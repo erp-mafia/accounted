@@ -1244,7 +1244,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   if ('error' in authResult) {
     const status = authResult.status
     if (status === 429) {
-      return new Response(authResult.error, { status: 429 })
+      return new Response(authResult.error, {
+        status: 429,
+        headers: { 'Content-Type': 'text/plain', 'Retry-After': '60' },
+      })
     }
     return new Response('Unauthorized', {
       status: 401,
