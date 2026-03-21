@@ -160,7 +160,6 @@ export async function POST(request: Request) {
   const redirectUri = url.searchParams.get('redirect_uri')
   const state = url.searchParams.get('state')
   const codeChallenge = url.searchParams.get('code_challenge') || ''
-  const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256'
 
   if (!redirectUri) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 })
@@ -193,7 +192,6 @@ export async function POST(request: Request) {
   const code = createAuthCode({
     userId: user.id,
     codeChallenge,
-    codeChallengeMethod,
     redirectUri,
   })
 

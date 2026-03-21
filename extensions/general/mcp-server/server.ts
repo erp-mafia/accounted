@@ -1234,21 +1234,22 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
   const token = extractBearerToken(request)
   if (!token) {
-    return new Response(
-      JSON.stringify(jsonRpcError(null, -32000, 'Authorization required')),
-      { status: 401, headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': wwwAuth } }
-    )
+    return new Response('Unauthorized', {
+      status: 401,
+      headers: { 'WWW-Authenticate': wwwAuth },
+    })
   }
 
   const authResult = await validateApiKey(token)
   if ('error' in authResult) {
     const status = authResult.status
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (status === 401) headers['WWW-Authenticate'] = wwwAuth
-    return new Response(
-      JSON.stringify(jsonRpcError(null, -32000, authResult.error)),
-      { status, headers }
-    )
+    if (status === 429) {
+      return new Response(authResult.error, { status: 429 })
+    }
+    return new Response('Unauthorized', {
+      status: 401,
+      headers: { 'WWW-Authenticate': wwwAuth },
+    })
   }
 
   const { userId } = authResult

@@ -21,7 +21,6 @@ function getEncryptionKey(): Buffer {
 export interface AuthCodePayload {
   userId: string
   codeChallenge: string
-  codeChallengeMethod: string
   redirectUri: string
   exp: number
 }
