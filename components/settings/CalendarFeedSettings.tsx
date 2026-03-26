@@ -164,9 +164,29 @@ export function CalendarFeedSettings() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <div className="h-5 w-5 bg-muted rounded animate-pulse" />
+            <div className="h-5 bg-muted rounded w-48 animate-pulse" />
+          </div>
+          <div className="h-4 bg-muted rounded w-72 mt-1 animate-pulse" />
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-2">
+            <div className="h-10 bg-muted rounded flex-1 animate-pulse" />
+            <div className="h-10 w-10 bg-muted rounded animate-pulse" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-4 bg-muted rounded w-56 animate-pulse" />
+            <div className="h-10 bg-muted rounded animate-pulse" />
+            <div className="h-3 bg-muted rounded w-64 animate-pulse" />
+          </div>
+          <div className="pt-2 border-t">
+            <div className="h-8 bg-muted rounded w-32 animate-pulse" />
+          </div>
+        </CardContent>
+      </Card>
     )
   }
 
