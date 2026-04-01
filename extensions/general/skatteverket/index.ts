@@ -33,7 +33,7 @@ export const skatteverketExtension: Extension = {
 
   settingsPanel: {
     label: 'Skatteverket',
-    path: '/settings?tab=skatteverket',
+    path: '/settings/account',
   },
 
   apiRoutes: [

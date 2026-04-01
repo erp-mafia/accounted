@@ -81,18 +81,14 @@ export default function SIEPreviewStep({
             <div>
               <p className="text-sm text-muted-foreground">Start</p>
               <p className="font-medium">
-                {preview.fiscalYearStart
-                  ? new Date(preview.fiscalYearStart).toLocaleDateString('sv-SE')
-                  : 'Okänt'}
+                {preview.fiscalYearStart ?? 'Okänt'}
               </p>
             </div>
             <ArrowRight className="h-4 w-4 text-muted-foreground" />
             <div>
               <p className="text-sm text-muted-foreground">Slut</p>
               <p className="font-medium">
-                {preview.fiscalYearEnd
-                  ? new Date(preview.fiscalYearEnd).toLocaleDateString('sv-SE')
-                  : 'Okänt'}
+                {preview.fiscalYearEnd ?? 'Okänt'}
               </p>
             </div>
           </div>

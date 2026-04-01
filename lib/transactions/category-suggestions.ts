@@ -1,7 +1,6 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { findMatchingTemplates, getTemplateById, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
-import { extensionRegistry } from '@/lib/extensions/registry'
 import type { Transaction, TransactionCategory, EntityType, MappingRule, LinePatternEntry } from '@/types'
 
 export interface SuggestedCategory {
@@ -9,7 +8,7 @@ export interface SuggestedCategory {
   label: string
   account: string | null
   confidence: number
-  source: 'mapping_rule' | 'pattern' | 'history' | 'ai'
+  source: 'mapping_rule' | 'pattern' | 'history'
   match_reason?: string
 }
 
@@ -165,70 +164,6 @@ function accountToCategory(account: string, amount: number): string | null {
   return expenseMap[account] || null
 }
 
-/**
- * Source priority for tiebreaking — used when two suggestions
- * have the same confidence score.
- */
-const SOURCE_PRIORITY: Record<SuggestedCategory['source'], number> = {
-  mapping_rule: 3,
-  ai: 2,
-  pattern: 1,
-  history: 0,
-}
-
-/**
- * Merge AI-generated suggestions into existing suggestion list.
- * AI suggestions take priority over history-based ones.
- * Deduplicates by category, preserving the higher-confidence entry.
- * When transactionAmount is provided, filters out wrong-direction suggestions.
- */
-export function mergeAiSuggestions(
-  existing: SuggestedCategory[],
-  aiSuggestions: { category: string; basAccount: string; confidence: number; reasoning: string }[],
-  transactionAmount?: number
-): SuggestedCategory[] {
-  const merged = [...existing]
-
-  for (const ai of aiSuggestions) {
-    // Skip suggestions that don't match transaction direction
-    if (transactionAmount !== undefined) {
-      if (transactionAmount > 0 && ai.category.startsWith('expense_')) continue
-      if (transactionAmount < 0 && ai.category.startsWith('income_')) continue
-    }
-
-    const existingIdx = merged.findIndex((s) => s.category === ai.category)
-    if (existingIdx !== -1) {
-      // Upgrade existing entry if the AI has higher confidence
-      if (ai.confidence > merged[existingIdx].confidence) {
-        merged[existingIdx] = {
-          ...merged[existingIdx],
-          account: ai.basAccount || merged[existingIdx].account,
-          confidence: ai.confidence,
-          source: 'ai',
-        }
-      }
-      continue
-    }
-
-    merged.push({
-      category: ai.category as TransactionCategory,
-      label: CATEGORY_LABELS[ai.category] || ai.category,
-      account: ai.basAccount || null,
-      confidence: ai.confidence,
-      source: 'ai',
-    })
-  }
-
-  // Sort by confidence first, then by source priority as tiebreaker
-  return merged
-    .sort((a, b) => {
-      const confidenceDiff = b.confidence - a.confidence
-      if (confidenceDiff !== 0) return confidenceDiff
-      return SOURCE_PRIORITY[b.source] - SOURCE_PRIORITY[a.source]
-    })
-    .slice(0, 5)
-}
-
 // ============================================================
 // Template Suggestions
 // ============================================================
@@ -338,38 +273,6 @@ export async function getSuggestedTemplates(
         requires_review: m.template.requires_review,
       })
     }
-  }
-
-  // 3. If AI extension loaded, merge in embedding-based matches (higher confidence)
-  try {
-    const aiExt = extensionRegistry.get('ai-categorization')
-    if (aiExt?.services?.findSimilarTemplates) {
-      const aiMatches: TemplateMatch[] = await aiExt.services.findSimilarTemplates(transaction, entityType)
-      for (const m of aiMatches) {
-        const existing = results.find((r) => r.template_id === m.template.id)
-        if (existing) {
-          // AI match upgrades confidence if higher
-          if (m.confidence > existing.confidence) {
-            existing.confidence = m.confidence
-          }
-        } else {
-          results.push({
-            template_id: m.template.id,
-            name_sv: m.template.name_sv,
-            name_en: m.template.name_en,
-            group: m.template.group,
-            debit_account: m.template.debit_account,
-            credit_account: m.template.credit_account,
-            confidence: m.confidence,
-            description_sv: m.template.description_sv,
-            risk_level: m.template.risk_level,
-            requires_review: m.template.requires_review,
-          })
-        }
-      }
-    }
-  } catch {
-    // AI enhancement is non-blocking
   }
 
   return results

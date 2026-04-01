@@ -291,7 +291,7 @@ async function sendConsentExpiryNotification(
     const emailData = {
       bankName: connection.bank_name as string,
       daysUntilExpiry: daysLeft,
-      renewalUrl: `${baseUrl}/settings?tab=banking`,
+      renewalUrl: `${baseUrl}/settings/banking`,
       companyName: companySettings?.company_name || 'gnubok',
       isExpired,
     }

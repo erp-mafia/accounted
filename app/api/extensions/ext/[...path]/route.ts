@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import { hasAiConsent, isAiExtension } from '@/lib/extensions/ai-consent'
 import { requireCompanyId } from '@/lib/company/context'
 import type { ApiRouteDefinition } from '@/lib/extensions/types'
 
@@ -43,7 +42,7 @@ function matchPath(
  * Catch-all route for extension-declared API routes.
  *
  * URL scheme: /api/extensions/ext/{extensionId}/{...routePath}
- * Example:    /api/extensions/ext/receipt-ocr/abc123/confirm → POST /:id/confirm
+ * Example:    /api/extensions/ext/mcp-server/mcp → POST /mcp
  *
  * - Looks up the extension in the registry
  * - Checks the extension toggle (disabled → 403)
@@ -119,17 +118,6 @@ async function handleRequest(
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
-
-  // AI consent check
-  if (isAiExtension(extensionId)) {
-    const consented = await hasAiConsent(supabase, companyId, extensionId)
-    if (!consented) {
-      return NextResponse.json(
-        { error: 'AI consent required', code: 'AI_CONSENT_REQUIRED' },
-        { status: 403 }
-      )
-    }
-  }
 
   // If path params were extracted, create a new Request with them as search params
   let handlerRequest = request

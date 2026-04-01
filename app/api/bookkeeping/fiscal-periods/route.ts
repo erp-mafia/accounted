@@ -48,7 +48,42 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: durationError }, { status: 400 })
   }
 
-  // Check for overlapping periods
+  // Enforce continuity: new period must chain from the latest existing period (BFL 3:1)
+  const { data: latest } = await supabase
+    .from('fiscal_periods')
+    .select('period_end, is_closed')
+    .eq('company_id', companyId)
+    .order('period_end', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (latest) {
+    const prev = new Date(latest.period_end + 'T00:00:00')
+    prev.setDate(prev.getDate() + 1)
+    const expectedStart = prev.toISOString().split('T')[0]
+    if (body.period_start !== expectedStart) {
+      return NextResponse.json(
+        { error: `Period must start on ${expectedStart} (day after latest period ends)` },
+        { status: 400 }
+      )
+    }
+  }
+
+  // Enforce: max one unclosed period (no skipping ahead)
+  const { count: openCount } = await supabase
+    .from('fiscal_periods')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('is_closed', false)
+
+  if (openCount && openCount > 0) {
+    return NextResponse.json(
+      { error: 'Cannot create a new period while an unclosed period exists' },
+      { status: 409 }
+    )
+  }
+
+  // Defense-in-depth: check for overlapping periods
   const { data: overlapping } = await supabase
     .from('fiscal_periods')
     .select('id, name')

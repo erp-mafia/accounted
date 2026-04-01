@@ -387,6 +387,16 @@ export const UpdateSettingsSchema = z.object({
   website: z.string().optional().or(z.literal('')),
   pays_salaries: z.boolean().optional(),
   sector_slug: z.string().nullable().optional(),
+  // Bookkeeping lock
+  bookkeeping_locked_through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ogiltigt datumformat (YYYY-MM-DD)').nullable().optional(),
+  auto_lock_period_days: z.number().int().positive().nullable().optional(),
+  // Invoice PDF settings
+  ore_rounding: z.boolean().optional(),
+  invoice_show_ocr: z.boolean().optional(),
+  invoice_show_bankgiro: z.boolean().optional(),
+  invoice_show_plusgiro: z.boolean().optional(),
+  invoice_late_fee_text: z.string().nullable().optional(),
+  invoice_credit_terms_text: z.string().nullable().optional(),
 }).refine(
   (data) => {
     // BFL 3 kap.: Enskild firma must have fiscal year starting January
@@ -572,4 +582,21 @@ export const PendingOperationsQuerySchema = z.object({
   status: z.enum(['pending', 'committed', 'rejected']).default('pending'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
+})
+
+// ============================================================
+// Voucher gap schemas
+// ============================================================
+
+export const VoucherGapQuerySchema = z.object({
+  fiscal_period_id: uuid,
+  voucher_series: z.string().optional(),
+})
+
+export const SaveGapExplanationSchema = z.object({
+  fiscal_period_id: uuid,
+  voucher_series: z.string().default('A'),
+  gap_start: z.number().int().positive(),
+  gap_end: z.number().int().positive(),
+  explanation: z.string().min(1).max(500),
 })

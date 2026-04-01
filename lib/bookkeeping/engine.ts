@@ -209,7 +209,9 @@ export async function createDraftEntry(
 
 /**
  * Commit a draft entry: assigns voucher number and transitions to 'posted'
- * Triggers balance validation and sets committed_at via DB triggers
+ * Uses the atomic commit_journal_entry RPC so the voucher number increment
+ * and status update happen in one transaction. If the balance trigger rejects
+ * the entry, the sequence increment rolls back — no burned numbers.
  */
 export async function commitEntry(
   supabase: SupabaseClient,
@@ -218,39 +220,15 @@ export async function commitEntry(
   entryId: string
 ): Promise<JournalEntry> {
 
-  // Fetch the draft entry
-  const { data: entry, error: fetchError } = await supabase
-    .from('journal_entries')
-    .select('*')
-    .eq('id', entryId)
-    .eq('company_id', companyId)
-    .eq('status', 'draft')
-    .single()
+  // Atomic: increment voucher sequence + update status in one transaction.
+  // Rolls back the sequence if the balance trigger or any constraint fails.
+  const { data: rpcResult, error: commitError } = await supabase.rpc('commit_journal_entry', {
+    p_company_id: companyId,
+    p_entry_id: entryId,
+  })
 
-  if (fetchError || !entry) {
-    throw new Error('Draft journal entry not found')
-  }
-
-  // Assign voucher number
-  const voucherNumber = await getNextVoucherNumber(
-    supabase,
-    companyId,
-    entry.fiscal_period_id,
-    entry.voucher_series || 'A'
-  )
-
-  // Update to posted with voucher number
-  // DB triggers will: validate balance, set committed_at, write audit log
-  const { error: postError } = await supabase
-    .from('journal_entries')
-    .update({
-      voucher_number: voucherNumber,
-      status: 'posted',
-    })
-    .eq('id', entryId)
-
-  if (postError) {
-    throw new Error(`Failed to commit journal entry: ${postError.message}`)
+  if (commitError) {
+    throw new Error(`Failed to commit journal entry: ${commitError.message}`)
   }
 
   // Fetch complete posted entry with lines

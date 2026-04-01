@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getSuggestedCategories, mergeAiSuggestions, getSuggestedTemplates, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { getSuggestedCategories, getSuggestedTemplates, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName, toCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { requireCompanyId } from '@/lib/company/context'
 import type { Transaction, EntityType } from '@/types'
@@ -65,30 +65,6 @@ export async function POST(request: Request) {
     }
   }
 
-  // Fetch pre-computed AI suggestions for these transactions
-  const aiKeys = ids.map((id: string) => `suggestion:${id}`)
-  const { data: aiRecords } = await supabase
-    .from('extension_data')
-    .select('key, value')
-    .eq('company_id', companyId)
-    .eq('extension_id', 'ai-categorization')
-    .in('key', aiKeys)
-
-  type AiSuggestion = { category: string; basAccount: string; confidence: number; reasoning: string }
-  const aiSuggestionsMap: Record<string, AiSuggestion[]> = {}
-  if (aiRecords) {
-    for (const record of aiRecords) {
-      const txId = record.key.replace('suggestion:', '')
-      const value = record.value
-      // Handle both single object (old) and array (new) storage formats
-      if (Array.isArray(value)) {
-        aiSuggestionsMap[txId] = value as AiSuggestion[]
-      } else {
-        aiSuggestionsMap[txId] = [value as AiSuggestion]
-      }
-    }
-  }
-
   // Fetch entity type for template matching
   const { data: settings } = await supabase
     .from('company_settings')
@@ -105,19 +81,11 @@ export async function POST(request: Request) {
   const template_suggestions: Record<string, SuggestedTemplate[]> = {}
 
   for (const tx of transactions) {
-    let result = getSuggestedCategories(
+    suggestions[tx.id] = getSuggestedCategories(
       tx as Transaction,
       mappingRules || [],
       categoryHistory
     )
-
-    // Merge pre-computed AI suggestions if available
-    const aiSuggestions = aiSuggestionsMap[tx.id]
-    if (aiSuggestions && aiSuggestions.length > 0) {
-      result = mergeAiSuggestions(result, aiSuggestions, tx.amount)
-    }
-
-    suggestions[tx.id] = result
     template_suggestions[tx.id] = await getSuggestedTemplates(tx as Transaction, entityType, mappingRules || undefined)
   }
 

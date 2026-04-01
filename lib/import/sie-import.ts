@@ -102,6 +102,31 @@ export async function checkDuplicateImport(
 }
 
 /**
+ * Check if a completed SIE import already exists for the same fiscal year period.
+ * Prevents importing two different SIE files that cover the same accounting period,
+ * which would create duplicate verifikationer violating BFNAR 2013:2.
+ * Only blocks on status='completed' — failed/pending imports don't prevent retries.
+ */
+export async function checkDuplicatePeriodImport(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalYearStart: string,
+  fiscalYearEnd: string
+): Promise<SIEImport | null> {
+  const { data } = await supabase
+    .from('sie_imports')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('fiscal_year_start', fiscalYearStart)
+    .eq('fiscal_year_end', fiscalYearEnd)
+    .eq('status', 'completed')
+    .limit(1)
+    .maybeSingle()
+
+  return data as SIEImport | null
+}
+
+/**
  * Clean up stale pending/failed import records for a given file hash.
  * Prevents UNIQUE constraint conflicts when re-importing after a failure.
  */
@@ -121,21 +146,22 @@ async function cleanupStaleImportRecords(
 }
 
 /**
- * Create a fiscal period if one doesn't exist for the date range
+ * Create a fiscal period if one doesn't exist for the date range.
+ * Dates are ISO strings "YYYY-MM-DD" to avoid timezone issues.
  */
 async function ensureFiscalPeriod(
   supabase: SupabaseClient,
   companyId: string,
-  startDate: Date,
-  endDate: Date
+  startDate: string,
+  endDate: string
 ): Promise<string> {
   // Check for an existing period that contains the SIE date range
   const { data: containing } = await supabase
     .from('fiscal_periods')
     .select('id')
     .eq('company_id', companyId)
-    .lte('period_start', formatDate(startDate))
-    .gte('period_end', formatDate(endDate))
+    .lte('period_start', startDate)
+    .gte('period_end', endDate)
     .single()
 
   if (containing) {
@@ -148,8 +174,8 @@ async function ensureFiscalPeriod(
     .from('fiscal_periods')
     .select('id')
     .eq('company_id', companyId)
-    .lte('period_start', formatDate(endDate))
-    .gte('period_end', formatDate(startDate))
+    .lte('period_start', endDate)
+    .gte('period_end', startDate)
     .order('period_start', { ascending: false })
     .limit(1)
 
@@ -158,8 +184,8 @@ async function ensureFiscalPeriod(
   }
 
   // Create new fiscal period
-  const startYear = startDate.getFullYear()
-  const endYear = endDate.getFullYear()
+  const startYear = parseInt(startDate.substring(0, 4), 10)
+  const endYear = parseInt(endDate.substring(0, 4), 10)
   const name = startYear === endYear
     ? `Räkenskapsår ${startYear}`
     : `Räkenskapsår ${startYear}/${endYear}`
@@ -169,8 +195,8 @@ async function ensureFiscalPeriod(
     .insert({
       company_id: companyId,
       name,
-      period_start: formatDate(startDate),
-      period_end: formatDate(endDate),
+      period_start: startDate,
+      period_end: endDate,
       is_closed: false,
       opening_balances_set: false,
     })
@@ -316,8 +342,7 @@ async function createOpeningBalanceEntry(
     }
   }
 
-  const fiscalYearStart = parsed.stats.fiscalYearStart
-  const entryDate = fiscalYearStart ? formatDate(fiscalYearStart) : formatDate(new Date())
+  const entryDate = parsed.stats.fiscalYearStart ?? formatDate(new Date())
 
   const entry = await createJournalEntry(supabase, companyId, userId, {
     fiscal_period_id: fiscalPeriodId,
@@ -908,8 +933,7 @@ async function createMigrationAdjustmentEntry(
   }
 
   // Date the adjustment at fiscal year end
-  const fiscalYearEnd = parsed.stats.fiscalYearEnd
-  const entryDate = fiscalYearEnd ? formatDate(fiscalYearEnd) : formatDate(new Date())
+  const entryDate = parsed.stats.fiscalYearEnd ?? formatDate(new Date())
 
   // Fix 4: Build structured description with skipped voucher details
   const skippedIds = skippedDetails.map(d => d.voucherId)
@@ -1023,12 +1047,8 @@ async function createPendingImportRecord(
       org_number: parsed.header.orgNumber,
       company_name: parsed.header.companyName,
       sie_type: parsed.header.sieType,
-      fiscal_year_start: parsed.stats.fiscalYearStart
-        ? formatDate(parsed.stats.fiscalYearStart)
-        : null,
-      fiscal_year_end: parsed.stats.fiscalYearEnd
-        ? formatDate(parsed.stats.fiscalYearEnd)
-        : null,
+      fiscal_year_start: parsed.stats.fiscalYearStart ?? null,
+      fiscal_year_end: parsed.stats.fiscalYearEnd ?? null,
       accounts_count: parsed.stats.totalAccounts,
       transactions_count: 0,
       status: 'pending',
@@ -1237,6 +1257,17 @@ export async function executeSIEImport(
       return result
     }
 
+    // Safety net: reject if a completed import already exists for this period
+    const periodDuplicate = await checkDuplicatePeriodImport(
+      supabase, companyId, fiscalYearStart, fiscalYearEnd
+    )
+    if (periodDuplicate) {
+      result.errors.push(
+        `En SIE-import för perioden ${fiscalYearStart} – ${fiscalYearEnd} finns redan (ID: ${periodDuplicate.id})`
+      )
+      return result
+    }
+
     if (options.createFiscalPeriod) {
       result.fiscalPeriodId = await ensureFiscalPeriod(
         supabase,
@@ -1250,8 +1281,8 @@ export async function executeSIEImport(
         .from('fiscal_periods')
         .select('id')
         .eq('company_id', companyId)
-        .lte('period_start', formatDate(fiscalYearStart))
-        .gte('period_end', formatDate(fiscalYearEnd))
+        .lte('period_start', fiscalYearStart)
+        .gte('period_end', fiscalYearEnd)
         .single()
 
       if (!existing) {
@@ -1359,15 +1390,19 @@ export async function executeSIEImport(
         const earliestVoucher = new Date(Math.min(...voucherDates))
         const latestVoucher = new Date(Math.max(...voucherDates))
 
+        // Parse fiscal year string dates for comparison (append T00:00:00 to avoid UTC shift)
+        const fyStart = new Date(fiscalYearStart + 'T00:00:00')
+        const fyEnd = new Date(fiscalYearEnd + 'T00:00:00')
+
         // Allow 30 days margin from fiscal year start/end for partial detection
         const msPerDay = 86400000
-        const startGap = earliestVoucher.getTime() - fiscalYearStart.getTime()
-        const endGap = fiscalYearEnd.getTime() - latestVoucher.getTime()
+        const startGap = earliestVoucher.getTime() - fyStart.getTime()
+        const endGap = fyEnd.getTime() - latestVoucher.getTime()
 
         if (startGap > 60 * msPerDay || endGap > 60 * msPerDay) {
           result.warnings.push(
             `SIE-filen verkar innehålla ett ofullständigt räkenskapsår: verifikationer ${formatDate(earliestVoucher)}–${formatDate(latestVoucher)}, ` +
-            `räkenskapsår ${formatDate(fiscalYearStart)}–${formatDate(fiscalYearEnd)}. ` +
+            `räkenskapsår ${fiscalYearStart}–${fiscalYearEnd}. ` +
             `Omföringsverifikationen kan bli felaktig om #UB/#RES avser hela året men verifikationerna bara täcker en del.`
           )
         }
@@ -1480,10 +1515,10 @@ export async function executeSIEImport(
       sourceSystem: parsed.header.program,
       sourceVersion: parsed.header.programVersion,
       sieType: parsed.header.sieType,
-      generatedDate: parsed.header.generatedDate ? formatDate(parsed.header.generatedDate) : null,
+      generatedDate: parsed.header.generatedDate ?? null,
       fiscalYear: {
-        start: formatDate(fiscalYearStart),
-        end: formatDate(fiscalYearEnd),
+        start: fiscalYearStart,
+        end: fiscalYearEnd,
       },
       importedAt: new Date().toISOString(),
       importedBy: companyId,
@@ -1512,7 +1547,7 @@ export async function executeSIEImport(
       voucherStats.skippedSingleLine + voucherStats.skippedEmpty
     result.details = {
       fiscalYear: fiscalYearStart && fiscalYearEnd
-        ? { start: formatDate(fiscalYearStart), end: formatDate(fiscalYearEnd) }
+        ? { start: fiscalYearStart, end: fiscalYearEnd }
         : undefined,
       skippedVouchers: totalSkippedForDetails > 0 ? {
         unbalanced: voucherStats.skippedUnbalanced,

@@ -14,7 +14,7 @@ export default function EnableBankingWorkspace({ userId }: WorkspaceComponentPro
         Koppla ditt bankkonto under Inställningar för att synka transaktioner automatiskt.
       </p>
       <Button asChild variant="outline" className="mt-4">
-        <Link href="/settings?tab=banking">
+        <Link href="/settings/banking">
           <Settings className="mr-2 h-4 w-4" />
           Gå till bankinställningar
         </Link>

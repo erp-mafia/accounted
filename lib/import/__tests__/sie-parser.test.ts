@@ -175,8 +175,8 @@ describe('parseSIEFile', () => {
       const result = parseSIEFile(MINIMAL_SIE)
       expect(result.header.fiscalYears).toHaveLength(1)
       expect(result.header.fiscalYears[0].yearIndex).toBe(0)
-      expect(result.header.fiscalYears[0].start).toEqual(new Date(2024, 0, 1))
-      expect(result.header.fiscalYears[0].end).toEqual(new Date(2024, 11, 31))
+      expect(result.header.fiscalYears[0].start).toBe('2024-01-01')
+      expect(result.header.fiscalYears[0].end).toBe('2024-12-31')
     })
 
     it('parses currency from #VALUTA', () => {
@@ -198,7 +198,7 @@ describe('parseSIEFile', () => {
 
     it('parses generated date', () => {
       const result = parseSIEFile(MINIMAL_SIE)
-      expect(result.header.generatedDate).toEqual(new Date(2024, 0, 1))
+      expect(result.header.generatedDate).toBe('2024-01-01')
     })
 
     it('parses SIE type 1', () => {
@@ -351,8 +351,8 @@ describe('parseSIEFile', () => {
 
     it('sets fiscal year start/end from RAR 0', () => {
       const result = parseSIEFile(MINIMAL_SIE)
-      expect(result.stats.fiscalYearStart).toEqual(new Date(2024, 0, 1))
-      expect(result.stats.fiscalYearEnd).toEqual(new Date(2024, 11, 31))
+      expect(result.stats.fiscalYearStart).toBe('2024-01-01')
+      expect(result.stats.fiscalYearEnd).toBe('2024-12-31')
     })
 
     it('returns null fiscal year dates when no RAR', () => {

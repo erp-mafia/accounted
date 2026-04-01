@@ -359,7 +359,7 @@ function SIEImportWizard() {
       const data = await res.json()
 
       if (!res.ok) {
-        if (data.error === 'duplicate') {
+        if (data.error === 'duplicate' || data.error === 'duplicate_period') {
           setError(data.message)
         } else if (data.error === 'validation') {
           setError(`${data.message}: ${data.errors?.join(', ') || 'Unknown validation error'}`)

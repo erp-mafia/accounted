@@ -183,7 +183,8 @@ export function decodeBuffer(buffer: ArrayBuffer, encoding: SIEEncoding): string
 }
 
 /**
- * Parse a date from SIE format (YYYYMMDD)
+ * Parse a date from SIE format (YYYYMMDD) into a Date object.
+ * Used for voucher dates where Date arithmetic is needed.
  */
 function parseSIEDate(dateStr: string): Date | null {
   if (!dateStr || dateStr.length !== 8) {
@@ -206,6 +207,37 @@ function parseSIEDate(dateStr: string): Date | null {
   }
 
   return date
+}
+
+/**
+ * Parse a date from SIE format (YYYYMMDD) into an ISO date string "YYYY-MM-DD".
+ * Used for fiscal year dates and generated dates to avoid timezone issues
+ * during JSON serialization (Date objects shift when crossing UTC boundaries).
+ */
+function parseSIEDateString(dateStr: string): string | null {
+  if (!dateStr || dateStr.length !== 8) {
+    return null
+  }
+
+  const year = dateStr.substring(0, 4)
+  const month = dateStr.substring(4, 6)
+  const day = dateStr.substring(6, 8)
+
+  const y = parseInt(year, 10)
+  const m = parseInt(month, 10)
+  const d = parseInt(day, 10)
+
+  if (isNaN(y) || isNaN(m) || isNaN(d)) {
+    return null
+  }
+
+  // Validate by round-tripping through Date (rejects Feb 30, etc.)
+  const date = new Date(y, m - 1, d)
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
+    return null
+  }
+
+  return `${year}-${month}-${day}`
 }
 
 /**
@@ -405,7 +437,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
         case 'GEN':
           if (fields[1]) {
-            header.generatedDate = parseSIEDate(fields[1])
+            header.generatedDate = parseSIEDateString(fields[1])
           }
           break
 
@@ -435,8 +467,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         case 'RAR': {
           // #RAR yearIndex start end
           const yearIndex = parseInt(fields[1], 10)
-          const start = parseSIEDate(fields[2])
-          const end = parseSIEDate(fields[3])
+          const start = parseSIEDateString(fields[2])
+          const end = parseSIEDateString(fields[3])
 
           if (start && end) {
             header.fiscalYears.push({ yearIndex, start, end })

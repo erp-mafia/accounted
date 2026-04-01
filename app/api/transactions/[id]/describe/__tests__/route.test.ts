@@ -14,21 +14,13 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   findCounterpartyTemplate: vi.fn().mockResolvedValue(null),
   buildMappingResultFromCounterpartyTemplate: vi.fn(),
+  formatCounterpartyName: vi.fn((name: string) => name),
 }))
 
-// Mock extension registry
-const mockFindSimilarTemplates = vi.fn().mockResolvedValue([])
-vi.mock('@/lib/extensions/registry', () => ({
-  extensionRegistry: {
-    get: vi.fn().mockReturnValue({
-      id: 'ai-categorization',
-      name: 'AI',
-      version: '1.0.0',
-      services: {
-        findSimilarTemplates: (...args: unknown[]) => mockFindSimilarTemplates(...args),
-      },
-    }),
-  },
+// Mock booking templates
+const mockFindMatchingTemplates = vi.fn().mockReturnValue([])
+vi.mock('@/lib/bookkeeping/booking-templates', () => ({
+  findMatchingTemplates: (...args: unknown[]) => mockFindMatchingTemplates(...args),
 }))
 
 // Mock Supabase
@@ -121,7 +113,7 @@ describe('POST /api/transactions/[id]/describe', () => {
       amount: -450,
     })
 
-    mockFindSimilarTemplates.mockResolvedValueOnce([
+    mockFindMatchingTemplates.mockReturnValueOnce([
       {
         template: {
           id: 'restaurant_dining',
@@ -131,6 +123,12 @@ describe('POST /api/transactions/[id]/describe', () => {
           debit_account: '6071',
           credit_account: '1930',
           description_sv: 'Representation - restaurang',
+          vat_rate: 0.12,
+          vat_treatment: 'reduced_12',
+          deductibility: 'conditional',
+          deductibility_note_sv: null,
+          special_rules_sv: null,
+          risk_level: 'MEDIUM',
         },
         confidence: 0.82,
       },
@@ -162,23 +160,16 @@ describe('POST /api/transactions/[id]/describe', () => {
     expect(status).toBe(200)
     expect(body.data.templates).toHaveLength(1)
     expect(body.data.needs_more_detail).toBe(false)
+    expect(body.data.ai_suggestion).toBeNull()
     expect(body.data.user_description).toBe('business lunch with client')
     expect(body.data.batch_candidate_count).toBe(3)
     expect(body.data.merchant_name).toBe('Restaurant XYZ')
-
-    // Verify findSimilarTemplates was called with the user description
-    expect(mockFindSimilarTemplates).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'tx-1' }),
-      'enskild_firma',
-      10,
-      'business lunch with client'
-    )
   })
 
   it('sets needs_more_detail when confidence is low', async () => {
     const tx = makeTransaction({ id: 'tx-2', merchant_name: null })
 
-    mockFindSimilarTemplates.mockResolvedValueOnce([
+    mockFindMatchingTemplates.mockReturnValueOnce([
       {
         template: {
           id: 'misc',
@@ -188,6 +179,12 @@ describe('POST /api/transactions/[id]/describe', () => {
           debit_account: '6991',
           credit_account: '1930',
           description_sv: 'Okategoriserad utgift',
+          vat_rate: 0,
+          vat_treatment: null,
+          deductibility: 'full',
+          deductibility_note_sv: null,
+          special_rules_sv: null,
+          risk_level: 'LOW',
         },
         confidence: 0.4,
       },

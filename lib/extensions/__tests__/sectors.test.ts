@@ -49,7 +49,7 @@ describe('sectors registry', () => {
   })
 
   it('should have 8 total extensions', () => {
-    expect(getAllExtensions().length).toBe(12)
+    expect(getAllExtensions().length).toBe(8)
   })
 
   it('should have unique slugs within each sector', () => {
@@ -80,10 +80,10 @@ describe('sectors registry', () => {
   })
 
   it('getExtensionDefinition returns correct extension', () => {
-    const ext = getExtensionDefinition('general', 'ai-chat')
+    const ext = getExtensionDefinition('general', 'mcp-server')
     expect(ext).toBeDefined()
-    expect(ext!.slug).toBe('ai-chat')
-    expect(ext!.name).toBe('AI-assistent')
+    expect(ext!.slug).toBe('mcp-server')
+    expect(ext!.name).toBe('MCP-server (API)')
     expect(ext!.sector).toBe('general')
   })
 
@@ -94,7 +94,7 @@ describe('sectors registry', () => {
 
   it('getExtensionsBySector returns extensions for a sector', () => {
     const extensions = getExtensionsBySector('general')
-    expect(extensions.length).toBe(12)
+    expect(extensions.length).toBe(8)
   })
 
   it('all extensions have required fields', () => {

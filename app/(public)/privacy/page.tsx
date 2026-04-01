@@ -109,23 +109,6 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2">EU Data Residency</td>
                   </tr>
                   <tr className="border-b">
-                    <td className="py-2 pr-4 font-medium">Anthropic</td>
-                    <td className="py-2 pr-4">
-                      Kvitto-OCR (receipt-ocr), transaktionskategorisering (ai-categorization),
-                      AI-chattassistent (ai-chat)
-                    </td>
-                    <td className="py-2 pr-4">USA</td>
-                    <td className="py-2">SCCs (standardavtalsklausuler)</td>
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-2 pr-4 font-medium">OpenAI</td>
-                    <td className="py-2 pr-4">
-                      Embedding-generering för likhetssökning (transaktionsmallar, kunskapsbas)
-                    </td>
-                    <td className="py-2 pr-4">USA</td>
-                    <td className="py-2">SCCs (standardavtalsklausuler)</td>
-                  </tr>
-                  <tr className="border-b">
                     <td className="py-2 pr-4 font-medium">Enable Banking</td>
                     <td className="py-2 pr-4">PSD2-bankkontouppkoppling</td>
                     <td className="py-2 pr-4">EU</td>

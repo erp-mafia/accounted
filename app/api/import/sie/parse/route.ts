@@ -9,7 +9,7 @@ import {
   calculateFileHash,
 } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
-import { generateImportPreview, checkDuplicateImport } from '@/lib/import/sie-import'
+import { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 
@@ -55,18 +55,35 @@ export async function POST(request: Request) {
     // Decode to string
     const content = decodeBuffer(arrayBuffer, encoding)
 
-    // Check for duplicate import
-    const duplicate = await checkDuplicateImport(supabase, user.id, content)
+    // Check for duplicate import (by file hash)
+    const duplicate = await checkDuplicateImport(supabase, companyId, content)
     if (duplicate) {
       return NextResponse.json({
         error: 'duplicate',
-        message: `This file has already been imported on ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'okänt datum'}`,
+        message: `Denna fil har redan importerats ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'okänt datum'}`,
         importId: duplicate.id,
       }, { status: 409 })
     }
 
     // Parse the SIE file
     const parsed = parseSIEFile(content)
+
+    // Check for existing import covering the same fiscal period
+    if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+      const periodDuplicate = await checkDuplicatePeriodImport(
+        supabase,
+        companyId,
+        parsed.stats.fiscalYearStart,
+        parsed.stats.fiscalYearEnd
+      )
+      if (periodDuplicate) {
+        return NextResponse.json({
+          error: 'duplicate_period',
+          message: `En SIE-import för perioden ${parsed.stats.fiscalYearStart} – ${parsed.stats.fiscalYearEnd} finns redan (importerad ${periodDuplicate.imported_at ? new Date(periodDuplicate.imported_at).toLocaleDateString('sv-SE') : 'okänt datum'})`,
+          importId: periodDuplicate.id,
+        }, { status: 409 })
+      }
+    }
 
     // Validate the parsed data
     const validation = validateSIEFile(parsed)

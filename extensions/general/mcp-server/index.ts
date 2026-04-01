@@ -8,7 +8,7 @@ export const mcpServerExtension: Extension = {
 
   settingsPanel: {
     label: 'MCP-server (API)',
-    path: '/settings?tab=api',
+    path: '/settings/api',
   },
 
   apiRoutes: [

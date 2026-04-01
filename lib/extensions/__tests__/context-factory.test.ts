@@ -83,7 +83,7 @@ describe('createExtensionContext', () => {
     const { supabase, mockResult } = createMockSupabase()
     mockResult({ data: { value: { autoOcr: true } }, error: null })
 
-    const ctx = createExtensionContext(supabase as never, 'user-1', 'company-1', 'receipt-ocr')
+    const ctx = createExtensionContext(supabase as never, 'user-1', 'company-1', 'mcp-server')
     const result = await ctx.settings.get<{ autoOcr: boolean }>('settings')
 
     expect(result).toEqual({ autoOcr: true })

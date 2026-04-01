@@ -29,10 +29,12 @@ export default function KpiPage() {
         const { data: periodsData } = await periodsRes.json()
         const { data: prefsData } = await prefsRes.json()
 
-        setPeriods(periodsData || [])
+        const today = new Date().toISOString().split('T')[0]
+        const activePeriods = (periodsData || []).filter((p: FiscalPeriod) => p.period_start <= today)
+        setPeriods(activePeriods)
         if (prefsData) setPreferences(prefsData)
-        if (periodsData && periodsData.length > 0) {
-          setSelectedPeriod(periodsData[0].id)
+        if (activePeriods.length > 0) {
+          setSelectedPeriod(activePeriods[0].id)
         }
       } catch {
         setError('Kunde inte hämta data')

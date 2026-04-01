@@ -254,7 +254,7 @@ export function SecuritySettings() {
                   </div>
                 </div>
                 <Button
-                  onClick={() => router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings?tab=security')}`)}
+                  onClick={() => router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)}
                 >
                   <ShieldCheck className="mr-2 h-4 w-4" />
                   Aktivera 2FA

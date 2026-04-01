@@ -31,7 +31,6 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, VatTreatment, InvoiceInboxItem, EntityType, LinePatternEntry } from '@/types'
 import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
-import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 interface QuickReviewState {
   transaction: TransactionWithInvoice
@@ -814,7 +813,7 @@ export default function TransactionsPage() {
                   onMarkPrivate={handleMarkPrivate}
                   onOpenMatchDialog={openMatchDialog}
                   onOpenCategoryDialog={openCategoryDialog}
-                  onOpenDescribe={ENABLED_EXTENSION_IDS.has('ai-categorization') ? openDescribeDialog : undefined}
+                  onOpenDescribe={openDescribeDialog}
                   onOpenQuickReview={handleOpenQuickReview}
                   onOpenTemplateReview={handleOpenTemplateReview}
                   onToggleSelect={toggleBatchSelect}

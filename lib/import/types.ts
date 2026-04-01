@@ -28,7 +28,7 @@ export interface SIEHeader {
   sieType: SIEType
   program: string | null           // #PROGRAM
   programVersion: string | null
-  generatedDate: Date | null       // #GEN
+  generatedDate: string | null     // #GEN — "YYYY-MM-DD"
   format: string | null            // #FORMAT (PC8 = CP437)
 
   // Company info
@@ -47,8 +47,8 @@ export interface SIEHeader {
  */
 export interface FiscalYearInfo {
   yearIndex: number                // 0 = current, -1 = previous, etc.
-  start: Date
-  end: Date
+  start: string                    // "YYYY-MM-DD"
+  end: string                      // "YYYY-MM-DD"
 }
 
 /**
@@ -134,8 +134,8 @@ export interface ParsedSIEFile {
     totalAccounts: number
     totalVouchers: number
     totalTransactionLines: number
-    fiscalYearStart: Date | null
-    fiscalYearEnd: Date | null
+    fiscalYearStart: string | null   // "YYYY-MM-DD"
+    fiscalYearEnd: string | null     // "YYYY-MM-DD"
   }
 }
 
@@ -305,8 +305,8 @@ export interface ImportPreview {
   orgNumber: string | null
 
   // Fiscal year
-  fiscalYearStart: Date | null
-  fiscalYearEnd: Date | null
+  fiscalYearStart: string | null   // "YYYY-MM-DD"
+  fiscalYearEnd: string | null     // "YYYY-MM-DD"
 
   // Statistics
   accountCount: number

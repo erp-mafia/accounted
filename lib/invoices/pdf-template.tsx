@@ -3,6 +3,7 @@ import {
   Page,
   Text,
   View,
+  Image,
   StyleSheet,
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
@@ -313,6 +314,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <Text style={{ marginTop: 5, color: '#666' }}>{invoice.invoice_number}</Text>
           </View>
           <View style={styles.companyInfo}>
+            {company.logo_url && (
+              <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-end' }} />
+            )}
             <Text style={styles.companyName}>{company.company_name}</Text>
             {company.address_line1 && <Text>{company.address_line1}</Text>}
             {(company.postal_code || company.city) && (
@@ -459,8 +463,19 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             )}
             <View style={styles.grandTotal}>
               <Text style={styles.grandTotalLabel}>{isCreditNote ? 'Att kreditera:' : 'Att betala:'}</Text>
-              <Text style={styles.grandTotalValue}>{formatCurrency(invoice.total, invoice.currency)}</Text>
+              <Text style={styles.grandTotalValue}>{formatCurrency(
+                (company.ore_rounding ?? true) && invoice.currency === 'SEK'
+                  ? Math.round(invoice.total)
+                  : invoice.total,
+                invoice.currency
+              )}</Text>
             </View>
+            {(company.ore_rounding ?? true) && invoice.currency === 'SEK' && Math.round(invoice.total) !== invoice.total && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { fontSize: 8 }]}>Öresavrundning:</Text>
+                <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatCurrency(Math.round(invoice.total) - invoice.total, 'SEK')}</Text>
+              </View>
+            )}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <View style={[styles.totalRow, { marginTop: 8 }]}>
                 <Text style={[styles.totalLabel, { fontSize: 9 }]}>I SEK (kurs {invoice.exchange_rate}):</Text>
@@ -497,13 +512,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 </Text>
               </View>
             )}
-            {company.bankgiro && (
+            {company.bankgiro && (company.invoice_show_bankgiro ?? true) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>Bankgiro:</Text>
                 <Text style={styles.paymentValue}>{company.bankgiro}</Text>
               </View>
             )}
-            {company.plusgiro && (
+            {company.plusgiro && (company.invoice_show_plusgiro ?? true) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>Plusgiro:</Text>
                 <Text style={styles.paymentValue}>{company.plusgiro}</Text>
@@ -525,10 +540,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <Text style={styles.paymentLabel}>Förfallodatum:</Text>
               <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{formatDate(invoice.due_date)}</Text>
             </View>
-            <View style={styles.paymentRow}>
-              <Text style={styles.paymentLabel}>OCR/Referens:</Text>
-              <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{generateOcrReference(invoice.invoice_number)}</Text>
-            </View>
+            {(company.invoice_show_ocr ?? true) && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>OCR/Referens:</Text>
+                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{generateOcrReference(invoice.invoice_number)}</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -543,6 +560,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {invoice.notes && (
           <View style={styles.notesBox}>
             <Text style={styles.notesText}>{invoice.notes}</Text>
+          </View>
+        )}
+
+        {/* Late fee & credit terms */}
+        {(company.invoice_late_fee_text || company.invoice_credit_terms_text) && (
+          <View style={{ marginTop: 10, marginBottom: 10 }}>
+            {company.invoice_late_fee_text && (
+              <Text style={{ fontSize: 8, color: '#666', marginBottom: 2 }}>{company.invoice_late_fee_text}</Text>
+            )}
+            {company.invoice_credit_terms_text && (
+              <Text style={{ fontSize: 8, color: '#666' }}>{company.invoice_credit_terms_text}</Text>
+            )}
           </View>
         )}
 

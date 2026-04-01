@@ -81,9 +81,11 @@ export default function ReportsPage() {
   async function fetchPeriods() {
     const res = await fetch('/api/bookkeeping/fiscal-periods')
     const { data } = await res.json()
-    setPeriods(data || [])
-    if (data && data.length > 0) {
-      setSelectedPeriod(data[0].id)
+    const today = new Date().toISOString().split('T')[0]
+    const activePeriods = (data || []).filter((p: FiscalPeriod) => p.period_start <= today)
+    setPeriods(activePeriods)
+    if (activePeriods.length > 0) {
+      setSelectedPeriod(activePeriods[0].id)
     }
   }
 

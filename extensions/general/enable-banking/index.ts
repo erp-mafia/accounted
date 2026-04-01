@@ -30,7 +30,7 @@ export const enableBankingExtension: Extension = {
 
   settingsPanel: {
     label: 'Bankintegration (PSD2)',
-    path: '/settings?tab=banking',
+    path: '/settings/banking',
   },
 
   apiRoutes: [

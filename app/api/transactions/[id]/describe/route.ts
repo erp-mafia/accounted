@@ -3,72 +3,12 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { DescribeTransactionSchema } from '@/lib/api/schemas'
-import { extensionRegistry } from '@/lib/extensions/registry'
-import { findMatchingTemplates, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
+import { findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
 import { findCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { requireCompanyId } from '@/lib/company/context'
-import type { Transaction, EntityType, VatTreatment } from '@/types'
-import type { Extension } from '@/lib/extensions/types'
-
-interface DescriptionAnalysisInput {
-  description: string
-  transactionAmount: number
-  transactionDate: string
-  transactionDescription: string
-  merchantName: string | null
-  currency: string
-  entityType: EntityType
-}
-
-interface DescriptionAnalysisResult {
-  debitAccount: string
-  creditAccount: string
-  vatTreatment: VatTreatment | null
-  category: string
-  confidence: number
-  reasoning: string
-  warnings: string[]
-  templateId: string | null
-}
+import type { Transaction, EntityType } from '@/types'
 
 ensureInitialized()
-
-async function getTemplateMatches(
-  aiExt: Extension | undefined,
-  transaction: Transaction,
-  entityType: EntityType,
-  description: string
-): Promise<TemplateMatch[]> {
-  if (aiExt?.services?.findSimilarTemplates) {
-    return aiExt.services.findSimilarTemplates(transaction, entityType, 10, description)
-  }
-  return findMatchingTemplates(transaction, entityType)
-}
-
-async function getAiAnalysis(
-  aiExt: Extension | undefined,
-  transaction: Transaction,
-  entityType: EntityType,
-  description: string
-): Promise<DescriptionAnalysisResult | null> {
-  if (!aiExt?.services?.analyzeDescription) return null
-
-  try {
-    const input: DescriptionAnalysisInput = {
-      description,
-      transactionAmount: transaction.amount,
-      transactionDate: transaction.date,
-      transactionDescription: transaction.description,
-      merchantName: transaction.merchant_name,
-      currency: transaction.currency,
-      entityType,
-    }
-    return await aiExt.services.analyzeDescription(input)
-  } catch (error) {
-    console.error('[describe] AI analysis failed, continuing with templates only:', error)
-    return null
-  }
-}
 
 export async function POST(
   request: Request,
@@ -110,13 +50,10 @@ export async function POST(
 
   const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
-  const aiExt = extensionRegistry.get('ai-categorization')
-
-  // Run template matching, counterparty lookup, and AI analysis in parallel
-  const [templates, counterpartyMatch, aiSuggestion] = await Promise.all([
-    getTemplateMatches(aiExt, transaction as Transaction, entityType, description),
+  // Run template matching and counterparty lookup in parallel
+  const [templates, counterpartyMatch] = await Promise.all([
+    findMatchingTemplates(transaction as Transaction, entityType),
     findCounterpartyTemplate(supabase, user.id, transaction as Transaction),
-    getAiAnalysis(aiExt, transaction as Transaction, entityType, description),
   ])
 
   // Build counterparty suggestion if matched
@@ -147,8 +84,7 @@ export async function POST(
     }
   }
 
-  // AI or counterparty match rescues weak templates
-  const needsMoreDetail = (aiSuggestion || counterpartySuggestion)
+  const needsMoreDetail = counterpartySuggestion
     ? false
     : templates.length === 0 || templates[0].confidence < 0.55
 
@@ -185,16 +121,7 @@ export async function POST(
         risk_level: m.template.risk_level,
       })),
       counterparty_match: counterpartySuggestion,
-      ai_suggestion: aiSuggestion ? {
-        debit_account: aiSuggestion.debitAccount,
-        credit_account: aiSuggestion.creditAccount,
-        vat_treatment: aiSuggestion.vatTreatment,
-        category: aiSuggestion.category,
-        confidence: aiSuggestion.confidence,
-        reasoning: aiSuggestion.reasoning,
-        warnings: aiSuggestion.warnings,
-        template_id: aiSuggestion.templateId,
-      } : null,
+      ai_suggestion: null,
       needs_more_detail: needsMoreDetail,
       user_description: description,
       batch_candidate_count: batchCandidateCount,

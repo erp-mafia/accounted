@@ -8,6 +8,7 @@ import {
   previewCurrencyRevaluation,
   executeCurrencyRevaluation,
 } from '@/lib/bookkeeping/currency-revaluation'
+import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import type {
   YearEndValidation,
   YearEndPreview,
@@ -16,6 +17,7 @@ import type {
   FiscalPeriod,
   JournalEntry,
   VoucherGap,
+  SequenceMismatch,
 } from '@/types'
 
 /**
@@ -46,8 +48,16 @@ export async function validateYearEndReadiness(
       warnings: [],
       draftCount: 0,
       voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
       trialBalanceBalanced: false,
     }
+  }
+
+  // Check: period must have ended (BFNAR 2017:3 / ÅRL 2:1)
+  const today = new Date().toISOString().split('T')[0]
+  if (period.period_end > today) {
+    errors.push('Cannot close a fiscal period that has not yet ended')
   }
 
   // Check: period not already closed
@@ -73,19 +83,109 @@ export async function validateYearEndReadiness(
     errors.push(`${drafts} draft journal entries must be posted or deleted before closing`)
   }
 
-  // Check: voucher continuity
+  // Check: voucher continuity across all series
   let voucherGaps: VoucherGap[] = []
-  const { data: gaps, error: gapsError } = await supabase.rpc('detect_voucher_gaps', {
-    p_company_id: companyId,
-    p_fiscal_period_id: fiscalPeriodId,
-    p_series: 'A',
-  })
+  const { data: seriesRows } = await supabase
+    .from('voucher_sequences')
+    .select('voucher_series')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
 
-  if (!gapsError && gaps && gaps.length > 0) {
-    voucherGaps = gaps as VoucherGap[]
-    warnings.push(
-      `Voucher number gaps detected: ${voucherGaps.map((g) => `${g.gap_start}-${g.gap_end}`).join(', ')}`
+  const seriesToCheck = seriesRows && seriesRows.length > 0
+    ? seriesRows.map((r: { voucher_series: string }) => r.voucher_series)
+    : ['A']
+
+  for (const series of seriesToCheck) {
+    const { data: gaps, error: gapsError } = await supabase.rpc('detect_voucher_gaps', {
+      p_company_id: companyId,
+      p_fiscal_period_id: fiscalPeriodId,
+      p_series: series,
+    })
+
+    if (!gapsError && gaps && gaps.length > 0) {
+      const tagged = (gaps as Array<{ gap_start: number; gap_end: number }>).map((g) => ({
+        ...g,
+        series,
+      }))
+      voucherGaps.push(...tagged)
+    }
+  }
+
+  // Check gap explanations — unexplained gaps block year-end (BFNAR 2013:2 punkt 5.8)
+  let unexplainedGaps: VoucherGap[] = []
+  if (voucherGaps.length > 0) {
+    const { data: explanations } = await supabase
+      .from('voucher_gap_explanations')
+      .select('voucher_series, gap_start, gap_end')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+
+    const explanationSet = new Set(
+      (explanations ?? []).map(
+        (e: { voucher_series: string; gap_start: number; gap_end: number }) =>
+          `${e.voucher_series}:${e.gap_start}:${e.gap_end}`
+      )
     )
+
+    for (const gap of voucherGaps) {
+      const key = `${gap.series}:${gap.gap_start}:${gap.gap_end}`
+      if (explanationSet.has(key)) {
+        warnings.push(
+          `Voucher gap in series ${gap.series} (${gap.gap_start}-${gap.gap_end}) — documented`
+        )
+      } else {
+        unexplainedGaps.push(gap)
+        errors.push(
+          `Unexplained voucher gap in series ${gap.series}: ${gap.gap_start}-${gap.gap_end}`
+        )
+      }
+    }
+  }
+
+  // Check: sequence counter reconciliation
+  const sequenceMismatches: SequenceMismatch[] = []
+  if (seriesRows && seriesRows.length > 0) {
+    for (const row of seriesRows as Array<{ voucher_series: string }>) {
+      const { data: seqData } = await supabase
+        .from('voucher_sequences')
+        .select('last_number')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('voucher_series', row.voucher_series)
+        .single()
+
+      const { data: maxData } = await supabase
+        .from('journal_entries')
+        .select('voucher_number')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('voucher_series', row.voucher_series)
+        .neq('status', 'draft')
+        .order('voucher_number', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      const sequenceCounter = seqData?.last_number ?? 0
+      const actualMax = maxData?.voucher_number ?? 0
+
+      if (sequenceCounter !== actualMax) {
+        sequenceMismatches.push({
+          series: row.voucher_series,
+          sequenceCounter,
+          actualMax,
+        })
+
+        if (sequenceCounter < actualMax) {
+          errors.push(
+            `Sequence counter integrity error in series ${row.voucher_series}: counter=${sequenceCounter} but max voucher=${actualMax}`
+          )
+        } else {
+          warnings.push(
+            `Sequence counter ahead of actual entries in series ${row.voucher_series}: counter=${sequenceCounter}, max voucher=${actualMax}`
+          )
+        }
+      }
+    }
   }
 
   // Check: trial balance is balanced
@@ -144,12 +244,19 @@ export async function validateYearEndReadiness(
     }
   }
 
+  // Check: continuity_verified flag from prior year-end
+  if (period.continuity_verified === false) {
+    errors.push('Opening balance continuity check failed for this period — resolve discrepancies before closing')
+  }
+
   return {
     ready: errors.length === 0,
     errors,
     warnings,
     draftCount: drafts,
     voucherGaps,
+    unexplainedGaps,
+    sequenceMismatches,
     trialBalanceBalanced,
   }
 }
@@ -373,6 +480,24 @@ export async function executeYearEndClosing(
     fiscalPeriodId,
     nextPeriod.id
   )
+
+  // 10. Validate IB/UB continuity and persist result
+  const continuity = await validateBalanceContinuity(supabase, companyId, nextPeriod.id)
+
+  await supabase
+    .from('fiscal_periods')
+    .update({ continuity_verified: continuity.valid })
+    .eq('id', nextPeriod.id)
+    .eq('company_id', companyId)
+
+  if (!continuity.valid) {
+    throw new Error(
+      `IB/UB continuity check failed: ${continuity.discrepancies.length} account(s) differ. ` +
+      continuity.discrepancies.map(d =>
+        `${d.account_number}: UB=${d.previous_ub_net}, IB=${d.current_ib_net}, diff=${d.difference}`
+      ).join('; ')
+    )
+  }
 
   // Fetch the now-closed period for the event payload
   const { data: closedPeriod } = await supabase

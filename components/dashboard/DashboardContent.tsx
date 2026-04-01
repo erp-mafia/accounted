@@ -217,7 +217,7 @@ export default function DashboardContent({ firstName, settings, summary, onboard
   if (summary.expiringBankConnections && summary.expiringBankConnections.length > 0) {
     const conn = summary.expiringBankConnections[0]
     alertItems.push(
-      <Link key="bank-expiry" href="/settings?tab=banking" className="group">
+      <Link key="bank-expiry" href="/settings/banking" className="group">
         <Card className="h-full border-warning/30 hover:bg-warning/[0.03] transition-colors">
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
