@@ -220,7 +220,7 @@ function MfaEnrollContent() {
           <div className="flex justify-center">
             <div className="rounded-lg border bg-white p-3">
               <img
-                src={qrCode.startsWith('data:') ? qrCode : `data:image/svg+xml;base64,${btoa(qrCode)}`}
+                src={qrCode.startsWith('data:') ? qrCode : `data:image/svg+xml,${encodeURIComponent(qrCode)}`}
                 alt="QR-kod för tvåfaktorsautentisering"
                 width={160}
                 height={160}

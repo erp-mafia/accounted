@@ -9,8 +9,11 @@ export async function POST(request: Request) {
   try {
     const { message, extra } = await request.json()
 
+    const sanitize = (s: unknown) =>
+      typeof s === 'string' ? s.replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').slice(0, 500) : ''
+
     // This console.error runs server-side → visible in Vercel Logs
-    console.error('[onboarding]', message, extra ? JSON.stringify(extra) : '')
+    console.error('[onboarding]', sanitize(message), extra ? sanitize(JSON.stringify(extra)) : '')
 
     return NextResponse.json({ ok: true })
   } catch {
