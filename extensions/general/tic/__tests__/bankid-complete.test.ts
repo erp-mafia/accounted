@@ -15,7 +15,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
-import { collectBankIdResult, requestEnrichment, fetchEnrichmentData } from '../lib/bankid-client'
+import { collectBankIdResult } from '../lib/bankid-client'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ticExtension } from '../index'
 
@@ -237,156 +237,8 @@ describe('POST /bankid/complete', () => {
       const { status } = await parseJsonResponse(await findCompleteHandler()(req))
 
       expect(status).toBe(400)
-      // Neither TIC call should fire — input validation happens first.
+      // collectBankIdResult should never be called — validation happens first.
       expect(collectBankIdResult).not.toHaveBeenCalled()
-      expect(requestEnrichment).not.toHaveBeenCalled()
-    })
-  })
-
-  // Regression suite for the TIC session-consume bug confirmed 2026-04-24.
-  // TIC marks a session as "consumed" on any /poll or /collect read after
-  // status=complete, after which /enrichment refuses the sessionId. The fix
-  // is to call /enrichment BEFORE /collect.
-  describe('TIC session-consume bug regression — call order', () => {
-    it('calls requestEnrichment BEFORE collectBankIdResult', async () => {
-      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      vi.mocked(requestEnrichment).mockResolvedValue({
-        enrichmentId: 'e-1',
-        sessionId: 'test-session',
-        status: 'Completed',
-        requestedTypes: ['CompanyRoles'],
-        completedTypes: ['CompanyRoles'],
-        secureUrl: '/api/v1/enrichment/data/abc',
-        secureUrlExpiresAtUtc: '2099-01-01T00:00:00Z',
-      })
-      vi.mocked(fetchEnrichmentData).mockResolvedValue({
-        personalNumber: '199001011234',
-        name: 'Anna Andersson',
-        enrichedAtUtc: '2026-04-27T00:00:00Z',
-        companyRoles: [],
-      })
-      mockServiceClient([
-        { data: null }, // pnr lookup → not linked
-      ])
-
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
-        method: 'POST',
-        body: { sessionId: 'test-session', mode: 'login' },
-      })
-      await findCompleteHandler()(req)
-
-      const enrichOrder = vi.mocked(requestEnrichment).mock.invocationCallOrder[0]
-      const collectOrder = vi.mocked(collectBankIdResult).mock.invocationCallOrder[0]
-
-      expect(enrichOrder).toBeDefined()
-      expect(collectOrder).toBeDefined()
-      expect(enrichOrder).toBeLessThan(collectOrder)
-    })
-
-    it('login still succeeds and storeEnrichment is skipped when enrichment throws', async () => {
-      vi.mocked(requestEnrichment).mockRejectedValue(new Error('TIC unreachable'))
-      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { admin, client } = mockServiceClient([
-        { data: { user_id: 'existing-user' } }, // pnr lookup → linked
-      ])
-
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
-        method: 'POST',
-        body: { sessionId: 'test-session', mode: 'login' },
-      })
-      const { status, body } = await parseJsonResponse<{
-        data?: { tokenHash?: string }
-      }>(await findCompleteHandler()(req))
-
-      expect(status).toBe(200)
-      expect(body.data?.tokenHash).toBe('magic-token-hash')
-      expect(admin.generateLink).toHaveBeenCalled()
-
-      // No extension_data write — the existing flow only touched bankid_identities.
-      const fromTables = vi.mocked(client.from).mock.calls.map((c) => c[0])
-      expect(fromTables).not.toContain('extension_data')
-    })
-
-    it('login still succeeds when /enrichment returns the "Session not completed" body shape', async () => {
-      // The exact shape TIC returns today for our tenant. Reproduces the
-      // production failure mode that prompted this fix.
-      vi.mocked(requestEnrichment).mockResolvedValue({
-        enrichmentId: '00000000-0000-0000-0000-000000000000',
-        sessionId: 'test-session',
-        status: 'failed',
-        requestedTypes: ['CompanyRoles'],
-        completedTypes: [],
-        error: 'Session not completed',
-        secureUrl: '',
-        secureUrlExpiresAtUtc: '',
-      } as unknown as Awaited<ReturnType<typeof requestEnrichment>>)
-      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { admin, client } = mockServiceClient([
-        { data: { user_id: 'existing-user' } }, // pnr lookup → linked
-      ])
-
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
-        method: 'POST',
-        body: { sessionId: 'test-session', mode: 'login' },
-      })
-      const { status, body } = await parseJsonResponse<{
-        data?: { tokenHash?: string }
-      }>(await findCompleteHandler()(req))
-
-      expect(status).toBe(200)
-      expect(body.data?.tokenHash).toBe('magic-token-hash')
-      expect(admin.generateLink).toHaveBeenCalled()
-      expect(fetchEnrichmentData).not.toHaveBeenCalled()
-
-      const fromTables = vi.mocked(client.from).mock.calls.map((c) => c[0])
-      expect(fromTables).not.toContain('extension_data')
-    })
-
-    it('writes extension_data when enrichment succeeds', async () => {
-      vi.mocked(requestEnrichment).mockResolvedValue({
-        enrichmentId: 'e-1',
-        sessionId: 'test-session',
-        status: 'Completed',
-        requestedTypes: ['CompanyRoles'],
-        completedTypes: ['CompanyRoles'],
-        secureUrl: '/api/v1/enrichment/data/abc',
-        secureUrlExpiresAtUtc: '2099-01-01T00:00:00Z',
-      })
-      const enrichmentBlob = {
-        personalNumber: '199001011234',
-        name: 'Anna Andersson',
-        enrichedAtUtc: '2026-04-27T00:00:00Z',
-        companyRoles: [
-          {
-            companyId: 1,
-            companyRegistrationNumber: '5560000001',
-            legalName: 'Acme AB',
-            legalEntityType: 'AB',
-            positionTypes: ['Ledamot'],
-            positionDescriptions: ['Styrelseledamot'],
-            positionStart: '2024-01-01',
-            positionEnd: null,
-            companyStatus: 'Active',
-          },
-        ],
-      }
-      vi.mocked(fetchEnrichmentData).mockResolvedValue(enrichmentBlob)
-      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { client } = mockServiceClient([
-        { data: { user_id: 'existing-user' } }, // pnr lookup → linked
-      ])
-
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
-        method: 'POST',
-        body: { sessionId: 'test-session', mode: 'login' },
-      })
-      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
-
-      expect(status).toBe(200)
-      expect(fetchEnrichmentData).toHaveBeenCalledWith('/api/v1/enrichment/data/abc')
-
-      const fromTables = vi.mocked(client.from).mock.calls.map((c) => c[0])
-      expect(fromTables).toContain('extension_data')
     })
   })
 })
