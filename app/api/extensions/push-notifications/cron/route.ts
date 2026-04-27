@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { loadExtensions } from '@/lib/extensions/loader'
+import { verifyCronSecret } from '@/lib/auth/cron'
 import {
   sendTaxDeadlineNotifications,
   sendInvoiceNotifications,
@@ -18,13 +19,8 @@ export async function GET(request: Request) {
   // Ensure extensions are loaded so event handlers are registered
   loadExtensions()
 
-  // Verify cron secret for security
-  const authHeader = request.headers.get('authorization')
-  const cronSecret = process.env.CRON_SECRET
-
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const authError = verifyCronSecret(request)
+  if (authError) return authError
 
   // Create a service role client for accessing all user data
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL

@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { verifyCronSecret } from '@/lib/auth/cron'
 
 /**
  * GET /api/events/cleanup/cron
@@ -7,12 +8,8 @@ import { NextResponse } from 'next/server'
  * Runs at 02:00 UTC every day.
  */
 export async function GET(request: Request) {
-  const authHeader = request.headers.get('authorization')
-  const cronSecret = process.env.CRON_SECRET
-
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const authError = verifyCronSecret(request)
+  if (authError) return authError
 
   try {
     const supabase = await createServiceClient()

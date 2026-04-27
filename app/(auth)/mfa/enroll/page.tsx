@@ -218,10 +218,14 @@ function MfaEnrollContent() {
         <div className="rounded-xl border bg-card p-6 space-y-6" style={{ boxShadow: 'var(--shadow-md)' }}>
           {/* QR Code */}
           <div className="flex justify-center">
-            <div
-              className="rounded-lg border bg-white p-3"
-              dangerouslySetInnerHTML={{ __html: qrCode }}
-            />
+            <div className="rounded-lg border bg-white p-3">
+              <img
+                src={qrCode.startsWith('data:') ? qrCode : `data:image/svg+xml;base64,${btoa(qrCode)}`}
+                alt="QR-kod för tvåfaktorsautentisering"
+                width={160}
+                height={160}
+              />
+            </div>
           </div>
 
           {/* Manual secret */}
