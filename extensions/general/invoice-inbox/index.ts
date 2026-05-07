@@ -30,7 +30,12 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024
 const NullableString = z.string().trim().max(500).nullable()
 const NullableDate = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date — expected YYYY-MM-DD')
+  .regex(
+    /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
+    'Invalid date — expected YYYY-MM-DD'
+  )
+  // Catch impossible calendar dates like 2026-02-30 that pass the regex.
+  .refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid calendar date')
   .nullable()
 const NullableNumber = z.number().nullable()
 

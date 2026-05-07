@@ -18,7 +18,11 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('invoice-inbox-extract')
 
 const MODEL = 'eu.anthropic.claude-sonnet-4-6'
-const MAX_TOKENS = 1500
+// 4096 covers a 10-15 line invoice plus VAT breakdown comfortably. The JSON
+// skeleton alone is ~200 tokens; 1500 left only ~1300 for content and
+// silently truncated complex documents (response cut mid-JSON →
+// JSON.parse throws → row lands with all-null fields).
+const MAX_TOKENS = 4096
 
 // Bedrock supports these document/image media types directly. HEIC/HEIF
 // are not on the list, so we skip AI for those — the inbox row still
@@ -109,7 +113,7 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
       "quantity": number,
       "unitPrice": number | null,
       "lineTotal": number,
-      "vatRate": number | null,         // e.g. 0.25, 0.12, 0.06, 0
+      "vatRate": number | null,         // percent integer: 25, 12, 6, or 0. Same convention as vatBreakdown.rate.
       "accountSuggestion": null         // always null — leave Swedish BAS suggestion to the user
     }
   ],
@@ -119,9 +123,11 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "total": number | null        // amount including VAT — what the buyer pays
   },
   "vatBreakdown": [
-    { "rate": number, "base": number, "amount": number }   // rate as percent, e.g. 25 for 25%
+    { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
   ]
 }
+
+VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the same percent-integer format (25, 12, 6, 0). Never use the decimal form (0.25, 0.12).
 
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.

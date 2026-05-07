@@ -48,6 +48,10 @@ interface InboxItem {
   matched_supplier_id: string | null
   created_supplier_invoice_id: string | null
   error_message: string | null
+  // Set client-side only while a manual upload is in flight. Replaced by a
+  // real server-side row once the AI extraction completes.
+  isPlaceholder?: boolean
+  fileName?: string
 }
 
 interface InboxAddress {
@@ -186,6 +190,28 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // ── Upload ─────────────────────────────────────────────────
 
   const uploadFile = useCallback(async (file: File) => {
+    // Optimistic placeholder — gives the user an immediate visual response
+    // for the 3–8s while Bedrock extracts. Removed once the real row arrives.
+    const tempId = `temp-${crypto.randomUUID()}`
+    const placeholder: InboxItem = {
+      id: tempId,
+      status: 'received',
+      source: 'upload',
+      created_at: new Date().toISOString(),
+      email_from: null,
+      email_subject: null,
+      email_received_at: null,
+      document_id: null,
+      extracted_data: null,
+      matched_supplier_id: null,
+      created_supplier_invoice_id: null,
+      error_message: null,
+      isPlaceholder: true,
+      fileName: file.name,
+    }
+    setItems((prev) => [placeholder, ...prev])
+    setSelectedId(tempId)
+    setSelected(placeholder)
     setIsUploading(true)
     try {
       const fd = new FormData()
@@ -197,11 +223,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Uppladdning misslyckades')
       toast({ title: 'Dokument uppladdat', description: file.name })
+      setItems((prev) => prev.filter((it) => it.id !== tempId))
       await fetchItems()
       if (json.data?.inbox_item_id) {
         await handleSelect(json.data.inbox_item_id)
       }
     } catch (err) {
+      setItems((prev) => prev.filter((it) => it.id !== tempId))
+      setSelectedId((prev) => (prev === tempId ? null : prev))
+      setSelected((prev) => (prev?.id === tempId ? null : prev))
       toast({
         title: 'Uppladdning misslyckades',
         description: err instanceof Error ? err.message : 'Försök igen.',
@@ -398,7 +428,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         {/* Document preview (hero) */}
         <main className="overflow-hidden bg-muted/10 relative">
           {selected ? (
-            <DocumentPreview docUrl={docUrl} docMime={docMime} />
+            <DocumentPreview docUrl={docUrl} docMime={docMime} isProcessing={!!selected.isPlaceholder} />
           ) : (
             <EmptyPreview
               onUploadClick={() => fileInputRef.current?.click()}
@@ -628,26 +658,33 @@ function InboxRow({
   const supplierName = pickSupplierName(item)
   const isErrored = item.status === 'error'
   const isProcessed = !!item.created_supplier_invoice_id
+  const isPlaceholder = !!item.isPlaceholder
 
   return (
     <li>
       <button
         type="button"
         onClick={onClick}
+        disabled={isPlaceholder}
         className={cn(
           'w-full text-left px-3 py-2 border-b transition-colors flex flex-col gap-0.5',
           selected ? 'bg-background border-l-2 border-l-primary' : 'hover:bg-background',
-          isErrored && !selected && 'bg-destructive/[0.03]'
+          isErrored && !selected && 'bg-destructive/[0.03]',
+          isPlaceholder && 'cursor-default'
         )}
       >
         <div className="flex items-center gap-2 min-w-0">
-          {item.source === 'email' ? (
+          {isPlaceholder ? (
+            <Loader2 className="h-3 w-3 text-muted-foreground shrink-0 animate-spin" />
+          ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
           <span className="text-sm font-medium truncate flex-1 min-w-0">
-            {supplierName ?? item.email_subject ?? 'Okänt dokument'}
+            {isPlaceholder
+              ? (item.fileName ?? 'Nytt dokument')
+              : (supplierName ?? item.email_subject ?? 'Okänt dokument')}
           </span>
           {isErrored && (
             <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />
@@ -657,8 +694,12 @@ function InboxRow({
           )}
         </div>
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
-          {amount != null && (
+          {isPlaceholder ? (
+            <span className="italic">Tolkar dokument med AI…</span>
+          ) : (
+            <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+          )}
+          {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
               {formatCurrency(amount, pickCurrency(item))}
             </span>
@@ -674,10 +715,20 @@ function InboxRow({
 function DocumentPreview({
   docUrl,
   docMime,
+  isProcessing = false,
 }: {
   docUrl: string | null
   docMime: string | null
+  isProcessing?: boolean
 }) {
+  if (isProcessing) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <span>Tolkar dokument med AI…</span>
+      </div>
+    )
+  }
   if (!docUrl) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
@@ -811,15 +862,28 @@ function FieldsRail({
         <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-3">
           Extraherade fält
         </h3>
-        <EditableFieldsList
-          itemId={item.id}
-          data={data ?? emptyExtraction()}
-          disabled={isProcessed}
-          onUpdated={onFieldsUpdated}
-        />
+        {item.isPlaceholder ? (
+          <div className="space-y-2">
+            <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Tolkar dokument med AI…
+            </div>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-8 w-full" />
+            ))}
+          </div>
+        ) : (
+          <EditableFieldsList
+            itemId={item.id}
+            data={data ?? emptyExtraction()}
+            disabled={isProcessed}
+            onUpdated={onFieldsUpdated}
+          />
+        )}
       </div>
 
-      {/* Actions */}
+      {/* Actions — hidden while AI extraction is in flight */}
+      {!item.isPlaceholder && (
       <div className="border-t px-4 py-3 space-y-2">
         {isProcessed && item.created_supplier_invoice_id ? (
           <Link href={`/supplier-invoices/${item.created_supplier_invoice_id}`} className="block">
@@ -870,6 +934,7 @@ function FieldsRail({
           </Badge>
         )}
       </div>
+      )}
     </div>
   )
 }
@@ -968,12 +1033,21 @@ function EditableFieldsList({
     Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
   )
   const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
+  // Last-known server values per field. Used to detect when the server
+  // normalises a value (currency upper-cased, whitespace trimmed) so we can
+  // pick up the canonical value into the input without clobbering an
+  // in-progress edit.
+  const lastServerRef = useRef<Record<FieldKey, string>>(
+    Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
+  )
 
   // Reset drafts when the user switches to a different inbox item.
   useEffect(() => {
-    setDrafts(
-      Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
-    )
+    const seeded = Object.fromEntries(
+      FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])
+    ) as Record<FieldKey, string>
+    setDrafts(seeded)
+    lastServerRef.current = seeded
     return () => {
       for (const t of Object.values(timersRef.current)) {
         if (t) clearTimeout(t)
@@ -982,6 +1056,32 @@ function EditableFieldsList({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemId])
+
+  // Re-seed drafts when the server returns normalised values (e.g. uppercased
+  // currency, trimmed strings). Only update fields where the local draft
+  // matches the previous server value — i.e. the user hasn't typed anything
+  // newer that we'd otherwise clobber.
+  useEffect(() => {
+    let dirty = false
+    const next: Record<FieldKey, string> = { ...lastServerRef.current }
+    setDrafts((prev) => {
+      const updated = { ...prev }
+      for (const f of FIELD_DEFS) {
+        const newServer = readField(data, f.key)
+        const prevServer = lastServerRef.current[f.key]
+        if (newServer !== prevServer) {
+          next[f.key] = newServer
+          // Only sync into the input if the user hadn't started a new edit.
+          if (prev[f.key] === prevServer) {
+            updated[f.key] = newServer
+            dirty = true
+          }
+        }
+      }
+      return dirty ? updated : prev
+    })
+    lastServerRef.current = next
+  }, [data])
 
   const currency = data.invoice?.currency ?? 'SEK'
 
@@ -1004,9 +1104,14 @@ function EditableFieldsList({
         )
         const json = await res.json()
         if (!res.ok) {
+          // 409 means the item is already linked to a supplier invoice and
+          // the server has rejected the edit. Surface the specific Swedish
+          // message ("Posten är redan kopplad…") instead of the generic
+          // fallback so the user understands why the field locked.
+          const isConflict = res.status === 409
           toast({
             variant: 'destructive',
-            title: 'Kunde inte spara',
+            title: isConflict ? 'Posten är låst' : 'Kunde inte spara',
             description: json.error ?? 'Försök igen',
           })
           setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
