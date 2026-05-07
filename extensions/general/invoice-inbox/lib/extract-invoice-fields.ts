@@ -1,23 +1,35 @@
-// Deterministic Swedish invoice field extraction.
+// AI-driven invoice/receipt field extraction.
 //
-// Replaces the deleted AI classifier. We pull text out of the PDF with
-// unpdf (a serverless-friendly pdfjs wrapper) and run regex extractors
-// against it. Each extractor is independent — a missing field stays null
-// rather than dragging down a neighbour. Validators (Luhn for
-// org-nr/OCR/bankgiro) keep false positives near zero.
+// Sends the uploaded document directly to Claude Sonnet 4.6 via AWS
+// Bedrock and asks for a structured InvoiceExtractionResult JSON. Sonnet
+// reads PDFs, images, and scans natively, which the previous regex
+// extractor couldn't — that's why English receipts (Anthropic, AWS,
+// Stripe, …) and image-only PDFs came back empty.
 //
-// Image-only PDFs and non-PDF mime types come back with all fields null.
-// The inbox item is still created so the user can register manually.
+// The AI output is validated against a Zod schema; anything that doesn't
+// parse falls back to an empty result so the inbox row still lands and
+// the user can fill the fields in manually.
 
+import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
+import { z } from 'zod'
 import type { InvoiceExtractionResult } from '@/types'
-import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { validateOcrReference, validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { extractText } from 'unpdf'
+import { createLogger } from '@/lib/logger'
 
-// Below this we treat the document as image-only / unreadable and skip
-// regex extraction. The PDF text extractor returns near-zero text for
-// scanned PDFs.
-const MIN_TEXT_CHARS_FOR_EXTRACTION = 10
+const log = createLogger('invoice-inbox-extract')
+
+const MODEL = 'eu.anthropic.claude-sonnet-4-6'
+const MAX_TOKENS = 1500
+
+// Bedrock supports these document/image media types directly. HEIC/HEIF
+// are not on the list, so we skip AI for those — the inbox row still
+// lands and the user can edit fields manually or replace the file.
+const SUPPORTED_MEDIA_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+])
 
 export interface ExtractionInput {
   buffer: Buffer
@@ -27,46 +39,102 @@ export interface ExtractionInput {
 
 export interface ExtractionOutput {
   data: InvoiceExtractionResult
-  /** Pulled from the PDF; null when the file isn't a text-based PDF. */
+  /** The raw JSON string returned by the model, or null on failure. */
   rawText: string | null
 }
 
-/**
- * Extract invoice fields from a PDF buffer. Returns an InvoiceExtractionResult
- * whether or not anything matched — empty fields are null, lineItems is [],
- * and totals are null. Never throws on parse failure (returns empty result).
- */
-export async function extractInvoiceFields(input: ExtractionInput): Promise<ExtractionOutput> {
-  const text = await tryExtractPdfText(input)
+const ExtractionSchema = z.object({
+  supplier: z.object({
+    name: z.string().nullable(),
+    orgNumber: z.string().nullable(),
+    vatNumber: z.string().nullable(),
+    address: z.string().nullable(),
+    bankgiro: z.string().nullable(),
+    plusgiro: z.string().nullable(),
+  }),
+  invoice: z.object({
+    invoiceNumber: z.string().nullable(),
+    invoiceDate: z.string().nullable(),
+    dueDate: z.string().nullable(),
+    paymentReference: z.string().nullable(),
+    currency: z.string(),
+  }),
+  lineItems: z.array(
+    z.object({
+      description: z.string(),
+      quantity: z.number(),
+      unitPrice: z.number().nullable(),
+      lineTotal: z.number(),
+      vatRate: z.number().nullable(),
+      accountSuggestion: z.string().nullable(),
+    })
+  ),
+  totals: z.object({
+    subtotal: z.number().nullable(),
+    vatAmount: z.number().nullable(),
+    total: z.number().nullable(),
+  }),
+  vatBreakdown: z.array(
+    z.object({
+      rate: z.number(),
+      base: z.number(),
+      amount: z.number(),
+    })
+  ),
+})
 
-  if (!text || text.length < MIN_TEXT_CHARS_FOR_EXTRACTION) {
-    return { data: emptyResult(), rawText: text }
-  }
+const SYSTEM_PROMPT = `You extract invoice and receipt fields from a single document for a Swedish accounting system.
 
-  const data: InvoiceExtractionResult = {
-    supplier: {
-      name: extractSupplierName(text),
-      orgNumber: extractOrgNumber(text),
-      vatNumber: extractVatNumber(text),
-      address: null,
-      bankgiro: extractBankgiro(text),
-      plusgiro: extractPlusgiro(text),
-    },
-    invoice: {
-      invoiceNumber: extractInvoiceNumber(text),
-      invoiceDate: extractDate(text, /faktura(?:datum|date)|utfärdat/i),
-      dueDate: extractDate(text, /förfallo(?:datum|dag)|due\s*date|betala\s*senast/i),
-      paymentReference: extractOcrReference(text),
-      currency: extractCurrency(text),
-    },
-    lineItems: [],
-    totals: extractTotals(text),
-    vatBreakdown: extractVatBreakdown(text),
-    confidence: 0,
-  }
+Return ONLY a single JSON object that matches this schema exactly. No prose, no markdown fences, no commentary.
 
-  return { data, rawText: text }
+{
+  "supplier": {
+    "name": string | null,
+    "orgNumber": string | null,    // 10 digits, no hyphen, only when issued by a Swedish entity
+    "vatNumber": string | null,    // ISO format, e.g. "SE556012579001" or "DE123456789"
+    "address": string | null,      // multi-line allowed
+    "bankgiro": string | null,     // Swedish bankgiro, with hyphen, e.g. "991-2346"
+    "plusgiro": string | null      // Swedish plusgiro, with hyphen, e.g. "12345-6"
+  },
+  "invoice": {
+    "invoiceNumber": string | null,    // include any suffix, e.g. "06655767-0007"
+    "invoiceDate": string | null,      // ISO date YYYY-MM-DD
+    "dueDate": string | null,          // ISO date YYYY-MM-DD
+    "paymentReference": string | null, // OCR / payment reference
+    "currency": string                 // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
+  },
+  "lineItems": [
+    {
+      "description": string,
+      "quantity": number,
+      "unitPrice": number | null,
+      "lineTotal": number,
+      "vatRate": number | null,         // e.g. 0.25, 0.12, 0.06, 0
+      "accountSuggestion": null         // always null — leave Swedish BAS suggestion to the user
+    }
+  ],
+  "totals": {
+    "subtotal": number | null,    // amount excluding VAT
+    "vatAmount": number | null,   // total VAT
+    "total": number | null        // amount including VAT — what the buyer pays
+  },
+  "vatBreakdown": [
+    { "rate": number, "base": number, "amount": number }   // rate as percent, e.g. 25 for 25%
+  ]
 }
+
+Rules:
+- Output JSON only. The first character must be '{' and the last must be '}'.
+- Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
+- "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
+- Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
+- Bankgiro/Plusgiro: only set when the document is for a Swedish supplier on a Swedish bank rail. Do not invent.
+- Org.nr: only set when it is an actual Swedish organisation number (10 digits, Luhn-valid). For US/EU companies leave null even if they list an EIN/VAT number.
+- VAT number: include the country prefix.
+- Numbers: parse with the document's locale (Swedish "1 234,56" = 1234.56; English "$1,234.56" = 1234.56). Output as plain JSON numbers.
+- If a field is missing or unreadable, set it to null. Never invent values.
+- lineItems: include every line. Empty array is fine if the document has no itemised lines.
+- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
 
 function emptyResult(): InvoiceExtractionResult {
   return {
@@ -92,202 +160,90 @@ function emptyResult(): InvoiceExtractionResult {
   }
 }
 
-// ── PDF text extraction ─────────────────────────────────────────────
-
-async function tryExtractPdfText(input: ExtractionInput): Promise<string | null> {
-  if (input.mimeType !== 'application/pdf') return null
-
-  try {
-    const { text } = await extractText(new Uint8Array(input.buffer), { mergePages: true })
-    return text.replace(/[ \t]+/g, ' ').trim()
-  } catch (err) {
-    console.warn('[invoice-inbox/extract] pdf text extraction failed:', err instanceof Error ? err.message : err)
-    return null
+function buildContent(input: ExtractionInput) {
+  const base64 = input.buffer.toString('base64')
+  if (input.mimeType === 'application/pdf') {
+    return [
+      {
+        type: 'document' as const,
+        source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
+      },
+      { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
+    ]
   }
+  return [
+    {
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: input.mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+        data: base64,
+      },
+    },
+    { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
+  ]
 }
 
-// ── Field extractors ────────────────────────────────────────────────
-
-function extractOrgNumber(text: string): string | null {
-  const candidates = text.match(/\b\d{6}-?\d{4}\b/g) ?? []
-  for (const c of candidates) {
-    const normalized = normalizeOrgNumber(c)
-    if (normalized) return normalized
+/**
+ * Extract invoice fields by sending the document directly to Claude
+ * Sonnet 4.6 via AWS Bedrock. Never throws on extraction failure —
+ * always returns an InvoiceExtractionResult. Empty fields are null.
+ */
+export async function extractInvoiceFields(
+  input: ExtractionInput
+): Promise<ExtractionOutput> {
+  if (!SUPPORTED_MEDIA_TYPES.has(input.mimeType)) {
+    return { data: emptyResult(), rawText: null }
   }
-  return null
-}
 
-function extractVatNumber(text: string): string | null {
-  const m = text.match(/\bSE\d{10}\d{2}\b/i)
-  return m ? m[0].toUpperCase() : null
-}
-
-function extractOcrReference(text: string): string | null {
-  // Anchor on "OCR" / "Referens" / "Bet.ref" labels; widen to any digit
-  // run on the same logical line if no labelled hit found.
-  const labelled = text.match(
-    /(?:OCR(?:-?nummer)?|Referens(?:nummer)?|Bet\.?\s*ref\.?|Betalningsreferens)[^\d\n]{0,40}(\d[\d\s]{3,30}\d)/i
-  )
-  if (labelled) {
-    const digits = labelled[1].replace(/\s/g, '')
-    if (validateOcrReference(digits)) return digits
+  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    log.warn('AWS Bedrock credentials missing — returning empty extraction', {
+      fileName: input.fileName,
+    })
+    return { data: emptyResult(), rawText: null }
   }
-  // Fallback: look for any standalone digit run that passes Luhn (4-25 digits)
-  const candidates = text.match(/\b\d{4,25}\b/g) ?? []
-  for (const c of candidates) {
-    if (validateOcrReference(c)) return c
-  }
-  return null
-}
 
-function extractBankgiro(text: string): string | null {
-  const labelled = text.match(/Bankgiro(?:nr)?[^\d\n]{0,20}(\d{3,4}-?\d{4})/i)
-  if (labelled && validateBankgiroNumber(labelled[1])) {
-    return labelled[1].includes('-') ? labelled[1] : insertBankgiroHyphen(labelled[1])
-  }
-  // Fallback: any 7-8 digit number with hyphen that passes Luhn
-  const candidates = text.match(/\b\d{3,4}-\d{4}\b/g) ?? []
-  for (const c of candidates) {
-    if (validateBankgiroNumber(c)) return c
-  }
-  return null
-}
-
-function insertBankgiroHyphen(digits: string): string {
-  if (digits.length === 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`
-  if (digits.length === 8) return `${digits.slice(0, 4)}-${digits.slice(4)}`
-  return digits
-}
-
-function extractPlusgiro(text: string): string | null {
-  const m = text.match(/Plusgiro(?:nr)?[^\d\n]{0,20}(\d{1,8}-\d)/i)
-  return m ? m[1] : null
-}
-
-function extractInvoiceNumber(text: string): string | null {
-  const m = text.match(
-    /(?:Faktura(?:nr|nummer)?|Invoice\s*(?:no|number|#))[^\w\n]{0,8}([A-Z0-9][A-Z0-9\-/]{2,20})/i
-  )
-  return m ? m[1].trim() : null
-}
-
-function extractDate(text: string, anchor: RegExp): string | null {
-  // Look for a date within ~40 chars of the anchor
-  const re = new RegExp(
-    `(?:${anchor.source})[^\\d\\n]{0,40}(\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}|\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{4})`,
-    'i'
-  )
-  const m = text.match(re)
-  if (!m) return null
-  return normalizeDate(m[1])
-}
-
-function normalizeDate(raw: string): string | null {
-  const sep = raw.match(/[-/.]/)
-  if (!sep) return null
-  const parts = raw.split(/[-/.]/).map((p) => p.trim())
-  if (parts.length !== 3) return null
-  let yyyy: string, mm: string, dd: string
-  if (parts[0].length === 4) {
-    [yyyy, mm, dd] = parts
-  } else if (parts[2].length === 4) {
-    [dd, mm, yyyy] = parts
-  } else {
-    return null
-  }
-  const m = mm.padStart(2, '0')
-  const d = dd.padStart(2, '0')
-  if (!/^\d{4}$/.test(yyyy) || !/^\d{2}$/.test(m) || !/^\d{2}$/.test(d)) return null
-  // Sanity check
-  const month = parseInt(m, 10)
-  const day = parseInt(d, 10)
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null
-  return `${yyyy}-${m}-${d}`
-}
-
-function extractCurrency(text: string): string {
-  // Default SEK; only switch if a 3-letter currency code appears with an amount nearby
-  const m = text.match(/\b(EUR|USD|GBP|NOK|DKK|CHF)\b/i)
-  return m ? m[1].toUpperCase() : 'SEK'
-}
-
-function extractTotals(text: string): { subtotal: number | null; vatAmount: number | null; total: number | null } {
-  const total = findAmountNear(text, /(?:Att\s*betala|Totalt\s*att\s*betala|Summa\s*att\s*betala|Total(?:summa)?|Belopp\s*att\s*betala)/i)
-  const vatAmount = findAmountNear(text, /(?:Total\s*moms|Moms(?:\s*totalt)?|VAT(?:\s*total)?)/i)
-  const subtotal = findAmountNear(text, /(?:Netto(?:summa)?|Subtotal|Summa\s*excl(?:\.|usive)?\s*moms|Belopp\s*excl(?:\.|usive)?\s*moms)/i)
-  return { subtotal, vatAmount, total }
-}
-
-function findAmountNear(text: string, anchor: RegExp): number | null {
-  const re = new RegExp(`(?:${anchor.source})[^\\d\\n-]{0,60}([0-9][\\d\\s.,]*[0-9])`, 'i')
-  const m = text.match(re)
-  if (!m) return null
-  return parseSwedishAmount(m[1])
-}
-
-function parseSwedishAmount(raw: string): number | null {
-  // Swedish uses space as thousands sep and comma as decimal: "1 234,56".
-  // Also tolerate "1,234.56" (international) and "1234.56".
-  const cleaned = raw.replace(/\s/g, '')
-  let normalized: string
-  if (/,/.test(cleaned) && /\./.test(cleaned)) {
-    // Both present — assume thousands+decimal. Decide by last separator.
-    const lastComma = cleaned.lastIndexOf(',')
-    const lastDot = cleaned.lastIndexOf('.')
-    if (lastComma > lastDot) {
-      normalized = cleaned.replace(/\./g, '').replace(',', '.')
-    } else {
-      normalized = cleaned.replace(/,/g, '')
-    }
-  } else if (/,/.test(cleaned)) {
-    // Only comma — Swedish decimal
-    normalized = cleaned.replace(',', '.')
-  } else {
-    normalized = cleaned
-  }
-  const n = parseFloat(normalized)
-  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
-}
-
-function extractVatBreakdown(text: string): Array<{ rate: number; base: number; amount: number }> {
-  const out: Array<{ rate: number; base: number; amount: number }> = []
-  // Match patterns like "Moms 25%  800,00  200,00" or "25% moms 200,00"
-  const lineRe = /(?:Moms\s*)?(\d{1,2})\s*%[^\n\d-]{0,30}([0-9][\d\s.,]*[0-9])(?:[^\n\d-]{0,30}([0-9][\d\s.,]*[0-9]))?/gi
-  let m: RegExpExecArray | null
-  while ((m = lineRe.exec(text)) !== null) {
-    const rate = parseInt(m[1], 10)
-    if (![25, 12, 6, 0].includes(rate)) continue
-    const a = parseSwedishAmount(m[2])
-    const b = m[3] ? parseSwedishAmount(m[3]) : null
-    if (a == null) continue
-    // Two amounts: base then VAT amount. One amount: just VAT, derive base.
-    if (b != null) {
-      out.push({ rate, base: a, amount: b })
-    } else if (rate > 0) {
-      const base = Math.round((a / (rate / 100)) * 100) / 100
-      out.push({ rate, base, amount: a })
-    }
-  }
-  // Dedup by rate (keep first hit)
-  const seen = new Set<number>()
-  return out.filter((row) => {
-    if (seen.has(row.rate)) return false
-    seen.add(row.rate)
-    return true
+  const client = new AnthropicBedrock({
+    awsRegion: process.env.AWS_REGION || 'eu-north-1',
+    awsAccessKey: process.env.AWS_ACCESS_KEY_ID,
+    awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY,
   })
-}
 
-function extractSupplierName(text: string): string | null {
-  // Heuristic: first non-blank, non-numeric line in the first 500 chars,
-  // skipping obvious header words.
-  const head = text.slice(0, 500)
-  const lines = head.split(/\n|(?:\s{4,})/).map((l) => l.trim()).filter(Boolean)
-  const skip = /^(faktura|invoice|kvitto|receipt|sida|page|datum|date)$/i
-  for (const line of lines) {
-    if (skip.test(line)) continue
-    if (/^\d/.test(line)) continue
-    if (line.length < 3 || line.length > 80) continue
-    return line
+  let rawText: string | null = null
+  try {
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: buildContent(input) }],
+    })
+
+    rawText = resp.content
+      .flatMap((b) => (b.type === 'text' ? [b.text] : []))
+      .join('')
+      .trim()
+
+    const parsed = JSON.parse(rawText)
+    const validated = ExtractionSchema.parse(parsed)
+
+    return {
+      data: {
+        ...validated,
+        lineItems: validated.lineItems.map((item) => ({
+          ...item,
+          accountSuggestion: null,
+        })),
+        confidence: 1,
+      },
+      rawText,
+    }
+  } catch (err) {
+    log.warn('AI extraction failed', {
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      error: err instanceof Error ? err.message : String(err),
+      hasRawText: rawText != null,
+    })
+    return { data: emptyResult(), rawText }
   }
-  return null
 }

@@ -1,6 +1,7 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { extractInvoiceFields } from './lib/extract-invoice-fields'
 import {
@@ -22,6 +23,48 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
+
+// Partial-update schema for the /items/:id/fields PATCH route. Only the
+// scalar fields the UI exposes for inline editing — line items and
+// vatBreakdown stay AI-managed for now and are preserved by the merge.
+const NullableString = z.string().trim().max(500).nullable()
+const NullableDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date — expected YYYY-MM-DD')
+  .nullable()
+const NullableNumber = z.number().nullable()
+
+const UpdateExtractedDataSchema = z.object({
+  supplier: z
+    .object({
+      name: NullableString,
+      orgNumber: NullableString,
+      vatNumber: NullableString,
+      address: NullableString,
+      bankgiro: NullableString,
+      plusgiro: NullableString,
+    })
+    .partial()
+    .optional(),
+  invoice: z
+    .object({
+      invoiceNumber: NullableString,
+      invoiceDate: NullableDate,
+      dueDate: NullableDate,
+      paymentReference: NullableString,
+      currency: z.string().min(3).max(8),
+    })
+    .partial()
+    .optional(),
+  totals: z
+    .object({
+      subtotal: NullableNumber,
+      vatAmount: NullableNumber,
+      total: NullableNumber,
+    })
+    .partial()
+    .optional(),
+})
 
 const UPLOAD_ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -323,6 +366,71 @@ export const invoiceInboxExtension: Extension = {
         if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
         return NextResponse.json({ data })
+      },
+    },
+
+    // ── Update extracted_data fields (manual user edits) ────
+    {
+      method: 'PATCH',
+      path: '/items/:id/fields',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        let body: z.infer<typeof UpdateExtractedDataSchema>
+        try {
+          const json = await request.json()
+          body = UpdateExtractedDataSchema.parse(json)
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid request body' },
+            { status: 400 }
+          )
+        }
+
+        const { data: item } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, extracted_data, created_supplier_invoice_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        if (item.created_supplier_invoice_id) {
+          return NextResponse.json(
+            { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
+            { status: 409 }
+          )
+        }
+
+        // Merge user edits into existing extracted_data so we don't lose
+        // line items, vatBreakdown, or AI-confidence on partial updates.
+        const current = (item.extracted_data ?? {}) as InvoiceExtractionResult
+        const merged: InvoiceExtractionResult = {
+          supplier: { ...current.supplier, ...body.supplier },
+          invoice: { ...current.invoice, ...body.invoice },
+          totals: { ...current.totals, ...body.totals },
+          lineItems: current.lineItems ?? [],
+          vatBreakdown: current.vatBreakdown ?? [],
+          confidence: current.confidence ?? 0,
+        }
+
+        const { data: updated, error: updateError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({ extracted_data: merged as unknown as Record<string, unknown> })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .select('id, extracted_data')
+          .single()
+
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        return NextResponse.json({ data: updated })
       },
     },
 

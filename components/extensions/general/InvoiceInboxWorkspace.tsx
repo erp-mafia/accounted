@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -420,6 +421,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               onDelete={() => handleDelete(selected.id)}
               onAttach={() => setAttachOpen(true)}
               isDeleting={isDeleting}
+              onFieldsUpdated={(nextData) => {
+                setSelected((prev) => (prev ? { ...prev, extracted_data: nextData } : prev))
+                setItems((prev) =>
+                  prev.map((it) =>
+                    it.id === selected.id ? { ...it, extracted_data: nextData } : it
+                  )
+                )
+              }}
             />
           ) : (
             <div className="p-6 text-center text-sm text-muted-foreground">
@@ -750,11 +759,13 @@ function FieldsRail({
   onDelete,
   onAttach,
   isDeleting,
+  onFieldsUpdated,
 }: {
   item: InboxItem
   onDelete: () => void
   onAttach: () => void
   isDeleting: boolean
+  onFieldsUpdated: (data: InvoiceExtractionResult) => void
 }) {
   const data = item.extracted_data
   const isProcessed = !!item.created_supplier_invoice_id
@@ -800,13 +811,12 @@ function FieldsRail({
         <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-3">
           Extraherade fält
         </h3>
-        {data ? (
-          <ExtractedFieldsList data={data} />
-        ) : (
-          <p className="text-xs text-muted-foreground italic">
-            Kunde inte läsa text — manuell registrering krävs.
-          </p>
-        )}
+        <EditableFieldsList
+          itemId={item.id}
+          data={data ?? emptyExtraction()}
+          disabled={isProcessed}
+          onUpdated={onFieldsUpdated}
+        />
       </div>
 
       {/* Actions */}
@@ -866,60 +876,235 @@ function FieldsRail({
 
 // ── Extracted fields list ────────────────────────────────────
 
-function ExtractedFieldsList({ data }: { data: InvoiceExtractionResult }) {
-  const fields: Array<{ label: string; value: string | null }> = [
-    { label: 'Leverantör', value: data.supplier?.name ?? null },
-    { label: 'Org.nr', value: data.supplier?.orgNumber ?? null },
-    { label: 'VAT-nr', value: data.supplier?.vatNumber ?? null },
-    { label: 'Bankgiro', value: data.supplier?.bankgiro ?? null },
-    { label: 'Plusgiro', value: data.supplier?.plusgiro ?? null },
-    { label: 'Fakturanr', value: data.invoice?.invoiceNumber ?? null },
-    { label: 'OCR/Referens', value: data.invoice?.paymentReference ?? null },
-    { label: 'Fakturadatum', value: data.invoice?.invoiceDate ?? null },
-    { label: 'Förfallodatum', value: data.invoice?.dueDate ?? null },
-    {
-      label: 'Totalt',
-      value: data.totals?.total != null ? formatCurrency(data.totals.total, data.invoice?.currency ?? 'SEK') : null,
+function emptyExtraction(): InvoiceExtractionResult {
+  return {
+    supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
+    invoice: { invoiceNumber: null, invoiceDate: null, dueDate: null, paymentReference: null, currency: 'SEK' },
+    lineItems: [],
+    totals: { subtotal: null, vatAmount: null, total: null },
+    vatBreakdown: [],
+    confidence: 0,
+  }
+}
+
+// Inline edit + debounced auto-save. The field set mirrors the
+// UpdateExtractedDataSchema in extensions/general/invoice-inbox/index.ts.
+type FieldKey =
+  | 'supplier.name'
+  | 'supplier.orgNumber'
+  | 'supplier.vatNumber'
+  | 'supplier.bankgiro'
+  | 'supplier.plusgiro'
+  | 'invoice.invoiceNumber'
+  | 'invoice.paymentReference'
+  | 'invoice.invoiceDate'
+  | 'invoice.dueDate'
+  | 'invoice.currency'
+  | 'totals.total'
+  | 'totals.vatAmount'
+
+interface FieldDef {
+  key: FieldKey
+  label: string
+  type: 'text' | 'date' | 'number'
+  inputMode?: 'numeric' | 'decimal'
+}
+
+const FIELD_DEFS: FieldDef[] = [
+  { key: 'supplier.name', label: 'Leverantör', type: 'text' },
+  { key: 'supplier.orgNumber', label: 'Org.nr', type: 'text' },
+  { key: 'supplier.vatNumber', label: 'VAT-nr', type: 'text' },
+  { key: 'supplier.bankgiro', label: 'Bankgiro', type: 'text' },
+  { key: 'supplier.plusgiro', label: 'Plusgiro', type: 'text' },
+  { key: 'invoice.invoiceNumber', label: 'Fakturanr', type: 'text' },
+  { key: 'invoice.paymentReference', label: 'OCR/Referens', type: 'text' },
+  { key: 'invoice.invoiceDate', label: 'Fakturadatum', type: 'date' },
+  { key: 'invoice.dueDate', label: 'Förfallodatum', type: 'date' },
+  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
+  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
+  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
+]
+
+function readField(data: InvoiceExtractionResult, key: FieldKey): string {
+  const [group, name] = key.split('.') as [keyof InvoiceExtractionResult, string]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const value = (data[group] as any)?.[name]
+  if (value == null) return ''
+  return String(value)
+}
+
+function buildPatchBody(key: FieldKey, raw: string, currency: string) {
+  const [group, name] = key.split('.')
+  const trimmed = raw.trim()
+
+  if (group === 'totals') {
+    const num = trimmed === '' ? null : Number(trimmed.replace(',', '.'))
+    if (num != null && !Number.isFinite(num)) return null
+    return { totals: { [name]: num } }
+  }
+  if (group === 'invoice' && (name === 'invoiceDate' || name === 'dueDate')) {
+    const value = trimmed === '' ? null : trimmed
+    return { invoice: { [name]: value } }
+  }
+  if (group === 'invoice' && name === 'currency') {
+    return { invoice: { currency: trimmed === '' ? currency : trimmed.toUpperCase() } }
+  }
+  return { [group]: { [name]: trimmed === '' ? null : trimmed } }
+}
+
+function EditableFieldsList({
+  itemId,
+  data,
+  disabled,
+  onUpdated,
+}: {
+  itemId: string
+  data: InvoiceExtractionResult
+  disabled: boolean
+  onUpdated: (data: InvoiceExtractionResult) => void
+}) {
+  const { toast } = useToast()
+  const [drafts, setDrafts] = useState<Record<FieldKey, string>>(() =>
+    Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
+  )
+  const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
+
+  // Reset drafts when the user switches to a different inbox item.
+  useEffect(() => {
+    setDrafts(
+      Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
+    )
+    return () => {
+      for (const t of Object.values(timersRef.current)) {
+        if (t) clearTimeout(t)
+      }
+      timersRef.current = {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemId])
+
+  const currency = data.invoice?.currency ?? 'SEK'
+
+  const persist = useCallback(
+    async (key: FieldKey, raw: string) => {
+      const body = buildPatchBody(key, raw, currency)
+      if (!body) {
+        toast({ variant: 'destructive', title: 'Ogiltigt värde' })
+        setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
+        return
+      }
+      try {
+        const res = await fetch(
+          `/api/extensions/ext/invoice-inbox/items/${itemId}/fields`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          }
+        )
+        const json = await res.json()
+        if (!res.ok) {
+          toast({
+            variant: 'destructive',
+            title: 'Kunde inte spara',
+            description: json.error ?? 'Försök igen',
+          })
+          setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
+          return
+        }
+        if (json.data?.extracted_data) {
+          onUpdated(json.data.extracted_data as InvoiceExtractionResult)
+        }
+      } catch (err) {
+        toast({
+          variant: 'destructive',
+          title: 'Nätverksfel',
+          description: err instanceof Error ? err.message : 'Kunde inte spara',
+        })
+        setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
+      }
     },
-    {
-      label: 'Moms',
-      value: data.totals?.vatAmount != null ? formatCurrency(data.totals.vatAmount, data.invoice?.currency ?? 'SEK') : null,
+    [itemId, currency, data, onUpdated, toast]
+  )
+
+  const onChange = useCallback(
+    (key: FieldKey, raw: string) => {
+      setDrafts((prev) => ({ ...prev, [key]: raw }))
+      const existing = timersRef.current[key]
+      if (existing) clearTimeout(existing)
+      timersRef.current[key] = setTimeout(() => {
+        timersRef.current[key] = undefined
+        if (raw === readField(data, key)) return
+        void persist(key, raw)
+      }, 800)
     },
-  ]
+    [data, persist]
+  )
+
+  const onBlur = useCallback(
+    (key: FieldKey) => {
+      const pending = timersRef.current[key]
+      if (pending) {
+        clearTimeout(pending)
+        timersRef.current[key] = undefined
+        const raw = drafts[key]
+        if (raw !== readField(data, key)) void persist(key, raw)
+      }
+    },
+    [data, drafts, persist]
+  )
+
+  const vatRows = useMemo(() => data.vatBreakdown ?? [], [data.vatBreakdown])
 
   return (
-    <dl className="space-y-2">
-      {fields.map((f) => (
-        <div key={f.label} className="flex flex-col gap-0.5">
-          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground/80">{f.label}</dt>
-          <dd
-            className={cn(
-              'text-sm break-all',
-              f.value == null && 'text-muted-foreground/50 italic'
-            )}
+    <div className="space-y-2">
+      {FIELD_DEFS.map((f) => (
+        <div key={f.key} className="flex flex-col gap-0.5">
+          <label
+            htmlFor={`field-${f.key}`}
+            className="text-[10px] uppercase tracking-wide text-muted-foreground/80"
           >
-            {f.value ?? '—'}
-          </dd>
+            {f.label}
+          </label>
+          <Input
+            id={`field-${f.key}`}
+            type={f.type}
+            inputMode={f.inputMode}
+            value={drafts[f.key]}
+            onChange={(e) => onChange(f.key, e.target.value)}
+            onBlur={() => onBlur(f.key)}
+            disabled={disabled}
+            placeholder="—"
+            className={cn(
+              'h-8 text-sm border-transparent bg-transparent px-2 -mx-2 hover:border-border focus-visible:border-ring',
+              drafts[f.key] === '' && 'text-muted-foreground/50 italic'
+            )}
+          />
         </div>
       ))}
-      {data.vatBreakdown && data.vatBreakdown.length > 0 && (
+      {vatRows.length > 0 && (
         <div className="pt-2 border-t mt-3">
-          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
             Momsfördelning
-          </dt>
-          <dd className="space-y-1">
-            {data.vatBreakdown.map((row, i) => (
+          </p>
+          <div className="space-y-1">
+            {vatRows.map((row, i) => (
               <div key={i} className="text-xs flex justify-between">
                 <span className="text-muted-foreground">{row.rate}%</span>
                 <span className="tabular-nums">
-                  {formatCurrency(row.base, data.invoice?.currency ?? 'SEK')} +{' '}
-                  {formatCurrency(row.amount, data.invoice?.currency ?? 'SEK')}
+                  {formatCurrency(row.base, currency)} +{' '}
+                  {formatCurrency(row.amount, currency)}
                 </span>
               </div>
             ))}
-          </dd>
+          </div>
         </div>
       )}
-    </dl>
+      {disabled && (
+        <p className="text-[10px] text-muted-foreground/70 pt-2">
+          Posten är kopplad till en leverantörsfaktura — fälten kan inte ändras.
+        </p>
+      )}
+    </div>
   )
 }
