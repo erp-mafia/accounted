@@ -57,7 +57,11 @@ const UpdateExtractedDataSchema = z.object({
       invoiceDate: NullableDate,
       dueDate: NullableDate,
       paymentReference: NullableString,
-      currency: z.string().min(3).max(8),
+      // ISO 4217 — three uppercase letters. We accept the user's edit only
+      // if it looks like a real currency code; loose strings would otherwise
+      // flow into the supplier-invoice-creation step and produce a faktura
+      // with an invalid currency (cf. ML 17 kap 24§ p.9).
+      currency: z.string().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter ISO 4217 code'),
     })
     .partial()
     .optional(),

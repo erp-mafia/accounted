@@ -44,7 +44,7 @@ const VALID_RESULT = {
       quantity: 1,
       unitPrice: 5,
       lineTotal: 5,
-      vatRate: 0.25,
+      vatRate: 25,
       accountSuggestion: null,
     },
   ],

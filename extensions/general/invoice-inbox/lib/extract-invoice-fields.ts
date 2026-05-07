@@ -69,8 +69,18 @@ const ExtractionSchema = z.object({
       quantity: z.number(),
       unitPrice: z.number().nullable(),
       lineTotal: z.number(),
-      vatRate: z.number().nullable(),
-      accountSuggestion: z.string().nullable(),
+      // Sane range for any real-world VAT rate. We allow non-Swedish rates
+      // (UK 20, DE 19, NO 25, ...) since gnubok stores foreign invoices
+      // for reference; the strict Swedish allowlist applies later when the
+      // user converts to a supplier invoice.
+      vatRate: z.number().min(0).max(100).nullable(),
+      // accountSuggestion is forcibly null at parse time — we never
+      // delegate BAS account assignment to an unvalidated AI output.
+      // .transform coerces a hallucinated string to null without
+      // failing the whole document parse, and eliminates the
+      // post-validation null-forcing pattern that left a brief window
+      // where a non-null value could appear in the parsed object.
+      accountSuggestion: z.union([z.string(), z.null()]).transform(() => null as null),
     })
   ),
   totals: z.object({
@@ -80,7 +90,7 @@ const ExtractionSchema = z.object({
   }),
   vatBreakdown: z.array(
     z.object({
-      rate: z.number(),
+      rate: z.number().min(0).max(100),
       base: z.number(),
       amount: z.number(),
     })
@@ -233,14 +243,9 @@ export async function extractInvoiceFields(
     const validated = ExtractionSchema.parse(parsed)
 
     return {
-      data: {
-        ...validated,
-        lineItems: validated.lineItems.map((item) => ({
-          ...item,
-          accountSuggestion: null,
-        })),
-        confidence: 1,
-      },
+      // accountSuggestion is null at this point — enforced by the schema's
+      // .transform — so no post-validation coercion is needed.
+      data: { ...validated, confidence: 1 },
       rawText,
     }
   } catch (err) {
