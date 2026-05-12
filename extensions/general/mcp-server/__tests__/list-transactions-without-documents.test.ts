@@ -55,6 +55,45 @@ describe('gnubok_list_transactions_without_documents', () => {
     expect(result.transactions[0].journal_entry_id).toBe('je-1')
   })
 
+  it('returns rows when DB has null merchant_name, reference, is_business, category (MCP structured output)', async () => {
+    const rows = [
+      {
+        id: 't-no-doc-1',
+        date: '2026-03-17',
+        description: 'Nolla skuld',
+        amount: -2745,
+        currency: 'SEK',
+        merchant_name: null,
+        reference: null,
+        is_business: null,
+        category: null,
+        journal_entry_id: 'je-nolla-1',
+      },
+    ]
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null, count: 1 })
+    enqueue({ data: rows, error: null })
+
+    const result = (await tool.execute(
+      { limit: 20 },
+      'company-1',
+      'user-1',
+      supabase as never
+    )) as {
+      transactions: typeof rows
+      count: number
+      total_count: number
+      has_more: boolean
+    }
+
+    expect(result.count).toBe(1)
+    expect(result.transactions[0].journal_entry_id).toBe('je-nolla-1')
+    expect(result.transactions[0].merchant_name).toBeNull()
+    expect(result.transactions[0].reference).toBeNull()
+    expect(result.transactions[0].is_business).toBeNull()
+    expect(result.transactions[0].category).toBeNull()
+  })
+
   it('returns empty result when nothing matches', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: null, count: 0 })
