@@ -11,35 +11,35 @@
 
 :root {
   color-scheme: light;
-  /* Grayscale Chrome Palette */
+  /* Grayscale Chrome Palette — Midday-style paper white + warm beige */
 
-  --background: 0 0% 97%;
+  --background: 0 0% 100%;
   --foreground: 0 0% 9%;
 
-  --card: 0 0% 99%;
+  --card: 0 0% 100%;
   --card-foreground: 0 0% 9%;
 
-  --popover: 0 0% 99%;
+  --popover: 0 0% 100%;
   --popover-foreground: 0 0% 9%;
 
-  --primary: 210 5% 25%;
+  --primary: 0 0% 9%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 0 0% 94%;
+  --secondary: 40 11% 89%;                /* Warm beige paper chip */
   --secondary-foreground: 0 0% 9%;
 
-  --muted: 0 0% 92%;
+  --muted: 40 8% 93%;
   --muted-foreground: 0 0% 40%;
 
-  --accent: 0 0% 92%;
+  --accent: 40 8% 93%;
   --accent-foreground: 0 0% 9%;
 
   --destructive: 6 36% 48%;               /* Muted terracotta */
   --destructive-foreground: 0 0% 100%;
 
-  --border: 0 0% 90%;
-  --input: 0 0% 90%;
-  --ring: 210 5% 25%;
+  --border: 45 5% 85%;
+  --input: 45 5% 85%;
+  --ring: 0 0% 9%;
 
   /* Radius */
   --radius: 0.5rem;
@@ -61,13 +61,13 @@
   --chart-4: 0 0% 50%;
 
   /* Custom tokens */
-  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-display: var(--font-hedvig-serif), Georgia, serif;
   --font-body: var(--font-geist-sans), system-ui, sans-serif;
 
-  /* Shadows — cool-toned */
-  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.08);
+  /* Shadows — barely-there; chrome relies on hairline borders */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 1px 1px rgba(15, 23, 42, 0.02);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.03);
+  --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.05);
 
   /* Animation */
   --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
@@ -83,13 +83,13 @@
   --background: 0 0% 7%;
   --foreground: 0 0% 87%;
 
-  --card: 0 0% 10%;
+  --card: 0 0% 11%;
   --card-foreground: 0 0% 87%;
 
-  --popover: 0 0% 10%;
+  --popover: 0 0% 11%;
   --popover-foreground: 0 0% 87%;
 
-  --primary: 210 4% 82%;
+  --primary: 0 0% 87%;
   --primary-foreground: 0 0% 7%;
 
   --secondary: 0 0% 14%;
@@ -104,9 +104,9 @@
   --destructive: 6 32% 56%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 0 0% 18%;
-  --input: 0 0% 18%;
-  --ring: 210 4% 82%;
+  --border: 45 4% 18%;
+  --input: 45 4% 18%;
+  --ring: 0 0% 87%;
 
   --success: 155 22% 48%;
   --success-foreground: 0 0% 100%;
@@ -278,15 +278,13 @@ h1, h2, h3 {
   animation: scaleIn var(--duration-base) var(--ease-out);
 }
 
-/* Refined hover effects */
+/* Refined hover effects — flat bg shift, no elevation */
 .hover-lift {
-  transition: transform var(--duration-fast) var(--ease-out),
-              box-shadow var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out);
 }
 
 .hover-lift:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  background-color: hsl(var(--muted) / 0.6);
 }
 
 /* Soft focus states */

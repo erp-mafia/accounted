@@ -354,13 +354,13 @@ Swedish sole traders (enskild firma) and small business owners (aktiebolag) who 
 
 ### Brand & Aesthetic
 
-**Minimal. Sharp. Efficient.** The interface should feel like a well-made instrument: considered, quiet, and confident. Reference: Mercury (banking). Anti-reference: enterprise software (SAP/Oracle density).
+**Editorial monochrome.** Paper-white surfaces, hairline borders, serif headlines. Reference: Midday. Anti-references: enterprise software (SAP/Oracle density), neon SaaS (Linear/Vercel coldness).
 
-- **Palette**: Grayscale foundation with restrained semantic colors — sage green (success/balance), terracotta (errors/overdue), ochre (warnings/attention). No loud brand color.
-- **Typography**: Fraunces (serif) for display headings, Geist (sans) for body. Tabular numbers everywhere financial data appears.
-- **Surfaces**: White/near-white cards on light gray backgrounds. Subtle borders (60% opacity). Soft shadows. Dark mode follows the same restraint.
+- **Palette**: Achromatic foundation. Pure white background, warm beige (`40 11% 89%`) for chips / active sidebar / hover / secondary buttons. Achromatic primary (no cool tint). Semantic colors (`--success` sage, `--warning` ochre, `--destructive` terracotta) exist but are **data-only** — they appear in charts and financial numbers (positive/negative deltas), never as chrome backgrounds. In chrome, only `--destructive` survives.
+- **Typography**: Hedvig Letters Serif for display headings, Geist (sans) for body, forms, and tables. Hedvig is single-weight (400) — do not apply `font-medium` to display text; its natural high-contrast strokes carry the weight. Tabular numbers everywhere financial data appears.
+- **Surfaces**: Cards sit flat on the page — no shadow, full-opacity hairline border (`border-border`), `rounded-lg` (8px). Card background matches page background; the border carries hierarchy. Dark mode drops the warm tint from secondary for a pure-gray mood shift; light mode keeps the beige.
 - **Spacing**: Generous whitespace. Dense data (tables, ledgers) uses tighter spacing but never feels cramped.
-- **Motion**: Subtle and purposeful. Stagger animations for list entry, spring easing for feedback. Never decorative.
+- **Motion**: Functional, not decorative. No press-scale, no hover-lift, no spring overshoot. Hover state is a flat background shift (`bg-secondary/60`). `transition-colors duration-150` is the default. Stagger animations on list entry are fine. Respect `prefers-reduced-motion` (already wired).
 - **Icons**: Lucide — 15px in navigation, slightly larger in empty states.
 
 ### Design Principles
@@ -426,11 +426,11 @@ Never render raw `{x.invoice_date}` directly — always route through `formatDat
 **Currency.** `formatCurrency(n, currency?)` from `lib/utils.ts`. Default SEK.
 
 **Typography.**
-- Page title: `<h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">` (or use `PageHeader`).
-- Card title: `<CardTitle className="text-base">` for sections, default for primary cards.
+- Page title: use `PageHeader` (renders `font-display text-3xl md:text-4xl tracking-tight`). Do not hand-roll an `<h1>`.
+- Card title: `<CardTitle className="text-base">` for sections, default for primary cards. The primitive already drops `font-medium` — do not add it back.
 - Section divider header inside a page: `<h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">`.
-- Headline number: `font-display text-xl font-medium tabular-nums`.
-- Display font (`font-display`, Fraunces) reserved for h1/h2/h3 and primary financial numbers.
+- Headline number: `font-display text-xl tabular-nums`. No `font-medium` — Hedvig's natural weight carries the gravitas.
+- Display font (`font-display`, Hedvig Letters Serif) reserved for h1/h2/h3 and primary financial numbers. If a specific `font-display` numeral reads weak inside a compact metric card, override that call site with `font-sans tabular-nums` (Geist) — better legibility on small numerals.
 
 **Forbidden / dead patterns.**
 - Page descriptions that paraphrase the page title (e.g. `<PageHeader title="Fakturor" description="Hantera dina fakturor">`) → drop the description.
@@ -438,3 +438,9 @@ Never render raw `{x.invoice_date}` directly — always route through `formatDat
 - Mobile-specific `<select>` duplicating desktop tabs in code — use a single Tabs primitive or a single grouped `Select`.
 - Hand-rolled icon buttons smaller than `h-10 w-10`. Use shadcn `Button size="icon"`.
 - Color-coded status using full-rainbow Tailwind palette (`bg-amber-100`, `bg-emerald-500/10`, etc.). Use Badge variants tied to the brand palette.
+- `shadow-sm` / `shadow-md` / `shadow-lg` on cards, buttons, or list items. The aesthetic is flat-with-hairlines — surfaces use `border-border`, not elevation. Shadows survive only on dialogs/popovers/dropdowns (anything that overlays the page).
+- `active:scale-[...]` on buttons. Buttons do not bounce.
+- `bg-gradient-to-*` on page or card backgrounds. Flat surfaces only.
+- `font-medium` on display elements (`font-display`, h1/h2/h3, CardTitle, PageHeader title). Hedvig is single-weight by design.
+- `rounded-xl` (12px) on cards. Cards are `rounded-lg` (8px). `rounded-xl` survives only on prominent hero-style surfaces if absolutely needed.
+- Opacity-suffixed border classes (`border-border/30`, `border-border/60`) on cards and primary surfaces. Use full-opacity `border-border` — the new border token is calibrated for that.

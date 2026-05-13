@@ -188,7 +188,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     <>
       {/* Desktop sidebar */}
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
-        <div className="flex min-h-0 flex-1 flex-col border-r border-border/30 bg-card/90">
+        <div className="flex min-h-0 flex-1 flex-col border-r border-border bg-background">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
             {/* Company switcher */}
             <div className="px-5 mb-8">
@@ -235,8 +235,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                         ? cn(
                             'transition-colors duration-150',
                             active
-                              ? 'bg-primary/12 text-foreground font-medium'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                              ? 'bg-secondary text-foreground font-medium'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
                           )
                         : 'text-muted-foreground/40 cursor-not-allowed'
                     )
@@ -306,8 +306,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           ? cn(
                               'transition-colors duration-150',
                               active
-                                ? 'bg-primary/12 text-foreground font-medium'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                                ? 'bg-secondary text-foreground font-medium'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
                             )
                           : 'text-muted-foreground/40 cursor-not-allowed'
                       )
@@ -364,8 +364,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           ? cn(
                               'transition-colors duration-150',
                               active
-                                ? 'bg-primary/12 text-foreground font-medium'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                                ? 'bg-secondary text-foreground font-medium'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
                             )
                           : 'text-muted-foreground/40 cursor-not-allowed'
                       )
@@ -403,8 +403,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           ? cn(
                               'transition-colors duration-150',
                               active
-                                ? 'bg-primary/12 text-foreground font-medium'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                                ? 'bg-secondary text-foreground font-medium'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
                             )
                           : 'text-muted-foreground/40 cursor-not-allowed'
                       )
@@ -430,7 +430,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
           </div>
 
           {/* Support + Logout */}
-          <div className="flex-shrink-0 px-3 py-3 border-t border-border/30 space-y-1">
+          <div className="flex-shrink-0 px-3 py-3 border-t border-border space-y-1">
             <div className="px-3 py-1.5">
               <SupportLink variant="muted" />
             </div>
@@ -762,7 +762,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
             </div>
 
             {/* Support + Logout */}
-            <div className="px-2 py-2 mt-1 border-t border-border/30 space-y-1">
+            <div className="px-2 py-2 mt-1 border-t border-border space-y-1">
               <div className="px-3 py-2">
                 <SupportLink variant="muted" />
               </div>

@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Fraunces } from "next/font/google";
+import { Hedvig_Letters_Serif } from "next/font/google";
 import Script from "next/script";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -23,10 +23,11 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
+const hedvigSerif = Hedvig_Letters_Serif({
+  variable: "--font-hedvig-serif",
   subsets: ["latin"],
   display: "swap",
+  weight: "400",
 });
 
 export function generateMetadata(): Metadata {
@@ -59,7 +60,7 @@ export default function RootLayout({
 }>) {
   const branding = getBranding();
   return (
-    <html lang="sv" translate="no" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable}`}>
+    <html lang="sv" translate="no" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable}`}>
       <head>
         <meta name="google" content="notranslate" />
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
