@@ -645,7 +645,38 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(written.find(a => a.uid === 'acc-usd')?.ledger_account).toBe('1933')
     })
 
-    it('rejects ledger_account not matching 4-digit BAS pattern', async () => {
+    it('rejects ledger_account not in BAS class 19 (e.g. 3001 revenue)', async () => {
+      // Even though 3001 might exist in the chart, routing the bank-side leg
+      // there would silently misroute every transaction into a revenue account.
+      // The class-19 restriction must be enforced at the API layer regardless of
+      // whether the chart contains the supplied account number.
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930', '3001'],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '3001' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/klass 19/)
+    })
+
+    it('rejects ledger_account that is malformed (not 4 digits)', async () => {
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
         chartAccountNumbers: ['1930'],
@@ -669,7 +700,7 @@ describe('PATCH /accounts (enable-banking)', () => {
 
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/4-siffrigt BAS-kontonummer/)
+      expect(body.error).toMatch(/klass 19/)
     })
 
     it('rejects ledger_account that does not exist in chart_of_accounts', async () => {

@@ -413,13 +413,16 @@ export function AccountPickerDialog({
                 key={account.uid}
                 className="flex items-center gap-3 p-3 hover:bg-muted/50"
               >
-                <button
-                  type="button"
-                  onClick={() => toggle(account.uid)}
-                  disabled={isSaving}
-                  className="flex flex-1 min-w-0 items-center gap-3 text-left disabled:cursor-not-allowed"
-                >
-                  <Checkbox checked={isChecked} disabled={isSaving} />
+                {/* Toggle area: label + Checkbox (a Radix Checkbox renders as
+                    its own <button role="checkbox">, so wrapping it in another
+                    <button> would be nested interactive elements — invalid HTML
+                    that browsers silently flatten and breaks event routing). */}
+                <label className="flex flex-1 min-w-0 cursor-pointer items-center gap-3">
+                  <Checkbox
+                    checked={isChecked}
+                    onCheckedChange={() => toggle(account.uid)}
+                    disabled={isSaving}
+                  />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">
                       {account.name || account.iban || 'Okänt konto'}
@@ -441,8 +444,9 @@ export function AccountPickerDialog({
                       }).format(account.balance)}
                     </p>
                   )}
-                </button>
-                {/* Per-account ledger picker — only meaningful for enabled accounts. */}
+                </label>
+                {/* Ledger picker is a sibling of the label, not inside it —
+                    otherwise clicking the Select would also toggle the checkbox. */}
                 <div className="w-44 shrink-0">
                   {isChecked && (
                     <Select

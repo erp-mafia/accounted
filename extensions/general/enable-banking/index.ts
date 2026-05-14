@@ -480,7 +480,13 @@ export const enableBankingExtension: Extension = {
         // account_mappings is optional. When present, it's an array of
         // { uid, ledger_account } pairs that route per-account ingest to a
         // specific BAS account (e.g. EUR account → 1932 instead of the default 1930).
-        const BAS_ACCOUNT_PATTERN = /^[0-9]{4}$/
+        // Restrict to BAS class 19 (kassa/bank). Accepting e.g. 3001 (revenue)
+        // or 2640 (input VAT) here would silently misroute every bank-side
+        // journal-entry leg into a revenue/VAT account, corrupting both the
+        // ledger and momsdeklaration. The chart-of-accounts existence check
+        // below is necessary but not sufficient — those accounts likely do
+        // exist in the chart, but they're the wrong class.
+        const BAS_ACCOUNT_PATTERN = /^19[0-9]{2}$/
         type AccountMapping = { uid: string; ledger_account?: string | null }
         let mappings: AccountMapping[] = []
         if (account_mappings !== undefined) {
@@ -499,7 +505,7 @@ export const enableBankingExtension: Extension = {
             }
             if (m.ledger_account != null && (typeof m.ledger_account !== 'string' || !BAS_ACCOUNT_PATTERN.test(m.ledger_account))) {
               return NextResponse.json(
-                { error: 'account_mappings: ledger_account måste vara ett 4-siffrigt BAS-kontonummer' },
+                { error: 'account_mappings: ledger_account måste vara ett BAS-konto i klass 19 (1900–1999)' },
                 { status: 400 }
               )
             }
