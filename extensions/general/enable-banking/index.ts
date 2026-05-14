@@ -548,6 +548,18 @@ export const enableBankingExtension: Extension = {
           )
         }
 
+        // Mirror the enabled_uids guard for account_mappings — without this,
+        // a typo'd UID in the mapping list is silently dropped (the entry
+        // never lands in the resulting accounts_data) while the response is
+        // still 200, leaving the client to believe the mapping was applied.
+        const unknownMappingUids = mappings.map(m => m.uid).filter(uid => !knownUids.has(uid))
+        if (unknownMappingUids.length > 0) {
+          return NextResponse.json(
+            { error: 'account_mappings innehåller okända konto-uid.', unknown_uids: unknownMappingUids },
+            { status: 400 }
+          )
+        }
+
         // Verify any provided ledger_account values actually exist in the
         // company's chart of accounts. Prevents users from typing arbitrary
         // numbers via the API and breaking journal entry creation later.

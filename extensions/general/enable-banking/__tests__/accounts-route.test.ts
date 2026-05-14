@@ -815,5 +815,39 @@ describe('PATCH /accounts (enable-banking)', () => {
       const body = await res.json()
       expect(body.error).toMatch(/account_mappings/)
     })
+
+    it('rejects account_mappings with UIDs not in the connection accounts_data', async () => {
+      // Mirrors the enabled_uids guard. Without this, a typo'd UID is silently
+      // dropped (the entry never lands in accounts_data) while the response is
+      // still 200, leaving the client to believe the mapping was applied.
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930', '1932'],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [
+            { uid: 'acc-1', ledger_account: '1930' },
+            { uid: 'acc-typo', ledger_account: '1932' }, // not in accounts_data
+          ],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/account_mappings/)
+      expect(body.unknown_uids).toEqual(['acc-typo'])
+    })
   })
 })
