@@ -37,6 +37,8 @@ interface SupabaseStub {
    * Falls back to updateError when the index isn't present.
    */
   updateErrorByCall?: Array<{ message: string } | null>
+  /** BAS account numbers that exist in the company's chart_of_accounts (PR 2 ledger validation). */
+  chartAccountNumbers?: string[]
   /** Last update payload (may be overwritten by a follow-up metadata update). */
   capturedUpdate?: Record<string, unknown>
   /** All update payloads in order — first is the status flip, second the initial-sync metadata. */
@@ -49,26 +51,44 @@ function buildSupabase(stub: SupabaseStub) {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: stub.authUser }, error: null }),
     },
-    from: vi.fn(() => ({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({
-        data: stub.connectionRow,
-        error: stub.connectionError ?? null,
-      }),
-      update: vi.fn((payload: Record<string, unknown>) => {
-        const callIndex = updateCallCount++
-        stub.capturedUpdate = payload
-        ;(stub.capturedUpdates ??= []).push(payload)
-        const error =
-          stub.updateErrorByCall && callIndex < stub.updateErrorByCall.length
-            ? stub.updateErrorByCall[callIndex]
-            : stub.updateError ?? null
+    from: vi.fn((table: string) => {
+      // The chart_of_accounts query is used for ledger_account validation
+      // (PR 487). It chains select().eq().in() and is awaited as a thenable.
+      if (table === 'chart_of_accounts') {
+        const numbers = stub.chartAccountNumbers ?? []
         return {
-          eq: vi.fn().mockResolvedValue({ error }),
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: vi.fn((_col: string, vals: string[]) => {
+            const data = vals
+              .filter(v => numbers.includes(v))
+              .map(v => ({ account_number: v }))
+            return Promise.resolve({ data, error: null })
+          }),
         }
-      }),
-    })),
+      }
+      return {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({
+          data: stub.connectionRow,
+          error: stub.connectionError ?? null,
+        }),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          const callIndex = updateCallCount++
+          stub.capturedUpdate = payload
+          ;(stub.capturedUpdates ??= []).push(payload)
+          // Per-call error overrides win when set; fall back to updateError otherwise.
+          const error =
+            stub.updateErrorByCall && callIndex < stub.updateErrorByCall.length
+              ? stub.updateErrorByCall[callIndex]
+              : stub.updateError ?? null
+          return {
+            eq: vi.fn().mockResolvedValue({ error }),
+          }
+        }),
+      }
+    }),
   }
 }
 
@@ -582,6 +602,187 @@ describe('PATCH /accounts (enable-banking)', () => {
       // Status flip still happened — connection is active, cron will retry backfill.
       expect(stub.capturedUpdates?.[0]?.status).toBe('active')
       expect(stub.capturedUpdates).toHaveLength(2)
+    })
+  })
+
+  describe('per-account ledger mapping (account_mappings)', () => {
+    it('persists ledger_account from account_mappings into accounts_data JSONB', async () => {
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930', '1932', '1933'],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [
+            { uid: 'acc-sek', currency: 'SEK', enabled: true },
+            { uid: 'acc-eur', currency: 'EUR', enabled: true },
+            { uid: 'acc-usd', currency: 'USD', enabled: true },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-sek', 'acc-eur', 'acc-usd'],
+          account_mappings: [
+            { uid: 'acc-sek', ledger_account: '1930' },
+            { uid: 'acc-eur', ledger_account: '1932' },
+            { uid: 'acc-usd', ledger_account: '1933' },
+          ],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      expect(written.find(a => a.uid === 'acc-sek')?.ledger_account).toBe('1930')
+      expect(written.find(a => a.uid === 'acc-eur')?.ledger_account).toBe('1932')
+      expect(written.find(a => a.uid === 'acc-usd')?.ledger_account).toBe('1933')
+    })
+
+    it('rejects ledger_account not matching 4-digit BAS pattern', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930'],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '19' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/4-siffrigt BAS-kontonummer/)
+    })
+
+    it('rejects ledger_account that does not exist in chart_of_accounts', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930'], // 1932 not in chart
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-eur', currency: 'EUR', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-eur'],
+          account_mappings: [{ uid: 'acc-eur', ledger_account: '1932' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/finns inte i kontoplanen/)
+      expect(body.invalid_accounts).toEqual(['1932'])
+    })
+
+    it('preserves existing ledger_account when account_mappings is omitted (selection edit)', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'active',
+          accounts_data: [
+            { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' },
+            { uid: 'acc-2', currency: 'EUR', enabled: true, ledger_account: '1932' },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        // No account_mappings — pure selection edit (disable acc-2)
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      // Both ledger_account values stay intact even though acc-2 is now disabled.
+      expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1930')
+      expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1932')
+    })
+
+    it('clears ledger_account when account_mappings entry sets it to null', async () => {
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930'],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'active',
+          accounts_data: [
+            { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: null }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBeUndefined()
+    })
+
+    it('rejects account_mappings that is not an array', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: 'not-an-array',
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/account_mappings/)
     })
   })
 })

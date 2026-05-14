@@ -280,4 +280,66 @@ describe('syncAccountTransactions', () => {
     expect(result.returnedMinBookingDate).toBeUndefined()
     expect(result.returnedMaxBookingDate).toBeUndefined()
   })
+
+  it('passes account.ledger_account as IngestOptions.settlementAccount when set', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'EUR' }, booking_date: '2026-04-01' }],
+      rawPages: ['{}'],
+    })
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1',
+      date: '2026-04-01',
+      booking_date: '2026-04-01',
+      amount: 100,
+      currency: 'EUR',
+      description: 'EUR purchase',
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const account = makeAccount({ uid: 'eur-acc', currency: 'EUR', ledger_account: '1932' })
+    await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      account,
+      '2026-02-13',
+      '2026-05-13',
+      mockIngest
+    )
+
+    const ingestOptions = mockIngest.mock.calls[0][4]
+    expect(ingestOptions).toMatchObject({ settlementAccount: '1932' })
+  })
+
+  it('omits settlementAccount when account.ledger_account is unset (mapping engine defaults to 1930)', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-01' }],
+      rawPages: ['{}'],
+    })
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1',
+      date: '2026-04-01',
+      booking_date: '2026-04-01',
+      amount: 100,
+      currency: 'SEK',
+      description: 'SEK purchase',
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const account = makeAccount() // No ledger_account
+    await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      account,
+      '2026-02-13',
+      '2026-05-13',
+      mockIngest
+    )
+
+    const ingestOptions = mockIngest.mock.calls[0][4]
+    expect(ingestOptions.settlementAccount).toBeUndefined()
+  })
 })

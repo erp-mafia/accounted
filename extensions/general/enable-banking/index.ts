@@ -456,6 +456,7 @@ export const enableBankingExtension: Extension = {
         const connection_id = body?.connection_id
         const enabled_uids = body?.enabled_uids
         const rawLookback = body?.initial_lookback_days
+        const account_mappings = body?.account_mappings
 
         if (typeof connection_id !== 'string' || !connection_id) {
           return NextResponse.json({ error: 'connection_id krävs' }, { status: 400 })
@@ -474,6 +475,36 @@ export const enableBankingExtension: Extension = {
             { error: `Max ${MAX_ENABLED_UIDS} konton per anslutning.` },
             { status: 400 }
           )
+        }
+
+        // account_mappings is optional. When present, it's an array of
+        // { uid, ledger_account } pairs that route per-account ingest to a
+        // specific BAS account (e.g. EUR account → 1932 instead of the default 1930).
+        const BAS_ACCOUNT_PATTERN = /^[0-9]{4}$/
+        type AccountMapping = { uid: string; ledger_account?: string | null }
+        let mappings: AccountMapping[] = []
+        if (account_mappings !== undefined) {
+          if (!Array.isArray(account_mappings)) {
+            return NextResponse.json(
+              { error: 'account_mappings måste vara en lista' },
+              { status: 400 }
+            )
+          }
+          for (const m of account_mappings) {
+            if (!m || typeof m !== 'object' || typeof m.uid !== 'string') {
+              return NextResponse.json(
+                { error: 'account_mappings: varje post kräver uid (sträng)' },
+                { status: 400 }
+              )
+            }
+            if (m.ledger_account != null && (typeof m.ledger_account !== 'string' || !BAS_ACCOUNT_PATTERN.test(m.ledger_account))) {
+              return NextResponse.json(
+                { error: 'account_mappings: ledger_account måste vara ett 4-siffrigt BAS-kontonummer' },
+                { status: 400 }
+              )
+            }
+          }
+          mappings = account_mappings as AccountMapping[]
         }
 
         // initial_lookback_days only applies on the pending_selection→active transition.
@@ -511,11 +542,46 @@ export const enableBankingExtension: Extension = {
           )
         }
 
+        // Verify any provided ledger_account values actually exist in the
+        // company's chart of accounts. Prevents users from typing arbitrary
+        // numbers via the API and breaking journal entry creation later.
+        const requestedLedgerAccounts = mappings
+          .map(m => m.ledger_account)
+          .filter((a): a is string => typeof a === 'string')
+        if (requestedLedgerAccounts.length > 0) {
+          const { data: chartRows } = await supabase
+            .from('chart_of_accounts')
+            .select('account_number')
+            .eq('company_id', companyId)
+            .in('account_number', requestedLedgerAccounts)
+          const validAccountNumbers = new Set((chartRows || []).map(r => r.account_number as string))
+          const invalid = requestedLedgerAccounts.filter(a => !validAccountNumbers.has(a))
+          if (invalid.length > 0) {
+            return NextResponse.json(
+              {
+                error: 'Ett eller flera bokföringskonton finns inte i kontoplanen.',
+                invalid_accounts: invalid,
+              },
+              { status: 400 }
+            )
+          }
+        }
+
         const enabledSet = new Set(enabled_uids)
-        const updatedAccounts: StoredAccount[] = existing.map(a => ({
-          ...a,
-          enabled: enabledSet.has(a.uid),
-        }))
+        const mappingsByUid = new Map(mappings.map(m => [m.uid, m]))
+        const updatedAccounts: StoredAccount[] = existing.map(a => {
+          const mapping = mappingsByUid.get(a.uid)
+          return {
+            ...a,
+            enabled: enabledSet.has(a.uid),
+            // Apply ledger_account from mapping when present. Explicit null clears it.
+            // Absent mapping leaves the existing ledger_account untouched (back-compat
+            // with selection-edit calls that don't include account_mappings).
+            ...(mapping
+              ? { ledger_account: mapping.ledger_account ?? undefined }
+              : {}),
+          }
+        })
 
         // State machine: only transition pending_selection → active. Once
         // active, the status field is omitted from the update so the same

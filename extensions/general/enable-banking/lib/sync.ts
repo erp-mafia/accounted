@@ -116,6 +116,9 @@ export async function syncAccountTransactions(
   const ingestOptions: IngestOptions = {}
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
+  // Per-account ledger routing — the mapping engine consumes settlementAccount
+  // for the bank-side leg, falling back to '1930' when unset.
+  if (account.ledger_account) ingestOptions.settlementAccount = account.ledger_account
   const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
 
   console.log('[enable-banking] Ingest result', {
