@@ -28,7 +28,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
         merchant_name: null,
         reference: null,
         is_business: null,
-        category: 'uncategorized',
+        category: null,
       },
     ]
     const { supabase, enqueue } = createQueuedMockSupabase()
