@@ -27,10 +27,14 @@ if [ -n "$placeholders_found" ]; then
   printf "WARNING: These variables appear to contain placeholder values:\n%bPlease set them to real values before running in production.\n" "$placeholders_found" >&2
 fi
 
-# Replace build-time placeholder sentinels with runtime env vars in static JS bundles.
-# This allows a single pre-built image to work with any Supabase project.
-if [ -d /app/.next/static ]; then
-  find /app/.next/static -name '*.js' -exec sed -i \
+# Replace build-time placeholder sentinels with runtime env vars in both client
+# and server JS bundles. Next.js inlines NEXT_PUBLIC_* values at build time into
+# server code too, so the server bundle must be patched as well — otherwise the
+# inlined placeholder strings reach runtime and break things like Supabase URL
+# parsing in /api/health. This allows a single pre-built image to work with any
+# Supabase project.
+if [ -d /app/.next ]; then
+  find /app/.next -name '*.js' -exec sed -i \
     -e "s|__NEXT_PUBLIC_SUPABASE_URL__|${NEXT_PUBLIC_SUPABASE_URL}|g" \
     -e "s|__NEXT_PUBLIC_SUPABASE_ANON_KEY__|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" \
     -e "s|__NEXT_PUBLIC_APP_URL__|${NEXT_PUBLIC_APP_URL}|g" \

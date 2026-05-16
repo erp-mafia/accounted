@@ -26,4 +26,8 @@ services:
       - APP_URL=http://app:3000
     volumes:
       - ./docker/crontab.self-hosted:/etc/supercronic/crontab:ro
+    # Run tini as PID 1 so supercronic does not engage its own process reaper.
+    # Supercronic's reaper path is broken on alpine and exits with
+    # "Failed to fork exec: no such file or directory" before reading the crontab.
+    init: true
     restart: unless-stopped
