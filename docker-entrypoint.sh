@@ -28,13 +28,19 @@ if [ -n "$placeholders_found" ]; then
 fi
 
 # Replace build-time placeholder sentinels with runtime env vars in both client
-# and server JS bundles. Next.js inlines NEXT_PUBLIC_* values at build time into
+# and server bundles. Next.js inlines NEXT_PUBLIC_* values at build time into
 # server code too, so the server bundle must be patched as well — otherwise the
 # inlined placeholder strings reach runtime and break things like Supabase URL
 # parsing in /api/health. This allows a single pre-built image to work with any
 # Supabase project.
+#
+# Beyond .js, the App Router prerenders statically-rendered routes (login,
+# privacy, DPA, landing) into .html/.rsc/.meta/.body sidecars under
+# /app/.next/server/app/. generateMetadata() runs at build time for those, so
+# the resolved <title> string is baked into the prerender artifacts — patching
+# only the .js bundles leaves the placeholder visible on every prerendered page.
 if [ -d /app/.next ]; then
-  find /app/.next -name '*.js' -exec sed -i \
+  find /app/.next -type f \( -name '*.js' -o -name '*.html' -o -name '*.rsc' -o -name '*.meta' -o -name '*.body' \) -exec sed -i \
     -e "s|__NEXT_PUBLIC_SUPABASE_URL__|${NEXT_PUBLIC_SUPABASE_URL}|g" \
     -e "s|__NEXT_PUBLIC_SUPABASE_ANON_KEY__|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" \
     -e "s|__NEXT_PUBLIC_APP_URL__|${NEXT_PUBLIC_APP_URL}|g" \
