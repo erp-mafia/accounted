@@ -73,7 +73,7 @@ jobs:
           cache-to: type=gha,scope=${{ github.ref_name }},mode=max
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign the image (keyless OIDC)
         env:
