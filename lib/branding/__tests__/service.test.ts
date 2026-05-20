@@ -15,6 +15,7 @@ const ENV_KEYS = [
   'NEXT_PUBLIC_BRANDING_MANIFEST_THEME_COLOR',
   'NEXT_PUBLIC_BRANDING_MANIFEST_BG_COLOR',
   'NEXT_PUBLIC_BRANDING_HIDDEN_NAV',
+  'NEXT_PUBLIC_BRANDING_NAV_DENSITY',
 ] as const
 
 describe('branding service', () => {
@@ -53,6 +54,25 @@ describe('branding service', () => {
     expect(b.manifestThemeColor).toBe('#1a1a1a')
     expect(b.manifestBackgroundColor).toBe('#ffffff')
     expect(b.hiddenNavHrefs).toEqual([])
+    expect(b.navDensity).toBe('standard')
+  })
+
+  it('accepts NEXT_PUBLIC_BRANDING_NAV_DENSITY=slim', async () => {
+    process.env.NEXT_PUBLIC_BRANDING_NAV_DENSITY = 'slim'
+    const { getBranding } = await import('../service')
+    expect(getBranding().navDensity).toBe('slim')
+  })
+
+  it('ignores invalid NEXT_PUBLIC_BRANDING_NAV_DENSITY values', async () => {
+    process.env.NEXT_PUBLIC_BRANDING_NAV_DENSITY = 'compact'
+    const { getBranding } = await import('../service')
+    expect(getBranding().navDensity).toBe('standard')
+  })
+
+  it('extension override can set navDensity', async () => {
+    const { getBranding, registerBrandingService } = await import('../service')
+    registerBrandingService({ navDensity: 'slim' })
+    expect(getBranding().navDensity).toBe('slim')
   })
 
   it('parses NEXT_PUBLIC_BRANDING_HIDDEN_NAV as comma-separated hrefs', async () => {

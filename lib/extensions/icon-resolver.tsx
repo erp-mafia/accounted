@@ -31,6 +31,7 @@ import {
   Building2,
   ArrowRightLeft,
   Mail,
+  MessageCircle,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -67,6 +68,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Building2,
   ArrowRightLeft,
   Mail,
+  MessageCircle,
 }
 
 export function resolveIcon(name: string): LucideIcon {

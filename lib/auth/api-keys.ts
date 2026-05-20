@@ -27,6 +27,7 @@ export const API_KEY_SCOPES = {
   'documents:read':     { label: 'Dokument — läs',       description: 'Lista och hämta dokumentbilagor' },
   'documents:write':    { label: 'Dokument — skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
   'compliance:read':    { label: 'Compliance — läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet' },
+  'agent:read':         { label: 'Agent — läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -133,6 +134,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_voucher:                  'bookkeeping:write',
   gnubok_correct_entry:                   'bookkeeping:write',
   gnubok_reverse_journal_entry:           'bookkeeping:write',
+  // Agent surface (Phase 6 MCP parity): briefing tool exposes company-specific
+  // profile + memory so it's scoped; gnubok_list_skills / gnubok_load_skill
+  // stay unscoped (discovery + static Markdown bodies + globally-readable atom
+  // registry — no per-company data).
+  gnubok_get_agent_briefing:              'agent:read',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {

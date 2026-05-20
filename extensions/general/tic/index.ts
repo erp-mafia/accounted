@@ -8,6 +8,7 @@ import {
   getPhones,
   getCompanyPurpose,
   getFinancialReportSummaries,
+  getBeneficialOwners,
 } from './lib/tic-client'
 import {
   startBankIdAuth,
@@ -411,15 +412,23 @@ export const ticExtension: Extension = {
           const companyId = doc.companyId
 
           // Phase 2: Supplementary data (non-blocking)
-          const [bankResult, sniResult, emailResult, phoneResult, purposeResult, reportsResult] =
-            await Promise.allSettled([
-              getBankAccounts(companyId),
-              getSNICodes(companyId),
-              getEmails(companyId),
-              getPhones(companyId),
-              getCompanyPurpose(companyId),
-              getFinancialReportSummaries(companyId),
-            ])
+          const [
+            bankResult,
+            sniResult,
+            emailResult,
+            phoneResult,
+            purposeResult,
+            reportsResult,
+            beneficialOwnersResult,
+          ] = await Promise.allSettled([
+            getBankAccounts(companyId),
+            getSNICodes(companyId),
+            getEmails(companyId),
+            getPhones(companyId),
+            getCompanyPurpose(companyId),
+            getFinancialReportSummaries(companyId),
+            getBeneficialOwners(companyId),
+          ])
 
           const bankAccounts =
             bankResult.status === 'fulfilled' && bankResult.value
@@ -469,6 +478,50 @@ export const ticExtension: Extension = {
           if (reportsResult.status === 'rejected') {
             log.warn('[tic] profile: financial reports fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(reportsResult.reason) })
           }
+          if (beneficialOwnersResult.status === 'rejected') {
+            log.warn('[tic] profile: beneficial-owners fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(beneficialOwnersResult.reason) })
+          }
+
+          // Flatten the beneficial-owners response. Bolagsverket returns one
+          // notification per registration event; the latest active
+          // notification's owners are the current ones. Personnummer is
+          // intentionally excluded — it's PII we don't need cached and we
+          // don't want it persisted on `companies.tic_snapshot`.
+          let beneficialOwners: TICCompanyProfile['beneficialOwners'] = []
+          let beneficialOwnerExempt = false
+          if (beneficialOwnersResult.status === 'fulfilled' && beneficialOwnersResult.value) {
+            const response = beneficialOwnersResult.value
+            beneficialOwnerExempt = Array.isArray(response.exempts) && response.exempts.length > 0
+            const notifications = Array.isArray(response.notifications) ? response.notifications : []
+            // Prefer the latest notification by notificationDate (already
+            // sorted descending in practice, but we sort defensively).
+            const latest = [...notifications]
+              .filter((n) => n && Array.isArray(n.bolagsverket_BeneficialOwner))
+              .sort((a, b) => {
+                const ad = a.notificationDate ?? ''
+                const bd = b.notificationDate ?? ''
+                return bd.localeCompare(ad)
+              })[0]
+            if (latest?.bolagsverket_BeneficialOwner) {
+              beneficialOwners = latest.bolagsverket_BeneficialOwner
+                .map((o) => {
+                  const nameParts = [o.firstName, o.middleName, o.lastName]
+                    .map((p) => (p ?? '').trim())
+                    .filter((p) => p.length > 0)
+                  const name = nameParts.length > 0 ? nameParts.join(' ') : (o.fallbackName ?? '').trim()
+                  if (!name) return null
+                  return {
+                    name,
+                    extentCode: o.extentCode ?? null,
+                    extentDescription: o.extentDescription ?? null,
+                    citizenshipCountryCode: o.citizenshipCountryCode ?? null,
+                    countryOfResidenceCode: o.countryOfResidenceCode ?? null,
+                    registeredAt: latest.fromDate ?? latest.notificationDate ?? null,
+                  }
+                })
+                .filter((o): o is NonNullable<typeof o> => o !== null)
+            }
+          }
 
           const fin = doc.mostRecentFinancialSummary
           const financials = fin
@@ -516,6 +569,8 @@ export const ticExtension: Extension = {
             phone,
             sniCodes,
             bankAccounts,
+            beneficialOwners,
+            beneficialOwnerExempt,
             financials,
             financialReports,
             fetchedAt: new Date().toISOString(),

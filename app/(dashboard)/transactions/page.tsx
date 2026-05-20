@@ -13,7 +13,6 @@ import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { Landmark, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
-import SwipeCategorizationView from '@/components/transactions/SwipeCategorizationView'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
@@ -81,7 +80,6 @@ export default function TransactionsPage() {
   const [mode, setMode] = useState<ViewMode>('inbox')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
-  const [showSwipeView, setShowSwipeView] = useState(false)
   const [categorySuggestions, setCategorySuggestions] = useState<Record<string, SuggestedCategory[]>>({})
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
@@ -415,9 +413,13 @@ export default function TransactionsPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Auto-open categorize panel when arriving via /transactions?highlight=<id>
-  // (used by the inbox "Bokför transaktionen" link). Runs once per distinct
-  // highlight id so closing the panel doesn't re-trigger it.
+  // Scroll the targeted row into view when arriving via
+  // /transactions?highlight=<id>. Callers are inbox "Öppna transaktionen",
+  // payment-booking dialog, and supplier-invoice cross-link — all "go look
+  // at this row", not "start booking". The legacy auto-open-template-picker
+  // behavior was removed in v5: booking happens in the inbox workspace now.
+  // Runs once per distinct highlight id so closing/scrolling away doesn't
+  // re-trigger it.
   useEffect(() => {
     if (!highlightId) return
     if (handledHighlightRef.current === highlightId) return
@@ -437,11 +439,6 @@ export default function TransactionsPage() {
         }
       })
     })
-
-    if (tx.is_business === null && !tx.journal_entry_id) {
-      setTemplatePickerTransaction(tx)
-      setTemplatePickerOpen(true)
-    }
   }, [highlightId, transactions])
 
   // Auto-fetch suggestions when transactions load
@@ -1070,22 +1067,6 @@ export default function TransactionsPage() {
     exitBatchMode()
   }
 
-  async function openSwipeView() {
-    try {
-      // Match invoices to transactions
-      await fetch('/api/transactions/batch-match-invoices', { method: 'POST' })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.matched > 0) fetchTransactions()
-        })
-    } catch {
-      // Non-critical
-    }
-    const uncatIds = uncategorizedTransactions.map((t) => t.id)
-    await fetchCategorySuggestions(uncatIds)
-    setShowSwipeView(true)
-  }
-
   function openMatchDialog(transaction: TransactionWithInvoice) {
     setSelectedTransaction(transaction)
     setMatchDialogOpen(true)
@@ -1194,21 +1175,6 @@ export default function TransactionsPage() {
     return journalEntryId
   }
 
-  // Swipe view
-  if (showSwipeView && uncategorizedTransactions.length > 0) {
-    return (
-      <SwipeCategorizationView
-        transactions={uncategorizedTransactions}
-        suggestions={categorySuggestions}
-        templateSuggestions={templateSuggestions}
-        onCategorize={handleCategorize}
-        onMatchInvoice={handleMatchInvoice}
-        onClose={() => setShowSwipeView(false)}
-        entityType={entityType as EntityType}
-      />
-    )
-  }
-
   return (
     <div className="space-y-6">
       {/* Status bar with mode toggle */}
@@ -1217,9 +1183,7 @@ export default function TransactionsPage() {
         invoiceMatchCount={transactionsWithMatches.length}
         mode={mode}
         onModeChange={setMode}
-        onOpenSwipeView={openSwipeView}
         onOpenCreateDialog={() => setIsDialogOpen(true)}
-        isLoadingSuggestions={isLoadingSuggestions}
         isBatchMode={isBatchMode}
         onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
       />
@@ -1638,6 +1602,7 @@ export default function TransactionsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
     </div>
   )
 }

@@ -16,8 +16,10 @@ import {
   CheckCircle2,
   FileWarning,
   Clock,
+  ArrowRight,
 } from 'lucide-react'
 import type { Deadline, ReceiptQueueSummary, OnboardingProgress } from '@/types'
+import { getBranding } from '@/lib/branding/service'
 
 const setupFreshStartKey = (companyId: string) => `erp_setup_fresh_start:${companyId}`
 
@@ -219,8 +221,100 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
     : 0
   const todoCount = summary.uncategorizedCount + summary.overdueInvoicesCount + pendingReceiptsCount + passedDeadlinesCount
 
+  const slim = getBranding().navDensity === 'slim'
+
+  // Pick the single most-urgent next action so the launchpad surfaces one
+  // unambiguous CTA. Order matches the friction we actually want to remove
+  // first: stale → overdue → uncategorized → unpaid → all clear.
+  const nextBestAction = (() => {
+    if (summary.staleUncategorizedCount > 0) {
+      return {
+        href: '/transactions',
+        title: 'Gamla transaktioner väntar',
+        body: `${summary.staleUncategorizedCount} transaktion${summary.staleUncategorizedCount === 1 ? '' : 'er'} äldre än 14 dagar saknar bokföring.`,
+        cta: 'Bokför nu',
+        tone: 'destructive' as const,
+        icon: Clock,
+      }
+    }
+    if (summary.overdueInvoicesCount > 0) {
+      return {
+        href: '/invoices?status=unpaid',
+        title: 'Förfallna fakturor',
+        body: `${summary.overdueInvoicesCount} st · ${formatCurrency(summary.unpaidInvoicesTotal)}`,
+        cta: 'Gå till fakturor',
+        tone: 'destructive' as const,
+        icon: Receipt,
+      }
+    }
+    if (summary.uncategorizedCount > 0) {
+      return {
+        href: '/transactions',
+        title: 'Transaktioner att bokföra',
+        body: `${summary.uncategorizedCount} obokförd${summary.uncategorizedCount === 1 ? '' : 'a'} transaktion${summary.uncategorizedCount === 1 ? '' : 'er'}.`,
+        cta: 'Bokför nu',
+        tone: 'primary' as const,
+        icon: ArrowLeftRight,
+      }
+    }
+    if (summary.unpaidInvoicesCount > 0) {
+      return {
+        href: '/invoices?status=unpaid',
+        title: 'Obetalda fakturor',
+        body: `${summary.unpaidInvoicesCount} st · ${formatCurrency(summary.unpaidInvoicesTotal)}`,
+        cta: 'Visa fakturor',
+        tone: 'primary' as const,
+        icon: Receipt,
+      }
+    }
+    return {
+      href: '/invoices/new',
+      title: 'Allt är ikapp',
+      body: 'Inga obokförda transaktioner och inga obetalda fakturor. Skicka nästa faktura?',
+      cta: 'Skapa faktura',
+      tone: 'neutral' as const,
+      icon: CheckCircle2,
+    }
+  })()
+
   return (
     <div className="stagger-enter space-y-8">
+      {slim && (
+        <>
+          {/* Next best action — single hero card */}
+          <section>
+            <Link href={nextBestAction.href} className="block group">
+              <Card className={cn(
+                'transition-colors',
+                nextBestAction.tone === 'destructive' && 'border-destructive/30 hover:bg-destructive/[0.03]',
+                nextBestAction.tone === 'primary' && 'hover:border-primary/50',
+                nextBestAction.tone === 'neutral' && 'hover:border-primary/30',
+              )}>
+                <CardContent className="p-6 flex items-center gap-5">
+                  <div className={cn(
+                    'flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center',
+                    nextBestAction.tone === 'destructive' && 'bg-destructive/10 text-destructive',
+                    nextBestAction.tone === 'primary' && 'bg-secondary text-foreground',
+                    nextBestAction.tone === 'neutral' && 'bg-secondary text-foreground',
+                  )}>
+                    <nextBestAction.icon className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-display text-xl leading-tight">{nextBestAction.title}</p>
+                    <p className="text-sm text-muted-foreground mt-1">{nextBestAction.body}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
+                    <span>{nextBestAction.cta}</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          </section>
+
+        </>
+      )}
+
       {/* Key metrics — 4 compact cards */}
       <section>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -338,8 +432,8 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
         </div>
       </section>
 
-      {/* Att hantera */}
-      {alertItems.length > 0 && (
+      {/* Att hantera — hidden in slim mode; the hero card already surfaces the top action */}
+      {!slim && alertItems.length > 0 && (
         <section id="alerts-section">
           <h2 className="font-display text-lg font-medium mb-4">Att hantera</h2>
           <div id="alerts-list" className="grid gap-4 md:grid-cols-2">

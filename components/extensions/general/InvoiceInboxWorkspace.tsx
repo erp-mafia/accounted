@@ -30,6 +30,8 @@ import { cn, formatCurrency } from '@/lib/utils'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
+import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 
 type AccountingMethod = 'accrual' | 'cash'
 
@@ -144,6 +146,7 @@ function WorkspaceSkeleton() {
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const { openAgentSheet } = useAgentSheet()
 
   const [items, setItems] = useState<InboxItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -173,6 +176,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isRotating, setIsRotating] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [bookDirectOpen, setBookDirectOpen] = useState(false)
+  // Match-to-bank-transaction picker (opens when user clicks "Matcha mot
+  // transaktion" on an unmatched inbox item).
+  const [matchPickerOpen, setMatchPickerOpen] = useState(false)
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
   // the company settings so we don't flicker the CTA order on first paint.
@@ -807,6 +813,31 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
+              onMatchTransaction={() => setMatchPickerOpen(true)}
+              onUnmatchTransaction={async () => {
+                const targetId = selected.id
+                const res = await fetch(
+                  `/api/extensions/ext/invoice-inbox/items/${targetId}/unmatch-transaction`,
+                  { method: 'POST' },
+                )
+                if (!res.ok) {
+                  const json = await res.json().catch(() => ({}))
+                  toast({
+                    title: 'Kunde inte avbryta matchningen',
+                    description: json.error ?? `HTTP ${res.status}`,
+                    variant: 'destructive',
+                  })
+                  return
+                }
+                await Promise.all([fetchItems(), handleSelect(targetId)])
+              }}
+              onAskAssistant={(transactionId) => {
+                openAgentSheet({
+                  intentId: 'transaction.categorization',
+                  intentArgs: { transaction_id: transactionId },
+                  contextRef: `transaction:${transactionId}`,
+                })
+              }}
               isDeleting={isDeleting}
               onRetryRequested={async () => {
                 await Promise.all([fetchItems(), handleSelect(selected.id)])
@@ -843,6 +874,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         onOpenChange={setBookDirectOpen}
         item={selected}
         onSuccess={async () => {
+          await Promise.all([fetchItems(), handleSelect(selected.id)])
+        }}
+      />
+    )}
+    {selected && (
+      <TransactionMatchPicker
+        open={matchPickerOpen}
+        onClose={() => setMatchPickerOpen(false)}
+        inboxItemId={selected.id}
+        extractedData={selected.extracted_data}
+        onMatched={async () => {
           await Promise.all([fetchItems(), handleSelect(selected.id)])
         }}
       />
@@ -955,7 +997,7 @@ function InboxRow({
 // ── Document preview pane ────────────────────────────────────
 // (placed below the row so editors can fold the row cleanly)
 
-function DocumentPreview({
+export function DocumentPreview({
   docUrl,
   docMime,
   isProcessing = false,
@@ -1240,6 +1282,9 @@ function FieldsRail({
   accountingMethod,
   onDelete,
   onBookDirect,
+  onMatchTransaction,
+  onUnmatchTransaction,
+  onAskAssistant,
   isDeleting,
   onFieldsUpdated,
   onRetryRequested,
@@ -1248,6 +1293,9 @@ function FieldsRail({
   accountingMethod: AccountingMethod
   onDelete: () => void
   onBookDirect: () => void
+  onMatchTransaction: () => void
+  onUnmatchTransaction: () => Promise<void>
+  onAskAssistant: (transactionId: string) => void
   isDeleting: boolean
   onFieldsUpdated: (data: InvoiceExtractionResult) => void
   onRetryRequested: () => Promise<void>
@@ -1256,9 +1304,11 @@ function FieldsRail({
   const data = item.extracted_data
   const isProcessed = !!item.created_supplier_invoice_id
   const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
-  const isLinkedToTransaction =
-    !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
-  const isResolved = isProcessed || isBookedDirectly || isLinkedToTransaction
+  // "Resolved" now means a journal entry exists — matched_transaction_id alone
+  // is not resolved, it's the prerequisite for booking against that tx.
+  const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
+  const isResolved = isProcessed || isBookedDirectly
+  const [isUnmatchingTx, setIsUnmatchingTx] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
   const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
 
@@ -1478,43 +1528,77 @@ function FieldsRail({
             </Button>
           </Link>
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
-          <Link href={`/transactions?highlight=${item.matched_transaction_id}`} className="block">
-            <Button variant="default" size="sm" className="w-full">
-              <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
-              Bokför transaktionen
-            </Button>
-          </Link>
-        ) : accountingMethod === 'cash' ? (
           <>
+            {/* Matched-to-tx state: show the bridge to booking. The user
+                picks one of two actions — book themselves with the
+                deterministic dialog, or hand off to the assistant. */}
+            <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs">
+              <div className="flex items-center gap-1.5 text-success font-medium mb-1">
+                <Link2 className="h-3 w-3" />
+                Matchad mot transaktion
+              </div>
+              <Link
+                href={`/transactions?highlight=${item.matched_transaction_id}`}
+                className="text-muted-foreground hover:text-foreground hover:underline"
+              >
+                Öppna transaktionen →
+              </Link>
+            </div>
             <Button
               variant="default"
               size="sm"
               className="w-full"
-              onClick={onBookDirect}
+              onClick={() => onAskAssistant(item.matched_transaction_id!)}
             >
-              Bokför direkt
+              Fråga assistenten
             </Button>
-            <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
-              <Button variant="outline" size="sm" className="w-full">
-                Skapa leverantörsfaktura
-              </Button>
-            </Link>
-          </>
-        ) : (
-          <>
-            <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
-              <Button variant="default" size="sm" className="w-full">
-                Skapa leverantörsfaktura
-              </Button>
-            </Link>
             <Button
               variant="outline"
               size="sm"
               className="w-full"
               onClick={onBookDirect}
             >
-              Bokför direkt
+              Bokför manuellt
             </Button>
+            <button
+              type="button"
+              onClick={async () => {
+                setIsUnmatchingTx(true)
+                try {
+                  await onUnmatchTransaction()
+                } finally {
+                  setIsUnmatchingTx(false)
+                }
+              }}
+              disabled={isUnmatchingTx}
+              className="w-full text-xs text-muted-foreground hover:text-foreground hover:underline pt-1"
+            >
+              {isUnmatchingTx ? 'Avbryter…' : 'Avbryt matchning'}
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Unmatched state: the canonical next step is to find the bank
+                transaction this underlag belongs to. "Skapa leverantörs-
+                faktura" stays as an escape hatch for users who want
+                supplier-invoice tracking (accrual flow). The old "Bokför
+                direkt" escape hatch was removed — its label was unclear
+                and the deterministic-book-without-bank-tx use case is
+                covered by "Matcha mot transaktion" → "Bokför manuellt"
+                (matched state). */}
+            <Button
+              variant="default"
+              size="sm"
+              className="w-full"
+              onClick={onMatchTransaction}
+            >
+              Matcha mot transaktion
+            </Button>
+            <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
+              <Button variant="outline" size="sm" className="w-full">
+                Skapa leverantörsfaktura
+              </Button>
+            </Link>
           </>
         )}
         <Button
@@ -1566,7 +1650,7 @@ function FieldsRail({
 
 // ── Extracted fields list ────────────────────────────────────
 
-function emptyExtraction(): InvoiceExtractionResult {
+export function emptyExtraction(): InvoiceExtractionResult {
   return {
     supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
     invoice: { invoiceNumber: null, invoiceDate: null, dueDate: null, paymentReference: null, currency: 'SEK' },
@@ -1642,7 +1726,7 @@ function buildPatchBody(key: FieldKey, raw: string, currency: string) {
   return { [group]: { [name]: trimmed === '' ? null : trimmed } }
 }
 
-function EditableFieldsList({
+export function EditableFieldsList({
   itemId,
   data,
   disabled,

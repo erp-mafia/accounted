@@ -1,5 +1,13 @@
 import type { Extension } from '@/lib/extensions/types'
-import { handleMcpRequest } from './server'
+import { handleMcpRequest, tools as mcpTools } from './server'
+import { registerAgentTools } from '@/lib/agent/tools/registry'
+import type { AgentTool } from '@/lib/agent/tools/types'
+
+// Make the same tool set available to the in-app chat agent. The chat loop
+// (lib/agent/chat/*) dispatches against the core agentToolRegistry so it can
+// stay decoupled from this extension's module path. Tools satisfy the
+// AgentTool contract structurally — see lib/agent/tools/types.ts.
+registerAgentTools(mcpTools as unknown as AgentTool[])
 
 export const mcpServerExtension: Extension = {
   id: 'mcp-server',

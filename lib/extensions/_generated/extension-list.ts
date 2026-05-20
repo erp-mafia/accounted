@@ -8,6 +8,7 @@ import { mcpServerExtension } from '@/extensions/general/mcp-server'
 import { cloudBackupExtension } from '@/extensions/general/cloud-backup'
 import { skatteverketExtension } from '@/extensions/general/skatteverket'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
+import { documentExtractionExtension } from '@/extensions/general/document-extraction'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   enableBankingExtension,
@@ -18,4 +19,5 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   cloudBackupExtension,
   skatteverketExtension,
   invoiceInboxExtension,
+  documentExtractionExtension,
 ]

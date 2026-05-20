@@ -39,6 +39,15 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'mcp.tool_called',
   'mcp.tools_list_called',
   'mcp.resource_read',
+  // Workflow lifecycle + next-hint follow-through (Phase 3A). Tells us where
+  // agents stall, which skills actually drive completion, and whether the
+  // next-field rollout is paying off.
+  'mcp.workflow_started',
+  'mcp.workflow_completed',
+  'mcp.next_hint_followed',
+  // Agent self-reported feedback — surfaces "this tool was missing", "this
+  // description was wrong", etc. Quarterly review → roadmap.
+  'agent.feedback',
   // Bank connection consent lifecycle — required audit trail per ASVS V16
   // and GDPR Art.30 (records of processing) for PSD2 consent decisions.
   'bank_connection.consent_granted',

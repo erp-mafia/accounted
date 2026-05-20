@@ -1368,6 +1368,23 @@ export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'r
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
+export interface PendingOperationAgentMetadata {
+  conversation_id?: string
+  intent_id?: string
+  model?: string
+  model_version?: string
+  prompt_hash?: string
+  atoms_loaded?: string[]
+  approved_by_user_id?: string
+}
+
+export type PendingOperationRejectionCategory =
+  | 'wrong_category'
+  | 'wrong_amount'
+  | 'duplicate'
+  | 'wrong_period'
+  | 'other'
+
 export interface PendingOperation {
   id: string
   user_id: string
@@ -1383,6 +1400,11 @@ export interface PendingOperation {
   actor_id: string | null
   actor_label: string | null
   risk_level: PendingOperationRiskLevel
+  // Stream 2 Phase 3: agent provenance (populated by chat loop, NULL for user-staged)
+  agent_metadata: PendingOperationAgentMetadata | null
+  // Stream 2 Phase 4: structured rejection so the agent can learn from "no"
+  rejection_category: PendingOperationRejectionCategory | null
+  rejection_reason: string | null
   created_at: string
   resolved_at: string | null
   updated_at: string

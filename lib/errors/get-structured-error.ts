@@ -44,6 +44,12 @@ export interface StructuredError {
   message_sv: string
   message_en: string
   remediation?: StructuredErrorRemediation
+  /**
+   * Present (true) only when the failure is transient. Agents may retry the
+   * same request after a short backoff. Absent or false means the request
+   * will fail the same way until inputs or system state change.
+   */
+  retryable?: boolean
 }
 
 interface StructuredErrorOptions {
@@ -144,6 +150,7 @@ export function getStructuredError(
     message_sv,
     message_en,
     ...(remediation ? { remediation } : {}),
+    ...(entry?.retryable ? { retryable: true } : {}),
   }
 }
 

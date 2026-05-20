@@ -1,23 +1,36 @@
 'use client'
 
+import { useEffect, useState } from 'react'
+import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
+import ExtractionStatus from '@/components/ui/extraction-status'
 import { motion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { AlertCircle, ArrowUpRight, ArrowDownRight, FileText, Loader2, Trash2 } from 'lucide-react'
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/info-tooltip'
-import { getAccountName, formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
-import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
-import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
+import { AlertCircle, ArrowUpRight, ArrowDownRight, FileText, Loader2, Trash2, FileCheck2 } from 'lucide-react'
+import AgentAvatar from '@/components/agent/AgentAvatar'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
+import { useToast } from '@/components/ui/use-toast'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+
+// True when the AI tier is active — gates user-facing strings that promise
+// AI behavior. On the free build (document-extraction disabled) we keep the
+// upload functional but drop the "AI:n läser dokumentet" promise.
+const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
 import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
+  /** Pre-fetched by the parent (page-level suggestions endpoint). The card
+   *  no longer renders auto-suggestion chips — the user picks via "Välj
+   *  mall…" or hands off to the assistant. Prop retained so callers don't
+   *  need to be touched in this PR. */
   suggestions?: SuggestedCategory[]
+  /** Same: parent still pre-fetches template suggestions; the card no
+   *  longer renders them. */
   templateSuggestions?: SuggestedTemplate[]
   /** When set, this bank tx looks like the bank side of a 1930↔1630
    *  transfer that the user will later see on /skattekonto. Renders a
@@ -32,7 +45,9 @@ interface TransactionInboxCardProps {
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
+  /** Retained for callers; unused now. */
   onOpenQuickReview?: (transaction: TransactionWithInvoice, suggestion: SuggestedCategory) => void
+  /** Retained for callers; unused now. */
   onOpenTemplateReview?: (transaction: TransactionWithInvoice, templateId: string) => void
   onToggleSelect: (id: string) => void
   onAnimationComplete?: (id: string) => void
@@ -40,8 +55,6 @@ interface TransactionInboxCardProps {
 
 export default function TransactionInboxCard({
   transaction,
-  suggestions,
-  templateSuggestions,
   skvCounterpartDate,
   processingId,
   isBatchMode,
@@ -52,28 +65,72 @@ export default function TransactionInboxCard({
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onDelete,
-  onOpenQuickReview,
-  onOpenTemplateReview,
   onToggleSelect,
   onAnimationComplete,
 }: TransactionInboxCardProps) {
   const isProcessing = processingId === transaction.id
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
+  const { openAgentSheet, identity } = useAgentSheet()
+  const { toast } = useToast()
+  const [isOpeningDoc, setIsOpeningDoc] = useState(false)
+  // Optimistic override — flips the icon to "attached" as soon as the upload
+  // POST succeeds, without waiting for the parent to refetch. The next
+  // parent refresh will sync; in the meantime the user sees the correct
+  // visual state immediately. Same hook handles agent-chat uploads via the
+  // gnubok:transaction-document-linked window event (AgentChat dispatches
+  // it after /api/agent/upload returns).
+  const [optimisticDocumentId, setOptimisticDocumentId] = useState<string | null>(null)
+  useEffect(() => {
+    function onLinked(e: Event) {
+      const detail = (e as CustomEvent<{ transaction_id?: string; document_id?: string }>).detail
+      if (!detail || detail.transaction_id !== transaction.id || !detail.document_id) return
+      setOptimisticDocumentId(detail.document_id)
+    }
+    window.addEventListener('gnubok:transaction-document-linked', onLinked)
+    return () => window.removeEventListener('gnubok:transaction-document-linked', onLinked)
+  }, [transaction.id])
+  const attachedDocumentId =
+    optimisticDocumentId ?? (transaction as { document_id?: string | null }).document_id ?? null
+  const hasAttachment = !!attachedDocumentId
+  // Only poll extraction status for documents the user attached during THIS
+  // session. Pre-existing attached docs from prior sessions wouldn't change
+  // status during this view, and polling them would be wasted requests.
+  // Gated on HAS_AI_EXTRACTION so the free tier doesn't poll an endpoint
+  // whose pipeline never runs.
+  const extraction = useDocumentExtraction(
+    HAS_AI_EXTRACTION ? optimisticDocumentId : null,
+  )
+
+  async function handleOpenAttachment(): Promise<void> {
+    if (!attachedDocumentId || isOpeningDoc) return
+    setIsOpeningDoc(true)
+    try {
+      const res = await fetch(`/api/documents/${attachedDocumentId}`)
+      if (!res.ok) {
+        toast({ title: 'Kunde inte hämta underlaget', variant: 'destructive' })
+        return
+      }
+      const { data } = await res.json()
+      if (data?.download_url) {
+        window.open(data.download_url, '_blank', 'noopener,noreferrer')
+      }
+    } catch (err) {
+      toast({
+        title: 'Kunde inte öppna underlaget',
+        description: err instanceof Error ? err.message : 'Okänt fel.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsOpeningDoc(false)
+    }
+  }
+
   const hasInvoiceMatch = !!transaction.potential_invoice && !transaction.invoice_id
   const hasSupplierInvoiceMatch = !!transaction.potential_supplier_invoice && !transaction.supplier_invoice_id
-  const topSuggestion = suggestions?.[0]
   const isUncategorized = transaction.is_business === null && !transaction.journal_entry_id
   const showCheckbox = isBatchMode && isUncategorized
   const isDeletable = !transaction.journal_entry_id
-
-  function handleSuggestionClick(suggestion: SuggestedCategory) {
-    if (onOpenQuickReview) {
-      onOpenQuickReview(transaction, suggestion)
-    } else {
-      onCategorize(transaction.id, true, suggestion.category)
-    }
-  }
 
   return (
     <motion.div
@@ -136,7 +193,7 @@ export default function TransactionInboxCard({
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <p className="font-medium truncate">{transaction.description}</p>
-                  <TransactionAttachmentIndicator documentId={transaction.document_id} />
+                  <TransactionAttachmentIndicator documentId={attachedDocumentId} />
                 </div>
                 <p className="text-sm text-muted-foreground">{formatDate(transaction.date)}</p>
               </div>
@@ -190,73 +247,15 @@ export default function TransactionInboxCard({
                   )}
                   Matcha Leverantörsfaktura {transaction.potential_supplier_invoice!.supplier_invoice_number}
                 </Button>
-              ) : templateSuggestions && templateSuggestions.length > 0 ? (
-                <>
-                  {templateSuggestions.slice(0, 2).map((ts, idx) => {
-                    const isCounterparty = isCounterpartyTemplateId(ts.template_id)
-                    const tmpl = isCounterparty ? null : getTemplateById(ts.template_id)
-                    return (
-                      <Button
-                        key={ts.template_id}
-                        size="sm"
-                        variant={idx === 0 ? 'default' : 'outline'}
-                        className="h-auto py-1.5 text-xs"
-                        onClick={() => {
-                          if (onOpenTemplateReview && (isCounterparty || tmpl)) {
-                            onOpenTemplateReview(transaction, ts.template_id)
-                          } else if (topSuggestion) {
-                            handleSuggestionClick(topSuggestion)
-                          }
-                        }}
-                        disabled={isProcessing || isDisabled}
-                      >
-                        <div className="flex flex-col items-start">
-                          <div className="flex items-center">
-                            {isProcessing && idx === 0 ? (
-                              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                            ) : null}
-                            {ts.name_sv}
-                          </div>
-                          <span className="opacity-70 font-normal text-[10px]">
-                            {isCounterparty
-                              ? `${ts.description_sv}`
-                              : getAccountName(tmpl?.debit_account || ts.debit_account)
-                            }
-                          </span>
-                        </div>
-                      </Button>
-                    )
-                  })}
-                </>
-              ) : topSuggestion ? (
-                <Button
-                  size="sm"
-                  variant="default"
-                  className="h-9 text-xs"
-                  onClick={() => handleSuggestionClick(topSuggestion)}
-                  disabled={isProcessing || isDisabled}
-                >
-                  {isProcessing ? (
-                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                  ) : null}
-                  {topSuggestion.label}
-                  {topSuggestion.account && (
-                    <span className="ml-1 opacity-70 font-normal">
-                      ({formatAccountWithName(topSuggestion.account)})
-                    </span>
-                  )}
-                  {topSuggestion.confidence >= 0.8 && (
-                    <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0">
-                      {Math.round(topSuggestion.confidence * 100)}%
-                    </Badge>
-                  )}
-                </Button>
               ) : null}
 
-              {/* Open category dialog / template picker */}
+              {/* Template picker. Replaces the previous "El & Uppvärmning",
+                  "Molntjänster" auto-suggestion chips — guess-quality was
+                  inconsistent and the user prefers to choose a mall
+                  explicitly OR hand the categorization to the assistant. */}
               <Button
                 size="sm"
-                variant={!hasInvoiceMatch && !hasSupplierInvoiceMatch && !topSuggestion && (!templateSuggestions || templateSuggestions.length === 0) ? 'default' : 'outline'}
+                variant={!hasInvoiceMatch && !hasSupplierInvoiceMatch ? 'default' : 'outline'}
                 className="h-9 text-xs"
                 onClick={() => onOpenCategoryDialog(transaction)}
                 disabled={isProcessing || isDisabled}
@@ -264,12 +263,64 @@ export default function TransactionInboxCard({
                 Välj mall...
               </Button>
 
+              {/* Document affordance: shown only when this transaction has
+                  an attachment (either via tx.document_id or a matched
+                  invoice_inbox_items row whose document_id propagated
+                  through the optimistic flip). Click opens the signed URL
+                  in a new tab. Uploading happens in /e/general/invoice-inbox
+                  (the canonical document inbox), never inline here. */}
+              {hasAttachment && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto text-success hover:text-success/80 transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleOpenAttachment()
+                  }}
+                  disabled={isProcessing || isDisabled || isOpeningDoc}
+                  title="Underlag bifogat — klicka för att öppna"
+                  aria-label="Öppna bifogat underlag"
+                >
+                  {isOpeningDoc ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileCheck2 className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  'text-muted-foreground hover:text-foreground',
+                  !hasAttachment && 'ml-auto',
+                )}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  openAgentSheet({
+                    intentId: 'transaction.categorization',
+                    intentArgs: { transaction_id: transaction.id },
+                    contextRef: `transaction:${transaction.id}`,
+                  })
+                }}
+                disabled={isProcessing || isDisabled}
+                aria-label={`Fråga ${identity.displayName?.trim() || 'din assistent'} om denna transaktion`}
+              >
+                <AgentAvatar
+                  avatarId={identity.avatarId}
+                  size="xs"
+                  alt={identity.displayName ?? 'Assistent'}
+                />
+              </Button>
+
               {/* Delete button — available for all unbooked transactions */}
               {isDeletable && onDelete && (
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="ml-auto text-muted-foreground hover:text-destructive"
+                  className="text-muted-foreground hover:text-destructive"
                   onClick={() => onDelete(transaction.id)}
                   disabled={isProcessing || isDisabled}
                   aria-label="Ta bort transaktion"
@@ -279,6 +330,19 @@ export default function TransactionInboxCard({
               )}
             </div>
           )}
+
+          {/* Extraction status — visible only while AI is reading a freshly
+              attached document, or briefly if reading failed. Sits below the
+              action row so it doesn't compete with the buttons for space. */}
+          {!isBatchMode &&
+            (extraction.status === 'running' || extraction.status === 'failed') && (
+              <div className="mt-2 pt-2 border-t border-border/40">
+                <ExtractionStatus
+                  status={extraction.status}
+                  elapsedMs={extraction.elapsedMs}
+                />
+              </div>
+            )}
         </CardContent>
       </Card>
     </motion.div>

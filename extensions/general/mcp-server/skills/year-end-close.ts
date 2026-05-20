@@ -100,4 +100,8 @@ export const yearEndCloseSkill: Skill = {
   summary: 'Annual close: bokslutstransaktioner, currency revaluation, lock → year-end → opening balances → close. Irreversible.',
   tags: ['yearly', 'close', 'bokslut', 'compliance'],
   body,
+  tier: 'workflow',
+  // AB-specific. Sole traders (EF) use a different year-end path (NE-bilaga)
+  // covered by a separate skill that we'll add when bokslut for EF lands.
+  applicability: { entity_type: 'AB' },
 }

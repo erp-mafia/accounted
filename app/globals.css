@@ -250,6 +250,25 @@ h1, h2, h3 {
   50% { opacity: 0.6; }
 }
 
+/* Three-dot "typing" indicator used by the agent chat pre-token bubble.
+   Each dot rides the same wave but with staggered animation-delay so the
+   bounce reads left-to-right. */
+@keyframes typingDot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+.animate-typing-dot {
+  animation: typingDot 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-typing-dot {
+    animation: gentlePulse 1.6s ease-in-out infinite;
+    transform: none;
+  }
+}
+
 /* Staggered entrance animation */
 .stagger-enter > * {
   animation: slideUp var(--duration-slow) var(--ease-out) both;

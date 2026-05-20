@@ -3,12 +3,65 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
-import { skills, findSkill, SKILL_URI_PREFIX, skillUri } from '../skills'
+import { workflowSkills, findSkill, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
   createServiceClient: vi.fn(),
 }))
+
+/** Build a supabase mock that satisfies the queries gnubok_list_skills issues:
+ *   - agent_atom_registry (empty atom set, so only static workflows surface)
+ *   - company_settings (entity_type + vat_registered, used by applicability filter)
+ *   - employees (active count, used by applicability filter)
+ *
+ *  All test queries resolve to the same defaults: entity_type='AB',
+ *  vat_registered=true, 1 active employee — so every applicability-filtered
+ *  skill is included by default. Individual tests can override via the
+ *  optional overrides parameter.
+ */
+function makeSupabaseWithEmptyAtomRegistry(
+  rows: unknown[] = [],
+  overrides: { entityType?: string | null; vatRegistered?: boolean; employeeCount?: number } = {},
+) {
+  const entityType = overrides.entityType ?? 'AB'
+  const vatRegistered = overrides.vatRegistered ?? true
+  const employeeCount = overrides.employeeCount ?? 1
+
+  return {
+    from: vi.fn((table: string) => {
+      if (table === 'company_settings') {
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: entityType === null ? null : { entity_type: entityType, vat_registered: vatRegistered },
+                error: null,
+              }),
+            })),
+          })),
+        }
+      }
+      if (table === 'employees') {
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn().mockResolvedValue({ count: employeeCount, data: null, error: null }),
+            })),
+          })),
+        }
+      }
+      // Default: agent_atom_registry shape returning empty list.
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            order: vi.fn().mockResolvedValue({ data: rows, error: null }),
+          })),
+        })),
+      }
+    }),
+  }
+}
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
@@ -18,14 +71,17 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     validateApiKey: vi.fn().mockResolvedValue({
       userId: 'user-1',
       companyId: 'company-1',
-      // Minimal scopes — skills tools should be available regardless.
+      // Minimal scopes — list/load skill tools are intentionally unscoped.
       scopes: [],
     }),
-    createServiceClientNoCookies: vi.fn(),
+    createServiceClientNoCookies: vi.fn(() => makeSupabaseWithEmptyAtomRegistry()),
   }
 })
 
 import { handleMcpRequest } from '../server'
+
+/** Alias for the legacy workflow-only array. New code reads `workflowSkills`. */
+const skills = workflowSkills
 
 function mcpRequest(method: string, params?: Record<string, unknown>, id: number | string = 1): Request {
   return new Request('http://localhost:3000/api/extensions/ext/mcp-server/mcp', {
@@ -43,9 +99,10 @@ async function parseResult(response: Response) {
 describe('Skills registry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __resetAtomCache()
   })
 
-  it('exports a non-empty skills array', () => {
+  it('exports a non-empty workflowSkills array', () => {
     expect(skills.length).toBeGreaterThanOrEqual(5)
   })
 
@@ -69,21 +126,28 @@ describe('Skills registry', () => {
       expect(s.summary.length).toBeLessThan(200)
       expect(Array.isArray(s.tags)).toBe(true)
       expect(s.tags.length).toBeGreaterThan(0)
+      expect(s.tier).toBe('workflow')
     }
   })
 
-  it('findSkill returns the skill or null', () => {
-    expect(findSkill('month-end-close')).toBeTruthy()
-    expect(findSkill('does-not-exist')).toBeNull()
+  it('findSkill resolves the workflow skill or null (sync workflow lookup)', async () => {
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    expect(await findSkill('month-end-close', supabase as never)).toBeTruthy()
+    expect(await findSkill('does-not-exist', supabase as never)).toBeNull()
   })
 
-  it('skillUri uses the gnubok://skill/ prefix', () => {
+  it('skillUri uses the gnubok://skill/ prefix; atom slugs are URL-encoded', () => {
     expect(skillUri('foo')).toBe('gnubok://skill/foo')
+    expect(skillUri('vertical/konsult-it')).toBe('gnubok://skill/vertical%2Fkonsult-it')
     expect(SKILL_URI_PREFIX).toBe('gnubok://skill/')
   })
 })
 
 describe('gnubok_list_skills tool', () => {
+  beforeEach(() => {
+    __resetAtomCache()
+  })
+
   it('is registered with correct annotations and no scope requirement', () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')
     expect(tool).toBeDefined()
@@ -91,21 +155,23 @@ describe('gnubok_list_skills tool', () => {
     expect(tool?.annotations.idempotentHint).toBe(true)
   })
 
-  it('returns all skills when called with no args', async () => {
+  it('returns all workflow skills when called with no args (empty atom registry)', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
-    const result = (await tool.execute({}, 'company-1', 'user-1', {} as never, { type: 'api_key' })) as {
-      skills: Array<{ slug: string; name: string; summary: string; tags: string[] }>
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string; name: string; summary: string; tags: string[]; tier: string }>
       count: number
     }
     expect(result.count).toBe(skills.length)
-    expect(result.skills.every((s) => s.slug && s.name && s.summary)).toBe(true)
+    expect(result.skills.every((s) => s.slug && s.name && s.summary && s.tier === 'workflow')).toBe(true)
     // Body should NOT be returned by list (token saving).
     expect((result.skills[0] as Record<string, unknown>).body).toBeUndefined()
   })
 
   it('filters by tag', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
-    const result = (await tool.execute({ tag: 'vat' }, 'company-1', 'user-1', {} as never, { type: 'api_key' })) as {
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    const result = (await tool.execute({ tag: 'vat' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       skills: Array<{ slug: string; tags: string[] }>
       count: number
     }
@@ -114,44 +180,178 @@ describe('gnubok_list_skills tool', () => {
       expect(s.tags.map((t) => t.toLowerCase())).toContain('vat')
     }
   })
+
+  it('filters by tier=workflow (excludes atoms when both present)', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    const result = (await tool.execute({ tier: 'workflow' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ tier: string }>
+      count: number
+    }
+    expect(result.count).toBeGreaterThan(0)
+    for (const s of result.skills) {
+      expect(s.tier).toBe('workflow')
+    }
+  })
+
+  it('filters by tier=horizontal/vertical/modifier (returns empty when no atoms)', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    for (const tier of ['horizontal', 'vertical', 'modifier']) {
+      const result = (await tool.execute({ tier }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+        count: number
+      }
+      expect(result.count).toBe(0)
+    }
+  })
+
+  it('surfaces registry atoms alongside workflow skills', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    // Body path points at a real SKILL.md on disk (seeded by Phase 3).
+    const supabase = makeSupabaseWithEmptyAtomRegistry([
+      {
+        id: 'vertical/konsult-it',
+        tier: 'vertical',
+        title: 'IT-konsult & systemutvecklare (SNI 62)',
+        description: 'Konsult-IT description',
+        sni_prefixes: ['62.01'],
+        body_path: '.claude/skills/industry/konsult-it/SKILL.md',
+      },
+    ])
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string; tier: string }>
+      count: number
+    }
+    expect(result.count).toBe(skills.length + 1)
+    expect(result.skills.find((s) => s.slug === 'vertical/konsult-it')?.tier).toBe('vertical')
+  })
+
+  it('applicability filter hides AB-only skills for EF companies', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: true })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string }>
+      hidden_count: number
+      company_context: { entity_type: string | null; has_employees: boolean; vat_registered: boolean }
+    }
+    const slugs = result.skills.map((s) => s.slug)
+    expect(slugs).not.toContain('year-end-close') // AB-only
+    expect(slugs).not.toContain('payroll-monthly') // requires employees
+    expect(slugs).toContain('month-end-close')
+    expect(slugs).toContain('invoicing-rules')
+    expect(slugs).toContain('quarterly-vat-review') // vat_registered=true
+    expect(result.hidden_count).toBeGreaterThan(0)
+    expect(result.company_context).toEqual({ entity_type: 'EF', has_employees: false, vat_registered: true })
+  })
+
+  it('include_all=true bypasses applicability filter', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: false })
+    const filtered = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      count: number
+      hidden_count: number
+    }
+    const unfiltered = (await tool.execute({ include_all: true }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      count: number
+      hidden_count: number
+    }
+    expect(unfiltered.count).toBe(filtered.count + filtered.hidden_count)
+    expect(unfiltered.hidden_count).toBe(0)
+  })
+
+  it('tier=vertical filter returns only verticals', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([
+      {
+        id: 'vertical/konsult-it',
+        tier: 'vertical',
+        title: 'Konsult-IT',
+        description: 'desc',
+        sni_prefixes: ['62.01'],
+        body_path: '.claude/skills/industry/konsult-it/SKILL.md',
+      },
+    ])
+    const result = (await tool.execute({ tier: 'vertical' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string; tier: string }>
+      count: number
+    }
+    expect(result.count).toBe(1)
+    expect(result.skills[0].slug).toBe('vertical/konsult-it')
+  })
 })
 
 describe('gnubok_load_skill tool', () => {
+  beforeEach(() => {
+    __resetAtomCache()
+  })
+
   it('is registered', () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')
     expect(tool).toBeDefined()
   })
 
-  it('returns full body for a valid slug', async () => {
+  it('returns full body for a valid workflow slug', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
-    const result = (await tool.execute({ slug: 'month-end-close' }, 'company-1', 'user-1', {} as never, { type: 'api_key' })) as {
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    const result = (await tool.execute({ slug: 'month-end-close' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       slug: string
       name: string
+      tier: string
       body: string
     }
     expect(result.slug).toBe('month-end-close')
+    expect(result.tier).toBe('workflow')
     expect(result.body).toContain('# Month-End Close')
     expect(result.body).toContain('## Tools')
   })
 
   it('throws structured error for unknown slug', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
     await expect(
-      tool.execute({ slug: 'nonexistent-skill' }, 'company-1', 'user-1', {} as never, { type: 'api_key' })
+      tool.execute({ slug: 'nonexistent-skill' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
     ).rejects.toThrow(/Skill not found.*Available skills/)
   })
 
   it('throws when slug is missing or empty', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
     await expect(
-      tool.execute({ slug: '' }, 'company-1', 'user-1', {} as never, { type: 'api_key' })
+      tool.execute({ slug: '' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
     ).rejects.toThrow(/slug is required/)
+  })
+
+  it('resolves an atom slug from the registry and returns its body', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([
+      {
+        id: 'vertical/konsult-it',
+        tier: 'vertical',
+        title: 'Konsult-IT',
+        description: 'desc',
+        sni_prefixes: ['62.01'],
+        body_path: '.claude/skills/industry/konsult-it/SKILL.md',
+      },
+    ])
+    const result = (await tool.execute({ slug: 'vertical/konsult-it' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      slug: string
+      tier: string
+      body: string
+    }
+    expect(result.slug).toBe('vertical/konsult-it')
+    expect(result.tier).toBe('vertical')
+    // Body comes from disk — must contain the rewritten frontmatter id.
+    expect(result.body).toContain('id: vertical/konsult-it')
   })
 })
 
 describe('Skills via MCP protocol', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Protocol tests use the createServiceClientNoCookies mock (empty registry)
+    // — reset the module-level atom cache so we don't see stragglers from
+    // earlier tests in the file that populated the cache via direct execute().
+    __resetAtomCache()
   })
 
   it('resources/list includes one entry per skill at gnubok://skill/<slug>', async () => {

@@ -28,6 +28,13 @@ export interface StructuredErrorEntry {
   message_sv: string
   message_en: string
   remediation?: StructuredErrorRemediation
+  /**
+   * When true, agents and clients may retry the same request after a short
+   * backoff. Set only on truly transient failures (DB blip, external API
+   * timeout, rate limit). Permanent failures (validation, not found, period
+   * locked) MUST stay false — retrying won't change the outcome.
+   */
+  retryable?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -79,6 +86,7 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',
     message_en: 'Rate limit exceeded.',
+    retryable: true,
   },
   NOT_IMPLEMENTED: {
     httpStatus: 501,
@@ -187,11 +195,17 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Verifikationen kunde inte sparas. Försök igen.',
     message_en: 'Bookkeeping database operation failed.',
+    retryable: true,
   },
   PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv: 'Bokföringen är låst för denna period.',
     message_en: 'Period is locked or closed; entries cannot be added.',
+    remediation: {
+      description:
+        'Either unlock the period via gnubok_unlock_period (if status is "locked", not "closed") or change the entry date to fall inside an open period.',
+      tool: 'gnubok_unlock_period',
+    },
   },
   PERIOD_NOT_LOCKED: {
     httpStatus: 400,
@@ -302,6 +316,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'Kunde inte hämta växelkursen från Riksbanken. Försök igen om en stund — verifikationen måste bokföras i SEK.',
     message_en:
       'Could not fetch the exchange rate from Riksbanken. The verifikation must be posted in SEK.',
+    retryable: true,
   },
 }
 
@@ -345,11 +360,13 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kunde inte registrera fakturabetalningen.',
     message_en: 'Failed to record invoice payment.',
+    retryable: true,
   },
   MATCH_INVOICE_LINK_TX_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte koppla transaktionen till fakturan.',
     message_en: 'Failed to link transaction to invoice.',
+    retryable: true,
   },
   MATCH_INVOICE_PARTIAL: {
     httpStatus: 200,
@@ -393,11 +410,13 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kunde inte registrera leverantörsfakturabetalningen.',
     message_en: 'Failed to record supplier invoice payment.',
+    retryable: true,
   },
   MATCH_SI_LINK_TX_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte koppla transaktionen till leverantörsfakturan.',
     message_en: 'Failed to link transaction to supplier invoice.',
+    retryable: true,
   },
   MATCH_SI_CASH_FX_UNSUPPORTED: {
     httpStatus: 400,
@@ -420,6 +439,7 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Transaktionerna kunde inte importeras.',
     message_en: 'Transaction ingest failed.',
+    retryable: true,
   },
   TX_BATCH_CATEGORIZE_EMPTY: {
     httpStatus: 400,

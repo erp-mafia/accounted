@@ -107,7 +107,12 @@ async function uploadAndExtract(
   companyId: string,
   file: { name: string; buffer: ArrayBuffer; type: string },
   source: 'upload' | 'email',
-  emailMeta?: EmailMeta
+  emailMeta?: EmailMeta,
+  // Pre-match the new inbox item to a bank transaction. Set when the caller
+  // already knows which transaction this receipt belongs to (e.g. the
+  // VerifyAndBookOverlay opened from a transaction row's paperclip or from
+  // a transaction-anchored chat). Skipped silently if missing.
+  matchedTransactionId?: string | null,
 ) {
   const correlationId = crypto.randomUUID()
 
@@ -188,6 +193,7 @@ async function uploadAndExtract(
         ? { messageId: emailMeta.messageId, filename: file.name }
         : null,
       correlation_id: correlationId,
+      matched_transaction_id: matchedTransactionId ?? null,
     })
     .select('*')
     .single()
@@ -222,6 +228,7 @@ async function uploadAndExtract(
     status: inbox.status,
     extracted_data: extracted,
     matched_supplier_id: inbox.matched_supplier_id,
+    matched_transaction_id: inbox.matched_transaction_id,
   }
 }
 
@@ -275,6 +282,11 @@ export const invoiceInboxExtension: Extension = {
 
         const formData = await request.formData()
         const file = formData.get('file') as File | null
+        const matchedTransactionIdRaw = formData.get('matched_transaction_id')
+        const matchedTransactionId =
+          typeof matchedTransactionIdRaw === 'string' && matchedTransactionIdRaw.length > 0
+            ? matchedTransactionIdRaw
+            : null
 
         if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
         if (file.size > MAX_FILE_SIZE) {
@@ -287,6 +299,29 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
+        // Validate matched_transaction_id belongs to this company before we
+        // spend the AI extraction budget. RLS would also catch a mismatch on
+        // the insert, but failing fast gives a clearer error and lets the
+        // caller distinguish "your context_ref pointed at a tx you don't own"
+        // from a generic upload failure.
+        if (matchedTransactionId) {
+          const { data: tx, error: txErr } = await ctx.supabase
+            .from('transactions')
+            .select('id')
+            .eq('id', matchedTransactionId)
+            .eq('company_id', ctx.companyId)
+            .maybeSingle()
+          if (txErr) {
+            return NextResponse.json({ error: txErr.message }, { status: 500 })
+          }
+          if (!tx) {
+            return NextResponse.json(
+              { error: 'matched_transaction_id refers to a transaction outside this company.' },
+              { status: 400 },
+            )
+          }
+        }
+
         try {
           const buffer = await file.arrayBuffer()
           const result = await uploadAndExtract(
@@ -294,7 +329,9 @@ export const invoiceInboxExtension: Extension = {
             ctx.userId,
             ctx.companyId,
             { name: file.name, buffer, type: file.type },
-            'upload'
+            'upload',
+            undefined,
+            matchedTransactionId,
           )
           return NextResponse.json({ data: result })
         } catch (error) {
@@ -612,6 +649,143 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: updateError.message }, { status: 500 })
         }
         return NextResponse.json({ data: { id, matched_supplier_id: body.supplier_id } })
+      },
+    },
+
+    // ── Match a bank transaction to an inbox item ──────────
+    // Sets invoice_inbox_items.matched_transaction_id. Used by the
+    // TransactionMatchPicker dialog after the user picks a candidate from
+    // the confidence-scored list. The transaction.categorization agent
+    // intent already reads this column in its capture() so the agent will
+    // see the inbox metadata as underlag on its next invocation.
+    {
+      method: 'POST',
+      path: '/items/:id/match-transaction',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        let body: { transaction_id?: string }
+        try {
+          body = await request.json()
+        } catch {
+          return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+        }
+        if (!body.transaction_id || typeof body.transaction_id !== 'string') {
+          return NextResponse.json({ error: 'transaction_id required' }, { status: 400 })
+        }
+
+        // Confirm transaction belongs to this company before linking. RLS
+        // would also catch it on the update, but failing fast keeps the
+        // error specific. Also fetch the existing document_id so we can
+        // decide whether to backfill it from the inbox doc below.
+        const { data: tx } = await ctx.supabase
+          .from('transactions')
+          .select('id, document_id')
+          .eq('id', body.transaction_id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+        if (!tx) {
+          return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
+        }
+
+        // Fetch the inbox item's document_id so we can mirror it to
+        // transactions.document_id below — the TransactionInboxCard reads
+        // that column to decide whether to show the paperclip/file-check
+        // indicators on the /transactions list. Without this, a row that
+        // has a matched inbox item still appears doc-less in the UI.
+        const { data: inboxItem } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, document_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        const { data: updated, error: updateError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({ matched_transaction_id: body.transaction_id })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .select('id, matched_transaction_id')
+          .single()
+
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        // Mirror the inbox document onto the transaction so the list view
+        // reflects "underlag bifogat" immediately. Only when the tx has
+        // no other doc already (we never overwrite an existing link).
+        if (inboxItem?.document_id && !tx.document_id) {
+          const { error: txUpdateError } = await ctx.supabase
+            .from('transactions')
+            .update({ document_id: inboxItem.document_id })
+            .eq('id', body.transaction_id)
+            .eq('company_id', ctx.companyId)
+            .is('document_id', null)
+          if (txUpdateError) {
+            // Non-fatal: the match itself succeeded; the UI indicator just
+            // won't flip until next page refresh. Log but don't roll back.
+            console.error('[invoice-inbox/match-transaction] tx.document_id backfill failed:', txUpdateError)
+          }
+        }
+
+        return NextResponse.json({ data: updated })
+      },
+    },
+
+    // ── Clear matched_transaction_id (user mistake / re-match) ────
+    {
+      method: 'POST',
+      path: '/items/:id/unmatch-transaction',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        // Capture the current match before clearing so we can mirror the
+        // unmatch onto transactions.document_id below.
+        const { data: existing } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, document_id, matched_transaction_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        const { data: updated, error: updateError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({ matched_transaction_id: null })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .select('id, matched_transaction_id')
+          .single()
+
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        // Clear the mirrored tx.document_id only when it currently points
+        // at the same doc this inbox item brought in. Guards against
+        // clobbering a doc that came from another source (paperclip
+        // upload, SIE import, etc.).
+        if (existing?.matched_transaction_id && existing.document_id) {
+          const { error: txUpdateError } = await ctx.supabase
+            .from('transactions')
+            .update({ document_id: null })
+            .eq('id', existing.matched_transaction_id)
+            .eq('company_id', ctx.companyId)
+            .eq('document_id', existing.document_id)
+          if (txUpdateError) {
+            console.error('[invoice-inbox/unmatch-transaction] tx.document_id clear failed:', txUpdateError)
+          }
+        }
+
+        return NextResponse.json({ data: updated })
       },
     },
 

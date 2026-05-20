@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
-import { Upload, Wand, Plus, CheckSquare, FileText, Lock } from 'lucide-react'
+import { Upload, Plus, CheckSquare, FileText, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { ViewMode } from './transaction-types'
 
@@ -12,9 +12,7 @@ interface TransactionStatusBarProps {
   invoiceMatchCount: number
   mode: ViewMode
   onModeChange: (mode: ViewMode) => void
-  onOpenSwipeView: () => void
   onOpenCreateDialog: () => void
-  isLoadingSuggestions: boolean
   isBatchMode: boolean
   onToggleBatchMode: () => void
 }
@@ -24,9 +22,7 @@ export default function TransactionStatusBar({
   invoiceMatchCount,
   mode,
   onModeChange,
-  onOpenSwipeView,
   onOpenCreateDialog,
-  isLoadingSuggestions,
   isBatchMode,
   onToggleBatchMode,
 }: TransactionStatusBarProps) {
@@ -61,25 +57,14 @@ export default function TransactionStatusBar({
             </Link>
           </Button>
           {mode === 'inbox' && uncategorizedCount > 0 && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onOpenSwipeView}
-                disabled={isLoadingSuggestions}
-              >
-                <Wand className="mr-2 h-4 w-4" />
-                {isLoadingSuggestions ? 'Laddar...' : 'Gå igenom alla'}
-              </Button>
-              <Button
-                variant={isBatchMode ? 'default' : 'outline'}
-                size="sm"
-                onClick={onToggleBatchMode}
-              >
-                <CheckSquare className="mr-2 h-4 w-4" />
-                {isBatchMode ? 'Avsluta' : 'Välj flera'}
-              </Button>
-            </>
+            <Button
+              variant={isBatchMode ? 'default' : 'outline'}
+              size="sm"
+              onClick={onToggleBatchMode}
+            >
+              <CheckSquare className="mr-2 h-4 w-4" />
+              {isBatchMode ? 'Avsluta' : 'Välj flera'}
+            </Button>
           )}
           <Button
             size="sm"

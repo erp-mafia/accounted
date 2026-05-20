@@ -41,6 +41,15 @@ export interface BrandingConfig {
 
   // Navigation
   hiddenNavHrefs: string[]
+  /**
+   * Sidebar density. `'standard'` renders the original full sidebar with
+   * every nav group at equal weight. `'slim'` renders an AI-first layout:
+   * four primary destinations (Översikt, Transaktioner, Fakturor, Anna)
+   * are visible at full weight, every other group is collapsed and muted,
+   * and Inställningar/Hjälp/Logga ut move into a profile dropdown.
+   * Set per-brand; default `'standard'` so self-hosted is unchanged.
+   */
+  navDensity: 'standard' | 'slim'
 }
 
 const DEFAULT_BRANDING: BrandingConfig = {
@@ -59,6 +68,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   manifestThemeColor: '#1a1a1a',
   manifestBackgroundColor: '#ffffff',
   hiddenNavHrefs: [],
+  navDensity: 'standard',
 }
 
 let _override: Partial<BrandingConfig> = {}
@@ -95,6 +105,9 @@ function readEnvOverrides(): Partial<BrandingConfig> {
   if (env.NEXT_PUBLIC_BRANDING_HIDDEN_NAV) {
     const hrefs = env.NEXT_PUBLIC_BRANDING_HIDDEN_NAV.split(',').map(s => s.trim()).filter(Boolean)
     if (hrefs.length > 0) o.hiddenNavHrefs = hrefs
+  }
+  if (env.NEXT_PUBLIC_BRANDING_NAV_DENSITY === 'slim' || env.NEXT_PUBLIC_BRANDING_NAV_DENSITY === 'standard') {
+    o.navDensity = env.NEXT_PUBLIC_BRANDING_NAV_DENSITY
   }
   return o
 }

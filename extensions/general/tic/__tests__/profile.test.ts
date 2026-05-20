@@ -8,6 +8,7 @@ vi.mock('../lib/tic-client', () => ({
   getPhones: vi.fn(),
   getCompanyPurpose: vi.fn(),
   getFinancialReportSummaries: vi.fn(),
+  getBeneficialOwners: vi.fn(),
 }))
 
 import { ticExtension } from '../index'
@@ -19,6 +20,7 @@ import {
   getPhones,
   getCompanyPurpose,
   getFinancialReportSummaries,
+  getBeneficialOwners,
 } from '../lib/tic-client'
 import type { TICCompanyDocument } from '../lib/tic-types'
 
@@ -29,6 +31,7 @@ const mockEmails = vi.mocked(getEmails)
 const mockPhones = vi.mocked(getPhones)
 const mockPurpose = vi.mocked(getCompanyPurpose)
 const mockReports = vi.mocked(getFinancialReportSummaries)
+const mockBeneficialOwners = vi.mocked(getBeneficialOwners)
 
 function makeRequest(orgNumber?: string): Request {
   const url = orgNumber
@@ -87,6 +90,7 @@ function mockAllSupplementary() {
   mockPurpose.mockResolvedValue([
     { companyPurposeId: 1, purpose: 'Försäljning av drycker' },
   ])
+  mockBeneficialOwners.mockResolvedValue({ notifications: [], exempts: [] })
   mockReports.mockResolvedValue([
     {
       financialReportSummaryId: 1,

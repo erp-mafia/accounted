@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   LayoutDashboard,
+  Home,
   Receipt,
   Users,
   ArrowLeftRight,
@@ -66,7 +67,7 @@ interface NavItem {
 
 // All nav items for sidebar and mobile drawer
 const navItems: NavItem[] = [
-  { href: '/', label: 'Översikt', icon: LayoutDashboard, group: 'main' },
+  { href: '/chat', label: 'Hem', icon: Home, group: 'main' },
   { href: '/kpi', label: 'Nyckeltal', icon: TrendingUp, group: 'main' },
   { href: '/e/general/invoice-inbox', label: 'Dokumentinkorg', icon: Inbox, group: 'main', betaBadge: true },
   // AR — Accounts Receivable
@@ -74,8 +75,7 @@ const navItems: NavItem[] = [
   { href: '/customers', label: 'Kunder', icon: Users, group: 'försäljning' },
   // AP — Accounts Payable
   { href: '/supplier-invoices', label: 'Leverantörsfakturor', icon: Wallet, group: 'inköp' },
-  // Temporarily hidden pending module rework (see feedback #49)
-  { href: '/suppliers', label: 'Leverantörer', icon: Building2, group: 'inköp', hidden: true },
+  { href: '/suppliers', label: 'Leverantörer', icon: Building2, group: 'inköp' },
   // General accounting
   { href: '/pending', label: 'Granskning', icon: ClipboardCheck, group: 'redovisning' },
   { href: '/transactions', label: 'Transaktioner', icon: ArrowLeftRight, group: 'redovisning' },
@@ -181,7 +181,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   ] as const
 
   const mobileNavItems = [
-    { href: '/', label: 'Översikt', icon: LayoutDashboard },
+    { href: '/chat', label: 'Hem', icon: Home },
     { href: '/invoices', label: 'Fakturor', icon: Receipt },
     { href: '/transactions', label: 'Transaktioner', icon: ArrowLeftRight },
   ]

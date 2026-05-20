@@ -13,9 +13,11 @@ import {
   FileText,
   Calendar,
   Plus,
+  Wand2,
   type LucideIcon,
 } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 
 interface EmptyStateProps {
   icon?: LucideIcon
@@ -27,6 +29,10 @@ interface EmptyStateProps {
   secondaryActionLabel?: string
   secondaryActionHref?: string
   supportHint?: boolean
+  // Show a small "Fråga assistenten" affordance under the actions. Opens the
+  // agent sheet with intent=onboarding.empty so the user can ask "how do I
+  // get started" without leaving the page.
+  agentHelp?: { route?: string; subject?: string }
   className?: string
   children?: React.ReactNode
 }
@@ -44,6 +50,7 @@ export function EmptyState({
   secondaryActionLabel,
   secondaryActionHref,
   supportHint,
+  agentHelp,
   className,
   children,
 }: EmptyStateProps) {
@@ -91,7 +98,28 @@ export function EmptyState({
           {children}
         </div>
       )}
+
+      {agentHelp && <AgentHelpLink {...agentHelp} />}
     </div>
+  )
+}
+
+function AgentHelpLink({ route, subject }: { route?: string; subject?: string }) {
+  const { openAgentSheet, identity } = useAgentSheet()
+  const name = identity.displayName?.trim() || 'assistenten'
+  return (
+    <button
+      type="button"
+      onClick={() => openAgentSheet({
+        intentId: 'onboarding.empty',
+        intentArgs: { route, subject },
+        contextRef: subject ? `onboarding:${subject}` : route ? `onboarding:${route}` : undefined,
+      })}
+      className="mt-6 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+    >
+      <Wand2 className="h-3.5 w-3.5" />
+      Eller fråga {name} hur du kommer igång
+    </button>
   )
 }
 
@@ -105,6 +133,7 @@ export function EmptyInvoices() {
       description="Skapa din första faktura på under 60 sekunder. Vi fyller i dina uppgifter automatiskt."
       actionLabel="Skapa faktura"
       actionHref="/invoices/new"
+      agentHelp={{ route: '/invoices', subject: 'kundfakturor' }}
     />
   )
 }
@@ -118,6 +147,7 @@ export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
       actionLabel="Lägg till kund"
       actionHref={onAction ? undefined : '/customers/new'}
       onAction={onAction}
+      agentHelp={{ route: '/customers', subject: 'kunder' }}
     />
   )
 }
@@ -131,6 +161,7 @@ export function EmptyTransactions() {
       actionLabel="Importera transaktioner"
       actionHref="/import"
       supportHint
+      agentHelp={{ route: '/transactions', subject: 'transaktioner' }}
     />
   )
 }

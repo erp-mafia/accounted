@@ -29,7 +29,42 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       apiKeyId: 'key-1',
       apiKeyName: 'Test Key',
     }),
-    createServiceClientNoCookies: vi.fn(),
+    // Minimal supabase mock — agent_atom_registry resolves to empty so
+    // gnubok_list_skills happy-path doesn't crash on its registry query.
+    // company_settings + employees are also handled so the applicability
+    // filter has data to work against.
+    createServiceClientNoCookies: vi.fn(() => ({
+      from: vi.fn((table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: { entity_type: 'AB', vat_registered: true },
+                  error: null,
+                }),
+              })),
+            })),
+          }
+        }
+        if (table === 'employees') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                eq: vi.fn().mockResolvedValue({ count: 1, data: null, error: null }),
+              })),
+            })),
+          }
+        }
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              order: vi.fn().mockResolvedValue({ data: [], error: null }),
+            })),
+          })),
+        }
+      }),
+    })),
   }
 })
 

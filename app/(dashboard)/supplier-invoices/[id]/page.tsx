@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info } from 'lucide-react'
+import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import Link from 'next/link'
@@ -239,6 +240,12 @@ export default function SupplierInvoiceDetailPage() {
 
         {/* Actions */}
         <div className="flex flex-wrap gap-2">
+          <AgentSparkleButton
+            intentId="supplier_invoice.review"
+            intentArgs={{ supplier_invoice_id: invoice.id }}
+            contextRef={`supplier_invoice:${invoice.id}`}
+            size="default"
+          />
           {invoice.status === 'registered' && !invoice.is_credit_note && (
             <>
               <Button

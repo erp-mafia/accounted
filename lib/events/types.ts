@@ -116,6 +116,7 @@ export type CoreEvent =
       requestId: string | number | null             // JSON-RPC request id (helps correlate with client-side logs)
       userId: string
       companyId: string
+      sessionId: string | null                      // from Mcp-Session-Id header; null if absent
     }}
   // tools/list — informs us whether agents are using progressive discovery
   // (gnubok_search_tools) or pulling the full list. Tool counts vary with
@@ -129,6 +130,7 @@ export type CoreEvent =
       requestId: string | number | null
       userId: string
       companyId: string
+      sessionId: string | null                      // from Mcp-Session-Id header; null if absent
     }}
   // resources/read — informs us which skills/widgets/data resources actually
   // get loaded by agents. `kind` discriminates by URI scheme so we can
@@ -143,6 +145,61 @@ export type CoreEvent =
       actorId: string | null
       actorLabel: string | null
       requestId: string | number | null
+      userId: string
+      companyId: string
+      sessionId: string | null                      // from Mcp-Session-Id header; null if absent
+    }}
+  // Workflow lifecycle — agents declare "I'm starting month-end-close" via
+  // gnubok_load_skill (or implicitly by following a skill's recommended tool
+  // sequence). Phase 3A captures these to measure: how often is a workflow
+  // started? How often does it complete? Where do agents abandon?
+  | { type: 'mcp.workflow_started'; payload: {
+      slug: string                                  // e.g. 'month-end-close'
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'mcp.workflow_completed'; payload: {
+      slug: string
+      sessionId: string | null
+      outcome: 'success' | 'abandoned' | 'failed'
+      stepsCompleted: number | null                 // null when not tracked granularly
+      durationMs: number | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+    }}
+  // Fires when the agent's next tool call matches the previous response's
+  // nextHint.tool — measures whether `next` hints are actually followed.
+  // Computed dispatcher-side by comparing the last response shape to the
+  // current call.
+  | { type: 'mcp.next_hint_followed'; payload: {
+      fromTool: string
+      toTool: string
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+    }}
+  // Agent self-reported feedback (gnubok_feedback tool). The product team
+  // queries event_log for `agent.feedback` and routes to a backlog.
+  | { type: 'agent.feedback'; payload: {
+      context: string
+      sentiment: 'positive' | 'negative' | 'neutral'
+      suggestion: string | null
+      toolName: string | null
+      skillSlug: string | null
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorId: string | null
+      actorLabel: string | null
       userId: string
       companyId: string
     }}

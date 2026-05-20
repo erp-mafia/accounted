@@ -4,6 +4,9 @@ import { headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
+import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
+import AgentTrigger from '@/components/agent/AgentTrigger'
+import CommandPalette from '@/components/common/CommandPalette'
 import { RecaptIdentify } from '@/components/RecaptIdentify'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
@@ -157,7 +160,12 @@ export default async function DashboardLayout({
     )
   }
 
-  const [{ data: settings }, { count: uncategorizedCount }, { count: pendingOpsCount }] = await Promise.all([
+  const [
+    { data: settings },
+    { count: uncategorizedCount },
+    { count: pendingOpsCount },
+    { data: agentProfileIdentity },
+  ] = await Promise.all([
     supabase
       .from('company_settings')
       .select('company_name, onboarding_complete, entity_type, is_sandbox')
@@ -173,6 +181,13 @@ export default async function DashboardLayout({
       .select('*', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .eq('status', 'pending'),
+    // Agent identity — name + avatar — surfaced on the FAB and chat
+    // surfaces. Null when no agent_profile exists yet (banner CTA path).
+    supabase
+      .from('agent_profiles')
+      .select('display_name, avatar_id')
+      .eq('company_id', companyId)
+      .maybeSingle(),
   ])
 
   // If onboarding incomplete, still render the dashboard — the page component
@@ -204,35 +219,44 @@ export default async function DashboardLayout({
 
   return (
     <CompanyProvider value={companyContextValue}>
-      <CompanyTabSync />
-      <div className="min-h-screen bg-background">
-        {/* Skip to content link for keyboard/screen reader users */}
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-lg focus:text-sm focus:font-medium"
-        >
-          Hoppa till innehåll
-        </a>
-        {isSandbox && <SandboxBanner />}
-        <DashboardNav
-          companyName={settings?.company_name || 'Min verksamhet'}
-          entityType={entityType}
-          uncategorizedTransactionCount={uncategorizedCount ?? 0}
-          pendingOperationsCount={pendingOpsCount ?? 0}
-          isSandbox={isSandbox}
-          extensionNavItems={getExtensionNavItems()}
-        />
-        <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
-          <MainContainer companyId={companyId}>{children}</MainContainer>
-        </main>
-        {!isSandbox && (
-          <RecaptIdentify
-            userId={user.id}
-            email={user.email}
-            displayName={settings?.company_name || undefined}
+      <AgentSheetProvider
+        identity={{
+          displayName: agentProfileIdentity?.display_name ?? null,
+          avatarId: agentProfileIdentity?.avatar_id ?? null,
+        }}
+      >
+        <CompanyTabSync />
+        <div className="min-h-screen bg-background">
+          {/* Skip to content link for keyboard/screen reader users */}
+          <a
+            href="#main-content"
+            className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-lg focus:text-sm focus:font-medium"
+          >
+            Hoppa till innehåll
+          </a>
+          {isSandbox && <SandboxBanner />}
+          <DashboardNav
+            companyName={settings?.company_name || 'Min verksamhet'}
+            entityType={entityType}
+            uncategorizedTransactionCount={uncategorizedCount ?? 0}
+            pendingOperationsCount={pendingOpsCount ?? 0}
+            isSandbox={isSandbox}
+            extensionNavItems={getExtensionNavItems()}
           />
-        )}
-      </div>
+          <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
+            <MainContainer companyId={companyId}>{children}</MainContainer>
+          </main>
+          <AgentTrigger />
+          <CommandPalette />
+          {!isSandbox && (
+            <RecaptIdentify
+              userId={user.id}
+              email={user.email}
+              displayName={settings?.company_name || undefined}
+            />
+          )}
+        </div>
+      </AgentSheetProvider>
     </CompanyProvider>
   )
 }

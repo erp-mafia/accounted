@@ -97,4 +97,8 @@ export const quarterlyVatReviewSkill: Skill = {
   summary: 'End-to-end momsdeklaration: deadlines, ruta-by-ruta map, reverse charge rules, common errors, drill-down via general ledger.',
   tags: ['vat', 'quarterly', 'monthly', 'compliance', 'skatteverket'],
   body,
+  tier: 'workflow',
+  // Only surfaces for VAT-registered companies. Most are; a hobby/below-tröskel
+  // EF without VAT registration shouldn't see this in its skill list.
+  applicability: { entity_type: 'both', requires: ['vat_registered'] },
 }

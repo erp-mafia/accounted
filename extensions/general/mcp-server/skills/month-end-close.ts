@@ -79,4 +79,8 @@ export const monthEndCloseSkill: Skill = {
   summary: 'End-of-month workflow: book transactions, reconcile bank, verify voucher gaps, file VAT (monthly filers), lock period.',
   tags: ['monthly', 'close', 'reconciliation', 'vat'],
   body,
+  tier: 'workflow',
+  // Universal — both AB and EF run a monthly close. VAT step is conditional
+  // inside the body so non-VAT-registered companies aren't blocked.
+  applicability: { entity_type: 'both' },
 }

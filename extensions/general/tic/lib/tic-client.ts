@@ -7,6 +7,7 @@ import type {
   TICPhone,
   TICCompanyPurpose,
   TICFinancialReportSummary,
+  TICBeneficialOwnerResponse,
 } from './tic-types'
 import { TICAPIError } from './tic-types'
 
@@ -99,4 +100,14 @@ export async function getCompanyPurpose(companyId: number): Promise<TICCompanyPu
 /** Get financial report summaries for a company. */
 export async function getFinancialReportSummaries(companyId: number): Promise<TICFinancialReportSummary[] | null> {
   return ticApiFetch<TICFinancialReportSummary[]>(`/datasets/companies/${companyId}/financial-report-summaries`)
+}
+
+/** Get current + historic beneficial owner records from Bolagsverket
+ * (verklig huvudman per Lag 2017:631). Returns notifications and any
+ * exempt-from-registration flags. Used to answer ownership questions
+ * authoritatively rather than asking the user to confirm. */
+export async function getBeneficialOwners(companyId: number): Promise<TICBeneficialOwnerResponse | null> {
+  return ticApiFetch<TICBeneficialOwnerResponse>(
+    `/datasets/companies/${companyId}/se/beneficial-owners`,
+  )
 }

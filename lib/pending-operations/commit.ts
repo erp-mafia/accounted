@@ -46,7 +46,7 @@ import {
   generateInvoiceEmailText,
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
-import { uploadDocument } from '@/lib/core/documents/document-service'
+import { uploadDocument, linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -240,6 +240,63 @@ async function commitCategorizeTransaction(
   if (updateError) {
     log.error('Failed to update transaction:', updateError)
     return { error: 'Failed to update transaction', status: 500 }
+  }
+
+  // Propagate the underlag from a matched invoice-inbox item onto the new
+  // verifikation. Without this, BFL 7 kap is violated: a verifikation
+  // exists with no underlag attached even though the user has explicitly
+  // linked an inbox item (with a document) to this transaction in the
+  // inbox workspace. We:
+  //   1. find the inbox item(s) where matched_transaction_id = txId
+  //   2. for each item with a document_id, set
+  //        document_attachments.journal_entry_id = journalEntryId
+  //      (idempotent — re-linking the same doc is a no-op write).
+  //   3. stamp invoice_inbox_items.created_journal_entry_id so the inbox
+  //      row visibly moves to "Bearbetade" and shows "Öppna verifikation".
+  // Errors are logged but don't fail the commit — the verifikation itself
+  // is already posted, and the link can be repaired by re-running this
+  // step. A future PR can move this into a single transaction with the
+  // journal entry creation.
+  if (journalEntryId) {
+    try {
+      const { data: matchedInboxItems } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, document_id')
+        .eq('company_id', companyId)
+        .eq('matched_transaction_id', txId)
+        .is('created_journal_entry_id', null)
+      for (const inbox of (matchedInboxItems ?? []) as Array<{
+        id: string
+        document_id: string | null
+      }>) {
+        if (inbox.document_id) {
+          try {
+            await linkToJournalEntry(supabase, companyId, inbox.document_id, journalEntryId)
+          } catch (err) {
+            log.error('Failed to link inbox document to journal entry', {
+              inbox_item_id: inbox.id,
+              document_id: inbox.document_id,
+              journal_entry_id: journalEntryId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        const { error: stampError } = await supabase
+          .from('invoice_inbox_items')
+          .update({ created_journal_entry_id: journalEntryId })
+          .eq('id', inbox.id)
+          .eq('company_id', companyId)
+        if (stampError) {
+          log.error('Failed to stamp inbox item created_journal_entry_id', {
+            inbox_item_id: inbox.id,
+            journal_entry_id: journalEntryId,
+            error: stampError.message,
+          })
+        }
+      }
+    } catch (err) {
+      log.error('Failed to propagate underlag from matched inbox items', err)
+    }
   }
 
   try {

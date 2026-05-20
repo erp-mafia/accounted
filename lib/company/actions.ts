@@ -1,11 +1,13 @@
 'use server'
 
+import { headers, cookies } from 'next/headers'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 
 /**
@@ -76,6 +78,20 @@ export async function createCompanyFromOnboarding(params: {
     endDate: string
     name: string
   }
+  // Optional TIC lookup result captured during the onboarding form. When
+  // supplied, persisted to companies.tic_snapshot so downstream features
+  // (specialized accountant agent composer, MCP briefing) can read the same
+  // Bolagsverket-sourced data the form used. Empty for manual entry paths.
+  ticLookup?: {
+    companyName: string
+    isCeased: boolean
+    address: { street: string | null; postalCode: string | null; city: string | null } | null
+    registration: { fTax: boolean; vat: boolean }
+    bankAccounts: { type: string; accountNumber: string; bic: string | null }[]
+    email: string | null
+    phone: string | null
+    sniCodes: { code: string; name: string }[]
+  } | null
 }): Promise<{ companyId?: string; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -154,6 +170,59 @@ export async function createCompanyFromOnboarding(params: {
     if (orgUpdateError) {
       await rollback('org_number update failed', orgUpdateError)
       return { error: 'Kunde inte spara organisationsnummer. Försök igen.' }
+    }
+  }
+
+  // Persist the FULL TIC profile (sniCodes + purpose + beneficial-owners +
+  // financials + …) once at signup. We call ensureTicSnapshot which:
+  //   1. Reads companies.tic_snapshot — empty for a brand-new row, so misses
+  //   2. Falls back to company_settings.org_number → uses the cleaned one
+  //   3. Self-fetches /api/extensions/ext/tic/profile with forwarded cookies
+  //   4. Persists the full profile + fetched_at timestamp
+  //
+  // This avoids the double-fetch the agent build path would otherwise
+  // trigger (lookup at form, then profile at agent build). On failure we
+  // fall through silently — the company row is already created, the agent
+  // build path will retry enrichment later, and we don't block signup.
+  if (cleanedOrgNumber) {
+    try {
+      const hdrs = await headers()
+      const cookieStore = await cookies()
+      const host = hdrs.get('host')
+      const proto =
+        hdrs.get('x-forwarded-proto') ?? (host?.startsWith('localhost') ? 'http' : 'https')
+      const origin = host
+        ? `${proto}://${host}`
+        : (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000')
+      const cookieHeader = cookieStore
+        .getAll()
+        .map((c) => `${c.name}=${c.value}`)
+        .join('; ')
+
+      await ensureTicSnapshot({
+        supabase,
+        companyId: newCompanyId,
+        cookieHeader,
+        origin,
+      })
+    } catch (err) {
+      // Best-effort enrichment. Signup must not fail because TIC is slow,
+      // unavailable, or the extension is disabled.
+      console.warn('[createCompanyFromOnboarding] tic profile enrichment failed', err)
+    }
+  } else if (params.ticLookup) {
+    // No org_number — we can't call /profile authoritatively, but the
+    // wizard already had a lookup result. Persist it as a degraded snapshot
+    // so the agent build at least sees what the user typed.
+    const { error: ticErr } = await supabase
+      .from('companies')
+      .update({
+        tic_snapshot: params.ticLookup,
+        tic_snapshot_fetched_at: new Date().toISOString(),
+      })
+      .eq('id', newCompanyId)
+    if (ticErr) {
+      console.warn('[createCompanyFromOnboarding] tic snapshot persist failed', ticErr)
     }
   }
 

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ArrowLeft, Lock } from 'lucide-react'
+import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -197,14 +198,22 @@ export default function YearEndPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="font-display text-3xl md:text-4xl tracking-tight">Årsbokslut</h1>
-        <Button variant="outline" asChild>
-          <Link href="/bookkeeping">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Bokföring
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <AgentSparkleButton
+            intentId="bokslut.step"
+            intentArgs={{ step_id: null }}
+            contextRef="bokslut:overview"
+            size="default"
+          />
+          <Button variant="outline" asChild>
+            <Link href="/bookkeeping">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Bokföring
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {periods === null && !periodsError && (

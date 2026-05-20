@@ -28,6 +28,7 @@ import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
 import { useCompany } from '@/contexts/CompanyContext'
+import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType } from '@/types'
 
 const itemSchema = z.object({
@@ -447,7 +448,7 @@ export default function NewInvoicePage() {
         <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label="Tillbaka">
           <ArrowLeft className="h-5 w-5" />
         </Button>
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
             {watchDocumentType === 'proforma' ? 'Ny proformafaktura' : watchDocumentType === 'delivery_note' ? 'Ny följesedel' : 'Ny faktura'}
             {numberPreview && (
@@ -460,6 +461,11 @@ export default function NewInvoicePage() {
             {watchDocumentType === 'proforma' ? 'Skapa en proformafaktura (ingen bokföring)' : watchDocumentType === 'delivery_note' ? 'Skapa en följesedel (utan priser)' : 'Skapa en ny faktura'}
           </p>
         </div>
+        <AgentSparkleButton
+          intentId="invoice.draft"
+          intentArgs={{ customer_id: watchCustomerId ?? null }}
+          contextRef={watchCustomerId ? `customer:${watchCustomerId}` : 'invoice:new'}
+        />
       </div>
 
       {hasBankDetails === false && (

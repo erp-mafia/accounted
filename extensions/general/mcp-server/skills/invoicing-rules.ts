@@ -145,4 +145,7 @@ export const invoicingRulesSkill: Skill = {
   summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment per customer type, ROT/RUT, Peppol, kreditfaktura.',
   tags: ['invoicing', 'vat', 'compliance', 'eu', 'rot-rut'],
   body,
+  tier: 'workflow',
+  // Universal — both AB and EF send invoices.
+  applicability: { entity_type: 'both' },
 }

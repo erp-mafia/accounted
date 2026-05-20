@@ -1,0 +1,227 @@
+import { createClient } from '@/lib/supabase/server'
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { ensureInitialized } from '@/lib/init'
+import { getActiveCompanyId } from '@/lib/company/context'
+import { getIntent } from '@/lib/agent/intents/registry'
+import { runChatTurn } from '@/lib/agent/chat/run-turn'
+
+// Make sure extensions are loaded — the chat loop dispatches against the
+// agent tool registry which is populated by the mcp-server extension at load.
+ensureInitialized()
+
+const BodySchema = z.object({
+  intent_id: z.string().min(1),
+  // Existing conversation to resume; if omitted, the route creates one. The
+  // chat sheet's React state holds the conversation id as `string | null`
+  // and serializes `null` on the first turn, so accept null alongside
+  // undefined and treat both as "no existing conversation".
+  conversation_id: z.string().uuid().nullable().optional(),
+  // Optional company override; defaults to active_company_id.
+  company_id: z.string().uuid().nullable().optional(),
+  // The user's message (or, on the first turn, this is empty and we send the
+  // intent's prompt template instead).
+  user_message: z.string().nullable().optional(),
+  // Intent-specific capture args (e.g. { transaction_id: '...' } for
+  // transaction.categorization). Used only on the first turn to build the
+  // prompt template.
+  intent_args: z.record(z.string(), z.unknown()).nullable().optional(),
+  // Optional context_ref for the conversation row, e.g. 'transaction:<id>'.
+  context_ref: z.string().max(200).nullable().optional(),
+})
+
+// POST /api/agent/invoke
+//
+// Streams NDJSON events from the chat loop. Each line is a JSON object whose
+// `kind` identifies the event type — see lib/agent/chat/run-turn.ts StreamEvent.
+//
+// Auth: the user must be a member of the resolved company.
+//
+// Plan ref: dev_docs/specialized-agent-plan.md §9 (chat loop).
+export async function POST(request: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  let body: z.infer<typeof BodySchema>
+  try {
+    body = BodySchema.parse(await request.json())
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Invalid body' },
+      { status: 400 },
+    )
+  }
+
+  const intent = getIntent(body.intent_id)
+  if (!intent) {
+    return NextResponse.json({ error: `Unknown intent: ${body.intent_id}` }, { status: 400 })
+  }
+
+  const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
+  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
+
+  const { data: membership } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  // Load lightweight company + user signals for the system prompt.
+  const [{ data: company }, { data: profile }] = await Promise.all([
+    supabase.from('companies').select('name').eq('id', companyId).single(),
+    supabase.from('profiles').select('full_name').eq('id', user.id).single(),
+  ])
+  const companyName = company?.name ?? ''
+  const firstName = profile?.full_name?.split(' ')[0] ?? null
+
+  // Resolve / create the conversation row.
+  let conversationId = body.conversation_id ?? null
+  if (!conversationId) {
+    const { data: newConv, error: convErr } = await supabase
+      .from('agent_conversations')
+      .insert({
+        company_id: companyId,
+        user_id: user.id,
+        intent_id: body.intent_id,
+        context_ref: body.context_ref ?? null,
+        title: intent.sheetTitle,
+      })
+      .select('id')
+      .single()
+    if (convErr || !newConv) {
+      return NextResponse.json(
+        { error: convErr?.message ?? 'Failed to create conversation' },
+        { status: 500 },
+      )
+    }
+    conversationId = newConv.id as string
+  }
+
+  // Compute the user message to send to Anthropic. On the first turn (no
+  // user_message provided), we run the intent's capture + promptTemplate
+  // pipeline so the prompt is anchored on the page context the user
+  // clicked from.
+  let effectiveUserMessage = body.user_message ?? ''
+  // When the caller didn't supply a user_message, we synthesize one from the
+  // intent's promptTemplate. Mark that synthetic turn hidden so the UI
+  // doesn't render the template scaffolding as a user bubble on resume.
+  let userMessageHidden = false
+  if (!effectiveUserMessage) {
+    try {
+      const captured = await intent.capture(body.intent_args ?? {}, {
+        supabase,
+        userId: user.id,
+        companyId,
+      })
+      const profileSummary = await loadProfileSummary(supabase, companyId)
+      const memory = await loadRankedMemory(supabase, companyId, 30)
+      effectiveUserMessage = intent.promptTemplate({
+        captured,
+        profileSummary,
+        activeMemory: memory,
+      })
+      userMessageHidden = true
+    } catch (err) {
+      return NextResponse.json(
+        {
+          error:
+            err instanceof Error
+              ? `Capture failed: ${err.message}`
+              : 'Capture failed',
+        },
+        { status: 500 },
+      )
+    }
+  }
+
+  // Stream — NDJSON events from the chat loop.
+  const encoder = new TextEncoder()
+  // Conversation id is set above; capture into a non-null local for the
+  // streaming closure's first emission.
+  const convId: string = conversationId
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const emit = (event: unknown): boolean => {
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'))
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      // Surface the conversation id so the client can resume with it.
+      emit({ kind: 'conversation', conversation_id: convId })
+
+      try {
+        await runChatTurn({
+          supabase,
+          userId: user.id,
+          companyId,
+          companyName,
+          firstName,
+          intent,
+          conversationId: convId,
+          userMessage: effectiveUserMessage,
+          userMessageHidden,
+          persist: true,
+          emit: (event) => emit(event),
+        })
+      } catch (err) {
+        emit({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Internal error',
+        })
+      } finally {
+        try {
+          controller.close()
+        } catch {
+          // Already closed
+        }
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
+async function loadProfileSummary(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  companyId: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('agent_profiles')
+    .select('profile_summary')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  return (data?.profile_summary as string | null) ?? null
+}
+
+async function loadRankedMemory(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  companyId: string,
+  cap: number,
+): Promise<{ content: string; kind: string }[]> {
+  const { data } = await supabase
+    .from('agent_memory')
+    .select('content, kind, relevance_score, last_accessed_at')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .order('relevance_score', { ascending: false })
+    .order('last_accessed_at', { ascending: false, nullsFirst: false })
+    .limit(cap)
+  return (data ?? []).map((r: { content: string; kind: string }) => ({
+    content: r.content,
+    kind: r.kind,
+  }))
+}

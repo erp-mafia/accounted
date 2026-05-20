@@ -5,8 +5,8 @@ import type { ReactNode } from 'react'
 
 /**
  * Picks the dashboard chrome container based on route. Extension workspaces
- * (/e/*) want the full viewport for file viewers and dashboards; everything
- * else gets the centered max-w-5xl card.
+ * (/e/*) and the /chat app shell want the full viewport for their own
+ * multi-pane layouts; everything else gets the centered max-w-5xl card.
  *
  * Lives in a client component because the parent (dashboard) layout is
  * shared across all dashboard routes. Server-side pathname checks done in
@@ -22,9 +22,13 @@ export function MainContainer({
   children: ReactNode
 }) {
   const pathname = usePathname()
-  const isExtensionWorkspace = pathname.startsWith('/e/')
+  // Full-bleed routes own their own padding + multi-pane layout. They
+  // shouldn't sit inside max-w-5xl or any horizontal padding — that's what
+  // causes a visible gap between the dashboard sidebar and the chat-sidebar
+  // pane on wide viewports.
+  const isFullBleed = pathname.startsWith('/e/') || pathname.startsWith('/chat')
 
-  return isExtensionWorkspace ? (
+  return isFullBleed ? (
     <div key={companyId ?? ''} className="h-full">{children}</div>
   ) : (
     <div

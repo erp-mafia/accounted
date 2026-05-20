@@ -1,21 +1,51 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Skill } from './types'
 import { monthEndCloseSkill } from './month-end-close'
 import { quarterlyVatReviewSkill } from './quarterly-vat-review'
 import { yearEndCloseSkill } from './year-end-close'
 import { invoicingRulesSkill } from './invoicing-rules'
 import { payrollMonthlySkill } from './payroll-monthly'
+import { bankReconciliationSkill } from './bank-reconciliation'
+import { kreditfakturaProcessSkill } from './kreditfaktura-process'
+import { customerOnboardingSkill } from './customer-onboarding'
+import { loadAtomsAsSkills } from './atoms'
 
-export const skills: Skill[] = [
+/** Static workflow skills the server ships with. Tier: 'workflow'. */
+export const workflowSkills: Skill[] = [
   monthEndCloseSkill,
   quarterlyVatReviewSkill,
   yearEndCloseSkill,
   invoicingRulesSkill,
   payrollMonthlySkill,
+  bankReconciliationSkill,
+  kreditfakturaProcessSkill,
+  customerOnboardingSkill,
 ]
 
-export function findSkill(slug: string): Skill | null {
-  return skills.find((s) => s.slug === slug) ?? null
+/** @deprecated Use `workflowSkills` for the static set, or `loadAllSkills(supabase)`
+ *  for the unified list (workflows + atoms). Kept for backwards compatibility
+ *  with prior imports. */
+export const skills = workflowSkills
+
+/**
+ * Resolve a skill by slug. Checks the static workflow array first (synchronous,
+ * always available), then falls back to the registry-backed atom set
+ * (asynchronous, supabase-bound).
+ */
+export async function findSkill(slug: string, supabase?: SupabaseClient): Promise<Skill | null> {
+  const wf = workflowSkills.find((s) => s.slug === slug)
+  if (wf) return wf
+  if (!supabase) return null
+  const atoms = await loadAtomsAsSkills(supabase)
+  return atoms.find((s) => s.slug === slug) ?? null
 }
 
-export type { Skill } from './types'
+/** Workflow skills + registry-loaded atoms in one list. */
+export async function loadAllSkills(supabase: SupabaseClient): Promise<Skill[]> {
+  const atoms = await loadAtomsAsSkills(supabase)
+  return [...workflowSkills, ...atoms]
+}
+
+export type { Skill, SkillTier } from './types'
 export { SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './types'
+export { loadAtomsAsSkills, __resetAtomCache } from './atoms'

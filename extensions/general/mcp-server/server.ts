@@ -28,7 +28,8 @@ import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { prompts, findPrompt } from './prompts'
-import { skills, findSkill, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
+import { findSkill, loadAllSkills, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
+import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import {
   checkIdempotencyKey,
@@ -36,7 +37,7 @@ import {
   hashRequest,
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
-import { toToolError } from './tool-result'
+import { toToolError, type NextActionHint } from './tool-result'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
@@ -71,6 +72,13 @@ interface ActorContext {
   type: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
   id?: string
   label?: string
+  /**
+   * Stable agent-session identifier from the `Mcp-Session-Id` JSON-RPC header
+   * when present, otherwise null. Used to correlate `mcp.tool_called`,
+   * `mcp.workflow_started`, `mcp.next_hint_followed`, etc. events across a
+   * single agent conversation. Not used for auth.
+   */
+  sessionId?: string | null
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -118,6 +126,11 @@ interface McpTool {
 
 const log = createLogger('mcp-server')
 
+// gnubok_feedback rate limit: 1 per 60s per actor. In-memory single-process;
+// no Redis dependency. See the gnubok_feedback tool definition below.
+const FEEDBACK_RATE_LIMIT_MS = 60_000
+const feedbackRateLimit = new Map<string, number>()
+
 const VALID_CATEGORIES = [
   'income_services', 'income_products', 'income_other',
   'expense_equipment', 'expense_software', 'expense_travel', 'expense_office',
@@ -133,11 +146,32 @@ const VALID_VAT_TREATMENTS = [
 
 // ── Pending operations staging ───────────────────────────────
 
-interface StageNextHint {
-  description: string
-  tool?: string
-  args?: Record<string, unknown>
-  resource?: string
+/**
+ * Param-keys we'll scan for an affärshändelse date when the caller doesn't
+ * pass `dateForPeriodCheck` explicitly. Ordered: most-specific first. The
+ * first ISO yyyy-MM-dd hit wins. Adding a new field is safe — unknown values
+ * just fall through to undefined.
+ */
+const AUTO_PERIOD_DATE_KEYS = [
+  'entry_date',
+  'payment_date',
+  'invoice_date',
+  'date',
+  'period_end',
+  'period_start',
+  'voucher_date',
+  'paid_date',
+  'transfer_date',
+] as const
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function autoExtractDateForPeriodCheck(params: Record<string, unknown>): string | undefined {
+  for (const key of AUTO_PERIOD_DATE_KEYS) {
+    const value = params[key]
+    if (typeof value === 'string' && ISO_DATE_RE.test(value)) return value
+  }
+  return undefined
 }
 
 interface StageOptions {
@@ -172,7 +206,7 @@ async function stagePendingOperation(
   params: Record<string, unknown>,
   previewData: Record<string, unknown>,
   actor: ActorContext = { type: 'user' },
-  next?: StageNextHint,
+  next?: NextActionHint,
   options: StageOptions = {}
 ): Promise<{
   staged: boolean
@@ -184,25 +218,26 @@ async function stagePendingOperation(
   message: string
   preview: Record<string, unknown>
   period_status?: PeriodStatusForDate
-  next?: StageNextHint
+  next?: NextActionHint
 }> {
   const riskLevel = getRiskLevel(operationType)
   const branding = getBranding().appName.toLowerCase()
 
-  // Resolve period_status once, in parallel with downstream IO when possible.
-  // Failure is non-fatal: the DB triggers are authoritative, so a missing
-  // envelope just degrades the agent's preview UX rather than blocking a write.
-  // We log the failure so a systematic outage (e.g. missing company_settings row,
-  // dropped query) is observable in audit logs rather than silently degraded.
+  // Resolve period_status once. The caller can pass `dateForPeriodCheck`
+  // explicitly; otherwise we scan params for a known affärshändelse-date
+  // field so every date-bearing operation surfaces a period_status envelope
+  // without each tool having to opt in. Failure is non-fatal — DB triggers
+  // are the authoritative gate; a missing envelope just degrades preview UX.
+  const dateForPeriodCheck = options.dateForPeriodCheck ?? autoExtractDateForPeriodCheck(params)
   let periodStatus: PeriodStatusForDate | undefined
-  if (options.dateForPeriodCheck) {
+  if (dateForPeriodCheck) {
     try {
-      periodStatus = await resolvePeriodStatusForDate(supabase, companyId, options.dateForPeriodCheck)
+      periodStatus = await resolvePeriodStatusForDate(supabase, companyId, dateForPeriodCheck)
     } catch (err) {
       log.warn('resolvePeriodStatusForDate failed', {
         operationType,
         companyId,
-        dateForPeriodCheck: options.dateForPeriodCheck,
+        dateForPeriodCheck,
         error: err instanceof Error ? err.message : String(err),
       })
       periodStatus = undefined
@@ -503,6 +538,18 @@ const PAGINATION_PROPS = {
   next_offset: { type: 'number', description: 'Offset for the next page (omitted on last page)' },
 } as const
 
+const NEXT_ACTION_HINT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    description: { type: 'string' },
+    tool: { type: 'string' },
+    args: { type: 'object', additionalProperties: true },
+    resource: { type: 'string' },
+  },
+  required: ['description'],
+} as const
+
 const STAGED_OPERATION_SCHEMA = {
   type: 'object',
   properties: {
@@ -523,7 +570,7 @@ const STAGED_OPERATION_SCHEMA = {
         lock_date: { type: ['string', 'null'] },
       },
     },
-    next: { type: 'object' },
+    next: NEXT_ACTION_HINT_SCHEMA,
   },
   required: ['staged', 'risk_level', 'actor', 'message', 'preview'],
 } as const
@@ -1256,12 +1303,21 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_skills',
-    description: 'List available domain-knowledge skills (workflows for month-end close, VAT review, year-end, invoicing, payroll). Call gnubok_load_skill(slug) to read the body.',
+    description: 'List available domain-knowledge skills filtered to this company (entity type, VAT, payroll). Workflow guides + loaded specialty atoms. Pass include_all=true to see hidden skills. Call gnubok_load_skill(slug) for any body.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        tag: { type: 'string', description: 'Optional filter — return only skills matching this tag (e.g. "vat", "monthly", "yearly", "payroll").' },
+        tag: { type: 'string', description: 'Optional filter by tag (e.g. "vat", "monthly", "yearly", "payroll", or the tier name "workflow"/"horizontal"/"vertical"/"modifier").' },
+        tier: {
+          type: 'string',
+          enum: ['workflow', 'horizontal', 'vertical', 'modifier'],
+          description: 'Optional filter by tier. workflow = static guides, horizontal = regulatory atoms (Swedish VAT/payroll/…), vertical = industry atoms (konsult-IT, e-handel…), modifier = cross-cutting atoms (holding-AB…).',
+        },
+        include_all: {
+          type: 'boolean',
+          description: 'When true, ignore the company-context filter (entity_type, employees, vat_registered) and return all skills. Default false.',
+        },
       },
     },
     outputSchema: {
@@ -1277,13 +1333,25 @@ export const tools: McpTool[] = [
               name: { type: 'string' },
               summary: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
+              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
             },
-            required: ['slug', 'name', 'summary'],
+            required: ['slug', 'name', 'summary', 'tier'],
           },
         },
         count: { type: 'number' },
+        hidden_count: { type: 'number', description: 'Skills hidden by company-context filter. Re-call with include_all=true to see them.' },
+        company_context: {
+          type: 'object',
+          additionalProperties: false,
+          description: 'Snapshot of the filter inputs used to compute the list — useful when debugging "why isn\'t skill X showing up?".',
+          properties: {
+            entity_type: { type: ['string', 'null'] },
+            has_employees: { type: 'boolean' },
+            vat_registered: { type: 'boolean' },
+          },
+        },
       },
-      required: ['skills', 'count'],
+      required: ['skills', 'count', 'hidden_count', 'company_context'],
     },
     annotations: {
       readOnlyHint: true,
@@ -1291,31 +1359,80 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args) {
+    async execute(args, companyId, _userId, supabase) {
       const tag = (args.tag as string | undefined)?.toLowerCase().trim()
-      const filtered = tag
-        ? skills.filter((s) => s.tags.some((t) => t.toLowerCase() === tag))
-        : skills
+      const tier = (args.tier as SkillTier | undefined)
+      const includeAll = args.include_all === true
+
+      // Resolve company context — read once per call. Failures degrade
+      // gracefully: an unresolved field means "don't filter on it" so a
+      // misconfigured company still gets the full skill list.
+      const [settings, employeeCount] = await Promise.all([
+        supabase
+          .from('company_settings')
+          .select('entity_type, vat_registered')
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('employees')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('is_active', true),
+      ])
+      const entityType = (settings.data?.entity_type as string | undefined) ?? null
+      const vatRegistered = Boolean(settings.data?.vat_registered)
+      const hasEmployees = (employeeCount.count ?? 0) > 0
+
+      const all = await loadAllSkills(supabase)
+
+      // First pass: tier + tag filter (unchanged).
+      const tagFiltered = all.filter((s) => {
+        if (tier && s.tier !== tier) return false
+        if (tag && !s.tags.some((t) => t.toLowerCase() === tag)) return false
+        return true
+      })
+
+      // Second pass: applicability filter — skipped when include_all=true so
+      // agents can always escape to the full list. Skills without an
+      // applicability declaration are always shown (universal).
+      const applicable = includeAll
+        ? tagFiltered
+        : tagFiltered.filter((s) => {
+            if (!s.applicability) return true
+            const a = s.applicability
+            if (a.entity_type && a.entity_type !== 'both' && entityType && entityType !== a.entity_type) return false
+            if (a.requires?.includes('employees') && !hasEmployees) return false
+            if (a.requires?.includes('vat_registered') && !vatRegistered) return false
+            return true
+          })
+
       return {
-        skills: filtered.map((s) => ({
+        skills: applicable.map((s) => ({
           slug: s.slug,
           name: s.name,
           summary: s.summary,
           tags: s.tags,
+          tier: s.tier,
         })),
-        count: filtered.length,
+        count: applicable.length,
+        hidden_count: tagFiltered.length - applicable.length,
+        company_context: {
+          entity_type: entityType,
+          has_employees: hasEmployees,
+          vat_registered: vatRegistered,
+        },
       }
     },
   },
 
   {
     name: 'gnubok_load_skill',
-    description: 'Load a domain-knowledge skill by slug. Returns the full Markdown body — call gnubok_list_skills first to find slugs.',
+    description: 'Load a skill body by slug. Workflow slugs are flat (e.g. "month-end-close"); atom slugs match registry ids (e.g. "vertical/konsult-it", "modifier/holding-ab"). Call gnubok_list_skills to find slugs.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        slug: { type: 'string', description: 'Skill slug (e.g. "month-end-close", "quarterly-vat-review", "year-end-close", "invoicing-rules", "payroll-monthly")' },
+        slug: { type: 'string', description: 'Skill slug — workflow slug ("month-end-close", "quarterly-vat-review", "year-end-close", "invoicing-rules", "payroll-monthly") or atom id ("vertical/konsult-it", "modifier/holding-ab", "horizontal/swedish-vat", …).' },
       },
       required: ['slug'],
     },
@@ -1327,9 +1444,10 @@ export const tools: McpTool[] = [
         name: { type: 'string' },
         summary: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
+        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
         body: { type: 'string', description: 'Full skill content as Markdown' },
       },
-      required: ['slug', 'name', 'body'],
+      required: ['slug', 'name', 'body', 'tier'],
     },
     annotations: {
       readOnlyHint: true,
@@ -1337,20 +1455,370 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args) {
+    async execute(args, companyId, userId, supabase, actor) {
       const slug = (args.slug as string | undefined)?.trim()
       if (!slug) throw new Error('slug is required')
-      const skill = findSkill(slug)
+      const skill = await findSkill(slug, supabase)
       if (!skill) {
-        const available = skills.map((s) => s.slug).join(', ')
+        const all = await loadAllSkills(supabase)
+        const available = all.map((s) => s.slug).join(', ')
         throw new Error(`Skill not found: "${slug}". Available skills: ${available}`)
+      }
+      // Workflow-tier skills are the closed-form processes (month-end-close,
+      // year-end-close, payroll-monthly). Loading one is a strong signal the
+      // agent is starting that workflow — emit so we can track completion
+      // rates. Atom skills are reference material and don't trigger this.
+      if (skill.tier === 'workflow' && actor) {
+        emitWorkflowStarted({ slug: skill.slug, actor, userId, companyId })
       }
       return {
         slug: skill.slug,
         name: skill.name,
         summary: skill.summary,
         tags: skill.tags,
+        tier: skill.tier,
         body: skill.body,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_remember_fact',
+    description: 'Capture a durable fact, preference, pattern, or correction about the company. Use mid-conversation when the user says something the agent should remember next time. Writes immediately — does not stage. Use sparingly for foundational signal, not for one-off context.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        content: {
+          type: 'string',
+          description: 'The full fact text in the user\'s language. Self-contained — readable without prior context. Example: "Företaget hyr lagerplats av AB Foo, hyresfaktura kommer 25:e varje månad."',
+        },
+        kind: {
+          type: 'string',
+          enum: ['fact', 'preference', 'pattern', 'correction'],
+          description: 'fact = verifiable statement, preference = user-stated choice, pattern = observed regularity, correction = agent learned from a user fix. Default fact.',
+        },
+        source_ref: {
+          type: 'string',
+          description: 'Optional pointer to where this fact came from (e.g. "conversation:<uuid>:turn-3").',
+        },
+        relevance_score: {
+          type: 'number',
+          description: 'How important this memory is for future prompts. 0.0–1.0. Default 0.8 for agent-captured facts.',
+        },
+      },
+      required: ['content'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string' },
+        kind: { type: 'string' },
+        content: { type: 'string' },
+        created_at: { type: 'string' },
+      },
+      required: ['id', 'kind', 'content', 'created_at'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const content = (args.content as string | undefined)?.trim()
+      if (!content || content.length < 2) throw new Error('content is required (min 2 chars)')
+      const kind = (args.kind as string | undefined) ?? 'fact'
+      if (!['fact', 'preference', 'pattern', 'correction'].includes(kind)) {
+        throw new Error(`invalid kind: ${kind}`)
+      }
+      const rawScore = args.relevance_score
+      const score =
+        typeof rawScore === 'number' && rawScore >= 0 && rawScore <= 1 ? rawScore : 0.8
+
+      const { data, error } = await supabase
+        .from('agent_memory')
+        .insert({
+          company_id: companyId,
+          kind,
+          content,
+          source: 'agent_learned',
+          source_ref: (args.source_ref as string | undefined) ?? null,
+          relevance_score: score,
+          is_active: true,
+          created_by_user_id: userId,
+        })
+        .select('id, kind, content, created_at')
+        .single()
+      if (error) throw new Error(`Failed to remember fact: ${error.message}`)
+      return data
+    },
+  },
+
+  {
+    name: 'gnubok_forget_fact',
+    description: 'Deactivate a memory entry by id. Use when the user explicitly asks to forget something or supersedes it. The row is kept for audit (is_active=false) but no longer surfaces in prompts.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'The memory entry id from a prior gnubok_remember_fact call.' },
+        reason: { type: 'string', description: 'Optional short note about why this is being forgotten (for audit).' },
+      },
+      required: ['id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string' },
+        is_active: { type: 'boolean' },
+      },
+      required: ['id', 'is_active'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const id = (args.id as string | undefined)?.trim()
+      if (!id) throw new Error('id is required')
+      const { data, error } = await supabase
+        .from('agent_memory')
+        .update({ is_active: false })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .select('id, is_active')
+        .single()
+      if (error) throw new Error(`Failed to forget fact: ${error.message}`)
+      return data
+    },
+  },
+
+  {
+    name: 'gnubok_feedback',
+    description: 'Report agent-side feedback: missing tool, wrong description, skill gap, or a positive signal. Goes to event_log for product-team triage. Rate-limited 1/min/key.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        context: {
+          type: 'string',
+          description: 'What you were trying to do and what blocked you — or what worked well. Free text, max 2000 chars.',
+        },
+        sentiment: {
+          type: 'string',
+          enum: ['positive', 'negative', 'neutral'],
+          description: 'Direction of the feedback. Default: negative.',
+        },
+        suggestion: {
+          type: 'string',
+          description: 'Optional concrete suggestion (e.g. "add a tool for X", "rename Y arg").',
+        },
+        tool_name: {
+          type: 'string',
+          description: 'Optional specific tool the feedback concerns.',
+        },
+        skill_slug: {
+          type: 'string',
+          description: 'Optional specific skill the feedback concerns.',
+        },
+      },
+      required: ['context'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        recorded: { type: 'boolean' },
+        message: { type: 'string' },
+      },
+      required: ['recorded', 'message'],
+    },
+    annotations: {
+      readOnlyHint: true,    // writes only to event_log (telemetry), no business state
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, _supabase, actor) {
+      const context = (args.context as string | undefined)?.trim()
+      if (!context) throw new Error('context is required')
+      if (context.length > 2000) throw new Error('context is too long (max 2000 chars)')
+
+      const sentiment = ((args.sentiment as string | undefined) ?? 'negative') as 'positive' | 'negative' | 'neutral'
+      const suggestion = (args.suggestion as string | undefined)?.trim() || null
+      const toolName = (args.tool_name as string | undefined)?.trim() || null
+      const skillSlug = (args.skill_slug as string | undefined)?.trim() || null
+
+      // Rate-limit per API key (or per user when no key id). 1 per 60 s.
+      // In-memory + single-process — leaky bucket would be cleaner but the
+      // signal here is product-team triage, not security; over-counting is
+      // fine, occasional under-counting is fine.
+      const rateKey = actor?.id ?? userId
+      const now = Date.now()
+      const last = feedbackRateLimit.get(rateKey)
+      if (last && now - last < FEEDBACK_RATE_LIMIT_MS) {
+        const waitSec = Math.ceil((FEEDBACK_RATE_LIMIT_MS - (now - last)) / 1000)
+        throw new Error(`gnubok_feedback is rate-limited. Try again in ${waitSec}s.`)
+      }
+      feedbackRateLimit.set(rateKey, now)
+
+      void eventBus
+        .emit({
+          type: 'agent.feedback',
+          payload: {
+            context,
+            sentiment,
+            suggestion,
+            toolName,
+            skillSlug,
+            sessionId: actor?.sessionId ?? null,
+            actorType: actor?.type ?? 'api_key',
+            actorId: actor?.id ?? null,
+            actorLabel: actor?.label ?? null,
+            userId,
+            companyId,
+          },
+        })
+        .catch((err) => console.error('[mcp] agent.feedback emit failed:', err))
+
+      return {
+        recorded: true,
+        message: 'Thanks — feedback queued for product-team review. We aggregate signal weekly.',
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_get_agent_briefing',
+    description: 'Bootstrap this company\'s specialized accountant context in one call: profile_summary, the atoms loaded for the company (metadata only — call gnubok_load_skill for bodies), and the top-30 active memories. Call once at session start.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        profile_summary: {
+          type: ['string', 'null'],
+          description: 'Composer-generated one-paragraph summary of the company. Null if no agent profile exists yet (composer has not run).',
+        },
+        atoms: {
+          type: 'array',
+          description: 'Atoms (horizontal/vertical/modifier skills) loaded for this company. Metadata only — call gnubok_load_skill(id) for the body.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', description: 'Atom id (e.g. "horizontal/swedish-vat", "vertical/konsult-it", "modifier/holding-ab"). Use as gnubok_load_skill slug.' },
+              tier: { type: 'string', enum: ['horizontal', 'vertical', 'modifier'] },
+              title: { type: 'string' },
+              description: { type: 'string' },
+            },
+            required: ['id', 'tier', 'title', 'description'],
+          },
+        },
+        memory: {
+          type: 'array',
+          description: 'Top-30 active memories (facts, preferences, patterns, corrections) ranked by relevance and recency.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              kind: { type: 'string', enum: ['fact', 'preference', 'pattern', 'correction'] },
+              content: { type: 'string' },
+              relevance_score: { type: ['number', 'null'] },
+            },
+            required: ['id', 'kind', 'content'],
+          },
+        },
+      },
+      required: ['profile_summary', 'atoms', 'memory'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(_args, companyId, _userId, supabase) {
+      const [profileRes, memoryRes] = await Promise.all([
+        supabase
+          .from('agent_profiles')
+          .select('profile_summary, horizontal_atoms, vertical_atoms, modifier_atoms')
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('agent_memory')
+          .select('id, kind, content, relevance_score')
+          .eq('company_id', companyId)
+          .eq('is_active', true)
+          .order('relevance_score', { ascending: false, nullsFirst: false })
+          .order('last_accessed_at', { ascending: false, nullsFirst: false })
+          .limit(30),
+      ])
+
+      if (profileRes.error) throw new Error(`Failed to load agent profile: ${profileRes.error.message}`)
+      if (memoryRes.error) throw new Error(`Failed to load agent memory: ${memoryRes.error.message}`)
+
+      const profile = profileRes.data as
+        | {
+            profile_summary: string | null
+            horizontal_atoms: string[] | null
+            vertical_atoms: string[] | null
+            modifier_atoms: string[] | null
+          }
+        | null
+      const memoryRows = (memoryRes.data ?? []) as Array<{
+        id: string
+        kind: string
+        content: string
+        relevance_score: number | null
+      }>
+
+      const atomIds = [
+        ...(profile?.horizontal_atoms ?? []),
+        ...(profile?.vertical_atoms ?? []),
+        ...(profile?.modifier_atoms ?? []),
+      ]
+
+      let atoms: Array<{ id: string; tier: string; title: string; description: string }> = []
+      if (atomIds.length > 0) {
+        const { data: atomRows, error: atomErr } = await supabase
+          .from('agent_atom_registry')
+          .select('id, tier, title, description')
+          .in('id', atomIds)
+          .eq('is_active', true)
+        if (atomErr) throw new Error(`Failed to load atom metadata: ${atomErr.message}`)
+        atoms = ((atomRows ?? []) as Array<{
+          id: string
+          tier: string
+          title: string | null
+          description: string
+        }>).map((r) => ({
+          id: r.id,
+          tier: r.tier,
+          title: r.title ?? r.id,
+          description: r.description,
+        }))
+      }
+
+      return {
+        profile_summary: profile?.profile_summary ?? null,
+        atoms,
+        memory: memoryRows.map((m) => ({
+          id: m.id,
+          kind: m.kind,
+          content: m.content,
+          relevance_score: m.relevance_score,
+        })),
       }
     },
   },
@@ -1683,7 +2151,10 @@ export const tools: McpTool[] = [
           category: result.category,
         },
         actor,
-        undefined,
+        {
+          description: 'Once approved, the journal entry is posted. Continue with gnubok_list_uncategorized_transactions to keep clearing the backlog, or lock the period once it is empty.',
+          tool: 'gnubok_list_uncategorized_transactions',
+        },
         tx?.date ? { dateForPeriodCheck: tx.date } : {},
       )
     },
@@ -2489,7 +2960,10 @@ export const tools: McpTool[] = [
           payment_date: paymentDate,
         },
         actor,
-        undefined,
+        {
+          description: 'Once approved, the payment is booked (15xx → 19xx). Use gnubok_get_ar_ledger to confirm the customer balance reflects it.',
+          tool: 'gnubok_get_ar_ledger',
+        },
         { dateForPeriodCheck: paymentDate },
       )
     },
@@ -2544,7 +3018,12 @@ export const tools: McpTool[] = [
           total: invoice.total,
           currency: invoice.currency,
         },
-        actor
+        actor,
+        {
+          description: 'After the customer pays, mark the invoice paid via gnubok_mark_invoice_as_paid (or match it to the inbound bank transaction with gnubok_match_transaction_to_invoice).',
+          tool: 'gnubok_mark_invoice_as_paid',
+          args: { invoice_id: invoiceId },
+        }
       )
     },
   },
@@ -2590,7 +3069,12 @@ export const tools: McpTool[] = [
           total: invoice.total,
           currency: invoice.currency,
         },
-        actor
+        actor,
+        {
+          description: 'Once approved, the invoice moves to "sent". Track its payment via gnubok_mark_invoice_as_paid when the customer pays.',
+          tool: 'gnubok_mark_invoice_as_paid',
+          args: { invoice_id: invoiceId },
+        }
       )
     },
   },
@@ -3328,7 +3812,11 @@ export const tools: McpTool[] = [
           invoice_currency: invoice.currency,
           customer_name: (invoice.customer as Record<string, unknown>)?.name as string,
         },
-        actor
+        actor,
+        {
+          description: 'After approval the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.',
+          tool: 'gnubok_get_ar_ledger',
+        }
       )
     },
   },
@@ -4338,7 +4826,11 @@ export const tools: McpTool[] = [
           existing_document_is_rakenskapsinformation: existingDoc?.journal_entry_id != null,
         },
         actor,
-        undefined,
+        {
+          description: 'Once approved, the receipt is linked to the transaction. If the transaction is still uncategorized, follow up with gnubok_categorize_transaction.',
+          tool: 'gnubok_categorize_transaction',
+          args: { transaction_id: transactionId },
+        },
         {
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
           dryRun: args.dry_run === true,
@@ -4721,7 +5213,12 @@ export const tools: McpTool[] = [
           will_reverse_voucher: `${entry.voucher_series}${entry.voucher_number}`,
           method: 'storno (reversal entry, never deletes)',
         },
-        actor
+        actor,
+        {
+          description: 'After approval the transaction is uncategorized again — book it with the correct category via gnubok_categorize_transaction.',
+          tool: 'gnubok_categorize_transaction',
+          args: { transaction_id: transactionId },
+        }
       )
     },
   },
@@ -5096,11 +5593,32 @@ export const tools: McpTool[] = [
       const nextId = args.next_period_id as string
       if (!closedId || !nextId) throw new Error('closed_period_id and next_period_id are required')
 
+      // Resolve human-readable period names so the approver doesn't see two raw
+      // UUIDs in the staged-ops list. Both lookups are scoped to the company so
+      // a mis-typed UUID from another tenant just yields a thin (but safe) title.
+      const [{ data: closed }, { data: next }] = await Promise.all([
+        supabase.from('fiscal_periods').select('name, period_end').eq('id', closedId).eq('company_id', companyId).maybeSingle(),
+        supabase.from('fiscal_periods').select('name, period_start').eq('id', nextId).eq('company_id', companyId).maybeSingle(),
+      ])
+      const closedLabel = closed?.name ?? closedId
+      const nextLabel = next?.name ?? nextId
+
       return stagePendingOperation(supabase, companyId, userId, 'set_opening_balances',
-        `Ingående balans: ${nextId}`,
+        `Ingående balans: ${closedLabel} → ${nextLabel}`,
         { closed_period_id: closedId, next_period_id: nextId },
-        { closed_period_id: closedId, next_period_id: nextId, will: 'create opening balance entry from closed-period trial balance' },
-        actor
+        {
+          closed_period_id: closedId,
+          closed_period_name: closed?.name ?? null,
+          next_period_id: nextId,
+          next_period_name: next?.name ?? null,
+          will: 'create opening balance entry from closed-period trial balance',
+        },
+        actor,
+        {
+          description: 'After approval, verify the opening balance matches the closed period\'s UB via gnubok_get_trial_balance on the next period.',
+          tool: 'gnubok_get_trial_balance',
+          args: { fiscal_period_id: nextId },
+        }
       )
     },
   },
@@ -5128,7 +5646,12 @@ export const tools: McpTool[] = [
         `Valutaomvärdering ${closingDate}`,
         { fiscal_period_id: fiscalPeriodId, closing_date: closingDate },
         { fiscal_period_id: fiscalPeriodId, closing_date: closingDate, posts_to: ['3960', '7960'] },
-        actor
+        actor,
+        {
+          description: 'After approval, confirm the new FX-adjusted balances via gnubok_get_balance_sheet.',
+          tool: 'gnubok_get_balance_sheet',
+          args: { fiscal_period_id: fiscalPeriodId },
+        }
       )
     },
   },
@@ -5241,7 +5764,12 @@ export const tools: McpTool[] = [
           gap_end: args.gap_end,
           explanation: explanation.trim(),
         },
-        actor
+        actor,
+        {
+          description: 'After approval, run gnubok_list_voucher_gaps again to confirm all gaps in the period now have explanations (BFNAR 2013:2).',
+          tool: 'gnubok_list_voucher_gaps',
+          args: { fiscal_period_id: args.fiscal_period_id },
+        }
       )
     },
   },
@@ -5279,7 +5807,10 @@ export const tools: McpTool[] = [
           invoice_date: inv.invoice_date,
         },
         actor,
-        undefined,
+        {
+          description: 'After approval the invoice is attested and ready for payment. When paid, match the outbound bank transaction via gnubok_match_transaction_to_invoice.',
+          tool: 'gnubok_get_supplier_ledger',
+        },
         inv.invoice_date ? { dateForPeriodCheck: inv.invoice_date } : {},
       )
     },
@@ -5317,7 +5848,11 @@ export const tools: McpTool[] = [
           currency: inv.currency,
           method: 'creates KREDIT- mirror invoice + reverses registration JE (accrual)',
         },
-        actor
+        actor,
+        {
+          description: 'After approval the credit note is posted and the leverantörsskuld cleared. Verify with gnubok_get_supplier_ledger.',
+          tool: 'gnubok_get_supplier_ledger',
+        }
       )
     },
   },
@@ -5345,8 +5880,9 @@ export const tools: McpTool[] = [
       if (inv.document_type !== 'proforma') throw new Error('Endast proformafakturor kan konverteras')
       if (inv.status === 'cancelled') throw new Error('Denna proformafaktura har redan makuleras')
 
+      const customerName = (inv.customer as { name?: string } | null)?.name ?? 'okänd kund'
       return stagePendingOperation(supabase, companyId, userId, 'convert_invoice',
-        `Konvertera proforma → faktura`,
+        `Konvertera proforma → faktura: ${customerName} ${Math.round(Number(inv.total) * 100) / 100} ${inv.currency}`,
         { invoice_id: id },
         {
           customer_name: (inv.customer as { name?: string } | null)?.name,
@@ -5401,7 +5937,12 @@ export const tools: McpTool[] = [
           locked_at: period.locked_at,
           will: 'clear locked_at — new entries can be posted into the period again',
         },
-        actor
+        actor,
+        {
+          description: 'After approval, post the rättelse via gnubok_correct_entry or new entries via gnubok_create_voucher, then re-lock with gnubok_lock_period.',
+          tool: 'gnubok_lock_period',
+          args: { fiscal_period_id: fiscalPeriodId },
+        }
       )
     },
   },
@@ -5450,7 +5991,11 @@ export const tools: McpTool[] = [
           reason: reason || null,
           method: 'creates KR- mirror invoice + reverses original JE (accrual)',
         },
-        actor
+        actor,
+        {
+          description: 'After approval the credit note posts and the kundfordring is cleared. If a refund is owed to the customer, book the outbound payment when it leaves the bank.',
+          tool: 'gnubok_get_ar_ledger',
+        }
       )
     },
   },
@@ -5507,7 +6052,11 @@ export const tools: McpTool[] = [
           import_transactions: Boolean(args.import_transactions),
           will: 'parse SIE on commit, create fiscal period + opening balances + journal entries',
         },
-        actor
+        actor,
+        {
+          description: 'After commit, verify the imported balances with gnubok_get_trial_balance and check continuity via the IB/UB of adjacent periods.',
+          tool: 'gnubok_get_trial_balance',
+        }
       )
     },
   },
@@ -5693,7 +6242,10 @@ export const tools: McpTool[] = [
           will: 'create a posted journal entry with a fresh sequential voucher number',
         },
         actor,
-        undefined,
+        {
+          description: 'After commit, confirm the new verifikation lands on the right accounts with gnubok_get_general_ledger or gnubok_query_journal.',
+          tool: 'gnubok_query_journal',
+        },
         { dateForPeriodCheck: entryDate },
       )
     },
@@ -5840,7 +6392,10 @@ export const tools: McpTool[] = [
           will: 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
         },
         actor,
-        undefined,
+        {
+          description: 'After commit, the original is marked reversed and a corrected verifikation lands in its place. Confirm both with gnubok_query_journal.',
+          tool: 'gnubok_query_journal',
+        },
         { dateForPeriodCheck: original.entry_date },
       )
     },
@@ -5976,7 +6531,10 @@ export const tools: McpTool[] = [
           will: 'post a storno that mirrors the original with debits and credits swapped, link via reverses_id, and leave the original visible (BFL 5 kap, makulering)',
         },
         actor,
-        undefined,
+        {
+          description: 'After commit, the storno is posted and the original stays visible. Confirm with gnubok_query_journal.',
+          tool: 'gnubok_query_journal',
+        },
         { dateForPeriodCheck: original.entry_date },
       )
     },
@@ -6109,14 +6667,15 @@ export const tools: McpTool[] = [
         : proposal.items
       const pending = filtered.filter((i) => !i.existingJournalEntryId)
 
+      const totalAmount = pending.reduce((s, i) => s + i.amount, 0)
       return stagePendingOperation(
         supabase, companyId, userId, 'post_annual_depreciation',
-        `Planenlig avskrivning: ${period.name}`,
+        `Planenlig avskrivning: ${period.name} — ${pending.length} tillgång(ar), ${Math.round(totalAmount * 100) / 100} SEK`,
         { fiscal_period_id: fiscalPeriodId, asset_ids: assetIds },
         {
           period_name: period.name,
           item_count: pending.length,
-          total_amount: pending.reduce((s, i) => s + i.amount, 0),
+          total_amount: totalAmount,
           will: `book ${pending.length} planenlig avskrivning(ar) — one journal entry per asset`,
           items: pending.map((i) => ({
             asset_id: i.asset.id,
@@ -6126,7 +6685,11 @@ export const tools: McpTool[] = [
           })),
         },
         actor,
-        undefined,
+        {
+          description: 'After approval, depreciation entries are posted. Continue the year-end flow via gnubok_year_end_readiness, then gnubok_run_year_end.',
+          tool: 'gnubok_year_end_readiness',
+          args: { fiscal_period_id: fiscalPeriodId },
+        },
         { dateForPeriodCheck: period.period_end },
       )
     },
@@ -6254,6 +6817,7 @@ function emitToolCallTelemetry(payload: {
         requestId: payload.requestId,
         userId: payload.userId,
         companyId: payload.companyId,
+        sessionId: payload.actor.sessionId ?? null,
       },
     })
     .catch((err) => {
@@ -6284,6 +6848,7 @@ function emitToolsListTelemetry(payload: {
         requestId: payload.requestId,
         userId: payload.userId,
         companyId: payload.companyId,
+        sessionId: payload.actor.sessionId ?? null,
       },
     })
     .catch((err) => {
@@ -6318,11 +6883,97 @@ function emitResourceReadTelemetry(payload: {
         requestId: payload.requestId,
         userId: payload.userId,
         companyId: payload.companyId,
+        sessionId: payload.actor.sessionId ?? null,
       },
     })
     .catch((err) => {
       console.error('[mcp] resource_read telemetry emit failed:', err)
     })
+}
+
+/**
+ * Per-session ring of "what was the most recent tool call, and what did its
+ * response suggest as the `next` tool?" Used to detect `mcp.next_hint_followed`
+ * when the agent's next call matches the previous nextHint.tool.
+ *
+ * In-memory only. Single-process visibility is acceptable for telemetry — a
+ * miss in a multi-instance deploy only loses signal, never blocks a tool call.
+ * Entries auto-expire after NEXT_HINT_TTL_MS to keep the map bounded.
+ */
+const NEXT_HINT_TTL_MS = 10 * 60 * 1000
+const lastResponseHintBySession = new Map<string, { fromTool: string; suggestedTool: string; expiresAt: number }>()
+
+function rememberNextHint(sessionId: string | null | undefined, fromTool: string, suggestedTool: string | undefined): void {
+  if (!sessionId || !suggestedTool) return
+  // Opportunistic eviction: drop a few expired entries on each write so the
+  // map can't grow without bound under steady load.
+  if (lastResponseHintBySession.size > 200) {
+    const now = Date.now()
+    for (const [k, v] of lastResponseHintBySession) {
+      if (v.expiresAt < now) {
+        lastResponseHintBySession.delete(k)
+        if (lastResponseHintBySession.size < 100) break
+      }
+    }
+  }
+  lastResponseHintBySession.set(sessionId, {
+    fromTool,
+    suggestedTool,
+    expiresAt: Date.now() + NEXT_HINT_TTL_MS,
+  })
+}
+
+function checkAndEmitNextHintFollowed(
+  sessionId: string | null | undefined,
+  toolName: string,
+  actor: ActorContext,
+  userId: string,
+  companyId: string,
+): void {
+  if (!sessionId) return
+  const prev = lastResponseHintBySession.get(sessionId)
+  if (!prev || prev.expiresAt < Date.now() || prev.suggestedTool !== toolName) return
+  // Consume the hint so we don't double-count if the agent calls the same
+  // tool twice in a row (idempotent retries shouldn't inflate the metric).
+  lastResponseHintBySession.delete(sessionId)
+  void eventBus
+    .emit({
+      type: 'mcp.next_hint_followed',
+      payload: {
+        fromTool: prev.fromTool,
+        toTool: toolName,
+        sessionId,
+        actorType: actor.type,
+        actorId: actor.id ?? null,
+        actorLabel: actor.label ?? null,
+        userId,
+        companyId,
+      },
+    })
+    .catch((err) => console.error('[mcp] next_hint_followed emit failed:', err))
+}
+
+/** Fire-and-forget telemetry for workflow lifecycle. */
+function emitWorkflowStarted(payload: {
+  slug: string
+  actor: ActorContext
+  userId: string
+  companyId: string
+}): void {
+  void eventBus
+    .emit({
+      type: 'mcp.workflow_started',
+      payload: {
+        slug: payload.slug,
+        sessionId: payload.actor.sessionId ?? null,
+        actorType: payload.actor.type,
+        actorId: payload.actor.id ?? null,
+        actorLabel: payload.actor.label ?? null,
+        userId: payload.userId,
+        companyId: payload.companyId,
+      },
+    })
+    .catch((err) => console.error('[mcp] workflow_started emit failed:', err))
 }
 
 /**
@@ -6372,10 +7023,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
   const { userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName } = authResult
   const supabase = createServiceClientNoCookies()
+  // The Mcp-Session-Id header (introduced in spec 2025-06-18) is the canonical
+  // way for an agent to keep a stable identifier across tools/call invocations
+  // in one conversation. We use it to correlate telemetry + drive the next-hint
+  // followed metric. It is NOT used for auth.
+  const rawSessionId = request.headers.get('mcp-session-id')
+  const sessionId = rawSessionId && /^[A-Za-z0-9_-]{1,128}$/.test(rawSessionId) ? rawSessionId : null
   const actor: ActorContext = {
     type: 'api_key',
     id: apiKeyId,
     label: apiKeyName ?? 'Unnamed API key',
+    sessionId,
   }
 
   // ── Parse JSON-RPC ──
@@ -6527,6 +7185,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
+      // Detect if THIS call follows the previous call's `next` hint — must
+      // run before execute() so we don't double-store on this call. Emits
+      // mcp.next_hint_followed when the agent's behaviour matches the hint.
+      checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, companyId)
+
       const callStartedAt = Date.now()
       try {
         // gnubok_search_tools needs the caller's scopes to filter results to
@@ -6545,6 +7208,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (result !== null && result !== undefined) {
           response.structuredContent =
             typeof result === 'object' && !Array.isArray(result) ? result : { value: result }
+        }
+        // Record the response's `next.tool` (when present) so the next call
+        // from the same session can be matched against it.
+        if (result && typeof result === 'object' && !Array.isArray(result)) {
+          const next = (result as Record<string, unknown>).next
+          if (next && typeof next === 'object') {
+            const suggestedTool = (next as Record<string, unknown>).tool
+            if (typeof suggestedTool === 'string') {
+              rememberNextHint(sessionId, toolName, suggestedTool)
+            }
+          }
         }
         emitToolCallTelemetry({
           tool: toolName,
@@ -6585,7 +7259,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
     }
 
-    case 'resources/list':
+    case 'resources/list': {
+      const allSkills = await loadAllSkills(supabase)
       return NextResponse.json(
         jsonRpc(id ?? null, {
           resources: [
@@ -6595,7 +7270,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               description: w.description,
               mimeType: WIDGET_MIME_TYPE,
             })),
-            ...skills.map((s) => ({
+            ...allSkills.map((s) => ({
               uri: skillUri(s.slug),
               name: s.name,
               description: s.summary,
@@ -6610,6 +7285,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           ],
         })
       )
+    }
 
     case 'resources/read': {
       const uri = (params as Record<string, unknown>)?.uri as string
@@ -6642,10 +7318,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       // Skills exposed at gnubok://skill/<slug> — Markdown bodies, forward-compatible
-      // with a future native MCP skills/list primitive.
+      // with a future native MCP skills/list primitive. Atom slugs (slash-bearing
+      // registry ids) are URL-encoded in the URI; skillSlugFromUri decodes.
       if (uri.startsWith(SKILL_URI_PREFIX)) {
         const slug = skillSlugFromUri(uri)
-        const skill = slug ? findSkill(slug) : null
+        const skill = slug ? await findSkill(slug, supabase) : null
         if (skill) {
           emitResourceReadTelemetry({
             uri,

@@ -33,6 +33,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
     { href: '/settings/skatteverket', label: 'Skatteverket', show: hasCompany && !isSandbox && hasSkatteverketExtension },
     { href: '/settings/salary', label: 'Löner', show: hasCompany && company?.entity_type === 'aktiebolag' },
     { href: '/settings/templates', label: 'Mallar', show: hasCompany },
+    { href: '/settings/agent-memory', label: 'Assistentens minne', show: hasCompany },
     { href: '/settings/backup', label: 'Säkerhetsbackup', show: hasCompany },
     { href: '/settings/account', label: 'Konto', show: true },
     { href: '/settings/api', label: 'API', show: hasCompany && hasMcpExtension },

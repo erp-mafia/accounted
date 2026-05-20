@@ -137,6 +137,7 @@ export default function WelcomeOnboarding({
           endDate: periodResult.endStr,
           name: periodResult.periodName,
         },
+        ticLookup,
       })
 
       if (result.error || !result.companyId) {

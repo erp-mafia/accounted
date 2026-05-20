@@ -22,7 +22,18 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       companyId: 'company-1',
       scopes: ['reports:read'],
     }),
-    createServiceClientNoCookies: vi.fn(),
+    // resources/list and other paths now call loadAllSkills(supabase) which
+    // queries agent_atom_registry. Return an empty registry so workflow-only
+    // assertions are unaffected.
+    createServiceClientNoCookies: vi.fn(() => ({
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            order: vi.fn().mockResolvedValue({ data: [], error: null }),
+          })),
+        })),
+      })),
+    })),
   }
 })
 

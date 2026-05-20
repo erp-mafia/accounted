@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Download, AlertCircle, ChevronDown, ChevronRight, ArrowRight } from 'lucide-react'
+import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { formatDate } from '@/lib/utils'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -1147,6 +1148,13 @@ function VatDeclarationView() {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <AgentSparkleButton
+          intentId="vat.review"
+          intentArgs={{ period_type: periodType, year, period }}
+          contextRef={`vat:${year}-${periodType}-${period}`}
+        />
+      </div>
       {/* Period selection */}
       <Card>
         <CardHeader>

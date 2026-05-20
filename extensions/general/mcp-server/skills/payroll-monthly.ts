@@ -115,4 +115,8 @@ export const payrollMonthlySkill: Skill = {
   summary: 'Monthly salary run + AGI: employee setup, calculation, sociala avgifter, semesterlöneskuld, booking, AGI XML.',
   tags: ['monthly', 'payroll', 'agi', 'compliance'],
   body,
+  tier: 'workflow',
+  // Only relevant when the company actually has employees. EF without payroll
+  // (most sole traders) shouldn't see this in the discovery list.
+  applicability: { entity_type: 'both', requires: ['employees'] },
 }

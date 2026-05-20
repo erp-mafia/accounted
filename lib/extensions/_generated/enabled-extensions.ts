@@ -9,4 +9,5 @@ export const ENABLED_EXTENSION_IDS: ReadonlySet<string> = new Set([
   'cloud-backup',
   'skatteverket',
   'invoice-inbox',
+  'document-extraction',
 ])

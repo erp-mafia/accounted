@@ -100,6 +100,32 @@ export interface TICCompanyPurpose {
   lastUpdatedAtUtc?: string
 }
 
+/** Raw Bolagsverket beneficial-owner notification record — one per
+ * registration event. The latest active notification is what we care
+ * about; older ones describe ownership changes over time. */
+export interface TICBeneficialOwnerNotificationRaw {
+  fromDate?: string | null
+  notificationDate?: string | null
+  statusCode?: string | null
+  statusDescription?: string | null
+  bolagsverket_BeneficialOwner?: {
+    firstName?: string | null
+    middleName?: string | null
+    lastName?: string | null
+    fallbackName?: string | null
+    citizenshipCountryCode?: string | null
+    countryOfResidenceCode?: string | null
+    extentCode?: string | null
+    extentDescription?: string | null
+  }[]
+}
+
+/** Top-level shape returned by /datasets/companies/{id}/se/beneficial-owners */
+export interface TICBeneficialOwnerResponse {
+  notifications?: TICBeneficialOwnerNotificationRaw[] | null
+  exempts?: { from?: string | null; to?: string | null }[] | null
+}
+
 /** Financial report summary from /financial-report-summaries endpoint */
 export interface TICFinancialReportSummary {
   financialReportSummaryId?: number
@@ -112,6 +138,22 @@ export interface TICFinancialReportSummary {
   isConsolidatedAccounts?: boolean
   isAudited?: boolean
   auditOpinion?: string
+}
+
+/** Flattened beneficial owner record — verklig huvudman per
+ * Lag (2017:631). Personnummer intentionally omitted to keep PII out of the
+ * cached profile; we only need name + ownership extent for downstream use
+ * (e.g. dropping "are you the sole owner?" verification questions). */
+export interface TICBeneficialOwner {
+  name: string
+  // Bolagsverket extent codes describe the share of ownership / control,
+  // e.g. "OWNS_25_TO_50_PERCENT", "OWNS_OVER_50_PERCENT". Kept verbatim so
+  // downstream Swedish-language formatting can map them.
+  extentCode: string | null
+  extentDescription: string | null
+  citizenshipCountryCode: string | null
+  countryOfResidenceCode: string | null
+  registeredAt: string | null
 }
 
 /** Normalized company profile for workspace display */
@@ -132,6 +174,12 @@ export interface TICCompanyProfile {
   phone: string | null
   sniCodes: { code: string; name: string }[]
   bankAccounts: { type: string; accountNumber: string; bic: string | null }[]
+  // Owners registered as verklig huvudman. Empty when the company has none
+  // (e.g. listed companies are exempt) or when the dataset returned nothing.
+  beneficialOwners: TICBeneficialOwner[]
+  // Whether the company is exempt from beneficial-owner registration
+  // (typically state-owned or stock-exchange-listed companies).
+  beneficialOwnerExempt: boolean
   financials: {
     periodStart: number
     periodEnd: number
