@@ -43,7 +43,7 @@
     "fuse.js": "^7.1.0",
     "ics": "^3.8.1",
     "jszip": "^3.10.1",
-    "lucide-react": "^0.563.0",
+    "lucide-react": "^1.16.0",
     "mailparser": "^3.9.8",
     "next": "16.1.5",
     "next-themes": "^0.4.6",
