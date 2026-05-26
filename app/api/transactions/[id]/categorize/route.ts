@@ -638,8 +638,24 @@ export const POST = withRouteContext(
             .eq('id', inboxItem.document_id)
             .eq('company_id', companyId)
         }
+
+        // Reflect the booking back onto the inbox row so it stops appearing as
+        // unmatched. Categorizing here puts the underlag on a verifikation,
+        // which is the inbox's "booked" state. Without this the inbox keeps
+        // offering "Matcha mot transaktion" for an underlag that's already on a
+        // posted entry — while the transactions view (which reads the
+        // doc↔verifikat link) already shows it as attached. Mirrors the
+        // backfill that /attach-document does for the manual paperclip path.
+        await supabase
+          .from('invoice_inbox_items')
+          .update({
+            matched_transaction_id: id,
+            created_journal_entry_id: journalEntryId,
+          })
+          .eq('id', body.inbox_item_id)
+          .eq('company_id', companyId)
       } catch (inboxErr) {
-        txLog.warn('failed to link inbox document (non-critical)', inboxErr as Error)
+        txLog.warn('failed to sync inbox item after booking (non-critical)', inboxErr as Error)
       }
     }
 

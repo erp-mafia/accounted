@@ -26,8 +26,9 @@ import type { InvoiceExtractionResult } from '@/types'
 //
 // Opens from the InvoiceInboxWorkspace FieldsRail when the user clicks
 // "Matcha mot transaktion" on an inbox item whose matched_transaction_id is
-// null. Lists unmatched company transactions (no journal_entry_id) within
-// ±30 days of the invoice date, scored via lib/documents/core-receipt-matcher.
+// null. Lists unmatched company transactions (no journal_entry_id) in a
+// forward-biased window around the invoice date (60d before → 180d after, to
+// cover late payments), scored via lib/documents/core-receipt-matcher.
 // User picks one → POST /items/:id/match-transaction → onMatched callback.
 
 interface CandidateTransaction {
@@ -49,7 +50,21 @@ interface Props {
   onMatched: (transactionId: string) => void
 }
 
-const DATE_WINDOW_DAYS = 30
+// Invoices are usually paid AFTER the invoice date — commonly on 30/60/90-day
+// terms, sometimes later. A symmetric ±30d window silently dropped legitimate
+// late payments (e.g. an Oct invoice paid in Dec) out of the candidate set
+// before scoring, so the correct transaction never appeared in the picker.
+// Bias the window forward and keep it generous: this is a manual picker, so
+// over-fetching is cheap — the user confirms every match by hand.
+const DATE_WINDOW_BACK_DAYS = 60
+const DATE_WINDOW_FORWARD_DAYS = 180
+
+// Date tolerance used only for *ranking* candidates (not for filtering — the
+// window above decides inclusion). Far wider than the receipt matcher's tight
+// ±3d default so a payment landing weeks or months after the invoice still
+// earns partial date credit and the true match floats to the top, instead of
+// every candidate collapsing to "Svag match".
+const MATCH_DATE_TOLERANCE_DAYS = 120
 
 export default function TransactionMatchPicker({
   open,
@@ -87,11 +102,12 @@ export default function TransactionMatchPicker({
     let cancelled = false
     setLoading(true)
     ;(async () => {
-      // Window: ±30 days around the invoice date.
+      // Window: from 60 days before to 180 days after the invoice date —
+      // forward-biased because the bank payment lands after the invoice.
       const lo = new Date(invoiceDate)
-      lo.setDate(lo.getDate() - DATE_WINDOW_DAYS)
+      lo.setDate(lo.getDate() - DATE_WINDOW_BACK_DAYS)
       const hi = new Date(invoiceDate)
-      hi.setDate(hi.getDate() + DATE_WINDOW_DAYS)
+      hi.setDate(hi.getDate() + DATE_WINDOW_FORWARD_DAYS)
       const loISO = lo.toISOString().slice(0, 10)
       const hiISO = hi.toISOString().slice(0, 10)
 
@@ -137,6 +153,7 @@ export default function TransactionMatchPicker({
           dateVariance,
           amountVariance,
           similarity,
+          MATCH_DATE_TOLERANCE_DAYS,
         )
         return {
           id: tx.id as string,
@@ -223,7 +240,7 @@ export default function TransactionMatchPicker({
             </div>
           ) : filtered.length === 0 ? (
             <p className="py-6 text-sm text-muted-foreground text-center">
-              Inga okatigoriserade transaktioner inom ±{DATE_WINDOW_DAYS} dagar.
+              Inga okategoriserade transaktioner nära underlagets datum.
             </p>
           ) : (
             filtered.map((c) => {
