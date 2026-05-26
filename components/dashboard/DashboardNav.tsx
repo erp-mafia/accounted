@@ -178,18 +178,21 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
-  // Per-group manual expand state. Each dropdown is auto-expanded when the
-  // active route lives inside it (so users navigating deep into Försäljning
-  // don't have to re-open the section on every page load).
+  // Per-group collapse state. Default: ALL groups expanded — the user
+  // can see every child link without hunting. Clicking the chevron
+  // collapses the group; opening it again restores the children.
+  // Active route still forces a group expanded even when the user has
+  // manually collapsed it (so deep-linking into /salary doesn't leave
+  // Personal hidden).
   type ExpandableGroup = Exclude<GroupKey, 'top'>
-  const [manualExpanded, setManualExpanded] = useState<Record<ExpandableGroup, boolean>>({
+  const [manualCollapsed, setManualCollapsed] = useState<Record<ExpandableGroup, boolean>>({
     försäljning: false,
     inköp: false,
     redovisning: false,
     personal: false,
   })
   const toggleGroup = (g: ExpandableGroup) =>
-    setManualExpanded((prev) => ({ ...prev, [g]: !prev[g] }))
+    setManualCollapsed((prev) => ({ ...prev, [g]: !prev[g] }))
 
   const openMobileMenu = () => {
     if (closeTimerRef.current) {
@@ -246,9 +249,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     { key: 'personal', items: filteredItems.filter((i) => i.group === 'personal') },
   ]
 
-  // A group auto-expands when one of its items matches the current route.
+  // A group is expanded when the user hasn't manually collapsed it OR
+  // an active route lives inside it (the active route always wins so a
+  // deep-link to /salary keeps Personal open even if previously collapsed).
   const isGroupExpanded = (g: ExpandableGroup, items: NavItem[]) =>
-    manualExpanded[g] || items.some((it) => isActive(it.href))
+    !manualCollapsed[g] || items.some((it) => isActive(it.href))
 
   const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
     { href: '/chat', labelKey: 'home', icon: Home },
