@@ -109,7 +109,10 @@ export async function POST(request: Request) {
           (host.startsWith('localhost') ? 'http' : 'https')
         const origin = `${proto}://${host}`
         const ticResult = await withTimeout(
-          ensureTicSnapshot({ supabase, companyId, cookieHeader, origin }),
+          // upgradeV1: agent build is the consumer of the v2-only sections;
+          // bounded to companies actively creating an agent, so the TIC
+          // budget stays safe even when upgrading pre-v2 snapshots.
+          ensureTicSnapshot({ supabase, companyId, cookieHeader, origin, upgradeV1: true }),
           TIC_BUDGET_MS,
         ).catch(() => ({ snapshot: null, source: 'fallback' as const }))
         send({

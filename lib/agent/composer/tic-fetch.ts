@@ -15,6 +15,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // Stale-cache policy: anything cached within the last 7 days is reused
 // verbatim. TIC data is slow-changing (sniCodes, registration, address
 // rarely flip) so this avoids re-hitting TIC on every page load.
+//
+// Rate budget: the /profile endpoint fans out to ~13 TIC (Lens) calls and
+// the account has a ~3000/mo ceiling. So we DON'T eagerly re-fetch every
+// pre-v2 (v1) snapshot — that would blow the budget across the customer
+// base. Instead, v1 snapshots upgrade to v2 lazily: only when a caller
+// that actually consumes the v2 sections passes `upgradeV1: true` (today
+// just the agent-onboarding paths, a deliberate once-per-company action).
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 const FETCH_TIMEOUT_MS = 5_000
@@ -22,6 +29,13 @@ const FETCH_TIMEOUT_MS = 5_000
 export interface TicSnapshotResult {
   snapshot: Record<string, unknown> | null
   source: 'cached' | 'fetched' | 'fallback'
+}
+
+// A snapshot written before the TIC v2 migration lacks the v2-only
+// `statuses` section. v2 always includes the key (possibly an empty
+// array), so its absence is a reliable "this is a v1 snapshot" signal.
+function isV1Snapshot(snapshot: Record<string, unknown> | null): boolean {
+  return snapshot != null && !('statuses' in snapshot)
 }
 
 export async function ensureTicSnapshot(opts: {
@@ -35,8 +49,13 @@ export async function ensureTicSnapshot(opts: {
   // background jobs but wrong for request-scoped paths because that env var
   // is the production canonical URL even in dev.
   origin?: string
+  // When true, a cached snapshot still inside the 7-day window is
+  // re-fetched if it's a pre-v2 (v1) shape. Gated to deliberate, bounded
+  // callers (agent onboarding) so the v1→v2 upgrade doesn't fan out across
+  // every company and exhaust the monthly TIC budget.
+  upgradeV1?: boolean
 }): Promise<TicSnapshotResult> {
-  const { supabase, companyId, cookieHeader, origin } = opts
+  const { supabase, companyId, cookieHeader, origin, upgradeV1 = false } = opts
 
   const { data: companyRow } = await supabase
     .from('companies')
@@ -46,9 +65,17 @@ export async function ensureTicSnapshot(opts: {
 
   if (!companyRow) return { snapshot: null, source: 'fallback' }
 
-  // Fresh cache hit — nothing to do.
-  if (companyRow.tic_snapshot && !isStale(companyRow.tic_snapshot_fetched_at as string | null)) {
-    return { snapshot: companyRow.tic_snapshot as Record<string, unknown>, source: 'cached' }
+  const cachedSnapshot = companyRow.tic_snapshot as Record<string, unknown> | null
+  const needsV2Upgrade = upgradeV1 && isV1Snapshot(cachedSnapshot)
+
+  // Fresh cache hit — nothing to do. (Unless the caller needs v2 fields and
+  // the cache is still v1, in which case we fall through to a refetch.)
+  if (
+    cachedSnapshot &&
+    !isStale(companyRow.tic_snapshot_fetched_at as string | null) &&
+    !needsV2Upgrade
+  ) {
+    return { snapshot: cachedSnapshot, source: 'cached' }
   }
 
   // Org number drifts: some onboarding flows persist it on company_settings

@@ -29,6 +29,16 @@ export const AGENT_GROUND_RULES: string[] = [
   '',
   // -- Anchor in user's own history --
   '- KOLLA HISTORIK FÖRST: innan du föreslår "så här gör du" på en återkommande motpart, anropa gnubok_query_journal med motpartens namn. Om de bokfört Vercel/Spotify/SJ förut — följ samma mönster. "Så här har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Bryt bara mönstret om underlaget tydligt säger något annat.',
+  '',
+  // -- Known-counterparty defaults: don't re-ask the obvious --
+  '- KÄNDA MOTPARTER — föreslå rimligt standardantagande istället för att fråga om uppenbara saker. Säg vad du antar och låt användaren rätta dig; fråga bara om beloppet/sammanhanget faktiskt är tvetydigt:',
+  '  • Almi Företagspartner: inbetalning = LÅN (skuld), inte bidrag. (Almi ger lån; bidrag är ovanligt.) Anta lån, nämn att det kan vara annat om de säger till.',
+  '  • Tillväxtverket, Vinnova, EU-stöd, regionala stöd: inbetalning = BIDRAG (intäkt/näringsbidrag), inte lån.',
+  '  • Skatteverket: utbetalning = skatt/avgift (moms, arbetsgivaravgift, prel.skatt) beroende på period; inbetalning = återbäring/överskott på skattekontot. Kolla skattekontot om osäker.',
+  '  • Bolagsverket: utbetalning = avgift (registrering/årsredovisning).',
+  '  • Försäkringskassan: inbetalning = ersättning (sjuklön, VAB, etc.).',
+  '  • Lön/eget uttag till privatkonto i EF: eget uttag, inte kostnad.',
+  '  Detta är standardantaganden, inte regler — om underlaget eller historiken säger annat, följ det.',
 ]
 
 /**

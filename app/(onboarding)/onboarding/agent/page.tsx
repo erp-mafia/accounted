@@ -32,7 +32,11 @@ export default async function AgentOnboardingPage() {
   const host = hdrs.get('host') ?? 'localhost:3000'
   const proto = hdrs.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https')
   const origin = `${proto}://${host}`
-  await ensureTicSnapshot({ supabase, companyId, cookieHeader, origin })
+  // upgradeV1: this is the one place the v2-only sections (statuses,
+  // beneficialOwners, payrolls, …) materially drive the composer, and it's
+  // a deliberate once-per-company action — safe to spend the TIC calls to
+  // bring a pre-v2 snapshot up to date.
+  await ensureTicSnapshot({ supabase, companyId, cookieHeader, origin, upgradeV1: true })
 
   // Fetch the small handful of fields we render directly into Phase B so the
   // user sees real values (not "Laddar…") the moment the stream finishes.
