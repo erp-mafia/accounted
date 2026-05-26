@@ -30,6 +30,7 @@ import {
   HandCoins,
   Package,
   ChevronsUpDown,
+  Sparkles,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -73,6 +74,7 @@ interface DashboardNavProps {
 type NavLabelKey =
   | 'dashboard'
   | 'home'
+  | 'assistant'
   | 'kpi'
   | 'invoice_inbox'
   | 'invoices'
@@ -116,7 +118,8 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   // Top section — flat list, always visible, no header
-  { href: '/chat', labelKey: 'home', icon: Home, group: 'top' },
+  { href: '/', labelKey: 'home', icon: Home, group: 'top' },
+  { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
   { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'top', betaBadge: true },
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'top' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'top' },
@@ -256,8 +259,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     !manualCollapsed[g] || items.some((it) => isActive(it.href))
 
   const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
-    { href: '/chat', labelKey: 'home', icon: Home },
-    { href: '/invoices', labelKey: 'invoices', icon: Receipt },
+    { href: '/', labelKey: 'home', icon: Home },
+    { href: '/chat', labelKey: 'assistant', icon: Sparkles },
     { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
   ]
 

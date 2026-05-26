@@ -1051,6 +1051,35 @@ function monthName(m: number): string {
     'juli', 'augusti', 'september', 'oktober', 'november', 'december'][m - 1] ?? ''
 }
 
+// ── agent_memory dedup helpers ───────────────────────────────
+// Cheap, embedding-free near-duplicate detection for gnubok_remember_fact.
+// Lowercase, strip punctuation, drop very short / stop-ish words, and
+// compare two memories by Jaccard similarity over their word sets. Good
+// enough to catch the agent re-remembering the same fact in slightly
+// different words; not a substitute for semantic embeddings, but zero-cost.
+const MEMORY_DEDUP_STOPWORDS = new Set([
+  'och', 'att', 'det', 'som', 'en', 'ett', 'är', 'för', 'med', 'på', 'av',
+  'till', 'den', 'de', 'i', 'om', 'har', 'var', 'kan', 'ska', 'samt',
+  'the', 'a', 'an', 'is', 'are', 'for', 'with', 'of', 'to', 'and', 'in',
+])
+
+function tokenizeForDedup(text: string): Set<string> {
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !MEMORY_DEDUP_STOPWORDS.has(t))
+  return new Set(tokens)
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let intersection = 0
+  for (const t of a) if (b.has(t)) intersection++
+  const union = a.size + b.size - intersection
+  return union === 0 ? 0 : intersection / union
+}
+
 export async function computeVatCloseCheck(
   args: Record<string, unknown>,
   companyId: string,
@@ -1640,6 +1669,46 @@ export const tools: McpTool[] = [
       const rawScore = args.relevance_score
       const score =
         typeof rawScore === 'number' && rawScore >= 0 && rawScore <= 1 ? rawScore : 0.8
+
+      // Dedup guard: the agent re-remembers the same fact constantly (e.g.
+      // "Vercel = omvänd skattskyldighet" on every Vercel categorization).
+      // Before inserting, compare against existing active memories by
+      // word-set Jaccard similarity. A near-duplicate (≥0.82) is treated as
+      // already-known: we touch its updated_at + nudge relevance instead of
+      // writing a new row, so agent_memory doesn't fill with paraphrases.
+      // Bounded to the 300 most-recent active rows — dedup-on-write keeps
+      // the working set small enough that this stays cheap.
+      const { data: existing } = await supabase
+        .from('agent_memory')
+        .select('id, kind, content, created_at, relevance_score')
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(300)
+
+      const incomingTokens = tokenizeForDedup(content)
+      const dupe = (existing ?? []).find(
+        (m: { content: string }) =>
+          jaccardSimilarity(incomingTokens, tokenizeForDedup(m.content)) >= 0.82,
+      ) as { id: string; kind: string; content: string; created_at: string; relevance_score: number } | undefined
+
+      if (dupe) {
+        // Already known. Bump relevance toward the new score (max) and
+        // refresh updated_at so recency-ordered recall still surfaces it.
+        await supabase
+          .from('agent_memory')
+          .update({
+            relevance_score: Math.max(dupe.relevance_score ?? 0, score),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', dupe.id)
+        return {
+          id: dupe.id,
+          kind: dupe.kind,
+          content: dupe.content,
+          created_at: dupe.created_at,
+        }
+      }
 
       const { data, error } = await supabase
         .from('agent_memory')

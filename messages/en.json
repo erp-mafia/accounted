@@ -62,6 +62,7 @@
   "nav": {
     "dashboard": "Overview",
     "home": "Home",
+    "assistant": "Assistant",
     "kpi": "KPIs",
     "invoice_inbox": "Documents",
     "invoices": "Invoices",

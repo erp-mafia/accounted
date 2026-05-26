@@ -62,6 +62,7 @@
   "nav": {
     "dashboard": "Översikt",
     "home": "Hem",
+    "assistant": "Assistent",
     "kpi": "Nyckeltal",
     "invoice_inbox": "Underlag",
     "invoices": "Fakturor",
