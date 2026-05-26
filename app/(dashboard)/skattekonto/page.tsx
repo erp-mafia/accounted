@@ -234,7 +234,7 @@ export default function SkattekontoPage() {
               ansluta med BankID i inställningarna.
             </p>
             <Button asChild>
-              <Link href="/settings/skatteverket">
+              <Link href="/settings/tax">
                 <ExternalLink className="mr-2 h-4 w-4" />
                 Anslut Skatteverket
               </Link>

@@ -162,6 +162,8 @@
     "templates": "Templates",
     "agent_profile": "Company profile",
     "agent_memory": "Assistant memory",
+    "agent_skills": "Assistant knowledge",
+    "assistant": "Assistant",
     "backup": "Backup",
     "account": "Account",
     "api": "API"

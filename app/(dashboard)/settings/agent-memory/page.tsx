@@ -1,11 +1,8 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
-
+// Merged into the "Assistenten" tab. Kept as a permanent redirect so existing
+// links (e.g. AgentChat's "what I remember" affordance) and old bookmarks land
+// in the right place.
 export default function AgentMemorySettingsPage() {
-  return (
-    <div className="space-y-8">
-      <AgentMemoryPanel />
-    </div>
-  )
+  redirect('/settings/assistant')
 }

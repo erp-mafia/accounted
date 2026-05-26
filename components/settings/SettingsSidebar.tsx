@@ -25,21 +25,19 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
   const hasCompany = !!company
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMcpExtension = ENABLED_EXTENSION_IDS.has('mcp-server')
-  const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
   const items: NavItem[] = [
+    // Företagsprofil (TIC-snapshot) lives under Företag; Skatteverket under Skatt;
+    // assistentens minne + kunskap under Assistenten; säkerhetsbackup under Importera/Exportera.
     { href: '/settings/company', label: t('company'), show: hasCompany },
     { href: '/settings/invoicing', label: t('invoicing'), show: hasCompany },
     { href: '/settings/bookkeeping', label: t('bookkeeping'), show: hasCompany },
     { href: '/settings/tax', label: t('tax'), show: hasCompany },
     { href: '/settings/team', label: t('team'), show: false },
     { href: '/settings/banking', label: t('banking'), show: hasCompany && !isSandbox && hasBankingExtension },
-    { href: '/settings/skatteverket', label: t('skatteverket'), show: hasCompany && !isSandbox && hasSkatteverketExtension },
     { href: '/settings/salary', label: t('salary'), show: hasCompany && company?.entity_type === 'aktiebolag' },
     { href: '/settings/templates', label: t('templates'), show: hasCompany },
-    { href: '/settings/company-profile', label: t('agent_profile'), show: hasCompany },
-    { href: '/settings/agent-memory', label: t('agent_memory'), show: hasCompany && identity.isVerified },
-    { href: '/settings/backup', label: t('backup'), show: hasCompany },
+    { href: '/settings/assistant', label: t('assistant'), show: hasCompany && identity.isVerified },
     { href: '/settings/account', label: t('account'), show: true },
     { href: '/settings/api', label: t('api'), show: hasCompany && hasMcpExtension },
   ].filter(item => item.show)

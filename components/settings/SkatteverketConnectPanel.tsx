@@ -60,7 +60,7 @@ export function SkatteverketConnectPanel() {
   }, [])
 
   function startConnect() {
-    const returnTo = encodeURIComponent('/settings/skatteverket')
+    const returnTo = encodeURIComponent('/settings/tax')
     window.location.href = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
   }
 

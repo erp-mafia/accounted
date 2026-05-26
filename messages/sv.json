@@ -162,6 +162,8 @@
     "templates": "Mallar",
     "agent_profile": "Företagsprofil",
     "agent_memory": "Assistentens minne",
+    "agent_skills": "Assistentens kunskap",
+    "assistant": "Assistenten",
     "backup": "Säkerhetsbackup",
     "account": "Konto",
     "api": "API"

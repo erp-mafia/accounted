@@ -633,11 +633,11 @@ export function AGIPanel(props: AGIPanelProps) {
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               Din anslutning utfärdades innan AGI-stödet aktiverades. Koppla
-              bort och anslut igen via Inställningar → Skatteverket för att
+              bort och anslut igen via Inställningar → Skatt för att
               kunna skicka AGI direkt.
             </p>
             <a
-              href="/settings/skatteverket"
+              href="/settings/tax"
               className="mt-2 inline-flex items-center gap-1 text-sm font-medium hover:underline"
             >
               Öppna inställningar <ExternalLink className="h-3.5 w-3.5" />
