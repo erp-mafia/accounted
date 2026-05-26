@@ -238,14 +238,16 @@ export async function createTransactionJournalEntry(
     }
   }
 
-  // Compose the verifikation's description. Base is the raw bank text;
-  // append notes when supplied so the audit trail records context the bank
-  // line can't carry (deltagare/syfte for representation, project ref, etc.).
-  // Trimmed and bounded to keep the description column happy.
+  // Compose the verifikation's description (verifikationstext). journal_entries
+  // has no separate notes column — the description IS the BFL audit field, so
+  // representation deltagare/syfte etc. belong here. Separate the bank text
+  // and the note with a middle dot (never an em-dash — house style), and only
+  // append when the note isn't already implied by the bank text.
   const trimmedNotes = notes?.trim()
+  const baseDescription = (transaction.description ?? '').trim()
   const composedDescription = trimmedNotes
-    ? `${transaction.description} — ${trimmedNotes}`.slice(0, 500)
-    : transaction.description
+    ? `${baseDescription} · ${trimmedNotes}`.trim().replace(/^· /, '').slice(0, 500)
+    : baseDescription
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
