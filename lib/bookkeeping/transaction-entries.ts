@@ -45,7 +45,12 @@ export async function createTransactionJournalEntry(
   companyId: string,
   userId: string,
   transaction: Transaction,
-  mappingResult: MappingResult
+  mappingResult: MappingResult,
+  // Optional audit-trail text to append to the verifikation's description.
+  // Used by the agent for representation bookings to capture deltagare +
+  // syfte directly on the journal entry (SKV's representationsregler /
+  // ML 8 kap require the verifikation to document who attended and why).
+  notes?: string,
 ): Promise<JournalEntry | null> {
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new InvalidMappingResultError(mappingResult.debit_account, mappingResult.credit_account)
@@ -233,10 +238,19 @@ export async function createTransactionJournalEntry(
     }
   }
 
+  // Compose the verifikation's description. Base is the raw bank text;
+  // append notes when supplied so the audit trail records context the bank
+  // line can't carry (deltagare/syfte for representation, project ref, etc.).
+  // Trimmed and bounded to keep the description column happy.
+  const trimmedNotes = notes?.trim()
+  const composedDescription = trimmedNotes
+    ? `${transaction.description} — ${trimmedNotes}`.slice(0, 500)
+    : transaction.description
+
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: transaction.date,
-    description: transaction.description,
+    description: composedDescription,
     source_type: 'bank_transaction',
     source_id: transaction.id,
     lines,

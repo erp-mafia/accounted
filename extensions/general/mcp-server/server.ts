@@ -2198,6 +2198,7 @@ export const tools: McpTool[] = [
         transaction_id: { type: 'string', description: 'UUID of the transaction to categorize' },
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override (defaults to standard_25 for business expenses)', enum: [...VALID_VAT_TREATMENTS] },
+        notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
       },
       required: ['transaction_id', 'category'],
     },
@@ -2245,6 +2246,9 @@ export const tools: McpTool[] = [
           transaction_id: args.transaction_id,
           category: args.category,
           vat_treatment: args.vat_treatment || null,
+          notes: typeof args.notes === 'string' && args.notes.trim().length > 0
+            ? (args.notes as string).trim()
+            : null,
         },
         {
           debit_account: result.debit_account,

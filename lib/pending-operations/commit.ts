@@ -209,6 +209,14 @@ async function commitCategorizeTransaction(
   const txId = params.transaction_id as string
   const category = params.category as TransactionCategory
   const vatTreatment = params.vat_treatment as VatTreatment | undefined
+  // Optional audit-trail text the agent passed alongside the categorization.
+  // For representation bookings the agent captures deltagare + syfte and
+  // funnels them in here so the verifikation's description carries the
+  // context an external auditor needs (SKV's representationsregler).
+  const notes =
+    typeof params.notes === 'string' && params.notes.trim().length > 0
+      ? (params.notes as string)
+      : undefined
 
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
@@ -241,7 +249,7 @@ async function commitCategorizeTransaction(
   let journalEntryId: string | null = null
   try {
     const journalEntry = await createTransactionJournalEntry(
-      supabase, companyId, userId, transaction as Transaction, mappingResult
+      supabase, companyId, userId, transaction as Transaction, mappingResult, notes,
     )
     if (journalEntry) journalEntryId = journalEntry.id
   } catch (err) {

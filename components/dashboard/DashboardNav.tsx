@@ -29,11 +29,20 @@ import {
   ClipboardCheck,
   HandCoins,
   Package,
+  ChevronsUpDown,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import { SupportLink } from '@/components/ui/support-link'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
 import { clearRecaptIdentity } from '@/lib/recapt'
@@ -76,7 +85,14 @@ type NavLabelKey =
   | 'help'
   | 'settings'
 
-type GroupKey = 'main' | 'försäljning' | 'inköp' | 'redovisning' | 'personal' | 'övrigt'
+// New nav layout (May 2026):
+//   top     — flat, no dropdown: Hem (agent), Underlag, Transaktioner, Granskning.
+//   försäljning / inköp / redovisning / personal — collapsible dropdowns.
+//   (account popover, bottom-left) — Inställningar, Hjälp, Logga ut, company switcher.
+// Help + Settings are NOT in `navItems` anymore; they live in the account
+// popover. KPI moved from main to redovisning. Pending stays visible at all
+// times — the inline badge carries the count.
+type GroupKey = 'top' | 'försäljning' | 'inköp' | 'redovisning' | 'personal'
 
 interface NavItem {
   href: string
@@ -91,31 +107,26 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  // Home points to the agent chat — the agent IS the entry point on this build.
-  // labelKey 'home' resolves to "Hem" / "Home"; keeping the i18n primitive even
-  // though the underlying route changed.
-  { href: '/chat', labelKey: 'home', icon: Home, group: 'main' },
-  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'main' },
-  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'main', betaBadge: true },
-  // AR — Accounts Receivable
+  // Top section — flat list, always visible, no header
+  { href: '/chat', labelKey: 'home', icon: Home, group: 'top' },
+  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'top', betaBadge: true },
+  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'top' },
+  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'top' },
+  // Försäljning dropdown
   { href: '/invoices', labelKey: 'invoices', icon: Receipt, group: 'försäljning' },
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
-  // AP — Accounts Payable
+  // Inköp dropdown
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'inköp' },
   { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp', hidden: true },
-  // General accounting
-  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'redovisning' },
-  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'redovisning' },
+  // Redovisning dropdown
+  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'redovisning' },
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'redovisning' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },
-  // Personal — enabled in production with a "Beta" badge while we validate the
-  // end-to-end salary + AGI flow with real customers.
+  // Personal — "Beta" badge while we validate the end-to-end salary + AGI flow.
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
   { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
-  { href: '/help', labelKey: 'help', icon: HelpCircle, group: 'övrigt' },
-  { href: '/settings', labelKey: 'settings', icon: Settings, group: 'övrigt' },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
@@ -126,13 +137,11 @@ function extensionLabelKey(href: string): string | null {
   return null
 }
 
-const groupLabelKey: Record<GroupKey, string> = {
-  main: 'group_main',
+const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   försäljning: 'group_sales',
   inköp: 'group_purchases',
   redovisning: 'group_accounting',
   personal: 'group_personnel',
-  övrigt: 'group_other',
 }
 
 export default function DashboardNav({ companyName: _companyName, entityType, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [] }: DashboardNavProps) {
@@ -149,9 +158,18 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
-  const isOnOvrigtPage = ['/help', '/settings', '/e/'].some(p => pathname.startsWith(p))
-  const [manualOvrigtExpanded, setManualOvrigtExpanded] = useState(false)
-  const isOvrigtExpanded = isOnOvrigtPage || manualOvrigtExpanded
+  // Per-group manual expand state. Each dropdown is auto-expanded when the
+  // active route lives inside it (so users navigating deep into Försäljning
+  // don't have to re-open the section on every page load).
+  type ExpandableGroup = Exclude<GroupKey, 'top'>
+  const [manualExpanded, setManualExpanded] = useState<Record<ExpandableGroup, boolean>>({
+    försäljning: false,
+    inköp: false,
+    redovisning: false,
+    personal: false,
+  })
+  const toggleGroup = (g: ExpandableGroup) =>
+    setManualExpanded((prev) => ({ ...prev, [g]: !prev[g] }))
 
   const openMobileMenu = () => {
     if (closeTimerRef.current) {
@@ -193,19 +211,24 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
     if (item.modes && !item.modes.includes(entityType)) return false
-    if (item.href === '/pending' && pendingOperationsCount === 0) return false
+    // Granskning stays in the top nav at all times now — the badge
+    // surfaces the count when there are pending ops, but the link is
+    // always present so users can navigate there manually.
     return true
   })
 
-  const mainItems = filteredItems.filter(i => i.group === 'main')
-  const övrigtItems = filteredItems.filter(i => i.group === 'övrigt')
+  const topItems = filteredItems.filter((i) => i.group === 'top')
 
-  const sidebarGroups: { key: GroupKey; items: NavItem[]; spacing: string }[] = [
-    { key: 'försäljning', items: filteredItems.filter(i => i.group === 'försäljning'), spacing: 'mb-4' },
-    { key: 'inköp', items: filteredItems.filter(i => i.group === 'inköp'), spacing: 'mb-4' },
-    { key: 'redovisning', items: filteredItems.filter(i => i.group === 'redovisning'), spacing: 'mb-4' },
-    { key: 'personal', items: filteredItems.filter(i => i.group === 'personal'), spacing: 'mb-6' },
+  const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = [
+    { key: 'försäljning', items: filteredItems.filter((i) => i.group === 'försäljning') },
+    { key: 'inköp', items: filteredItems.filter((i) => i.group === 'inköp') },
+    { key: 'redovisning', items: filteredItems.filter((i) => i.group === 'redovisning') },
+    { key: 'personal', items: filteredItems.filter((i) => i.group === 'personal') },
   ]
+
+  // A group auto-expands when one of its items matches the current route.
+  const isGroupExpanded = (g: ExpandableGroup, items: NavItem[]) =>
+    manualExpanded[g] || items.some((it) => isActive(it.href))
 
   const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
     { href: '/chat', labelKey: 'home', icon: Home },
@@ -230,236 +253,252 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
         <div className="flex min-h-0 flex-1 flex-col border-r border-border bg-background">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
-            {/* Company switcher */}
-            <div className="px-5 mb-8">
-              <CompanySwitcher />
-            </div>
-
-            {/* Navigation with group headers */}
             <nav className="px-3" aria-label={tNav('main_navigation')}>
-              {/* Main group */}
-              <div className="mb-6">
-                <p className="px-3 mb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
-                  {tNav('group_main')}
-                </p>
-                <div className="space-y-px">
-                  {mainItems.map((item) => {
-                    const Icon = item.icon
-                    const active = isActive(item.href)
-                    const enabled = isItemEnabled(item.href)
-                    const content = (
-                      <>
-                        <Icon className={cn(
-                          "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
-                          active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                        )} />
-                        <span className="flex-1">{tNav(item.labelKey)}</span>
-                        {renderBadge(item, 'sidebar')}
-                      </>
-                    )
-                    const baseClass = cn(
-                      'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                      enabled
-                        ? cn(
-                            'transition-colors duration-150',
-                            active
-                              ? 'bg-secondary text-foreground font-medium'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
-                          )
-                        : 'text-muted-foreground/40 cursor-not-allowed'
-                    )
-                    return enabled ? (
-                      <Link key={item.href} href={item.href} className={baseClass}>
-                        {content}
-                      </Link>
-                    ) : (
-                      <div
-                        key={item.href}
-                        className={baseClass}
-                        aria-disabled="true"
-                        title={tNav('needs_company_tooltip')}
+              {/* Top section: flat, no header. Hem, Underlag, Transaktioner, Granskning. */}
+              <div className="mb-4 space-y-px">
+                {topItems.map((item) => {
+                  const Icon = item.icon
+                  const active = isActive(item.href)
+                  const enabled = isItemEnabled(item.href)
+                  const badge =
+                    item.href === '/transactions' && uncategorizedTransactionCount > 0
+                      ? uncategorizedTransactionCount
+                      : item.href === '/pending' && pendingOperationsCount > 0
+                        ? pendingOperationsCount
+                        : null
+                  const decorBadge = renderBadge(item, 'sidebar')
+                  const content = (
+                    <>
+                      <Icon
+                        className={cn(
+                          'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+                          active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
+                        )}
+                      />
+                      <span className="flex-1">{tNav(item.labelKey)}</span>
+                      {decorBadge ? decorBadge : badge !== null && (
+                        <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
+                          {badge > 99 ? '99+' : badge}
+                        </span>
+                      )}
+                    </>
+                  )
+                  const baseClass = cn(
+                    'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
+                    enabled
+                      ? cn(
+                          'transition-colors duration-150',
+                          active
+                            ? 'bg-secondary text-foreground font-medium'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+                        )
+                      : 'text-muted-foreground/40 cursor-not-allowed',
+                  )
+                  return enabled ? (
+                    <Link key={item.href} href={item.href} className={baseClass}>
+                      {content}
+                    </Link>
+                  ) : (
+                    <div
+                      key={item.href}
+                      className={baseClass}
+                      aria-disabled="true"
+                      title={tNav('needs_company_tooltip')}
+                    >
+                      {content}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Collapsible groups: Försäljning, Inköp, Redovisning, Personal */}
+              {sidebarGroups
+                .filter(({ items }) => items.length > 0)
+                .map(({ key, items }) => {
+                  const expanded = isGroupExpanded(key, items)
+                  return (
+                    <div key={key} className="mb-1">
+                      <button
+                        onClick={() => toggleGroup(key)}
+                        className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] hover:text-foreground transition-colors rounded-lg"
                       >
-                        {content}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* AR / AP / Personal / Accounting groups */}
-              {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items, spacing }) => (
-                <div key={key} className={spacing}>
-                  <p className="px-3 mb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
-                    {tNav(groupLabelKey[key])}
-                  </p>
-                  <div className="space-y-px">
-                    {items.map((item) => {
-                      const Icon = item.icon
-                      const active = isActive(item.href)
-                      const enabled = isItemEnabled(item.href) && !item.comingSoon
-                      const badge = item.href === '/transactions' && uncategorizedTransactionCount > 0
-                        ? uncategorizedTransactionCount
-                        : item.href === '/pending' && pendingOperationsCount > 0
-                          ? pendingOperationsCount
-                          : null
-                      const decorBadge = renderBadge(item, 'sidebar')
-                      const content = (
-                        <>
-                          <Icon className={cn(
-                            "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
-                            active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                          )} />
-                          <span className="flex-1">{tNav(item.labelKey)}</span>
-                          {decorBadge ? decorBadge : badge !== null && (
-                            <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
-                              {badge > 99 ? '99+' : badge}
-                            </span>
+                        <span>{tNav(groupLabelKey[key])}</span>
+                        <ChevronDown
+                          className={cn(
+                            'h-3 w-3 transition-transform duration-200',
+                            expanded && 'rotate-180',
                           )}
-                        </>
-                      )
-                      const baseClass = cn(
-                        'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                        enabled
-                          ? cn(
-                              'transition-colors duration-150',
-                              active
-                                ? 'bg-secondary text-foreground font-medium'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+                        />
+                      </button>
+                      {expanded && (
+                        <div className="space-y-px animate-fade-in mb-2">
+                          {items.map((item) => {
+                            const Icon = item.icon
+                            const active = isActive(item.href)
+                            const enabled = isItemEnabled(item.href) && !item.comingSoon
+                            const decorBadge = renderBadge(item, 'sidebar')
+                            const content = (
+                              <>
+                                <Icon
+                                  className={cn(
+                                    'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+                                    active
+                                      ? 'text-primary'
+                                      : 'text-muted-foreground group-hover:text-foreground',
+                                  )}
+                                />
+                                <span className="flex-1">{tNav(item.labelKey)}</span>
+                                {decorBadge}
+                              </>
                             )
-                          : 'text-muted-foreground/40 cursor-not-allowed'
-                      )
-                      return enabled ? (
-                        <Link key={item.href} href={item.href} className={baseClass}>
-                          {content}
-                        </Link>
-                      ) : (
-                        <div
-                          key={item.href}
-                          className={baseClass}
-                          aria-disabled="true"
-                          title={item.comingSoon ? tNav('badge_coming_soon') : tNav('needs_company_tooltip')}
-                        >
-                          {content}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
-
-              {/* Övrigt group - collapsible */}
-              <div className="mb-4">
-                <button
-                  onClick={() => setManualOvrigtExpanded(!isOvrigtExpanded)}
-                  className="w-full flex items-center justify-between px-3 mb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] hover:text-muted-foreground transition-colors"
-                >
-                  <span>{tNav('group_other')}</span>
-                  <ChevronDown className={cn(
-                    "h-3 w-3 transition-transform duration-200",
-                    isOvrigtExpanded && "rotate-180"
-                  )} />
-                </button>
-                {isOvrigtExpanded && (
-                  <div className="space-y-px animate-fade-in">
-                    {extensionNavItems.map((item) => {
-                      const Icon = resolveIcon(item.icon)
-                      const active = isActive(item.href)
-                      const enabled = hasCompany
-                      const labelTranslationKey = extensionLabelKey(item.href)
-                      const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
-                      const content = (
-                        <>
-                          <Icon className={cn(
-                            "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
-                            active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                          )} />
-                          {label}
-                        </>
-                      )
-                      const baseClass = cn(
-                        'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                        enabled
-                          ? cn(
-                              'transition-colors duration-150',
-                              active
-                                ? 'bg-secondary text-foreground font-medium'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+                            const baseClass = cn(
+                              'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
+                              enabled
+                                ? cn(
+                                    'transition-colors duration-150',
+                                    active
+                                      ? 'bg-secondary text-foreground font-medium'
+                                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+                                  )
+                                : 'text-muted-foreground/40 cursor-not-allowed',
                             )
-                          : 'text-muted-foreground/40 cursor-not-allowed'
-                      )
-                      return enabled ? (
-                        <Link key={item.href} href={item.href} className={baseClass}>
-                          {content}
-                        </Link>
-                      ) : (
-                        <div
-                          key={item.href}
-                          className={baseClass}
-                          aria-disabled="true"
-                          title={tNav('needs_company_tooltip')}
-                        >
-                          {content}
-                        </div>
-                      )
-                    })}
-                    {övrigtItems.map((item) => {
-                      const Icon = item.icon
-                      const active = isActive(item.href)
-                      const enabled = isItemEnabled(item.href)
-                      const content = (
-                        <>
-                          <Icon className={cn(
-                            "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
-                            active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                          )} />
-                          {tNav(item.labelKey)}
-                        </>
-                      )
-                      const baseClass = cn(
-                        'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                        enabled
-                          ? cn(
-                              'transition-colors duration-150',
-                              active
-                                ? 'bg-secondary text-foreground font-medium'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+                            return enabled ? (
+                              <Link key={item.href} href={item.href} className={baseClass}>
+                                {content}
+                              </Link>
+                            ) : (
+                              <div
+                                key={item.href}
+                                className={baseClass}
+                                aria-disabled="true"
+                                title={
+                                  item.comingSoon
+                                    ? tNav('badge_coming_soon')
+                                    : tNav('needs_company_tooltip')
+                                }
+                              >
+                                {content}
+                              </div>
                             )
-                          : 'text-muted-foreground/40 cursor-not-allowed'
-                      )
-                      return enabled ? (
-                        <Link key={item.href} href={item.href} className={baseClass}>
-                          {content}
-                        </Link>
-                      ) : (
-                        <div
-                          key={item.href}
-                          className={baseClass}
-                          aria-disabled="true"
-                          title={tNav('needs_company_tooltip')}
-                        >
-                          {content}
+                          })}
+                          {/* Extension nav items land in Redovisning since the
+                              current extensions (TIC workspace, etc.) are
+                              accounting-adjacent. Future categorised extensions
+                              can opt into a different group via their manifest. */}
+                          {key === 'redovisning' &&
+                            extensionNavItems.map((item) => {
+                              const Icon = resolveIcon(item.icon)
+                              const active = isActive(item.href)
+                              const enabled = hasCompany
+                              const labelTranslationKey = extensionLabelKey(item.href)
+                              const label = labelTranslationKey
+                                ? tNav(labelTranslationKey)
+                                : item.label
+                              const content = (
+                                <>
+                                  <Icon
+                                    className={cn(
+                                      'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+                                      active
+                                        ? 'text-primary'
+                                        : 'text-muted-foreground group-hover:text-foreground',
+                                    )}
+                                  />
+                                  {label}
+                                </>
+                              )
+                              const baseClass = cn(
+                                'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
+                                enabled
+                                  ? cn(
+                                      'transition-colors duration-150',
+                                      active
+                                        ? 'bg-secondary text-foreground font-medium'
+                                        : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+                                    )
+                                  : 'text-muted-foreground/40 cursor-not-allowed',
+                              )
+                              return enabled ? (
+                                <Link key={item.href} href={item.href} className={baseClass}>
+                                  {content}
+                                </Link>
+                              ) : (
+                                <div
+                                  key={item.href}
+                                  className={baseClass}
+                                  aria-disabled="true"
+                                  title={tNav('needs_company_tooltip')}
+                                >
+                                  {content}
+                                </div>
+                              )
+                            })}
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
+                      )}
+                    </div>
+                  )
+                })}
             </nav>
           </div>
 
-          {/* Support + Logout */}
-          <div className="flex-shrink-0 px-3 py-3 border-t border-border space-y-1">
-            <div className="px-3 py-1.5">
-              <SupportLink variant="muted" />
-            </div>
-            <Button
-              variant="ghost"
-              className="w-full justify-start text-muted-foreground hover:text-foreground text-[13px] h-9 px-3"
-              onClick={handleLogout}
-            >
-              <LogOut className="mr-2.5 h-[15px] w-[15px]" />
-              {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
-            </Button>
+          {/* Account popover (bottom-left). Holds company switcher, Hjälp,
+              Inställningar, Logga ut. Replaces the old top company-switcher
+              card + the bottom Support/Logout block. */}
+          <div className="flex-shrink-0 px-3 py-3 border-t border-border">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+                >
+                  <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
+                    {(company?.name ?? '?').slice(0, 1)}
+                  </span>
+                  <span className="flex-1 truncate font-medium text-foreground">
+                    {company?.name ?? tNav('mitt_konto')}
+                  </span>
+                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start" className="w-60">
+                {/* Company switcher inline. Renders its own portal-based
+                    list when opened; closing it doesn't dismiss this menu,
+                    so the user can keep navigating. */}
+                <div className="px-1 py-1">
+                  <CompanySwitcher />
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {tNav('mitt_konto')}
+                </DropdownMenuLabel>
+                <DropdownMenuItem asChild>
+                  <Link href="/settings" className="cursor-pointer">
+                    <Settings className="mr-2 h-4 w-4" />
+                    {tNav('settings')}
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/help" className="cursor-pointer">
+                    <HelpCircle className="mr-2 h-4 w-4" />
+                    {tNav('help')}
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <SupportLink variant="muted" className="cursor-pointer" />
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault()
+                    void handleLogout()
+                  }}
+                  className="cursor-pointer text-muted-foreground focus:text-foreground"
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </aside>
@@ -573,17 +612,28 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
 
             {/* Navigation */}
             <div className="px-2">
-              {/* Main items */}
+              {/* Top items (Hem, Underlag, Transaktioner, Granskning) */}
               <div className="space-y-0.5">
-                {mainItems.map((item) => {
+                {topItems.map((item) => {
                   const Icon = item.icon
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
+                  const badge =
+                    item.href === '/transactions' && uncategorizedTransactionCount > 0
+                      ? uncategorizedTransactionCount
+                      : item.href === '/pending' && pendingOperationsCount > 0
+                        ? pendingOperationsCount
+                        : null
+                  const decorBadge = renderBadge(item, 'mobile')
                   const content = (
                     <>
                       <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
                       <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
-                      {renderBadge(item, 'mobile')}
+                      {decorBadge ? decorBadge : badge !== null && (
+                        <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
+                          {badge > 99 ? '99+' : badge}
+                        </span>
+                      )}
                     </>
                   )
                   const baseClass = cn(
@@ -673,53 +723,67 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                 </div>
               ))}
 
-              {/* Övrigt divider */}
+              {/* Tillägg (extensions) — only when there's at least one */}
+              {extensionNavItems.length > 0 && (
+                <>
+                  <div className="flex items-center gap-3 my-1.5 px-3">
+                    <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_extensions')}</span>
+                    <div className="flex-1 h-px bg-border/30" />
+                  </div>
+                  <div className="space-y-0.5">
+                    {extensionNavItems.map((item) => {
+                      const Icon = resolveIcon(item.icon)
+                      const active = isActive(item.href)
+                      const enabled = hasCompany
+                      const labelTranslationKey = extensionLabelKey(item.href)
+                      const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
+                      const content = (
+                        <>
+                          <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
+                          <span className="text-sm">{label}</span>
+                        </>
+                      )
+                      const baseClass = cn(
+                        'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
+                        enabled
+                          ? cn(
+                              'transition-colors',
+                              active
+                                ? 'bg-primary/10 text-primary font-medium'
+                                : 'text-foreground active:bg-muted/60'
+                            )
+                          : 'text-muted-foreground/40'
+                      )
+                      return enabled ? (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          onClick={closeMobileMenu}
+                          className={baseClass}
+                        >
+                          {content}
+                        </Link>
+                      ) : (
+                        <div key={item.href} className={baseClass} aria-disabled="true">
+                          {content}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Mitt konto divider */}
               <div className="flex items-center gap-3 my-1.5 px-3">
-                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_other')}</span>
+                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('mitt_konto')}</span>
                 <div className="flex-1 h-px bg-border/30" />
               </div>
 
-              {/* Other items */}
               <div className="space-y-0.5">
-                {extensionNavItems.map((item) => {
-                  const Icon = resolveIcon(item.icon)
-                  const active = isActive(item.href)
-                  const enabled = hasCompany
-                  const labelTranslationKey = extensionLabelKey(item.href)
-                  const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
-                  const content = (
-                    <>
-                      <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                      <span className="text-sm">{label}</span>
-                    </>
-                  )
-                  const baseClass = cn(
-                    'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                    enabled
-                      ? cn(
-                          'transition-colors',
-                          active
-                            ? 'bg-primary/10 text-primary font-medium'
-                            : 'text-foreground active:bg-muted/60'
-                        )
-                      : 'text-muted-foreground/40'
-                  )
-                  return enabled ? (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={closeMobileMenu}
-                      className={baseClass}
-                    >
-                      {content}
-                    </Link>
-                  ) : (
-                    <div key={item.href} className={baseClass} aria-disabled="true">
-                      {content}
-                    </div>
-                  )
-                })}
-                {övrigtItems.map((item) => {
+                {([
+                  { href: '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
+                  { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
+                ]).map((item) => {
                   const Icon = item.icon
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
