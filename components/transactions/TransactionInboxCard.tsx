@@ -20,14 +20,12 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   FileText,
-  FileCheck2,
   Link2,
   Loader2,
   Trash2,
 } from 'lucide-react'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
-import { useToast } from '@/components/ui/use-toast'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 // True when the AI tier is active — gates user-facing strings that promise
@@ -75,14 +73,12 @@ export default function TransactionInboxCard({
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
   const { openAgentSheet, identity } = useAgentSheet()
-  const { toast } = useToast()
-  const [isOpeningDoc, setIsOpeningDoc] = useState(false)
-  // Optimistic override — flips the icon to "attached" as soon as the upload
-  // POST succeeds, without waiting for the parent to refetch. The next
-  // parent refresh will sync; in the meantime the user sees the correct
-  // visual state immediately. Same hook handles agent-chat uploads via the
-  // gnubok:transaction-document-linked window event (AgentChat dispatches
-  // it after /api/agent/upload returns).
+  // Optimistic override — flips the indicator to "attached" as soon as the
+  // upload POST succeeds, without waiting for the parent to refetch. The
+  // next parent refresh will sync; in the meantime the user sees the
+  // correct visual state immediately. Same hook handles agent-chat uploads
+  // via the gnubok:transaction-document-linked window event (AgentChat
+  // dispatches it after /api/agent/upload returns).
   const [optimisticDocumentId, setOptimisticDocumentId] = useState<string | null>(null)
   useEffect(() => {
     function onLinked(e: Event) {
@@ -95,7 +91,6 @@ export default function TransactionInboxCard({
   }, [transaction.id])
   const attachedDocumentId =
     optimisticDocumentId ?? (transaction as { document_id?: string | null }).document_id ?? null
-  const hasAttachment = !!attachedDocumentId
   // Only poll extraction status for documents the user attached during THIS
   // session. Pre-existing attached docs from prior sessions wouldn't change
   // status during this view, and polling them would be wasted requests.
@@ -104,30 +99,6 @@ export default function TransactionInboxCard({
   const extraction = useDocumentExtraction(
     HAS_AI_EXTRACTION ? optimisticDocumentId : null,
   )
-
-  async function handleOpenAttachment(): Promise<void> {
-    if (!attachedDocumentId || isOpeningDoc) return
-    setIsOpeningDoc(true)
-    try {
-      const res = await fetch(`/api/documents/${attachedDocumentId}`)
-      if (!res.ok) {
-        toast({ title: 'Kunde inte hämta underlaget', variant: 'destructive' })
-        return
-      }
-      const { data } = await res.json()
-      if (data?.download_url) {
-        window.open(data.download_url, '_blank', 'noopener,noreferrer')
-      }
-    } catch (err) {
-      toast({
-        title: 'Kunde inte öppna underlaget',
-        description: err instanceof Error ? err.message : 'Okänt fel.',
-        variant: 'destructive',
-      })
-    } finally {
-      setIsOpeningDoc(false)
-    }
-  }
 
   const hasInvoiceMatch = !!transaction.potential_invoice && !transaction.invoice_id
   const hasSupplierInvoiceMatch =
@@ -289,30 +260,10 @@ export default function TransactionInboxCard({
                     <Link2 className="h-4 w-4" />
                   </Button>
                 )}
-                {/* Open attached document — only shown when this transaction has
-                    an attachment (tx.document_id or an optimistically-linked
-                    inbox upload). Uploading happens in /e/general/invoice-inbox
-                    or via the agent sheet — never inline here. */}
-                {hasAttachment && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-success hover:text-success/80"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void handleOpenAttachment()
-                    }}
-                    disabled={isProcessing || isDisabled || isOpeningDoc}
-                    title="Underlag bifogat — klicka för att öppna"
-                    aria-label="Öppna bifogat underlag"
-                  >
-                    {isOpeningDoc ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <FileCheck2 className="h-4 w-4" />
-                    )}
-                  </Button>
-                )}
+                {/* The Paperclip indicator next to the description
+                    (TransactionAttachmentIndicator) is the single click
+                    target for opening the underlag. We deliberately don't
+                    duplicate that with a second icon in the trailing slot. */}
                 {/* Hand-off to the agent for categorization help. Hidden
                     pre-onboarding so the row doesn't sprout an avatar button
                     that leads to a generic chat. */}
