@@ -20,8 +20,8 @@ const SUGGESTIONS: { label: string; prompt: string }[] = [
     prompt: 'Vad är min största utgiftspost den här månaden? Visa de fem största kategorierna.',
   },
   {
-    label: 'Hjälp mig kategorisera obokade transaktioner',
-    prompt: 'Jag har transaktioner som inte är kategoriserade. Hjälp mig gå igenom dem ett par åt gången.',
+    label: 'Hur ser min momsrapport ut för senaste perioden?',
+    prompt: 'Hur ser min momsrapport ut för den senaste perioden? Vad blir moms att betala eller få tillbaka, och ser något ovanligt ut?',
   },
   {
     label: 'När är min nästa skatte- eller momsdeadline?',
