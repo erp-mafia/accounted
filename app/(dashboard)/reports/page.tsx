@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
@@ -44,13 +45,13 @@ interface DrillDownStep {
   accountNumber?: string
 }
 
-const TAB_LABELS: Record<string, string> = {
-  'resultatrapport': 'Resultatrapport',
-  'balansrapport': 'Balansrapport',
-  'trial-balance': 'Saldobalans',
-  'income-statement': 'Resultaträkning',
-  'balance-sheet': 'Balansräkning',
-  'huvudbok': 'Huvudbok',
+const TAB_LABEL_KEYS: Record<string, string> = {
+  'resultatrapport': 'name_resultatrapport',
+  'balansrapport': 'name_balansrapport',
+  'trial-balance': 'name_trial_balance',
+  'income-statement': 'name_income_statement',
+  'balance-sheet': 'name_balance_sheet',
+  'huvudbok': 'name_huvudbok',
 }
 
 export default function ReportsPage() {
@@ -58,6 +59,7 @@ export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState('resultatrapport')
   const [isLoadingInit, setIsLoadingInit] = useState(true)
   const { company } = useCompany()
+  const t = useTranslations('reports')
 
   // Drill-down state: when navigating from a report to the GL for a specific account
   const [glAccountFilter, setGlAccountFilter] = useState<string | null>(null)
@@ -66,11 +68,11 @@ export default function ReportsPage() {
   const navigateToAccount = useCallback((accountNumber: string) => {
     setDrillDownTrail((prev) => [
       ...prev,
-      { tab: activeTab, label: TAB_LABELS[activeTab] || activeTab },
+      { tab: activeTab, label: TAB_LABEL_KEYS[activeTab] ? t(TAB_LABEL_KEYS[activeTab]) : activeTab },
     ])
     setGlAccountFilter(accountNumber)
     setActiveTab('huvudbok')
-  }, [activeTab])
+  }, [activeTab, t])
 
   const handleTabChange = useCallback((tab: string) => {
     // Manual tab change clears drill-down state
@@ -95,7 +97,7 @@ export default function ReportsPage() {
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Rapporter</h1>
+        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
       </div>
 
       <div className="flex flex-col sm:flex-row sm:items-end gap-4">
@@ -106,18 +108,14 @@ export default function ReportsPage() {
           hideFuturePeriods
           onReady={() => setIsLoadingInit(false)}
         />
-        {selectedPeriod && (
-          <Button
-            variant="outline"
-            onClick={() => {
-              window.open(`/api/reports/sie-export?period_id=${selectedPeriod}`, '_blank')
-            }}
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Ladda ner SIE-fil
-          </Button>
-        )}
       </div>
+      <p className="text-sm text-muted-foreground">
+        {t('sie_moved_hint')}{' '}
+        <Link href="/import?view=export#sie-export" className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground">
+          {t('sie_moved_link')}
+        </Link>
+        .
+      </p>
 
       {isLoadingInit ? (
         <div className="space-y-6">
@@ -160,7 +158,7 @@ export default function ReportsPage() {
               </React.Fragment>
             ))}
             <span className="font-medium">
-              Huvudbok {glAccountFilter && `— ${glAccountFilter}`}
+              {t('name_huvudbok')} {glAccountFilter && `— ${glAccountFilter}`}
             </span>
           </nav>
         )}
@@ -445,6 +443,7 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
   )
 }
 function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+  const t = useTranslations('reports')
   const [data, setData] = useState<IncomeStatementReport | null>(null)
   const [monthlyData, setMonthlyData] = useState<MonthlyDataPoint[]>([])
   const [monthlyLoading, setMonthlyLoading] = useState(false)
@@ -524,7 +523,7 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
           onClick={() => window.open(`/api/reports/income-statement/pdf?period_id=${periodId}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
-          Ladda ner PDF
+          {t('download_pdf')}
         </Button>
       </div>
 
@@ -604,6 +603,7 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
 }
 
 function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+  const t = useTranslations('reports')
   const [data, setData] = useState<BalanceSheetReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -669,7 +669,7 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
           onClick={() => window.open(`/api/reports/balance-sheet/pdf?period_id=${periodId}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
-          Ladda ner PDF
+          {t('download_pdf')}
         </Button>
       </div>
 
@@ -728,6 +728,7 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
 }
 
 function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+  const t = useTranslations('reports')
   const [data, setData] = useState<ResultatrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -793,7 +794,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
           onClick={() => window.open(`/api/reports/resultatrapport/pdf?period_id=${periodId}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
-          Ladda ner PDF
+          {t('download_pdf')}
         </Button>
       </div>
 
@@ -868,6 +869,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
 }
 
 function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+  const t = useTranslations('reports')
   const [data, setData] = useState<BalansrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -931,7 +933,7 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
           onClick={() => window.open(`/api/reports/balansrapport/pdf?period_id=${periodId}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
-          Ladda ner PDF
+          {t('download_pdf')}
         </Button>
       </div>
 

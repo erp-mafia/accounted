@@ -287,17 +287,17 @@ describe('buildIndividuppgifterSnapshot', () => {
     expect(snapshot[1].personnummer).toBe('198506159876')
   })
 
-  it('preserves FK570 for correction reference', () => {
+  it('preserves specificationNumber for correction reference', () => {
     const snapshot = buildIndividuppgifterSnapshot(employees)
-    expect(snapshot[0].fk570).toBe(1)
-    expect(snapshot[1].fk570).toBe(2)
+    expect(snapshot[0].specificationNumber).toBe(1)
+    expect(snapshot[1].specificationNumber).toBe(2)
   })
 
-  it('includes all required rutor', () => {
+  it('includes the core IU amounts', () => {
     const snapshot = buildIndividuppgifterSnapshot(employees)
-    expect(snapshot[0]).toHaveProperty('ruta011', 40000)
-    expect(snapshot[0]).toHaveProperty('ruta001', 12000)
-    expect(snapshot[0]).toHaveProperty('ruta020', 40000)
+    expect(snapshot[0]).toHaveProperty('grossSalary', 40000)
+    expect(snapshot[0]).toHaveProperty('taxWithheld', 12000)
+    expect(snapshot[0]).toHaveProperty('avgifterBasis', 40000)
   })
 })
 
@@ -312,8 +312,8 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       taxWithheld: 12000,
       avgifterBasis: 40000,
       absenceEvents: [
-        { date: '2026-04-15', type: 'vab', hours: 8 },
-        { date: '2026-04-16', type: 'vab', hours: 4 },
+        { date: '2026-04-15', type: 'vab', hours: 8, specifikationsnummer: 1 },
+        { date: '2026-04-16', type: 'vab', hours: 4, specifikationsnummer: 2 },
       ],
     },
     {
@@ -323,7 +323,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       taxWithheld: 10500,
       avgifterBasis: 35000,
       absenceEvents: [
-        { date: '2026-04-20', type: 'parental', hours: 8 },
+        { date: '2026-04-20', type: 'parental', hours: 8, specifikationsnummer: 1 },
       ],
     },
   ]
@@ -352,18 +352,40 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       company,
       [{
         ...employeesWithAbsence[1],
-        absenceEvents: [{ date: '2026-04-20', type: 'parental', hours: 8 }],
+        absenceEvents: [{ date: '2026-04-20', type: 'parental', hours: 8, specifikationsnummer: 1 }],
       }],
       totals,
     )
     expect(xml).not.toMatch(/FranvaroTimmarTFP|FranvaroProcentTFP/)
   })
 
-  it('uses 1-based stable specifikationsnummer per employee, ordered by date', () => {
+  it('emits the persisted specifikationsnummer per event (stable across corrections)', () => {
     const xml = generateAGIXml(company, employeesWithAbsence, totals)
-    // emp1 has two events on 2026-04-15 and 2026-04-16
+    // emp1 has two events with specnummer 1 and 2 (assigned by DB trigger);
+    // emp2 has one event with specnummer 1. The values come from the
+    // event object — they are NOT recomputed from array index.
     expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">1</gem:FranvaroSpecifikationsnummer>')
     expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">2</gem:FranvaroSpecifikationsnummer>')
+  })
+
+  it('preserves the persisted specnummer even when an earlier event is removed', () => {
+    // Simulates the correction scenario the persistence is designed for:
+    // the first vab day was deleted, so the remaining day keeps its
+    // original specnummer (2). Without persistence the index would shift
+    // to 1 and Skatteverket would treat it as a replacement of the
+    // already-filed day-1 event.
+    const xml = generateAGIXml(
+      company,
+      [{
+        ...employeesWithAbsence[0],
+        absenceEvents: [
+          { date: '2026-04-16', type: 'vab', hours: 4, specifikationsnummer: 2 },
+        ],
+      }],
+      totals,
+    )
+    expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">2</gem:FranvaroSpecifikationsnummer>')
+    expect(xml).not.toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">1</gem:FranvaroSpecifikationsnummer>')
   })
 
   it('formats fractional hours with up to 2 decimals', () => {
@@ -371,7 +393,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       company,
       [{
         ...employeesWithAbsence[0],
-        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 4.5 }],
+        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 4.5, specifikationsnummer: 1 }],
       }],
       totals,
     )
@@ -383,7 +405,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       company,
       [{
         ...employeesWithAbsence[0],
-        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 50 }],
+        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 50, specifikationsnummer: 1 }],
       }],
       totals,
     )
@@ -404,7 +426,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       { ...company, periodYear: 2025, periodMonth: 1 },
       [{
         ...employeesWithAbsence[0],
-        absenceEvents: [{ date: '2025-01-15', type: 'vab', hours: 8 }],
+        absenceEvents: [{ date: '2025-01-15', type: 'vab', hours: 8, specifikationsnummer: 1 }],
       }],
       totals,
     )
@@ -442,7 +464,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
       company,
       [{
         ...employeesWithAbsence[0],
-        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 8 }],
+        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 8, specifikationsnummer: 1 }],
       }],
       totals,
     )

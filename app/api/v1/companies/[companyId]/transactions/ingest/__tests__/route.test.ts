@@ -19,7 +19,7 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
-const { ingestMock, createTxJE } = vi.hoisted(() => ({
+const { ingestMock, createTxJE, findMissingAccountsMock } = vi.hoisted(() => ({
   ingestMock: vi.fn().mockResolvedValue({
     imported: 2,
     duplicates: 1,
@@ -30,6 +30,12 @@ const { ingestMock, createTxJE } = vi.hoisted(() => ({
     transaction_ids: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
   }),
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-bc' }),
+  // batch-categorize pre-validates every mapped account against chart_of_accounts
+  // (commit 6afb13aa). The flexible-Supabase proxy returns { data: null } for
+  // unmocked tables, which would make the real implementation report ALL
+  // accounts as missing and short-circuit every item with ACCOUNTS_NOT_IN_CHART.
+  // Stub it to "no missing accounts" so the happy path is exercised.
+  findMissingAccountsMock: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/lib/transactions/ingest', () => ({
@@ -38,6 +44,15 @@ vi.mock('@/lib/transactions/ingest', () => ({
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: createTxJE,
 }))
+vi.mock('@/lib/bookkeeping/account-validation', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/account-validation')>(
+    '@/lib/bookkeeping/account-validation',
+  )
+  return {
+    ...actual,
+    findMissingActiveAccounts: findMissingAccountsMock,
+  }
+})
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as ingestPOST } from '../route'

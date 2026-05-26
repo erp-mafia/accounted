@@ -16,7 +16,8 @@ import type { TrialBalanceRow } from '@/types'
 export async function generateTrialBalance(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options?: { excludeYearEndClosing?: boolean }
 ): Promise<{
   rows: TrialBalanceRow[]
   totalDebit: number
@@ -51,13 +52,17 @@ export async function generateTrialBalance(
   }>(({ from, to }) => {
     let query = supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status)')
+      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type)')
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
       .in('journal_entries.status', ['posted', 'reversed'])
 
     if (obEntryId) {
       query = query.neq('journal_entry_id', obEntryId)
+    }
+
+    if (options?.excludeYearEndClosing) {
+      query = query.neq('journal_entries.source_type', 'year_end')
     }
 
     return query.range(from, to)

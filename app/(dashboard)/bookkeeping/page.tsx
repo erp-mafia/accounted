@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
@@ -47,6 +48,7 @@ export default function BookkeepingPage() {
   const [copyPrefill, setCopyPrefill] = useState<CopyPrefill | null>(null)
   const [isLoadingCopy, setIsLoadingCopy] = useState(false)
   const [nextVoucher, setNextVoucher] = useState<NextVoucher | null>(null)
+  const t = useTranslations('bookkeeping')
 
   // React to copy_from in URL: switch tab, fetch source entry, then clean URL.
   // useSearchParams keeps this reactive even when navigation happens within the
@@ -65,8 +67,8 @@ export default function BookkeepingPage() {
       .then(({ data, error }: { data?: JournalEntry; error?: string }) => {
         if (error || !data) {
           toast({
-            title: 'Kunde inte kopiera verifikat',
-            description: error || 'Källverifikatet hittades inte.',
+            title: t('copy_failed_title'),
+            description: error || t('copy_source_missing'),
             variant: 'destructive',
           })
           return
@@ -94,8 +96,8 @@ export default function BookkeepingPage() {
       })
       .catch(() => {
         toast({
-          title: 'Kunde inte kopiera verifikat',
-          description: 'Källverifikatet kunde inte hämtas.',
+          title: t('copy_failed_title'),
+          description: t('copy_fetch_failed'),
           variant: 'destructive',
         })
       })
@@ -133,7 +135,7 @@ export default function BookkeepingPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Bokföring"
+        title={t('title')}
         action={
           <div className="flex gap-2 w-full sm:w-auto">
             <AgentSparkleButton
@@ -145,7 +147,7 @@ export default function BookkeepingPage() {
           <Button variant="outline" asChild className="w-full sm:w-auto">
             <Link href="/bookkeeping/year-end">
               <Lock className="mr-2 h-4 w-4" />
-              Årsbokslut
+              {t('year_end')}
             </Link>
           </Button>
           </div>
@@ -154,16 +156,16 @@ export default function BookkeepingPage() {
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
         <TabsList>
-          <TabsTrigger value="journal">Verifikationer</TabsTrigger>
+          <TabsTrigger value="journal">{t('tab_journal')}</TabsTrigger>
           <TabsTrigger value="new-entry">
-            Ny verifikation
+            {t('tab_new_entry')}
             {nextVoucher && (
               <span className="ml-1 text-muted-foreground tabular-nums">
                 ({nextVoucher.series}{nextVoucher.next})
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="accounts">Kontoplan</TabsTrigger>
+          <TabsTrigger value="accounts">{t('tab_accounts')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="journal" className="space-y-4">
@@ -175,7 +177,7 @@ export default function BookkeepingPage() {
           {isLoadingCopy ? (
             <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Laddar källverifikat...</span>
+              <span className="text-sm">{t('loading_source_voucher')}</span>
             </div>
           ) : (
             <>
@@ -184,12 +186,10 @@ export default function BookkeepingPage() {
                   <Copy className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                   <div className="flex-1">
                     <p className="font-medium">
-                      Kopia av verifikat {copyPrefill.sourceVoucherLabel || '(okänt nummer)'}
+                      {t('copy_banner_title', { label: copyPrefill.sourceVoucherLabel || t('copy_banner_unknown_label') })}
                     </p>
                     <p className="text-muted-foreground mt-0.5">
-                      Ett nytt, fristående verifikat skapas med egen verifikationsserie och nummer.
-                      Detta är <strong>inte</strong> en rättelse eller storno av originalet — använd
-                      &quot;Skapa ändringsverifikation&quot; om du vill korrigera källverifikatet.
+                      {t('copy_banner_body')}
                     </p>
                   </div>
                 </div>

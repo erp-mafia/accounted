@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +18,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   useSubmitWithAccountActivation,
   throwOnStructuredError,
@@ -77,6 +79,7 @@ export default function JournalEntryForm({
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const { company } = useCompany()
+  const t = useTranslations('journal_form')
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().split('T')[0])
@@ -100,6 +103,9 @@ export default function JournalEntryForm({
   const [foreignAmount, setForeignAmount] = useState('')
   const [periodMismatch, setPeriodMismatch] = useState<'no_period' | 'wrong_period' | null>(null)
   const [showCreatePeriod, setShowCreatePeriod] = useState(false)
+  // Per-account saldo as of entryDate, keyed by account_number.
+  // undefined = not fetched, null = fetch in flight.
+  const [accountBalances, setAccountBalances] = useState<Record<string, number | null>>({})
 
   const isForeign = entryCurrency !== 'SEK'
 
@@ -209,6 +215,76 @@ export default function JournalEntryForm({
       fetchRate(entryCurrency)
     }
   }, [entryCurrency, fetchRate])
+
+  // Stable key of selected account numbers across all lines, sorted + deduped.
+  // Only valid 4-digit BAS account numbers are included.
+  const accountsKey = useMemo(
+    () =>
+      Array.from(
+        new Set(lines.map((l) => l.account_number).filter((a) => /^\d{4}$/.test(a)))
+      )
+        .sort()
+        .join(','),
+    [lines]
+  )
+
+  // Fetch per-account saldo as of entryDate for the accounts currently on the
+  // form. Balances are reference-only ("saldo before this entry") — they ignore
+  // the draft lines the user is typing, by design.
+  useEffect(() => {
+    if (!accountsKey) {
+      setAccountBalances({})
+      return
+    }
+    const accountList = accountsKey.split(',')
+    // Carry forward any previously-known balances for these accounts so the
+    // value doesn't blank out on re-fetch; mark genuinely new accounts as
+    // loading (null).
+    setAccountBalances((prev) => {
+      const next: Record<string, number | null> = {}
+      for (const a of accountList) next[a] = a in prev ? prev[a] : null
+      return next
+    })
+
+    let cancelled = false
+    const handle = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({ accounts: accountsKey, as_of: entryDate })
+        const res = await fetch(`/api/bookkeeping/account-balances?${qs}`)
+        if (!res.ok) {
+          // 4xx (e.g. future entryDate rejected by Zod) or 5xx: collapse the
+          // loading skeleton so the column doesn't get stuck. Saldo is a
+          // reference value, not authoritative — showing 0 here is preferable
+          // to an indefinite spinner.
+          if (cancelled) return
+          setAccountBalances((prev) => {
+            const next = { ...prev }
+            for (const a of accountList) {
+              if (next[a] == null) next[a] = 0
+            }
+            return next
+          })
+          return
+        }
+        const body = (await res.json()) as {
+          data: Array<{ account_number: string; balance: number }>
+        }
+        if (cancelled) return
+        setAccountBalances((prev) => {
+          const next = { ...prev }
+          for (const row of body.data) next[row.account_number] = row.balance
+          return next
+        })
+      } catch {
+        // Reference value — failure is non-fatal, just leave previous state.
+      }
+    }, 150)
+
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [accountsKey, entryDate])
 
   const addLine = () => {
     setLines([...lines, { ...BLANK_LINE }])
@@ -379,16 +455,16 @@ export default function JournalEntryForm({
         }
         if (linkFailCount > 0) {
           toast({
-            title: 'Underlag kunde inte bifogas',
-            description: `${linkFailCount} fil(er) kunde inte länkas till verifikationen. Försök igen via bokföringssidan.`,
+            title: t('toast_attach_failed_title'),
+            description: t('toast_attach_failed_description', { count: linkFailCount }),
             variant: 'destructive',
           })
         }
       }
 
       toast({
-        title: 'Verifikation skapad',
-        description: `Verifikation ${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''} har skapats.`,
+        title: t('toast_created_title'),
+        description: t('toast_created_description', { voucher: `${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''}` }),
       })
       setShowReview(false)
       setDescription('')
@@ -408,7 +484,7 @@ export default function JournalEntryForm({
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
-          title: 'Kunde inte skapa verifikation',
+          title: t('toast_create_failed'),
           description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
           variant: 'destructive',
         })
@@ -442,8 +518,8 @@ export default function JournalEntryForm({
       }
 
       toast({
-        title: 'Utkast sparat',
-        description: 'Utkastet kan bokföras från bokföringssidan.',
+        title: t('toast_draft_saved_title'),
+        description: t('toast_draft_saved_description'),
       })
       setDescription('')
       setNotes('')
@@ -462,7 +538,7 @@ export default function JournalEntryForm({
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
-          title: 'Kunde inte spara utkast',
+          title: t('toast_save_draft_failed'),
           description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
           variant: 'destructive',
         })
@@ -483,10 +559,10 @@ export default function JournalEntryForm({
             : 'sm:grid-cols-[1fr_auto_1fr_3.5rem]'
       }`}>
         <div>
-          <Label>Räkenskapsår</Label>
+          <Label>{t('fiscal_year')}</Label>
           <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
             <SelectTrigger className="mt-1">
-              <SelectValue placeholder="Välj period" />
+              <SelectValue placeholder={t('fiscal_year_placeholder')} />
             </SelectTrigger>
             <SelectContent>
               {periods.map((p) => (
@@ -499,7 +575,7 @@ export default function JournalEntryForm({
         </div>
         {!(embedded && initialDate) && (
           <div>
-            <Label>Datum</Label>
+            <Label>{t('date')}</Label>
             <Input
               type="date"
               value={entryDate}
@@ -508,19 +584,19 @@ export default function JournalEntryForm({
           </div>
         )}
         <div>
-          <Label>Beskrivning</Label>
+          <Label>{t('description')}</Label>
           <Input
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Verifikationstext..."
+            placeholder={t('description_placeholder')}
           />
         </div>
         <div className={embedded ? 'hidden' : 'col-span-full'}>
-          <Label>Intern anteckning <span className="text-muted-foreground font-normal">(valfritt)</span></Label>
+          <Label>{t('internal_note')} <span className="text-muted-foreground font-normal">{t('internal_note_optional')}</span></Label>
           <Textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="T.ex. anledning till bokning, referens till mejl, etc."
+            placeholder={t('internal_note_placeholder')}
             className="mt-1 resize-none"
             rows={2}
             maxLength={2000}
@@ -528,7 +604,7 @@ export default function JournalEntryForm({
         </div>
         {!embedded && (
           <div>
-            <Label>Serie</Label>
+            <Label>{t('series')}</Label>
             <Input
               value={voucherSeries}
               onChange={(e) => {
@@ -554,8 +630,8 @@ export default function JournalEntryForm({
         <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
           <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
           <div className="flex-1 text-sm text-warning-foreground">
-            <p className="font-medium">Inget räkenskapsår matchar datumet {entryDate}</p>
-            <p className="mt-0.5">Skapa ett räkenskapsår som täcker detta datum för att kunna bokföra.</p>
+            <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
+            <p className="mt-0.5">{t('no_period_help')}</p>
           </div>
           <Button
             variant="outline"
@@ -564,7 +640,7 @@ export default function JournalEntryForm({
             className="shrink-0"
           >
             <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
-            Skapa räkenskapsår
+            {t('create_period')}
           </Button>
         </div>
       )}
@@ -572,7 +648,7 @@ export default function JournalEntryForm({
       {/* Currency section */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-24">
-          <Label className="text-xs text-muted-foreground">Valuta</Label>
+          <Label className="text-xs text-muted-foreground">{t('currency')}</Label>
           <Select value={entryCurrency} onValueChange={(v) => {
             setEntryCurrency(v as Currency)
             if (v === 'SEK') {
@@ -594,7 +670,7 @@ export default function JournalEntryForm({
           <>
             <div className="w-40">
               <Label className="text-xs text-muted-foreground">
-                Omräkningskurs (1 {entryCurrency} = ? SEK)
+                {t('exchange_rate_label', { currency: entryCurrency })}
               </Label>
               <div className="relative mt-1">
                 <Input
@@ -613,7 +689,7 @@ export default function JournalEntryForm({
             </div>
             <div className="w-40">
               <Label className="text-xs text-muted-foreground">
-                Belopp i {entryCurrency}
+                {t('amount_in_currency_label', { currency: entryCurrency })}
               </Label>
               <Input
                 type="number"
@@ -659,11 +735,11 @@ export default function JournalEntryForm({
             <Input
               value={line.line_description}
               onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-              placeholder="Radtext..."
+              placeholder={t('line_description_placeholder')}
             />
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Debet</Label>
+                <Label className="text-xs text-muted-foreground">{t('col_debit')}</Label>
                 <Input
                   type="number"
                   value={line.debit_amount}
@@ -676,7 +752,7 @@ export default function JournalEntryForm({
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Kredit</Label>
+                <Label className="text-xs text-muted-foreground">{t('col_credit')}</Label>
                 <Input
                   type="number"
                   value={line.credit_amount}
@@ -689,18 +765,29 @@ export default function JournalEntryForm({
                 />
               </div>
             </div>
+            {/^\d{4}$/.test(line.account_number) && (
+              <div className="flex justify-end text-xs text-muted-foreground tabular-nums pt-0.5">
+                {accountBalances[line.account_number] === null || accountBalances[line.account_number] === undefined ? (
+                  <Skeleton className="h-3 w-20" />
+                ) : (
+                  <span>
+                    {t('saldo_label')} {formatCurrency(accountBalances[line.account_number] as number)}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         ))}
 
         {/* Mobile totals */}
         <div className="flex justify-between items-center px-1 pt-2 font-semibold text-sm">
-          <span>Summa</span>
+          <span>{t('sum')}</span>
           <div className="flex gap-4">
             <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              D: {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+              {t('sum_d', { amount: totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
             </span>
             <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              K: {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+              {t('sum_k', { amount: totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
             </span>
           </div>
         </div>
@@ -713,7 +800,7 @@ export default function JournalEntryForm({
             className="flex-1"
           >
             <Plus className="h-3 w-3 mr-1" />
-            Lägg till rad
+            {t('add_line')}
           </Button>
           <BookingTemplatePicker
             onApply={handleTemplateApply}
@@ -727,10 +814,11 @@ export default function JournalEntryForm({
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b text-left">
-              <th className="py-2 w-28">Konto</th>
-              <th className="py-2 px-1">Beskrivning</th>
-              <th className="py-2 w-32 px-1 text-right">Debet</th>
-              <th className="py-2 w-32 px-1 text-right">Kredit</th>
+              <th className="py-2 w-28">{t('col_account')}</th>
+              <th className="py-2 px-1">{t('col_description')}</th>
+              <th className="py-2 w-32 px-1 text-right">{t('col_debit')}</th>
+              <th className="py-2 w-32 px-1 text-right">{t('col_credit')}</th>
+              <th className="py-2 w-28 px-1 text-right">{t('col_saldo')}</th>
               <th className="py-2 w-10"></th>
             </tr>
           </thead>
@@ -748,7 +836,7 @@ export default function JournalEntryForm({
                   <Input
                     value={line.line_description}
                     onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-                    placeholder="Radtext..."
+                    placeholder={t('line_description_placeholder')}
                     className="h-8"
                   />
                 </td>
@@ -776,6 +864,16 @@ export default function JournalEntryForm({
                     step="0.01"
                   />
                 </td>
+                <td className="py-1.5 px-1 text-right tabular-nums text-muted-foreground">
+                  {(() => {
+                    if (!/^\d{4}$/.test(line.account_number)) return null
+                    const bal = accountBalances[line.account_number]
+                    if (bal === null || bal === undefined) {
+                      return <Skeleton className="h-4 w-20 ml-auto" />
+                    }
+                    return formatCurrency(bal)
+                  })()}
+                </td>
                 <td className="py-1.5">
                   <Button
                     variant="ghost"
@@ -793,7 +891,7 @@ export default function JournalEntryForm({
           <tfoot>
             <tr className="font-semibold">
               <td colSpan={2} className="py-2 px-1">
-                Summa
+                {t('sum')}
               </td>
               <td
                 className={`py-2 px-1 text-right ${
@@ -810,6 +908,7 @@ export default function JournalEntryForm({
                 {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </td>
               <td></td>
+              <td></td>
             </tr>
           </tfoot>
         </table>
@@ -821,7 +920,7 @@ export default function JournalEntryForm({
             onClick={addLine}
           >
             <Plus className="h-3 w-3 mr-1" />
-            Lägg till rad
+            {t('add_line')}
           </Button>
           <BookingTemplatePicker
             onApply={handleTemplateApply}
@@ -833,7 +932,7 @@ export default function JournalEntryForm({
       {/* Document attachments */}
       {!embedded && (
         <div>
-          <Label className="mb-2 block">Underlag</Label>
+          <Label className="mb-2 block">{t('attachments_label')}</Label>
           <DocumentUploadZone
             files={uploadedFiles}
             onFilesChange={setUploadedFiles}
@@ -843,7 +942,7 @@ export default function JournalEntryForm({
 
       {!isBalanced && totalDebit > 0 && (
         <p className="text-sm text-destructive">
-          Differens: {formatCurrency(Math.abs(totalDebit - totalCredit))}
+          {t('difference', { amount: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
         </p>
       )}
 
@@ -853,31 +952,31 @@ export default function JournalEntryForm({
             variant="outline"
             onClick={handleSaveDraft}
             disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : 'Sparar som utkast utan att tilldela verifikationsnummer'}
+            title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
           >
             {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Spara som utkast
+            {t('save_draft')}
           </Button>
           <Button
             onClick={handleReview}
             disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+            title={!canWrite ? t('read_only_tooltip') : undefined}
           >
             {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-            Granska & skapa
+            {t('review_and_create')}
           </Button>
         </div>
         {(!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
           <div className="text-xs text-muted-foreground space-y-0.5 text-right">
-            {!description && <p>Ange en beskrivning</p>}
-            {!selectedPeriod && <p>Välj en räkenskapsperiod</p>}
-            {periodMismatch === 'no_period' && <p>Skapa ett räkenskapsår som matchar datumet</p>}
-            {isUploading && <p>Vänta tills filerna laddats upp</p>}
+            {!description && <p>{t('validation_description')}</p>}
+            {!selectedPeriod && <p>{t('validation_period')}</p>}
+            {periodMismatch === 'no_period' && <p>{t('validation_no_matching_period')}</p>}
+            {isUploading && <p>{t('validation_uploading')}</p>}
             {incompleteLineCount > 0 && (
-              <p>Alla rader med belopp måste ha ett konto (och tvärtom)</p>
+              <p>{t('validation_incomplete_lines')}</p>
             )}
             {submittableLines.length < 2 && incompleteLineCount === 0 && (
-              <p>Minst två rader med konto och belopp krävs</p>
+              <p>{t('validation_min_lines')}</p>
             )}
           </div>
         )}
@@ -897,10 +996,10 @@ export default function JournalEntryForm({
         isSubmitting={isSubmitting}
         title={
           !embedded && nextVoucherNumber != null
-            ? `Granska verifikation (${voucherSeries}${nextVoucherNumber})`
-            : 'Granska verifikation'
+            ? t('review_title_with_voucher', { voucher: `${voucherSeries}${nextVoucherNumber}` })
+            : t('review_title')
         }
-        warningText={embedded ? '' : 'En verifikation skapas och kan inte ändras efteråt. Korrigeringar görs genom storno.'}
+        warningText={embedded ? '' : t('review_warning')}
       >
         <JournalEntryReviewContent
           periodName={periods.find((p) => p.id === selectedPeriod)?.name || ''}
@@ -926,12 +1025,12 @@ export default function JournalEntryForm({
           setShowReview(true)
         }}
         isSubmitting={false}
-        title="Underlag saknas"
-        warningText="Inget underlag bifogat. Enligt bokföringslagen (BFL 5 kap. 6-7 §§) ska varje bokföringspost ha en verifikation som underlag. Du kan bifoga underlag nu eller fortsätta utan."
-        confirmLabel="Bokför utan underlag"
+        title={t('no_doc_dialog_title')}
+        warningText={t('no_doc_dialog_warning')}
+        confirmLabel={t('no_doc_confirm')}
       >
         <div className="text-sm text-muted-foreground">
-          Granska uppgifterna innan du bekräftar.
+          {t('no_doc_body')}
         </div>
       </ConfirmationDialog>
 
@@ -952,7 +1051,7 @@ export default function JournalEntryForm({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Ny verifikation</CardTitle>
+        <CardTitle>{t('card_title')}</CardTitle>
       </CardHeader>
       <CardContent>
         {formContent}

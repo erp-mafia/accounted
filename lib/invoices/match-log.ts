@@ -6,6 +6,7 @@ type MatchAction =
   | 'auto_suggested'
   | 'suggestion_cleared'
   | 'storno_conflict_resolved'
+  | 'linked_to_existing_voucher'
 
 /**
  * Log a payment match event to the append-only audit trail.

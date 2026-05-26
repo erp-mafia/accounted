@@ -159,7 +159,9 @@ describe('POST /bankid/complete', () => {
       )
       expect(admin.updateUserById).toHaveBeenCalledWith(
         'new-user-uuid',
-        expect.objectContaining({ app_metadata: { bankid_linked: true } })
+        expect.objectContaining({
+          app_metadata: { bankid_linked: true, has_password: false },
+        })
       )
     })
   })

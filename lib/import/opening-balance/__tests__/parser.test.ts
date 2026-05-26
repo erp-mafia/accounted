@@ -161,6 +161,59 @@ describe('parseOpeningBalanceFile', () => {
     expect(result.warnings.some((w) => w.includes('1930'))).toBe(true)
   })
 
+  it('preserves validation_errors from every duplicated row when merging', async () => {
+    const XLSX = await import('xlsx')
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const wb = XLSX.utils.book_new()
+    // Two rows for account 3001 (a P&L class warning fires on each) plus a
+    // balance-sheet row to keep totals reachable. Both copies of 3001 should
+    // contribute their warning into the merged row's validation_errors so it
+    // isn't silently lost.
+    const data = [
+      ['Kontonr', 'Debet', 'Kredit'],
+      ['3001', 100, 0],
+      ['3001', 200, 0],
+      ['2099', 0, 300],
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+
+    const merged = result.rows.find((r) => r.account_number === '3001')
+    expect(merged).toBeDefined()
+    expect(merged!.debit_amount).toBe(300)
+    expect(merged!.validation_errors.length).toBeGreaterThan(0)
+    expect(merged!.validation_errors.some((e) => e.includes('resultatkonto'))).toBe(true)
+  })
+
+  it('merges duplicates that differ only in whitespace / formatting', async () => {
+    const XLSX = await import('xlsx')
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const wb = XLSX.utils.book_new()
+    // Same account written three ways: plain, padded with NBSP, with a dot
+    const data = [
+      ['Kontonr', 'Debet', 'Kredit'],
+      ['1930', 10000, 0],
+      [' 1930 ', 20000, 0],
+      ['1.930', 30000, 0],
+      ['2099', 0, 60000],
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+
+    const matches = result.rows.filter((r) => r.account_number === '1930')
+    expect(matches.length).toBe(1)
+    expect(matches[0].debit_amount).toBe(60000)
+    expect(result.rows.length).toBe(2)
+  })
+
   it('skips zero-amount rows', async () => {
     const XLSX = await import('xlsx')
     const { parseOpeningBalanceFile } = await import('../parser')

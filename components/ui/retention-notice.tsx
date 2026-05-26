@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
@@ -21,41 +22,37 @@ interface RetentionNoticeProps {
  * hides it from the UI and anonymizes PII where applicable.
  */
 export function RetentionNotice({ variant, className }: RetentionNoticeProps) {
+  const t = useTranslations('retention_notice')
   const { appName } = getBranding()
   const copy =
     variant === 'company'
       ? {
-          title: 'Bokföringen behålls i 7 år',
+          title: t('company_title'),
           body: (
             <>
-              Enligt bokföringslagen (BFL 7 kap. 2§) sparas räkenskapsinformation i 7 år.
-              När du raderar företaget döljs det i {appName.toLowerCase()}, men verifikationer, dokument och
-              bokföring behålls säkert tills lagkravet löpt ut. Du kan{' '}
+              {t('company_body_prefix', { appName: appName.toLowerCase() })}
               <Link
                 href="/settings/backup"
                 className="underline underline-offset-2 hover:text-foreground"
               >
-                ladda ner en säkerhetsbackup
-              </Link>{' '}
-              innan du fortsätter.
+                {t('company_body_link')}
+              </Link>
+              {t('company_body_suffix')}
             </>
           ),
         }
       : {
-          title: 'Kontoraderingen är permanent',
+          title: t('account_title'),
           body: (
             <>
-              Ditt konto avidentifieras och du loggas ut från alla enheter.
-              Räkenskapsinformation från företag du ägt behålls säkert i 7 år enligt BFL 7
-              kap. 2§. Du kan inte skapa ett nytt konto med samma e-postadress — kontakta
-              support om du vill återaktivera kontot i framtiden. Ladda gärna ner en{' '}
+              {t('account_body_prefix')}
               <Link
                 href="/settings/backup"
                 className="underline underline-offset-2 hover:text-foreground"
               >
-                säkerhetsbackup
-              </Link>{' '}
-              innan du fortsätter.
+                {t('account_body_link')}
+              </Link>
+              {t('account_body_suffix')}
             </>
           ),
         }

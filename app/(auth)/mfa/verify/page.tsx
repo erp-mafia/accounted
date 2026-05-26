@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,6 +12,8 @@ import { Loader2, ShieldCheck, LogOut } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
 
 export default function MfaVerifyPage() {
+  const t = useTranslations('mfa')
+  const tCommon = useTranslations('common')
   const [code, setCode] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [factorId, setFactorId] = useState<string | null>(null)
@@ -29,7 +32,6 @@ export default function MfaVerifyPage() {
       if (verifiedFactor) {
         setFactorId(verifiedFactor.id)
       } else {
-        // No MFA factor enrolled — shouldn't be here
         router.push('/')
       }
     }
@@ -38,7 +40,6 @@ export default function MfaVerifyPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Lockout countdown timer
   useEffect(() => {
     if (!lockoutUntil) return
     const tick = () => {
@@ -64,8 +65,8 @@ export default function MfaVerifyPage() {
 
       if (challengeError) {
         toast({
-          title: 'Verifiering misslyckades',
-          description: 'Kunde inte starta verifiering. Försök igen.',
+          title: t('verify_failed_title'),
+          description: t('verify_challenge_failed_description'),
           variant: 'destructive',
         })
         setIsLoading(false)
@@ -82,7 +83,6 @@ export default function MfaVerifyPage() {
         const attempts = failedAttempts + 1
         setFailedAttempts(attempts)
 
-        // Exponential backoff after 3 failed attempts: 5s, 15s, 30s
         if (attempts >= 3) {
           const delays = [5_000, 15_000, 30_000]
           const delay = delays[Math.min(attempts - 3, delays.length - 1)]
@@ -90,8 +90,8 @@ export default function MfaVerifyPage() {
         }
 
         toast({
-          title: 'Fel kod',
-          description: 'Kontrollera koden och försök igen.',
+          title: t('wrong_code_title'),
+          description: t('wrong_code_description'),
           variant: 'destructive',
         })
         setCode('')
@@ -100,7 +100,6 @@ export default function MfaVerifyPage() {
         return
       }
 
-      // Check for pending invite token
       const cookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
       const inviteToken = cookieMatch?.[1]
 
@@ -127,8 +126,8 @@ export default function MfaVerifyPage() {
       router.refresh()
     } catch {
       toast({
-        title: 'Verifiering misslyckades',
-        description: 'Ett oväntat fel uppstod. Försök igen.',
+        title: t('verify_failed_title'),
+        description: t('unexpected_error'),
         variant: 'destructive',
       })
     } finally {
@@ -150,16 +149,16 @@ export default function MfaVerifyPage() {
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">Tvåfaktorsverifiering</h1>
+          <h1 className="text-2xl font-medium tracking-tight">{t('verify_title')}</h1>
           <p className="text-muted-foreground text-sm mt-2">
-            Ange den 6-siffriga koden från din autentiseringsapp
+            {t('verify_subtitle_full')}
           </p>
         </div>
 
         <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
           <form onSubmit={handleVerify} className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="code">Verifieringskod</Label>
+              <Label htmlFor="code">{t('verify_code_label')}</Label>
               <Input
                 ref={inputRef}
                 id="code"
@@ -184,12 +183,12 @@ export default function MfaVerifyPage() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Verifierar...
+                  {t('verifying')}
                 </>
               ) : lockoutUntil ? (
-                `Vänta ${lockoutRemaining}s`
+                t('wait_seconds', { seconds: lockoutRemaining })
               ) : (
-                'Verifiera'
+                t('verify_button')
               )}
             </Button>
           </form>
@@ -201,13 +200,13 @@ export default function MfaVerifyPage() {
           onClick={handleLogout}
         >
           <LogOut className="mr-2 h-4 w-4" />
-          Logga ut
+          {tCommon('logout')}
         </Button>
 
         <p className="text-xs text-muted-foreground text-center mt-4">
-          Förlorat din autentiseringsapp?{' '}
-          <SupportLink variant="muted" subject="MFA-problem — kan inte logga in" className="inline">
-            Kontakta support
+          {t('lost_authenticator')}{' '}
+          <SupportLink variant="muted" subject="MFA — cannot sign in" className="inline">
+            {t('contact_support')}
           </SupportLink>
         </p>
       </div>

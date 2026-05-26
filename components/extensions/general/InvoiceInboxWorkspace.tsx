@@ -52,6 +52,12 @@ interface InboxItem {
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
   error_message: string | null
+  // True when AI extraction was skipped — either because the upload caller
+  // passed skip_extraction=true (MCP/agent path) or because the server's
+  // page-count gate skipped a PDF above the auto-extract limit (issue #553).
+  // Distinct from status='error' (extraction failed) and from extracted_data
+  // having empty fields (extraction ran but found nothing).
+  extraction_skipped: boolean
   // Set client-side only while a manual upload is in flight. Replaced by a
   // real server-side row once the AI extraction completes.
   isPlaceholder?: boolean
@@ -359,6 +365,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       created_supplier_invoice_id: null,
       created_journal_entry_id: null,
       error_message: null,
+      extraction_skipped: false,
       isPlaceholder: true,
       fileName: file.name,
     }
@@ -377,7 +384,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Uppladdning misslyckades')
-      toast({ title: 'Dokument uppladdat', description: file.name })
+      if (json.data?.extraction_skipped) {
+        const pages = json.data?.page_count
+        toast({
+          title: 'Dokument uppladdat',
+          description: pages
+            ? `Stort dokument (${pages} sidor) — AI-tolkning skippad. Du kan koppla det till en transaktion eller skapa leverantörsfaktura manuellt.`
+            : 'AI-tolkning skippad. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.',
+        })
+      } else {
+        toast({ title: 'Dokument uppladdat', description: file.name })
+      }
       setItems((prev) => prev.filter((it) => it.id !== tempId))
       await fetchItems()
       if (options.autoSelect && json.data?.inbox_item_id) {
@@ -980,6 +997,11 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
+          ) : item.extraction_skipped ? (
+            <span className="flex items-center gap-1.5 min-w-0">
+              <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+            </span>
           ) : (
             <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
           )}
@@ -1310,80 +1332,15 @@ function FieldsRail({
   const isResolved = isProcessed || isBookedDirectly
   const [isUnmatchingTx, setIsUnmatchingTx] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
-  const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
 
-  // "Skapa leverantör" — surface when extraction caught a supplier name
-  // but no existing supplier matched. Frees the user from navigating to
-  // /suppliers/new manually for the very common "first invoice from this
-  // vendor" case.
+  // Surface a quiet hint when extraction caught a supplier name but no existing
+  // supplier matched. The actual creation flow lives on the leverantörsfaktura
+  // form (Skapa & välj), so we don't render a separate button here.
   const extractedSupplierName = data?.supplier?.name?.trim() || null
-  const showCreateSupplierCta =
+  const showNoMatchHint =
     !isResolved &&
     !item.matched_supplier_id &&
     !!extractedSupplierName
-
-  const handleCreateSupplier = async () => {
-    if (!extractedSupplierName) return
-    setIsCreatingSupplier(true)
-    try {
-      // Heuristic supplier_type: any extracted VAT number starting with "SE"
-      // (or a 10-digit org_number) → Swedish; otherwise default to
-      // non_eu_business. The user can correct on the supplier detail page.
-      const vat = data?.supplier?.vatNumber?.trim() || ''
-      const org = data?.supplier?.orgNumber?.trim() || ''
-      const supplierType =
-        vat.toUpperCase().startsWith('SE') || /^\d{6}-?\d{4}$/.test(org)
-          ? 'swedish_business'
-          : 'non_eu_business'
-
-      const createRes = await fetch('/api/suppliers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: extractedSupplierName,
-          supplier_type: supplierType,
-          org_number: org || undefined,
-          vat_number: vat || undefined,
-          address_line1: data?.supplier?.address || undefined,
-          bankgiro: data?.supplier?.bankgiro || undefined,
-          plusgiro: data?.supplier?.plusgiro || undefined,
-        }),
-      })
-      const createJson = await createRes.json().catch(() => ({}))
-      if (!createRes.ok || !createJson?.data?.id) {
-        toast({
-          title: 'Kunde inte skapa leverantör',
-          description: createJson?.error || 'Försök igen.',
-          variant: 'destructive',
-        })
-        return
-      }
-
-      // Link the new supplier back to the inbox item so the next action
-      // (Skapa leverantörsfaktura) prefills correctly.
-      const matchRes = await fetch(
-        `/api/extensions/ext/invoice-inbox/items/${item.id}/match-supplier`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ supplier_id: createJson.data.id }),
-        },
-      )
-      if (!matchRes.ok) {
-        const matchErr = await matchRes.json().catch(() => ({}))
-        toast({
-          title: 'Leverantör skapad, men inte kopplad',
-          description: matchErr?.error || 'Välj leverantören manuellt på leverantörsfakturan.',
-          variant: 'destructive',
-        })
-      } else {
-        toast({ title: 'Leverantör skapad', description: extractedSupplierName })
-      }
-      await onRetryRequested()
-    } finally {
-      setIsCreatingSupplier(false)
-    }
-  }
 
   const handleRetry = async () => {
     setIsRetrying(true)
@@ -1462,26 +1419,22 @@ function FieldsRail({
         </div>
       )}
 
-      {/* Skapa leverantör hint — only when no existing supplier matched */}
-      {showCreateSupplierCta && (
-        <div className="border-b bg-primary/5 px-4 py-2.5 text-xs flex items-center justify-between gap-2">
-          <span className="text-muted-foreground">
-            Ingen leverantör matchade <span className="text-foreground font-medium">{extractedSupplierName}</span>
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs shrink-0"
-            onClick={handleCreateSupplier}
-            disabled={isCreatingSupplier}
-          >
-            {isCreatingSupplier ? (
-              <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-            ) : (
-              <Plus className="h-3 w-3 mr-1.5" />
-            )}
-            Skapa leverantör
-          </Button>
+      {/* Hint only — creation happens on the leverantörsfaktura form via "Skapa & välj" */}
+      {showNoMatchHint && (
+        <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+          Ingen leverantör matchade{' '}
+          <span className="text-foreground font-medium">{extractedSupplierName}</span>
+          {' — leverantören skapas när du klickar Skapa leverantörsfaktura.'}
+        </div>
+      )}
+
+      {/* Skipped-extraction hint: explains the empty fields and points the
+          user to the manual paths (transaction link or supplier invoice). */}
+      {item.extraction_skipped && !isResolved && (
+        <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+          AI-tolkning skippades p.g.a. dokumentets storlek (fler än 3 sidor).
+          Du kan koppla dokumentet till en transaktion eller skapa
+          leverantörsfaktura manuellt.
         </div>
       )}
 
@@ -1688,15 +1641,15 @@ const FIELD_DEFS: FieldDef[] = [
   { key: 'supplier.name', label: 'Leverantör', type: 'text' },
   { key: 'supplier.orgNumber', label: 'Org.nr', type: 'text' },
   { key: 'supplier.vatNumber', label: 'VAT-nr', type: 'text' },
+  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
+  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
+  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
   { key: 'supplier.bankgiro', label: 'Bankgiro', type: 'text' },
   { key: 'supplier.plusgiro', label: 'Plusgiro', type: 'text' },
   { key: 'invoice.invoiceNumber', label: 'Fakturanr', type: 'text' },
   { key: 'invoice.paymentReference', label: 'OCR/Referens', type: 'text' },
   { key: 'invoice.invoiceDate', label: 'Fakturadatum', type: 'date' },
   { key: 'invoice.dueDate', label: 'Förfallodatum', type: 'date' },
-  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
-  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
-  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
 ]
 
 function readField(data: InvoiceExtractionResult, key: FieldKey): string {

@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
@@ -17,6 +18,7 @@ interface BankIdIdentity {
 }
 
 export function BankIdSettings() {
+  const t = useTranslations('settings_bankid')
   const [identity, setIdentity] = useState<BankIdIdentity | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isLinking, setIsLinking] = useState(false)
@@ -45,20 +47,20 @@ export function BankIdSettings() {
   const handleLinkComplete = async (result: BankIdResult) => {
     if (result.error) {
       const message = result.error === 'already_linked'
-        ? 'Detta BankID ar redan kopplat till ett annat konto.'
-        : 'Kunde inte koppla BankID.'
+        ? t('toast_already_linked')
+        : t('toast_link_failed')
       toast({ title: message, variant: 'destructive' })
       setIsLinking(false)
       return
     }
 
-    toast({ title: 'BankID kopplat till ditt konto' })
+    toast({ title: t('toast_linked') })
     setIsLinking(false)
     fetchIdentity()
   }
 
   const handleUnlink = async () => {
-    if (!confirm('Vill du koppla bort BankID fran ditt konto?')) return
+    if (!confirm(t('confirm_unlink'))) return
 
     setIsUnlinking(true)
     try {
@@ -66,9 +68,9 @@ export function BankIdSettings() {
       if (!res.ok) throw new Error('Unlink failed')
 
       setIdentity(null)
-      toast({ title: 'BankID bortkopplat' })
+      toast({ title: t('toast_unlinked') })
     } catch {
-      toast({ title: 'Kunde inte koppla bort BankID', variant: 'destructive' })
+      toast({ title: t('toast_unlink_failed'), variant: 'destructive' })
     } finally {
       setIsUnlinking(false)
     }
@@ -88,8 +90,8 @@ export function BankIdSettings() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Koppla BankID</CardTitle>
-          <CardDescription>Skanna QR-koden med BankID-appen</CardDescription>
+          <CardTitle className="text-base">{t('link_bankid_title')}</CardTitle>
+          <CardDescription>{t('link_bankid_description')}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center">
           <BankIdAuth mode="link" onComplete={handleLinkComplete} />
@@ -107,12 +109,10 @@ export function BankIdSettings() {
           ) : (
             <Shield className="h-4 w-4 text-muted-foreground" />
           )}
-          BankID
+          {t('title')}
         </CardTitle>
         <CardDescription>
-          {identity
-            ? 'Ditt konto ar kopplat till BankID.'
-            : 'Koppla BankID for sakrare inloggning.'}
+          {identity ? t('linked_description') : t('not_linked_description')}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -123,7 +123,7 @@ export function BankIdSettings() {
                 {identity.given_name} {identity.surname}
               </span>
               <span className="ml-2">
-                Kopplat {formatDateLong(identity.linked_at)}
+                {t('linked_on', { date: formatDateLong(identity.linked_at) })}
               </span>
             </div>
             <Button
@@ -133,7 +133,7 @@ export function BankIdSettings() {
               disabled={isUnlinking}
               className="text-destructive hover:text-destructive"
             >
-              {isUnlinking ? 'Kopplar bort...' : 'Koppla bort'}
+              {isUnlinking ? t('unlinking') : t('unlink_button')}
             </Button>
           </div>
         ) : (
@@ -141,7 +141,7 @@ export function BankIdSettings() {
             variant="outline"
             onClick={() => setIsLinking(true)}
           >
-            Koppla BankID
+            {t('link_button')}
           </Button>
         )}
       </CardContent>

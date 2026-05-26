@@ -1,18 +1,47 @@
 services:
   app:
-    image: ghcr.io/erp-mafia/gnubok:latest
+    image: ghcr.io/erp-mafia/gnubok:${IMAGE_TAG:-latest}
     env_file: .env
+    # Bound to loopback by default — put a TLS-terminating reverse proxy in
+    # front (see docker-compose.caddy.yml). Override PORT in .env to change
+    # the host port, or use the caddy overlay to remove the host binding.
     ports:
-      - "${PORT:-3000}:3000"
+      - "127.0.0.1:${PORT:-3000}:3000"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    init: true
+    # tmpfs ordering matters — the parent /app/.next must be mounted before
+    # any sub-mounts. The entrypoint cp's image-baked templates into these
+    # mounts at startup, then sed-substitutes, then chmod -R a-w.
+    #
+    # mode=750: root-owned, group-readable. The entrypoint runs as root long
+    # enough to copy templates, substitute placeholders, and chown the cache
+    # directory to nextjs:nodejs (gid 1001). nodejs group members can read
+    # the partially-substituted bundle during startup; nothing else on the
+    # host can. After chmod a-w the served files are read-only for everyone.
+    tmpfs:
+      - /tmp
+      - /app/.next:uid=0,gid=1001,mode=750,size=400m
+      - /app/public:uid=0,gid=1001,mode=750,size=200m
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 200
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 5s
-      start_period: 10s
+      start_period: 30s
+      start_interval: 5s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   cron:
     build:
@@ -26,4 +55,19 @@ services:
       - APP_URL=http://app:3000
     volumes:
       - ./docker/crontab.self-hosted:/etc/supercronic/crontab:ro
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 64m
+    pids_limit: 30
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -52,6 +53,7 @@ export default function Step2CompanyDetails({
   isSaving,
   orgNumberLocked,
 }: Step2Props) {
+  const t = useTranslations('onboarding')
   const {
     register,
     handleSubmit,
@@ -137,12 +139,12 @@ export default function Step2CompanyDetails({
             return
           }
           if (res.status === 404) {
-            setLookupError('Inget företag hittades med det organisationsnumret.')
+            setLookupError(t('step2_lookup_not_found'))
             onTicLookup?.(null)
             return
           }
           if (!res.ok) {
-            setLookupError('Kunde inte hämta företagsuppgifter. Du kan fylla i manuellt.')
+            setLookupError(t('step2_lookup_failed'))
             onTicLookup?.(null)
             return
           }
@@ -163,7 +165,7 @@ export default function Step2CompanyDetails({
         })
         .catch((err) => {
           if ((err as Error).name === 'AbortError') return
-          setLookupError('Kunde inte hämta företagsuppgifter. Du kan fylla i manuellt.')
+          setLookupError(t('step2_lookup_failed'))
           onTicLookup?.(null)
         })
         .finally(() => {
@@ -184,13 +186,13 @@ export default function Step2CompanyDetails({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Grunduppgifter</CardTitle>
+          <CardTitle>{t('step2_card_title')}</CardTitle>
           <CardDescription>
             {ticEnabled
-              ? 'Ange organisationsnummer så hämtas övriga uppgifter automatiskt.'
+              ? t('step2_card_desc_tic')
               : isAB
-                ? 'Ange bolagets registrerade namn och organisationsnummer.'
-                : 'Ange namn på din verksamhet.'}
+                ? t('step2_card_desc_ab')
+                : t('step2_card_desc_ef')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -201,11 +203,11 @@ export default function Step2CompanyDetails({
           })} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="org_number">
-                Organisationsnummer *
+                {t('step2_org_number_label')}
               </Label>
               <Input
                 id="org_number"
-                placeholder={isAB ? 'XXXXXX-XXXX' : 'ÅÅMMDD-XXXX (ditt personnummer vid EF)'}
+                placeholder={isAB ? 'XXXXXX-XXXX' : t('step2_org_number_placeholder_ef')}
                 {...register('org_number')}
                 readOnly={orgNumberLocked}
                 className={orgNumberLocked ? 'bg-muted cursor-not-allowed' : undefined}
@@ -215,13 +217,13 @@ export default function Step2CompanyDetails({
               )}
               <p className="text-xs text-muted-foreground">
                 {isAB
-                  ? 'Obligatoriskt för aktiebolag'
-                  : 'Vid enskild firma är orgnummer samma som ditt personnummer'}
+                  ? t('step2_org_help_ab')
+                  : t('step2_org_help_ef')}
               </p>
               {ticEnabled && isLooking && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Hämtar företagsuppgifter...
+                  {t('step2_fetching_details')}
                 </div>
               )}
               {ticEnabled && lookupDone && !lookupDone.isCeased && (
@@ -233,7 +235,7 @@ export default function Step2CompanyDetails({
               {ticEnabled && lookupDone?.isCeased && (
                 <div className="flex items-center gap-2 text-sm text-destructive">
                   <AlertTriangle className="h-3.5 w-3.5" />
-                  {lookupDone.companyName} — företaget är avregistrerat
+                  {t('step2_ceased_inline', { companyName: lookupDone.companyName })}
                 </div>
               )}
               {ticEnabled && lookupError && (
@@ -243,7 +245,7 @@ export default function Step2CompanyDetails({
                 <div className="flex items-start gap-2 text-sm text-destructive">
                   <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
                   <span>
-                    Det här företaget finns redan i {branding.appName.toLowerCase()}. Be en befintlig administratör att bjuda in dig.
+                    {t('step2_company_exists', { appName: branding.appName.toLowerCase() })}
                   </span>
                 </div>
               )}
@@ -251,11 +253,11 @@ export default function Step2CompanyDetails({
 
             <div className="space-y-2">
               <Label htmlFor="company_name">
-                {isAB ? 'Företagsnamn' : 'Verksamhetsnamn (Eller ditt namn vid EF)'} *
+                {isAB ? t('step2_company_name_ab') : t('step2_company_name_ef')}
               </Label>
               <Input
                 id="company_name"
-                placeholder={isAB ? 'AB Företaget' : 'Alices Konsultverksamhet'}
+                placeholder={isAB ? t('step2_company_name_placeholder_ab') : t('step2_company_name_placeholder_ef')}
                 {...register('company_name')}
               />
               {errors.company_name && (
@@ -264,21 +266,21 @@ export default function Step2CompanyDetails({
             </div>
 
             <div className="pt-4 border-t">
-              <h3 className="font-medium mb-4">Adress (för fakturor)</h3>
+              <h3 className="font-medium mb-4">{t('step2_address_heading')}</h3>
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="address_line1">Gatuadress</Label>
+                  <Label htmlFor="address_line1">{t('step2_street_address')}</Label>
                   <Input
                     id="address_line1"
-                    placeholder="Storgatan 1"
+                    placeholder={t('step2_street_placeholder')}
                     {...register('address_line1')}
                   />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="postal_code">Postnummer</Label>
+                    <Label htmlFor="postal_code">{t('step2_postal_code')}</Label>
                     <Input
                       id="postal_code"
                       placeholder="123 45"
@@ -286,7 +288,7 @@ export default function Step2CompanyDetails({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="city">Ort</Label>
+                    <Label htmlFor="city">{t('step2_city')}</Label>
                     <Input
                       id="city"
                       placeholder="Stockholm"
@@ -306,7 +308,7 @@ export default function Step2CompanyDetails({
                 className="w-full sm:w-auto"
               >
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                Tillbaka
+                {t('back')}
               </Button>
               <Button
                 type="submit"
@@ -316,11 +318,11 @@ export default function Step2CompanyDetails({
                 {isSaving ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sparar...
+                    {t('saving')}
                   </>
                 ) : (
                   <>
-                    Fortsätt
+                    {t('continue')}
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </>
                 )}

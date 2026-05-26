@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -209,15 +210,16 @@ const glossaryTerms: GlossaryTerm[] = [
 ]
 
 const categoryConfig = {
-  skatt: { label: 'Skatt', icon: Calculator, color: 'bg-orange-500/10 text-orange-600' },
-  moms: { label: 'Moms', icon: Receipt, color: 'bg-blue-500/10 text-blue-600' },
-  faktura: { label: 'Faktura', icon: FileText, color: 'bg-success/10 text-success' },
-  bokföring: { label: 'Bokföring', icon: BookOpen, color: 'bg-purple-500/10 text-purple-600' },
-  bank: { label: 'Bank', icon: Building2, color: 'bg-pink-500/10 text-pink-600' },
-  företag: { label: 'Företag', icon: Building2, color: 'bg-cyan-500/10 text-cyan-600' },
+  skatt: { labelKey: 'category_skatt', icon: Calculator, color: 'bg-orange-500/10 text-orange-600' },
+  moms: { labelKey: 'category_moms', icon: Receipt, color: 'bg-blue-500/10 text-blue-600' },
+  faktura: { labelKey: 'category_faktura', icon: FileText, color: 'bg-success/10 text-success' },
+  bokföring: { labelKey: 'category_bokforing', icon: BookOpen, color: 'bg-purple-500/10 text-purple-600' },
+  bank: { labelKey: 'category_bank', icon: Building2, color: 'bg-pink-500/10 text-pink-600' },
+  företag: { labelKey: 'category_foretag', icon: Building2, color: 'bg-cyan-500/10 text-cyan-600' },
 }
 
 function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {
+  const t = useTranslations('help')
   const config = categoryConfig[term.category]
   const CategoryIcon = config.icon
 
@@ -265,7 +267,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
 
             {term.relatedTerms && term.relatedTerms.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-muted-foreground">Relaterat:</span>
+                <span className="text-xs text-muted-foreground">{t('related_label')}</span>
                 {term.relatedTerms.map((related) => (
                   <Badge key={related} variant="outline" className="text-xs">
                     {related}
@@ -276,7 +278,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
 
             {term.skatteverketUrl && (
               <HelpLink href={term.skatteverketUrl}>
-                Läs mer på Skatteverket
+                {t('read_more_skv')}
                 <ExternalLink className="h-3 w-3" />
               </HelpLink>
             )}
@@ -288,6 +290,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
 }
 
 export default function HelpPage() {
+  const t = useTranslations('help')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set())
@@ -329,8 +332,8 @@ export default function HelpPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Hjälp & Ordlista"
-        description="Förklaringar av skatte- och bokföringstermer på ren svenska."
+        title={t('title')}
+        description={t('subtitle')}
       />
 
       {/* Search */}
@@ -338,7 +341,7 @@ export default function HelpPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           type="search"
-          placeholder="Sök efter term..."
+          placeholder={t('search_placeholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-9"
@@ -356,7 +359,7 @@ export default function HelpPage() {
               : 'bg-secondary text-muted-foreground hover:text-foreground'
           )}
         >
-          Alla
+          {t('filter_all')}
         </button>
         {Object.entries(categoryConfig).map(([key, config]) => (
           <button
@@ -369,7 +372,7 @@ export default function HelpPage() {
                 : 'bg-secondary text-muted-foreground hover:text-foreground'
             )}
           >
-            {config.label}
+            {t(config.labelKey)}
           </button>
         ))}
       </div>
@@ -381,7 +384,7 @@ export default function HelpPage() {
             <CardContent className="py-12 text-center">
               <Search className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
               <p className="text-muted-foreground">
-                Inga termer hittades för &quot;{searchQuery}&quot;
+                {t('no_results', { query: searchQuery })}
               </p>
             </CardContent>
           </Card>
@@ -400,8 +403,8 @@ export default function HelpPage() {
       {/* Document templates */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Dokument & Mallar</CardTitle>
-          <CardDescription>Lagstadgade mallar för din bokföring — ladda ner, fyll i och spara</CardDescription>
+          <CardTitle className="text-lg">{t('templates_title')}</CardTitle>
+          <CardDescription>{t('templates_subtitle')}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -438,7 +441,7 @@ export default function HelpPage() {
       {/* External resources */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Externa resurser</CardTitle>
+          <CardTitle className="text-lg">{t('external_resources_title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -475,10 +478,10 @@ export default function HelpPage() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Mail className="h-5 w-5 text-muted-foreground" />
-            <CardTitle>Behöver du mer hjälp?</CardTitle>
+            <CardTitle>{t('support_title')}</CardTitle>
           </div>
           <CardDescription>
-            Hittar du inte svaret? Kontakta oss så hjälper vi dig.
+            {t('support_subtitle')}
           </CardDescription>
         </CardHeader>
         <CardContent>

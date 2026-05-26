@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FileText, ImageIcon, Download, ChevronDown, ChevronUp, Plus } from 'lucide-react'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
@@ -43,6 +44,7 @@ export default function JournalEntryAttachments({
   journalEntryId,
   onCountChange,
 }: JournalEntryAttachmentsProps) {
+  const t = useTranslations('journal_attachments')
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
@@ -122,7 +124,7 @@ export default function JournalEntryAttachments({
   if (loading) {
     return (
       <div className="py-2 text-sm text-muted-foreground">
-        Laddar underlag...
+        {t('loading')}
       </div>
     )
   }
@@ -131,7 +133,7 @@ export default function JournalEntryAttachments({
     <div className="border-t pt-3 mt-3">
       <div className="flex items-center justify-between mb-2">
         <h4 className="text-sm font-medium">
-          Underlag {documents.length > 0 && `(${documents.length})`}
+          {t('title')} {documents.length > 0 && `(${documents.length})`}
         </h4>
         <Button
           variant="outline"
@@ -140,7 +142,7 @@ export default function JournalEntryAttachments({
           onClick={() => setShowUpload(!showUpload)}
         >
           <Plus className="h-3 w-3 mr-1" />
-          Lägg till underlag
+          {t('add')}
         </Button>
       </div>
 
@@ -159,7 +161,7 @@ export default function JournalEntryAttachments({
       {/* Document list */}
       {documents.length === 0 && !showUpload ? (
         <p className="text-sm text-muted-foreground py-1">
-          Inga underlag bifogade.
+          {t('empty')}
         </p>
       ) : (
         <div className="space-y-1">
@@ -199,7 +201,7 @@ export default function JournalEntryAttachments({
                   size="sm"
                   className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
                   onClick={() => handleDownload(doc.id)}
-                  title="Ladda ner"
+                  title={t('download')}
                 >
                   <Download className="h-3 w-3" />
                 </Button>
@@ -209,7 +211,7 @@ export default function JournalEntryAttachments({
               {expandedDoc === doc.id && doc.download_url && isImageType(doc.mime_type) && (
                 <div className="px-2 py-2">
                   <img
-                    src={doc.download_url}
+                    src={`/api/documents/${doc.id}/inline`}
                     alt={doc.file_name}
                     className="max-h-48 rounded-lg object-contain"
                   />
@@ -220,7 +222,7 @@ export default function JournalEntryAttachments({
               {expandedDoc === doc.id && doc.download_url && isPdfType(doc.mime_type) && (
                 <div className="px-2 py-2">
                   <iframe
-                    src={doc.download_url}
+                    src={`/api/documents/${doc.id}/inline`}
                     title={doc.file_name}
                     className="w-full h-[60vh] rounded-lg border"
                   />

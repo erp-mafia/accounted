@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import Image from 'next/image'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -25,6 +26,7 @@ export default function InvitePage() {
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
+  const t = useTranslations('invite')
   const token = params.token as string
 
   const [isLoading, setIsLoading] = useState(true)
@@ -48,20 +50,20 @@ export default function InvitePage() {
 
         const data = await inviteRes.json()
         if (!inviteRes.ok) {
-          setError(data.error || 'Inbjudan är ogiltig.')
+          setError(data.error || t('invalid_invite'))
           return
         }
 
         setInvite(data.data)
         setCurrentUserEmail(sessionRes.data.user?.email ?? null)
       } catch {
-        setError('Kunde inte ladda inbjudan.')
+        setError(t('load_failed'))
       } finally {
         setIsLoading(false)
       }
     }
     loadInvite()
-  }, [token])
+  }, [token, t])
 
   const secureCookieFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; secure' : ''
 
@@ -105,8 +107,8 @@ export default function InvitePage() {
 
       if (!res.ok) {
         toast({
-          title: 'Kunde inte gå med',
-          description: body.error || 'Ett oväntat fel uppstod. Försök igen.',
+          title: t('join_failed_title'),
+          description: body.error || t('unexpected_error'),
           variant: 'destructive',
         })
         setIsJoining(false)
@@ -114,10 +116,10 @@ export default function InvitePage() {
       }
 
       toast({
-        title: 'Välkommen!',
+        title: t('welcome_title'),
         description: invite?.companyName
-          ? `Du är nu medlem i ${invite.companyName}.`
-          : 'Du är nu medlem.',
+          ? t('joined_named', { companyName: invite.companyName })
+          : t('joined_generic'),
       })
       // Full reload so the middleware re-resolves company context from the
       // updated user_preferences.active_company_id.
@@ -125,8 +127,8 @@ export default function InvitePage() {
     } catch (err) {
       console.error('[invite] join failed:', err)
       toast({
-        title: 'Kunde inte gå med',
-        description: 'Ett oväntat fel uppstod. Försök igen.',
+        title: t('join_failed_title'),
+        description: t('unexpected_error'),
         variant: 'destructive',
       })
       setIsJoining(false)
@@ -177,7 +179,7 @@ export default function InvitePage() {
           </div>
           <div className="animate-fade-in">
             <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight leading-[1.1]">
-              {error ? 'Ogiltig inbjudan' : 'Du har blivit inbjuden'}
+              {error ? t('header_invalid') : t('header_invited')}
             </h1>
           </div>
         </div>
@@ -193,13 +195,13 @@ export default function InvitePage() {
                   <div>
                     <p className="font-medium">{error}</p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Kontakta personen som bjöd in dig för en ny inbjudan.
+                      {t('contact_inviter')}
                     </p>
                     <Link
                       href="/login"
                       className="text-sm text-primary hover:underline mt-3 inline-block"
                     >
-                      Gå till inloggning
+                      {t('go_to_login')}
                     </Link>
                   </div>
                 </div>
@@ -209,9 +211,9 @@ export default function InvitePage() {
                 <div className="flex items-start gap-3">
                   <AlertCircle className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-medium">Inbjudan har gått ut</p>
+                    <p className="font-medium">{t('expired_title')}</p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Be personen som bjöd in dig att skicka en ny inbjudan.
+                      {t('expired_description')}
                     </p>
                   </div>
                 </div>
@@ -230,10 +232,13 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        Du har bjudits in som medlem till detta företag.
+                        {t('invited_to_company')}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Inloggad som <strong>{currentUserEmail}</strong>.
+                        {t.rich('logged_in_as', {
+                          email: currentUserEmail ?? '',
+                          strong: (chunks) => <strong>{chunks}</strong>,
+                        })}
                       </p>
                     </div>
                   </div>
@@ -248,10 +253,10 @@ export default function InvitePage() {
                   {isJoining ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Går med…
+                      {t('joining')}
                     </>
                   ) : (
-                    <>Gå med i {invite.companyName}</>
+                    <>{t('join_named', { companyName: invite.companyName ?? '' })}</>
                   )}
                 </Button>
               </div>
@@ -266,18 +271,21 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        Inbjudan är skickad till <strong>{invite.email}</strong>, men
-                        du är inloggad som <strong>{currentUserEmail}</strong>.
+                        {t.rich('wrong_account', {
+                          invitedEmail: invite.email,
+                          currentEmail: currentUserEmail ?? '',
+                          strong: (chunks) => <strong>{chunks}</strong>,
+                        })}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Logga ut och logga in igen med rätt konto för att gå med.
+                        {t('signout_then_login')}
                       </p>
                     </div>
                   </div>
                 </Card>
 
                 <Button size="lg" className="w-full" onClick={handleSignOutAndRetry}>
-                  Logga ut och byt konto
+                  {t('signout_and_switch')}
                 </Button>
               </div>
             ) : invite?.alreadyHasAccount ? (
@@ -291,18 +299,21 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        Du har bjudits in som medlem till detta företag.
+                        {t('invited_to_company')}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
-                        <strong>{invite.email}</strong> har redan ett konto på {branding.appName.toLowerCase()}.
-                        Logga in för att gå med.
+                        {t.rich('existing_account', {
+                          email: invite.email,
+                          appName: branding.appName.toLowerCase(),
+                          strong: (chunks) => <strong>{chunks}</strong>,
+                        })}
                       </p>
                     </div>
                   </div>
                 </Card>
 
                 <Button size="lg" className="w-full" onClick={handleAcceptExistingUser}>
-                  Logga in och gå med
+                  {t('login_and_join')}
                 </Button>
               </div>
             ) : invite ? (
@@ -316,18 +327,18 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        Du har bjudits in som medlem till detta företag.
+                        {t('invited_to_company')}
                       </p>
                     </div>
                   </div>
                 </Card>
 
                 <Button size="lg" className="w-full" onClick={handleAccept}>
-                  Skapa konto och gå med
+                  {t('create_account_and_join')}
                 </Button>
 
                 <p className="text-center text-xs text-muted-foreground">
-                  Genom att skapa ett konto godkänner du våra villkor.
+                  {t('terms_notice')}
                 </p>
               </div>
             ) : null}

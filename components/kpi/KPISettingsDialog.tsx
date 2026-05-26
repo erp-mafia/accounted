@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Settings2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -23,6 +24,8 @@ interface KPISettingsDialogProps {
 }
 
 export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDialogProps) {
+  const t = useTranslations('kpi')
+  const tCommon = useTranslations('common')
   const [draft, setDraft] = useState<KPIPreferences>(preferences)
   const [expandedKpi, setExpandedKpi] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
@@ -78,14 +81,14 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5">
           <Settings2 className="h-3.5 w-3.5" />
-          Anpassa
+          {t('customize')}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Anpassa nyckeltal</DialogTitle>
+          <DialogTitle>{t('settings_title')}</DialogTitle>
           <DialogDescription>
-            Välj vilka nyckeltal som visas och justera beräkningarna.
+            {t('settings_subtitle')}
           </DialogDescription>
         </DialogHeader>
 
@@ -120,10 +123,10 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                     )}
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">
-                        {def.label}
+                        {t(`def_${def.id}_label`)}
                         {hasOverride && (
                           <span className="ml-1.5 text-xs text-muted-foreground font-normal">
-                            (anpassad)
+                            {t('settings_custom_suffix')}
                           </span>
                         )}
                       </p>
@@ -137,26 +140,26 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
 
                 {isExpanded && (
                   <div className="mt-3 ml-5.5 space-y-2.5 text-xs text-muted-foreground">
-                    <p>{def.description}</p>
+                    <p>{t(`def_${def.id}_description`)}</p>
                     <div>
                       <p className="font-medium text-foreground/80 mb-0.5">
-                        Formel
+                        {t('settings_formula_label')}
                       </p>
                       <p className="font-mono text-[11px] bg-muted/50 rounded px-2 py-1">
-                        {def.formula}
+                        {t(`def_${def.id}_formula`)}
                       </p>
                     </div>
                     <div>
                       <p className="font-medium text-foreground/80 mb-0.5">
-                        Konton
+                        {t('settings_accounts_label')}
                       </p>
-                      <p>{def.accountDescription}</p>
+                      <p>{t(`def_${def.id}_accounts`)}</p>
                     </div>
 
                     {def.customizableAccounts && (
                       <div className="pt-1">
                         <label className="font-medium text-foreground/80 block mb-1">
-                          Anpassa konton
+                          {t('settings_customize_accounts')}
                         </label>
                         <input
                           type="text"
@@ -168,8 +171,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                           className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs font-mono tabular-nums placeholder:text-muted-foreground/50"
                         />
                         <p className="mt-1 text-[10px] text-muted-foreground/70">
-                          Ange kontonummer separerade med komma (t.ex.{' '}
-                          {def.defaultAccounts.slice(0, 3).join(', ')})
+                          {t('settings_account_hint', { example: def.defaultAccounts.slice(0, 3).join(', ') })}
                         </p>
                         {hasOverride && (
                           <button
@@ -177,7 +179,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                             onClick={() => clearAccountOverride(def.id)}
                             className="mt-1 text-[10px] text-primary hover:underline"
                           >
-                            Återställ till standard
+                            {t('settings_reset_field')}
                           </button>
                         )}
                       </div>
@@ -196,16 +198,16 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <RotateCcw className="h-3 w-3" />
-            Återställ allt
+            {t('settings_reset_all')}
           </button>
           <div className="flex gap-2">
             <DialogClose asChild>
               <Button variant="outline" size="sm">
-                Avbryt
+                {tCommon('cancel')}
               </Button>
             </DialogClose>
             <Button size="sm" onClick={handleSave} disabled={saving}>
-              {saving ? 'Sparar...' : 'Spara'}
+              {saving ? tCommon('saving') : tCommon('save')}
             </Button>
           </div>
         </div>

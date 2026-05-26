@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
 import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { CashAccountSelector } from '@/components/common/CashAccountSelector'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -100,6 +101,7 @@ export function BankReconciliationView() {
 
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [accountNumber, setAccountNumber] = useState('1930')
 
   const [dryRunResults, setDryRunResults] = useState<DryRunMatch[] | null>(null)
   const [runLoading, setRunLoading] = useState(false)
@@ -117,7 +119,8 @@ export function BankReconciliationView() {
       const params = new URLSearchParams()
       if (dateFrom) params.set('date_from', dateFrom)
       if (dateTo) params.set('date_to', dateTo)
-      const qs = params.toString() ? `?${params}` : ''
+      params.set('account_number', accountNumber)
+      const qs = `?${params}`
 
       const [statusRes, glRes, unmatchedRes, matchedRes] = await Promise.all([
         fetch(`/api/reconciliation/bank/status${qs}`),
@@ -143,7 +146,7 @@ export function BankReconciliationView() {
     } finally {
       setLoading(false)
     }
-  }, [dateFrom, dateTo])
+  }, [dateFrom, dateTo, accountNumber])
 
   useEffect(() => {
     fetchAll()
@@ -159,6 +162,7 @@ export function BankReconciliationView() {
         body: JSON.stringify({
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
+          account_number: accountNumber,
           dry_run: true,
         }),
       })
@@ -182,6 +186,7 @@ export function BankReconciliationView() {
         body: JSON.stringify({
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
+          account_number: accountNumber,
           dry_run: false,
         }),
       })
@@ -337,6 +342,10 @@ export function BankReconciliationView() {
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-end gap-4">
+            <CashAccountSelector
+              value={accountNumber}
+              onChange={setAccountNumber}
+            />
             <div>
               <Label>Datum från</Label>
               <input

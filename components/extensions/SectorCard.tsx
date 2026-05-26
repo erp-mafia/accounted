@@ -1,10 +1,18 @@
 import Link from 'next/link'
+import { getTranslations } from 'next-intl/server'
 import { Card, CardContent } from '@/components/ui/card'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
+import { sectorNameKey, sectorDescriptionKey } from '@/lib/extensions/i18n'
 import type { Sector } from '@/lib/extensions/types'
 
-export default function SectorCard({ sector }: { sector: Sector }) {
-   
+export default async function SectorCard({ sector }: { sector: Sector }) {
+  const t = await getTranslations('extensions')
+
+  const nameKey = sectorNameKey(sector.slug)
+  const descriptionKey = sectorDescriptionKey(sector.slug)
+  const name = nameKey ? t(nameKey) : sector.name
+  const description = descriptionKey ? t(descriptionKey) : sector.description
+
   const Icon = resolveIcon(sector.icon)
 
   return (
@@ -17,11 +25,11 @@ export default function SectorCard({ sector }: { sector: Sector }) {
             </div>
             <div>
               <h3 className="text-sm font-medium group-hover:text-primary transition-colors">
-                {sector.name}
+                {name}
               </h3>
-              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{sector.description}</p>
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{description}</p>
               <p className="text-xs text-muted-foreground mt-1.5">
-                {sector.extensions.length} tillägg
+                {t('extension_count', { count: sector.extensions.length })}
               </p>
             </div>
           </div>

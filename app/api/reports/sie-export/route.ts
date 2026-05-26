@@ -10,6 +10,7 @@ export const GET = withRouteContext(
 
     const { searchParams } = new URL(request.url)
     const periodId = searchParams.get('period_id')
+    const excludeClosing = searchParams.get('exclude_closing') === 'true'
 
     if (!periodId) {
       return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
@@ -32,6 +33,7 @@ export const GET = withRouteContext(
         fiscal_period_id: periodId,
         company_name: company.company_name || 'Unknown',
         org_number: company.org_number,
+        exclude_year_end_closing: excludeClosing,
       })
 
       return new NextResponse(sieContent, {

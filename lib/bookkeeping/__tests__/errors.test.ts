@@ -26,6 +26,53 @@ describe('Typed bookkeeping errors', () => {
     expect(err).toBeInstanceOf(Error)
   })
 
+  it('AccountsNotInChartError ordering is deterministic across input permutations', () => {
+    // The user-facing toast lists which accounts to activate in Kontoplan.
+    // If the same set of missing accounts came back in different orders on
+    // each call, the user might mistake an identical error for a different
+    // one. Lock in: same set → same array, regardless of input order.
+    const sets: string[][] = [
+      ['5410', '2641'],
+      ['2641', '5410'],
+      ['5410', '5410', '2641', '2641'],
+      ['2641', '2641', '5410'],
+    ]
+    const outputs = sets.map((s) => new AccountsNotInChartError(s).accountNumbers)
+    for (const out of outputs) {
+      expect(out).toEqual(['2641', '5410'])
+    }
+    // And the rendered message stays stable too.
+    expect(new AccountsNotInChartError(['5410', '2641']).message).toBe(
+      new AccountsNotInChartError(['2641', '5410']).message,
+    )
+  })
+
+  it('AccountsNotInChartError sorts numerically, not by UTF-16 code units', () => {
+    // Default string sort would order ['245', '1930'] as ['1930', '245']
+    // because '1' < '2'. That's wrong for accounts — a user looking at the
+    // toast and walking down their kontoplan expects numeric order.
+    const err = new AccountsNotInChartError(['1930', '245', '5410'])
+    expect(err.accountNumbers).toEqual(['245', '1930', '5410'])
+  })
+
+  it('AccountsNotInChartError tie-breaks numerically-equal strings deterministically', () => {
+    // "0245" and "245" compare as Number-equal but are distinct strings; the
+    // comparator must not collapse them by returning 0 unstably. We don't
+    // emit zero-padded BAS codes anywhere internally, but the public surface
+    // shouldn't be sensitive to that defensive case.
+    const err = new AccountsNotInChartError(['245', '0245'])
+    expect(err.accountNumbers).toEqual(['0245', '245'])
+  })
+
+  it('AccountsNotInChartError preserves order across multiple calls with same data', () => {
+    // Same inputs ⇒ identical outputs across separate calls (no hidden
+    // randomness, no Set iteration drift, no dependence on call order).
+    const calls = Array.from({ length: 5 }, () => new AccountsNotInChartError(['5410', '1930', '2641']).accountNumbers)
+    for (let i = 1; i < calls.length; i++) {
+      expect(calls[i]).toEqual(calls[0])
+    }
+  })
+
   it('JournalEntryNotBalancedError preserves amounts and kind', () => {
     const err = new JournalEntryNotBalancedError(100, 80, 'correction')
     expect(err.code).toBe('JOURNAL_ENTRY_NOT_BALANCED')

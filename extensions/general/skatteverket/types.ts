@@ -213,6 +213,25 @@ export interface SkatteverketAGIErrorBody {
   meddelandeTillUtvecklare?: string
 }
 
+/**
+ * Response from POST /underlag/huvuduppgift/kontrollera and
+ * /underlag/individuppgift/kontrollera (Skatteverket v1.7 §6.6 kontrollsvar).
+ *
+ * Validates a single HU or IU as JSON without storing it. `fel` is empty
+ * when status === 'OK'. AVVISANDE means the payload was malformed enough
+ * to skip rule evaluation; STOPP is a hard validation failure that would
+ * reject the underlag.
+ */
+export interface SkatteverketAGIKontrollsvar {
+  status: 'OK' | 'INFO' | 'ARENDE' | 'STOPP' | 'AVVISANDE'
+  fel: SkatteverketAGIKontrollsvarFel[]
+}
+
+export interface SkatteverketAGIKontrollsvarFel {
+  status: 'OK' | 'INFO' | 'ARENDE' | 'STOPP' | 'AVVISANDE'
+  felmeddelande?: string
+}
+
 export interface SkatteverketSubmission {
   id: string
   user_id: string

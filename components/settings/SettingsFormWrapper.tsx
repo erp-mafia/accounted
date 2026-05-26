@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Loader2, Check, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -17,6 +18,7 @@ interface SettingsFormWrapperProps {
 }
 
 export function SettingsFormWrapper({ children, onSave, className }: SettingsFormWrapperProps) {
+  const t = useTranslations('settings_company')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const [isSaving, setIsSaving] = useState(false)
@@ -71,7 +73,7 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
             throw new Error(messages.join(' • '))
           }
         }
-        throw new Error(result.error || 'Kunde inte spara inställningar')
+        throw new Error(result.error || t('wrapper_save_failed_default'))
       }
 
       onSuccess?.(result.data ?? updates)
@@ -79,14 +81,14 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
       timerRef.current = setTimeout(() => setSaved(false), 2000)
     } catch (error) {
       toast({
-        title: 'Kunde inte spara',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('wrapper_save_failed_title'),
+        description: error instanceof Error ? error.message : t('wrapper_try_again'),
         variant: 'destructive',
       })
     }
 
     setIsSaving(false)
-  }, [onSave, toast])
+  }, [onSave, toast, t])
 
   return (
     <form onSubmit={handleSubmit} className={className}>
@@ -96,27 +98,27 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
         {saved && (
           <span className="flex items-center gap-1.5 text-sm text-muted-foreground animate-in fade-in duration-200">
             <Check className="h-3.5 w-3.5" />
-            Sparat
+            {t('wrapper_saved')}
           </span>
         )}
         <Button
           type="submit"
           disabled={isSaving || !canWrite}
           size="sm"
-          title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+          title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
         >
           {isSaving ? (
             <>
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              Sparar...
+              {t('wrapper_saving')}
             </>
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-3.5 w-3.5" />
-              Spara ändringar
+              {t('wrapper_save_changes')}
             </>
           ) : (
-            'Spara ändringar'
+            t('wrapper_save_changes')
           )}
         </Button>
       </div>

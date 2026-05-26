@@ -972,7 +972,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     common: false,
   },
 
-  // --- PERSONNEL (3) ---
+  // --- PERSONNEL (10) ---
   {
     id: 'personnel_salary',
     name_sv: 'Lön (netto)',
@@ -1044,6 +1044,177 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     description_sv: 'Preliminärskatt till Skatteverket',
     common: false,
   },
+  {
+    id: 'personnel_mileage_taxfree',
+    name_sv: 'Skattefri bilersättning (mil)',
+    name_en: 'Tax-free mileage reimbursement',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7331',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Ersättning till anställd för bil- och körersättning, skattefri inom Skatteverkets gränsbelopp (för 2026: kontrollera aktuell mil-ersättning). Underlag: körjournal. Ingen ingående moms.',
+    mcc_codes: [],
+    keywords: ['milersättning', 'mil ersättning', 'milerstättning', 'körersättning', 'kör ersättning', 'bilersättning', 'reseersättning', 'kilometerersättning'],
+    risk_level: 'LOW',
+    requires_review: true,
+    impact_score: 5,
+    auto_match_confidence: 0.95,
+    default_private: false,
+    fallback_category: 'expense_other',
+    description_sv: 'Skattefri milersättning till anställd (kräver körjournal)',
+    common: true,
+  },
+  {
+    id: 'personnel_mileage_taxable',
+    name_sv: 'Skattepliktig bilersättning (mil)',
+    name_en: 'Taxable mileage reimbursement',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7332',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Den del av bilersättningen som överstiger Skatteverkets skattefria gränsbelopp. Skattepliktig för mottagaren och ska tas upp på AGI. Ingen ingående moms.',
+    mcc_codes: [],
+    keywords: ['skattepliktig milersättning', 'skattepliktig bilersättning', 'överskjutande bilersättning'],
+    risk_level: 'MEDIUM',
+    requires_review: true,
+    impact_score: 5,
+    auto_match_confidence: 0.90,
+    default_private: false,
+    fallback_category: 'expense_other',
+    description_sv: 'Skattepliktig del av bilersättning (AGI-pliktig)',
+    common: false,
+  },
+  {
+    id: 'personnel_per_diem_sweden_taxfree',
+    name_sv: 'Skattefritt traktamente (Sverige)',
+    name_en: 'Tax-free per diem (Sweden)',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7321',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Skattefritt traktamente för tjänsteresa i Sverige inom Skatteverkets schablonbelopp. Kräver reseräkning + övernattning >50 km från tjänstestället. Ingen ingående moms.',
+    mcc_codes: [],
+    // Note: keywords are intentionally narrow. "utlandstraktamente" must route
+    // to the abroad template, not here — so we avoid the bare "traktament"
+    // substring (which would also fire on "utlandstraktamente").
+    keywords: ['traktamente', 'dagtraktamente', 'helt dygn', 'halvt dygn'],
+    risk_level: 'LOW',
+    requires_review: true,
+    impact_score: 5,
+    auto_match_confidence: 0.95,
+    default_private: false,
+    fallback_category: 'expense_travel',
+    description_sv: 'Skattefritt traktamente för tjänsteresa i Sverige (kräver reseräkning)',
+    common: true,
+  },
+  {
+    id: 'personnel_per_diem_sweden_taxable',
+    name_sv: 'Skattepliktigt traktamente (Sverige)',
+    name_en: 'Taxable per diem (Sweden)',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7322',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Den del av traktamentet som överstiger Skatteverkets skattefria schablon. Skattepliktigt för mottagaren och ska tas upp på AGI.',
+    mcc_codes: [],
+    keywords: ['skattepliktigt traktamente', 'överskjutande traktamente'],
+    risk_level: 'MEDIUM',
+    requires_review: true,
+    impact_score: 4,
+    auto_match_confidence: 0.90,
+    default_private: false,
+    fallback_category: 'expense_travel',
+    description_sv: 'Skattepliktig del av traktamente Sverige (AGI-pliktig)',
+    common: false,
+  },
+  {
+    id: 'personnel_per_diem_abroad_taxfree',
+    name_sv: 'Skattefritt traktamente (utlandet)',
+    name_en: 'Tax-free per diem (abroad)',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7323',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Skattefritt utlandstraktamente per land enligt Skatteverkets normalbelopp. Kräver reseräkning. Tremånadersregeln gäller efter 3 mån.',
+    mcc_codes: [],
+    keywords: ['utlandstraktamente', 'traktamente utland', 'utlandsresa', 'utlands', 'normalbelopp'],
+    risk_level: 'LOW',
+    requires_review: true,
+    impact_score: 4,
+    auto_match_confidence: 0.90,
+    default_private: false,
+    fallback_category: 'expense_travel',
+    description_sv: 'Skattefritt traktamente för tjänsteresa utomlands',
+    common: false,
+  },
+  {
+    id: 'personnel_per_diem_abroad_taxable',
+    name_sv: 'Skattepliktigt traktamente (utlandet)',
+    name_en: 'Taxable per diem (abroad)',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7324',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Del av utlandstraktamente som överstiger Skatteverkets normalbelopp. Skattepliktig och AGI-pliktig.',
+    mcc_codes: [],
+    keywords: ['skattepliktigt utlandstraktamente'],
+    risk_level: 'MEDIUM',
+    requires_review: true,
+    impact_score: 3,
+    auto_match_confidence: 0.90,
+    default_private: false,
+    fallback_category: 'expense_travel',
+    description_sv: 'Skattepliktig del av utlandstraktamente (AGI-pliktig)',
+    common: false,
+  },
+  {
+    id: 'personnel_congestion_charge_taxfree',
+    name_sv: 'Trängselskatt (skattefri ersättning)',
+    name_en: 'Congestion charge (tax-free reimbursement)',
+    group: 'personnel',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '7333',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Ersättning till anställd för trängselskatt vid tjänsteresa, skattefri enligt 11 kap 26 § IL.',
+    mcc_codes: [],
+    keywords: ['trängselskatt', 'trängselavgift', 'congestion'],
+    risk_level: 'LOW',
+    requires_review: false,
+    impact_score: 3,
+    auto_match_confidence: 0.85,
+    default_private: false,
+    fallback_category: 'expense_travel',
+    description_sv: 'Ersättning för trängselskatt vid tjänsteresa',
+    common: false,
+  },
 
   // --- REVENUE (4) ---
   {
@@ -1093,6 +1264,29 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     common: true,
   },
   {
+    id: 'revenue_reduced_6',
+    name_sv: 'Försäljning 6% moms (böcker/kultur/transport)',
+    name_en: 'Revenue 6% VAT (books/culture/transport)',
+    group: 'revenue',
+    direction: 'income',
+    entity_applicability: 'all',
+    debit_account: '1930',
+    credit_account: '3003',
+    vat_treatment: 'reduced_6',
+    vat_rate: 0.06,
+    deductibility: 'full',
+    mcc_codes: [],
+    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'books', 'culture', 'transport'],
+    risk_level: 'NONE',
+    requires_review: false,
+    impact_score: 5,
+    auto_match_confidence: 0.75,
+    default_private: false,
+    fallback_category: 'income_services',
+    description_sv: 'Intäkter med 6% moms (böcker, persontransport, kultur, idrott)',
+    common: true,
+  },
+  {
     id: 'revenue_eu_services',
     name_sv: 'Tjänsteförsäljning EU (omvänd moms)',
     name_en: 'Service revenue EU (reverse charge)',
@@ -1139,6 +1333,31 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     default_private: false,
     fallback_category: 'income_services',
     description_sv: 'Export av varor/tjänster utanför EU (momsfritt, ruta 40)',
+    common: true,
+  },
+  {
+    id: 'revenue_exempt_domestic',
+    name_sv: 'Momsfri försäljning (Sverige)',
+    name_en: 'VAT-exempt sales (domestic)',
+    group: 'revenue',
+    direction: 'income',
+    entity_applicability: 'all',
+    debit_account: '1930',
+    credit_account: '3100',
+    credit_account_ab: '3004',
+    vat_treatment: 'exempt',
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Momsfri försäljning inom Sverige (t.ex. sjukvård, tandvård, utbildning, social omsorg, försäkring, finansiella tjänster) → rapportera i ruta 42',
+    mcc_codes: [],
+    keywords: ['momsfri', 'momsfritt', 'sjukvård', 'tandvård', 'utbildning', 'undervisning', 'social omsorg', 'kultur', 'försäkring', 'finansiella tjänster', 'exempt', 'healthcare', 'education'],
+    risk_level: 'LOW',
+    requires_review: false,
+    impact_score: 5,
+    auto_match_confidence: 0.70,
+    default_private: false,
+    fallback_category: 'income_services',
+    description_sv: 'Momsfri försäljning inom Sverige (sjukvård, utbildning m.m., ruta 42)',
     common: true,
   },
 
@@ -1487,6 +1706,60 @@ export function validateTemplateForEntity(
 }
 
 /**
+ * Common Swedish bank-description prefixes/suffixes that describe HOW a payment
+ * was made, not WHAT was purchased. These get stripped before keyword matching
+ * so a transaction text like "milersättning april Överföring via internet" no
+ * longer collides with the `telecom_internet` template's `internet` keyword.
+ *
+ * Order matters: list longer phrases first so substring removal hits them
+ * before shorter ones (e.g. "överföring via internet" before "internet").
+ */
+const BANK_NOISE_PHRASES: readonly string[] = [
+  'överföring via internet',
+  'överföring via mobil',
+  'överföring via app',
+  'överföring inom bank',
+  'överföring mellan konton',
+  'internetbetalning',
+  'mobilbetalning',
+  'direktbetalning',
+  'direktöverföring',
+  'autogirobetalning',
+  'autogiro',
+  'bg-betalning',
+  'bg betalning',
+  'pg-betalning',
+  'pg betalning',
+  'bgmax',
+  'bg-inb',
+  'plusgiro',
+  'bankgiro',
+  'swish till',
+  'swish från',
+  'swish-betalning',
+  'kortköp',
+  'kortbetalning',
+  'webbköp',
+  'överföring',
+  'insättning',
+]
+
+/**
+ * Strip bank-payment-method noise from a description so the substring matcher
+ * doesn't match on the bank's own prefix vocabulary. Operates on lowercase
+ * input and collapses the whitespace it leaves behind.
+ */
+export function stripBankNoise(lowerText: string): string {
+  let out = lowerText
+  for (const phrase of BANK_NOISE_PHRASES) {
+    if (out.includes(phrase)) {
+      out = out.split(phrase).join(' ')
+    }
+  }
+  return out.replace(/\s+/g, ' ').trim()
+}
+
+/**
  * Multi-signal matching against a transaction.
  * Returns top matches sorted by confidence descending.
  */
@@ -1500,7 +1773,10 @@ export function findMatchingTemplates(
 
   const descLower = (transaction.description || '').toLowerCase()
   const merchantLower = (transaction.merchant_name || '').toLowerCase()
-  const searchText = `${descLower} ${merchantLower}`
+  const rawSearchText = `${descLower} ${merchantLower}`
+  // Strip bank-method noise so e.g. "Överföring via internet" doesn't make
+  // the matcher believe the merchant is "Internet" (→ 6230 telecom).
+  const searchText = stripBankNoise(rawSearchText)
 
   for (const t of BOOKING_TEMPLATES) {
     // Filter entity applicability

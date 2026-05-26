@@ -50,6 +50,10 @@ export const cloudBackupExtension: Extension = {
   version: '1.0.0',
   sector: 'general',
 
+  // The canonical entry point for cloud-backup is now `/import#cloud-backup`
+  // (under "Importera/Exportera"). `/settings/backup` is preserved as a
+  // permanent redirect to that anchor so legacy bookmarks and OAuth callbacks
+  // keep working — see `app/(dashboard)/settings/backup/page.tsx`.
   settingsPanel: {
     label: 'Molnsynkronisering',
     path: '/settings/backup',

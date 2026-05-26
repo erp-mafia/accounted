@@ -30,9 +30,20 @@ vi.mock('@/lib/core/bookkeeping/storno-service', async () => {
   }
 })
 
+vi.mock('@/lib/core/documents/document-service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/core/documents/document-service')>(
+    '@/lib/core/documents/document-service'
+  )
+  return {
+    ...actual,
+    linkToJournalEntry: vi.fn(),
+  }
+})
+
 import { commitPendingOperation } from '../commit'
 import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {
@@ -104,7 +115,10 @@ describe('commitPendingOperation: create_voucher', () => {
         description: 'Capitalize Cursor subscription to 1010',
         source_type: 'manual',
       }),
-      'mcp_create_voucher'
+      // Default commit_method when opts.commitMethod is not passed.
+      // Must be one of the values allowed by the DB CHECK constraint
+      // (migration 20260420120001_journal_entry_commit_metadata.sql).
+      'user_accept'
     )
     // findFiscalPeriod must NOT be called when fiscal_period_id is supplied —
     // it's the caller's explicit choice.
@@ -218,7 +232,7 @@ describe('commitPendingOperation: create_voucher', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'manual' }),
-      'mcp_create_voucher'
+      'user_accept'
     )
     expect(createJournalEntry).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -226,6 +240,46 @@ describe('commitPendingOperation: create_voucher', () => {
       expect.anything(),
       expect.objectContaining({ source_type: 'bank_transaction' }),
       expect.anything()
+    )
+  })
+
+  it('passes bulk_accept commit_method when invoked from the bulk-commit path', async () => {
+    // The bulk-commit route passes opts.commitMethod = 'bulk_accept' so the
+    // resulting journal_entry rows are tagged correctly per BFNAR 2013:2
+    // behandlingshistorik. Without this assertion, a regression that drops
+    // opts on the way to the engine would silently book everything as
+    // 'user_accept'.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-bulk', voucher_number: 9 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'bulk-approved voucher',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '1010', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op, {
+      commitMethod: 'bulk_accept',
+    })
+
+    expect(result.status).toBe('committed')
+    expect(createJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.anything(),
+      'bulk_accept'
     )
   })
 
@@ -255,6 +309,222 @@ describe('commitPendingOperation: create_voucher', () => {
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/balanserar inte/i)
     expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  // ── inbox-direct booking flow ──────────────────────────────────────
+  // gnubok_create_voucher accepts an optional inbox_item_id. On commit, the
+  // executor must update invoice_inbox_items (created_journal_entry_id +
+  // status='confirmed') and attach the OCR document to the new JE.
+
+  it('inbox-direct: posts the entry, marks inbox confirmed, and attaches the document', async () => {
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-inbox', voucher_number: 17, voucher_series: 'A' })
+    )
+    vi.mocked(linkToJournalEntry).mockResolvedValueOnce({
+      id: 'doc-1',
+      journal_entry_id: 'je-inbox',
+    } as never)
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'Kvitto Clas Ohlson — adapter',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      journal_entry_id: 'je-inbox',
+      inbox_item_id: 'inbox-1',
+      inbox_linked: true,
+    })
+    expect(linkToJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'doc-1',
+      'je-inbox',
+    )
+  })
+
+  it('inbox-direct without document_id: links the inbox row but does not attempt document attach', async () => {
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-no-doc', voucher_number: 18 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'inbox without scanned doc',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: null,
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ inbox_linked: true, inbox_item_id: 'inbox-1' })
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('inbox-direct: document attach failure does NOT roll back the posted entry', async () => {
+    // The verifikat is already posted and immutable — failing the doc link
+    // must not cascade into a failed commit, only a logged warning.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-link-fails', voucher_number: 19 })
+    )
+    vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('storage RLS denied'))
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'doc link fails',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ journal_entry_id: 'je-link-fails', inbox_linked: true })
+  })
+
+  it('inbox-direct: zero-rows-updated (another commit already claimed the inbox) — voucher posted, inbox_linked=false, no doc attach', async () => {
+    // Race scenario the .is('created_journal_entry_id', null) predicate is
+    // designed to catch: two pending ops on the same inbox item commit in
+    // parallel, the loser sees 0 rows updated.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-race-loser', voucher_number: 22 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: [], error: null }) // inbox update returned ZERO rows (race lost)
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'racy concurrent commit',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ inbox_linked: false })
+    // Critical: document MUST NOT be linked to the racing loser JE — the
+    // inbox already points at the winner's JE.
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('inbox-direct: inbox update failure does NOT roll back the posted entry (inbox_linked=false)', async () => {
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-inbox-fails', voucher_number: 20 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: { message: 'unique constraint violated (concurrent commit)' } }) // inbox update fails
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'racy double-commit',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        // No document_id → linkToJournalEntry must not be called even after
+        // inbox update fails.
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ inbox_linked: false })
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('no inbox_item_id: does not touch invoice_inbox_items at all', async () => {
+    // Regression guard: standalone voucher creation must not query the inbox
+    // table — that would surprise users who never use the inbox flow.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-standalone', voucher_number: 21 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher's commit update — no inbox call between
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'pure capitalization, no inbox',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '1010', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).not.toHaveProperty('inbox_item_id')
+    expect(result.data).not.toHaveProperty('inbox_linked')
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+
+    // Confirm no `from('invoice_inbox_items')` call was issued.
+    const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((args) => args[0])
+    expect(fromCalls).not.toContain('invoice_inbox_items')
   })
 })
 

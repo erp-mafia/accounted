@@ -102,13 +102,15 @@ export function parseOpeningBalanceFile(
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
-    const rawAccountNumber = String(row[columns.account_number_col] || '').trim()
+    const rawAccountNumber = String(row[columns.account_number_col] || '')
+      .replace(/[ ​‌‍﻿]/g, '') // strip NBSP and zero-width chars
+      .trim()
 
     // Skip empty rows
     if (!rawAccountNumber) continue
 
-    // Clean account number (remove leading zeros, spaces, dashes)
-    const accountNumber = rawAccountNumber.replace(/[^0-9]/g, '')
+    // Clean account number — strip every non-digit (whitespace, dots, dashes, letters)
+    const accountNumber = rawAccountNumber.replace(/\D/g, '')
 
     // Skip non-4-digit account numbers (likely header/total rows)
     if (!/^\d{4}$/.test(accountNumber)) {
@@ -186,15 +188,29 @@ export function parseOpeningBalanceFile(
     })
   }
 
-  // Merge duplicate accounts
+  // Merge duplicate accounts — keyed on the already-normalized account_number.
+  // Union validation_errors across rows so a warning that fires on row 5 (e.g.
+  // BAS-class mismatch) isn't silently dropped because row 2 of the same
+  // account had no error. Suppressed validation issues on IB-feeding data
+  // would risk a misclassification propagating into the ledger.
   const mergedMap = new Map<string, ParsedOpeningBalanceRow>()
   for (const row of rows) {
     const existing = mergedMap.get(row.account_number)
     if (existing) {
       existing.debit_amount = Math.round((existing.debit_amount + row.debit_amount) * 100) / 100
       existing.credit_amount = Math.round((existing.credit_amount + row.credit_amount) * 100) / 100
+      if (!existing.account_name && row.account_name) {
+        existing.account_name = row.account_name
+      }
+      if (row.validation_errors?.length) {
+        const seen = new Set(existing.validation_errors)
+        for (const err of row.validation_errors) {
+          if (!seen.has(err)) existing.validation_errors.push(err)
+        }
+        existing.is_valid = existing.is_valid && row.is_valid
+      }
     } else {
-      mergedMap.set(row.account_number, { ...row })
+      mergedMap.set(row.account_number, { ...row, validation_errors: [...row.validation_errors] })
     }
   }
   const mergedRows = Array.from(mergedMap.values())

@@ -143,6 +143,30 @@ export async function findMatchingInvoices(
     return []
   }
 
+  // Defensive filter: exclude invoices that already have a payment voucher
+  // attached but whose status leaked (still 'sent'/'overdue'). Partially-paid
+  // invoices can legitimately take more payments, so they pass through.
+  // Without this, a status leak would double-book the receipt.
+  const fullCandidateIds = invoices
+    .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
+    .map((inv) => inv.id as string)
+  const paidIds = new Set<string>()
+  if (fullCandidateIds.length > 0) {
+    const { data: paymentRows } = await supabase
+      .from('invoice_payments')
+      .select('invoice_id')
+      .eq('company_id', companyId)
+      .in('invoice_id', fullCandidateIds)
+      .not('journal_entry_id', 'is', null)
+    for (const row of paymentRows ?? []) {
+      paidIds.add((row as { invoice_id: string }).invoice_id)
+    }
+  }
+  const filteredInvoices = invoices.filter((inv) => !paidIds.has(inv.id as string))
+  if (filteredInvoices.length === 0) {
+    return []
+  }
+
   const matches: InvoiceMatch[] = []
 
   // OCR/Bankgiro reference matching — highest confidence
@@ -150,7 +174,7 @@ export async function findMatchingInvoices(
   const txReference = (transaction as Transaction & { reference?: string | null }).reference
   if (txReference) {
     const normalizedRef = txReference.replace(/\s+/g, '')
-    for (const invoice of invoices) {
+    for (const invoice of filteredInvoices) {
       // Match against invoice_number (used as OCR reference in Swedish payments)
       const invoiceRef = invoice.invoice_number?.replace(/\s+/g, '')
       if (invoiceRef && normalizedRef === invoiceRef) {
@@ -168,7 +192,7 @@ export async function findMatchingInvoices(
     }
   }
 
-  for (const invoice of invoices) {
+  for (const invoice of filteredInvoices) {
     // Currency filter - must match or be SEK equivalent
     const currencyMatch =
       invoice.currency === transaction.currency ||

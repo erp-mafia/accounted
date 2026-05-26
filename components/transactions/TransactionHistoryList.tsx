@@ -1,26 +1,47 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  DataList,
+  DataListHeader,
+  DataListRow,
+  DataListPrimary,
+  DataListMeta,
+  DataListMetaSeparator,
+  DataListEmpty,
+} from '@/components/ui/data-list'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
 import {
-  Search,
   ArrowUpRight,
   ArrowDownRight,
   ArrowLeftRight,
   Check,
+  ChevronDown,
   Landmark,
   Link2,
   FileText,
   Loader2,
+  MoreHorizontal,
   Trash2,
 } from 'lucide-react'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
+import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { TransactionWithInvoice, HistoryFilter } from './transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
@@ -36,6 +57,7 @@ type HistoryRow =
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
+  searchTerm?: string
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
@@ -49,6 +71,7 @@ interface TransactionHistoryListProps {
 export default function TransactionHistoryList({
   transactions,
   skvRows = [],
+  searchTerm = '',
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onDelete,
@@ -58,20 +81,19 @@ export default function TransactionHistoryList({
   isLoadingMore,
   onLoadMore,
 }: TransactionHistoryListProps) {
-  const [searchTerm, setSearchTerm] = useState('')
+  const t = useTranslations('tx_history')
   const [filter, setFilter] = useState<HistoryFilter>('all')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   // The bank/private filter doesn't apply to SKV rows — they have no
   // is_business flag. So when the filter is 'business' or 'private' we
-  // implicitly hide SKV (it doesn't match either). Source filter narrows
-  // further if the user picks one explicitly.
-  const bankFiltered = transactions.filter((t) => {
-    const matchesSearch = t.description.toLowerCase().includes(searchTerm.toLowerCase())
+  // implicitly hide SKV.
+  const bankFiltered = transactions.filter((tx) => {
+    const matchesSearch = tx.description.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesFilter =
       filter === 'all' ||
-      (filter === 'business' && t.is_business === true) ||
-      (filter === 'private' && t.is_business === false)
+      (filter === 'business' && tx.is_business === true) ||
+      (filter === 'private' && tx.is_business === false)
     return matchesSearch && matchesFilter
   })
 
@@ -82,8 +104,8 @@ export default function TransactionHistoryList({
 
   const merged: HistoryRow[] = []
   if (sourceFilter !== 'skatteverket') {
-    for (const t of bankFiltered) {
-      merged.push({ source: 'bank', date: t.date, data: t })
+    for (const tx of bankFiltered) {
+      merged.push({ source: 'bank', date: tx.date, data: tx })
     }
   }
   if (sourceFilter !== 'bank') {
@@ -98,72 +120,58 @@ export default function TransactionHistoryList({
 
   const showSourceFilter = skvRows.length > 0 && transactions.length > 0
   const filtered = merged
+  const showHeader = showSourceFilter
 
   return (
     <div className="space-y-4">
-      {/* Search + filter pills */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Sök transaktioner..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
+      {/* Business/private tabs */}
+      <Tabs value={filter} onValueChange={(v) => setFilter(v as HistoryFilter)}>
+        <TabsList>
+          <TabsTrigger value="all">{t('filter_all')}</TabsTrigger>
+          <TabsTrigger value="business">{t('filter_business')}</TabsTrigger>
+          <TabsTrigger value="private">{t('filter_private')}</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      <DataList>
+        {showHeader && (
+          <DataListHeader>
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">
+              {t('source_label')}
+            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                  {sourceFilter === 'all'
+                    ? t('source_all')
+                    : sourceFilter === 'bank'
+                      ? t('source_bank')
+                      : t('source_skatteverket')}
+                  <ChevronDown className="h-3 w-3 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-[12rem]">
+                <DropdownMenuRadioGroup
+                  value={sourceFilter}
+                  onValueChange={(v) => setSourceFilter(v as SourceFilter)}
+                >
+                  <DropdownMenuRadioItem value="all">{t('source_all')}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="bank">{t('source_bank')}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="skatteverket">{t('source_skatteverket')}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </DataListHeader>
+        )}
+
+        {filtered.length === 0 ? (
+          <DataListEmpty
+            icon={<ArrowLeftRight className="h-6 w-6" />}
+            title={t('empty_title')}
+            description={searchTerm ? t('empty_search') : t('empty_filter')}
           />
-        </div>
-        <div className="flex gap-1.5">
-          {(['all', 'business', 'private'] as const).map((f) => (
-            <Button
-              key={f}
-              size="sm"
-              variant={filter === f ? 'default' : 'outline'}
-              className="h-9"
-              onClick={() => setFilter(f)}
-            >
-              {f === 'all' ? 'Alla' : f === 'business' ? 'Företag' : 'Privat'}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      {showSourceFilter && (
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Källa:</span>
-          {(['all', 'bank', 'skatteverket'] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setSourceFilter(s)}
-              className={cn(
-                'flex items-center gap-1 rounded-full border px-3 py-1 transition-colors',
-                sourceFilter === s
-                  ? 'border-foreground bg-foreground text-background'
-                  : 'border-border text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {s === 'skatteverket' && <Landmark className="h-3 w-3" />}
-              {s === 'all' ? 'Alla' : s === 'bank' ? 'Bank' : 'Skatteverket'}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Transaction list */}
-      {filtered.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <ArrowLeftRight className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium">Inga transaktioner</h3>
-            <p className="text-muted-foreground text-center mt-1">
-              {searchTerm
-                ? 'Inga transaktioner matchar din sökning'
-                : 'Inga transaktioner att visa med valt filter'}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((item) =>
+        ) : (
+          filtered.map((item) =>
             item.source === 'bank' ? (
               <BankHistoryRow
                 key={`bank-${item.data.id}`}
@@ -180,25 +188,22 @@ export default function TransactionHistoryList({
                 onMatch={onSkvMatch}
               />
             ),
-          )}
-          {hasMore && onLoadMore && !searchTerm && (
-            <div className="flex justify-center pt-4">
-              <Button
-                variant="outline"
-                onClick={onLoadMore}
-                disabled={isLoadingMore}
-              >
-                {isLoadingMore ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Laddar...
-                  </>
-                ) : (
-                  'Ladda fler'
-                )}
-              </Button>
-            </div>
-          )}
+          )
+        )}
+      </DataList>
+
+      {hasMore && onLoadMore && !searchTerm && filtered.length > 0 && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
+            {isLoadingMore ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {t('loading_more')}
+              </>
+            ) : (
+              t('load_more')
+            )}
+          </Button>
         </div>
       )}
     </div>
@@ -216,128 +221,184 @@ function BankHistoryRow({
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
 }) {
+  const t = useTranslations('tx_history')
+  // Viewers must not see write affordances. CorrectionAffordance opens a
+  // dialog that stages a storno + correction journal entry; the API path
+  // already 403s for viewers but rendering the trigger creates a confusing
+  // dead end.
+  const { canWrite } = useCanWrite()
+  const isIncome = transaction.amount > 0
+  const isBooked = !!transaction.journal_entry_id
+  const isLinkedToInvoice = !!transaction.invoice_id
+  const hasInvoiceMatch =
+    !isLinkedToInvoice && !!transaction.potential_invoice && !isBooked
+
+  // Primary status badge — pick the most informative one.
+  const statusBadge = (() => {
+    if (isBooked) {
+      return (
+        <Badge variant="success" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
+          <Check className="h-3 w-3" />
+          {t('posted')}
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="warning" className="h-4 px-1.5 py-0 text-[10px]">
+        {t('not_posted')}
+      </Badge>
+    )
+  })()
+
+  const categoryLabel =
+    transaction.is_business !== null &&
+    !(
+      transaction.is_business &&
+      transaction.category === 'uncategorized' &&
+      transaction.journal_entry_id
+    )
+      ? transaction.is_business
+        ? getCategoryDisplayName(transaction.category)
+        : t('private_badge')
+      : null
+
   return (
-    <Card data-tx-id={transaction.id} className="hover:border-primary/50 transition-colors">
-      <CardContent className="py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div
-              className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${
-                transaction.amount > 0
-                  ? 'bg-success/10 text-success'
-                  : 'bg-destructive/10 text-destructive'
-              }`}
+    <DataListRow
+      data-tx-id={transaction.id}
+      leading={
+        <span
+          className={cn(
+            'inline-flex h-5 w-5 items-center justify-center',
+            isIncome ? 'text-success' : 'text-foreground/60'
+          )}
+          aria-hidden
+        >
+          {isIncome ? (
+            <ArrowUpRight className="h-4 w-4" />
+          ) : (
+            <ArrowDownRight className="h-4 w-4" />
+          )}
+        </span>
+      }
+      trailing={
+        <>
+          <div className="text-right">
+            <p
+              className={cn(
+                'font-medium tabular-nums leading-none',
+                isIncome && 'text-success'
+              )}
             >
-              {transaction.amount > 0 ? (
-                <ArrowUpRight className="h-5 w-5" />
-              ) : (
-                <ArrowDownRight className="h-5 w-5" />
-              )}
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <p className="font-medium">{transaction.description}</p>
-                <TransactionAttachmentIndicator documentId={transaction.document_id} />
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <span>{formatDate(transaction.date)}</span>
-                {transaction.is_business !== null &&
-                  !(
-                    transaction.is_business &&
-                    transaction.category === 'uncategorized' &&
-                    transaction.journal_entry_id
-                  ) && (
-                    <>
-                      <span>·</span>
-                      <Badge variant={transaction.is_business ? 'default' : 'secondary'}>
-                        {transaction.is_business
-                          ? getCategoryDisplayName(transaction.category)
-                          : 'Privat'}
-                      </Badge>
-                    </>
-                  )}
-                {transaction.invoice_id && (
-                  <>
-                    <span>·</span>
-                    <Badge variant="outline" className="text-primary border-primary">
-                      <Link2 className="h-3 w-3 mr-1" />
-                      Kopplad till faktura
-                    </Badge>
-                  </>
-                )}
-                {transaction.journal_entry_id ? (
-                  <>
-                    <span>·</span>
-                    <Badge variant="outline" className="text-success border-success">
-                      <Check className="h-3 w-3 mr-1" />
-                      Bokförd
-                    </Badge>
-                  </>
-                ) : (
-                  <>
-                    <span>·</span>
-                    <button
-                      type="button"
-                      className="inline-flex items-center rounded-md border border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground hover:bg-warning/10 transition-colors"
-                      onClick={() => onOpenCategoryDialog(transaction)}
-                    >
-                      Ej bokförd
-                    </button>
-                  </>
-                )}
-                {transaction.potential_invoice && !transaction.invoice_id && (
-                  <>
-                    <span>·</span>
-                    <button
-                      type="button"
-                      className="inline-flex items-center rounded-md border border-primary px-2.5 py-0.5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors"
-                      onClick={() => onOpenMatchDialog(transaction)}
-                    >
-                      <FileText className="h-3 w-3 mr-1" />
-                      Möjlig match: Faktura {transaction.potential_invoice.invoice_number}
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {!transaction.journal_entry_id && (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-10 text-xs"
-                onClick={() => onOpenCategoryDialog(transaction)}
-              >
-                Bokför
-              </Button>
-            )}
-            {!transaction.journal_entry_id && onDelete && (
-              <Button
-                size="icon"
-                variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
-                onClick={() => onDelete(transaction.id)}
-                aria-label="Ta bort transaktion"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-            <div className="text-right">
-              <p className="font-medium tabular-nums">
-                {transaction.amount > 0 ? '+' : ''}
-                {formatCurrency(transaction.amount, transaction.currency)}
+              {isIncome ? '+' : ''}
+              {formatCurrency(transaction.amount, transaction.currency)}
+            </p>
+            {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
+              <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
+                {formatCurrency(transaction.amount_sek)}
               </p>
-              {transaction.currency !== 'SEK' && transaction.amount_sek && (
-                <p className="text-sm text-muted-foreground">
-                  {formatCurrency(transaction.amount_sek)}
-                </p>
-              )}
-            </div>
+            )}
           </div>
-        </div>
-      </CardContent>
-    </Card>
+          {!isBooked && (
+            <Button
+              size="sm"
+              variant="default"
+              className="h-8 px-3 text-xs"
+              onClick={() => onOpenCategoryDialog(transaction)}
+            >
+              {t('book')}
+            </Button>
+          )}
+          {isBooked && (
+            <Button asChild size="sm" variant="ghost" className="h-8 px-3 text-xs">
+              <Link href={`/bookkeeping/${transaction.journal_entry_id}`}>
+                {t('view_voucher_short')}
+              </Link>
+            </Button>
+          )}
+          {(hasInvoiceMatch || (!isBooked && onDelete) || (isBooked && canWrite)) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground"
+                  aria-label="Fler alternativ"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {hasInvoiceMatch && (
+                  <DropdownMenuItem onSelect={() => onOpenMatchDialog(transaction)}>
+                    <FileText className="h-3.5 w-3.5" />
+                    {t('possible_match_invoice', {
+                      number: transaction.potential_invoice!.invoice_number ?? '',
+                    })}
+                  </DropdownMenuItem>
+                )}
+                {isBooked && canWrite && transaction.journal_entry_id && (
+                  <CorrectionAffordance journalEntryId={transaction.journal_entry_id}>
+                    {({ open, isLoading }) => (
+                      <DropdownMenuItem onSelect={() => open()} disabled={isLoading}>
+                        {isLoading ? t('fetching') : t('create_correction')}
+                      </DropdownMenuItem>
+                    )}
+                  </CorrectionAffordance>
+                )}
+                {!isBooked && onDelete && (
+                  <>
+                    {hasInvoiceMatch && <DropdownMenuSeparator />}
+                    <DropdownMenuItem
+                      onSelect={() => onDelete(transaction.id)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {t('delete')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </>
+      }
+    >
+      <div className="flex items-center gap-1.5 min-w-0">
+        <DataListPrimary>{transaction.description}</DataListPrimary>
+        <TransactionAttachmentIndicator documentId={transaction.document_id} />
+      </div>
+      <DataListMeta>
+        <span className="tabular-nums">{formatDate(transaction.date)}</span>
+        <DataListMetaSeparator />
+        {statusBadge}
+        {categoryLabel && (
+          <>
+            <DataListMetaSeparator />
+            <span>{categoryLabel}</span>
+          </>
+        )}
+        {isLinkedToInvoice && (
+          <>
+            <DataListMetaSeparator />
+            <span className="inline-flex items-center gap-1">
+              <Link2 className="h-3 w-3" />
+              {t('linked_to_invoice')}
+            </span>
+          </>
+        )}
+        {hasInvoiceMatch && (
+          <>
+            <DataListMetaSeparator />
+            <span className="inline-flex items-center gap-1 text-primary">
+              <FileText className="h-3 w-3" />
+              {t('possible_match_invoice', {
+                number: transaction.potential_invoice!.invoice_number ?? '',
+              })}
+            </span>
+          </>
+        )}
+      </DataListMeta>
+    </DataListRow>
   )
 }
 
@@ -350,100 +411,106 @@ function SkattekontoHistoryRow({
   onBokfor?: (row: StoredSkattekontoTransaction) => void
   onMatch?: (row: StoredSkattekontoTransaction) => void
 }) {
+  const t = useTranslations('tx_history')
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
   const isBooked = !!row.journal_entry_id
+
+  const statusBadge = (() => {
+    if (isBooked) {
+      return (
+        <Badge variant="success" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
+          <Check className="h-3 w-3" />
+          {t('posted')}
+        </Badge>
+      )
+    }
+    if (row.match_suggestion) {
+      return (
+        <Badge variant="warning" className="h-4 px-1.5 py-0 text-[10px]">
+          {t('possible_duplicate')}
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
+        {t('not_posted')}
+      </Badge>
+    )
+  })()
+
   return (
-    <Card className="hover:border-primary/50 transition-colors">
-      <CardContent className="py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div
+    <DataListRow
+      leading={
+        <span
+          className={cn(
+            'inline-flex h-5 w-5 items-center justify-center',
+            isIncome ? 'text-success' : 'text-foreground/60'
+          )}
+          aria-hidden
+        >
+          {isIncome ? (
+            <ArrowUpRight className="h-4 w-4" />
+          ) : (
+            <ArrowDownRight className="h-4 w-4" />
+          )}
+        </span>
+      }
+      trailing={
+        <>
+          <div className="text-right">
+            <p
               className={cn(
-                'h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0',
-                isIncome ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive',
+                'font-medium tabular-nums leading-none',
+                isIncome && 'text-success'
               )}
             >
-              {isIncome ? (
-                <ArrowUpRight className="h-5 w-5" />
-              ) : (
-                <ArrowDownRight className="h-5 w-5" />
-              )}
-            </div>
-            <div>
-              <p className="font-medium">{row.transaktionstext}</p>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <span>{formatDate(row.transaktionsdatum)}</span>
-                <span>·</span>
-                <Badge variant="outline" className="gap-1">
-                  <Landmark className="h-3 w-3" />
-                  Skatteverket
-                </Badge>
-                {isBooked ? (
-                  <>
-                    <span>·</span>
-                    <Badge variant="outline" className="text-success border-success">
-                      <Check className="h-3 w-3 mr-1" />
-                      Bokförd
-                    </Badge>
-                  </>
-                ) : row.match_suggestion ? (
-                  <>
-                    <span>·</span>
-                    <Badge variant="outline" className="border-warning text-warning">
-                      Möjlig dublett
-                    </Badge>
-                  </>
-                ) : (
-                  <>
-                    <span>·</span>
-                    <Badge variant="outline">Ej bokförd</Badge>
-                  </>
-                )}
-              </div>
-            </div>
+              {isIncome ? '+' : ''}
+              {formatCurrency(amount)}
+            </p>
           </div>
-          <div className="flex items-center gap-3">
-            {!isBooked && onMatch && (
-              <Button
-                size="sm"
-                variant={row.match_suggestion ? 'default' : 'outline'}
-                className="h-10 text-xs"
-                onClick={() => onMatch(row)}
-              >
-                <Link2 className="mr-1 h-3 w-3" />
-                {row.match_suggestion ? 'Koppla' : 'Matcha'}
-              </Button>
-            )}
-            {!isBooked && !row.match_suggestion && onBokfor && (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-10 text-xs"
-                onClick={() => onBokfor(row)}
-              >
-                Bokför
-              </Button>
-            )}
-            {isBooked && (
-              <Button asChild size="sm" variant="ghost" className="h-10 text-xs">
-                <Link href={`/bookkeeping/${row.journal_entry_id}`}>Visa verifikat</Link>
-              </Button>
-            )}
-            <div className="text-right">
-              <p
-                className={cn(
-                  'font-medium tabular-nums',
-                  isIncome && 'text-success',
-                )}
-              >
-                {isIncome ? '+' : ''}
-                {formatCurrency(amount)}
-              </p>
-            </div>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+          {!isBooked && onMatch && (
+            <Button
+              size="sm"
+              variant={row.match_suggestion ? 'default' : 'outline'}
+              className="h-8 px-3 text-xs"
+              onClick={() => onMatch(row)}
+            >
+              <Link2 className="mr-1 h-3 w-3" />
+              {row.match_suggestion ? t('link') : t('match')}
+            </Button>
+          )}
+          {!isBooked && !row.match_suggestion && onBokfor && (
+            <Button
+              size="sm"
+              variant="default"
+              className="h-8 px-3 text-xs"
+              onClick={() => onBokfor(row)}
+            >
+              {t('book')}
+            </Button>
+          )}
+          {isBooked && (
+            <Button asChild size="sm" variant="ghost" className="h-8 px-3 text-xs">
+              <Link href={`/bookkeeping/${row.journal_entry_id}`}>
+                {t('view_voucher_short')}
+              </Link>
+            </Button>
+          )}
+        </>
+      }
+    >
+      <DataListPrimary>{row.transaktionstext}</DataListPrimary>
+      <DataListMeta>
+        <span className="tabular-nums">{formatDate(row.transaktionsdatum)}</span>
+        <DataListMetaSeparator />
+        <span className="inline-flex items-center gap-1">
+          <Landmark className="h-3 w-3" />
+          {t('skv_badge')}
+        </span>
+        <DataListMetaSeparator />
+        {statusBadge}
+      </DataListMeta>
+    </DataListRow>
   )
 }

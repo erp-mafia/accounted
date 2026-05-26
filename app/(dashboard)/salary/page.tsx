@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,12 +15,12 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { SalaryRun } from '@/types'
 
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Utkast',
-  review: 'Granskning',
-  approved: 'Godkänd',
-  paid: 'Betald',
-  booked: 'Bokförd',
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  draft: 'status_draft',
+  review: 'status_review',
+  approved: 'status_approved',
+  paid: 'status_paid',
+  booked: 'status_booked',
 }
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
@@ -35,6 +36,7 @@ export default function SalaryPage() {
   const [employeeCount, setEmployeeCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const { canWrite } = useCanWrite()
+  const t = useTranslations('salary')
 
   useEffect(() => {
     async function load() {
@@ -81,20 +83,20 @@ export default function SalaryPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Löner"
+        title={t('title')}
         action={
           <div className="flex gap-2">
             <Button variant="outline" asChild>
               <Link href="/salary/employees">
                 <Users className="mr-2 h-4 w-4" />
-                Anställda
+                {t('employees')}
               </Link>
             </Button>
             {canWrite && (
               <Button asChild>
                 <Link href="/salary/runs/new">
                   <Plus className="mr-2 h-4 w-4" />
-                  Ny lönekörning
+                  {t('new_run')}
                 </Link>
               </Button>
             )}
@@ -109,7 +111,7 @@ export default function SalaryPage() {
             <div className="flex items-center gap-3">
               <Users className="h-5 w-5 text-muted-foreground" />
               <div>
-                <p className="text-sm text-muted-foreground">Anställda</p>
+                <p className="text-sm text-muted-foreground">{t('employees')}</p>
                 <p className="text-2xl font-semibold tabular-nums">{employeeCount}</p>
               </div>
             </div>
@@ -120,7 +122,7 @@ export default function SalaryPage() {
             <div className="flex items-center gap-3">
               <HandCoins className="h-5 w-5 text-muted-foreground" />
               <div>
-                <p className="text-sm text-muted-foreground">Bruttolöner {currentYear}</p>
+                <p className="text-sm text-muted-foreground">{t('gross_year', { year: currentYear })}</p>
                 <p className="text-2xl font-semibold tabular-nums">{formatCurrency(totalGrossYTD)}</p>
               </div>
             </div>
@@ -131,7 +133,7 @@ export default function SalaryPage() {
             <div className="flex items-center gap-3">
               <CalendarDays className="h-5 w-5 text-muted-foreground" />
               <div>
-                <p className="text-sm text-muted-foreground">Avgifter {currentYear}</p>
+                <p className="text-sm text-muted-foreground">{t('contributions_year', { year: currentYear })}</p>
                 <p className="text-2xl font-semibold tabular-nums">{formatCurrency(totalAvgifterYTD)}</p>
               </div>
             </div>
@@ -142,27 +144,27 @@ export default function SalaryPage() {
       {/* Recent runs */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Lönekörningar</CardTitle>
+          <CardTitle className="text-base">{t('runs_title')}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {runs.length === 0 ? (
             <EmptyState
               icon={HandCoins}
-              title="Inga lönekörningar ännu"
-              description="Skapa en lönekörning för att räkna ut löner, skatt och arbetsgivaravgifter."
-              actionLabel={canWrite ? 'Skapa lönekörning' : undefined}
+              title={t('empty_runs_title')}
+              description={t('empty_runs_description')}
+              actionLabel={canWrite ? t('create_run') : undefined}
               actionHref={canWrite ? '/salary/runs/new' : undefined}
             />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Utbetalningsdag</TableHead>
-                  <TableHead className="text-right">Brutto</TableHead>
-                  <TableHead className="text-right">Netto</TableHead>
-                  <TableHead className="text-right">Avgifter</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t('th_period')}</TableHead>
+                  <TableHead>{t('th_payday')}</TableHead>
+                  <TableHead className="text-right">{t('th_gross')}</TableHead>
+                  <TableHead className="text-right">{t('th_net')}</TableHead>
+                  <TableHead className="text-right">{t('th_contributions')}</TableHead>
+                  <TableHead>{t('th_status')}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -186,7 +188,7 @@ export default function SalaryPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>
-                        {STATUS_LABELS[run.status]}
+                        {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">

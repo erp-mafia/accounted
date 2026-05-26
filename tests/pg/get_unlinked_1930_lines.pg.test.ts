@@ -1,11 +1,11 @@
 /**
- * pg-real test for get_unlinked_1930_lines (PR 3 of erp-mafia/gnubok#443).
+ * pg-real test for get_unlinked_gl_lines.
  *
  * Verifies the RPC excludes opening_balance vouchers from the unmatched-1930
  * set, while preserving the existing behavior for posted bank-import vouchers,
- * date-range filtering, and company scoping.
- *
- * Migration: 20260514132534_unlinked_1930_lines_exclude_opening_balance.sql
+ * date-range filtering, and company scoping. The RPC was renamed from
+ * get_unlinked_1930_lines in 20260519120000_get_unlinked_gl_lines.sql; the
+ * default p_account_number of '1930' keeps these assertions valid.
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
@@ -55,7 +55,7 @@ async function insertPostedJournalEntry(params: {
   return id
 }
 
-describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
+describe('get_unlinked_gl_lines RPC — opening_balance exclusion', () => {
   it('excludes opening_balance vouchers from the unmatched-1930 set', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -93,7 +93,7 @@ describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
     })
 
     const { rows } = await getPool().query(
-      `SELECT journal_entry_id, source_type FROM public.get_unlinked_1930_lines($1)`,
+      `SELECT journal_entry_id, source_type FROM public.get_unlinked_gl_lines($1)`,
       [companyId],
     )
 
@@ -127,9 +127,12 @@ describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
       voucherNumber: 11,
     })
 
-    // Window covers only the second voucher.
+    // Window covers only the second voucher. Use named notation so we don't have
+    // to repeat the '1930' default just to reach the date params.
     const { rows } = await getPool().query(
-      `SELECT entry_date FROM public.get_unlinked_1930_lines($1, $2, $3) ORDER BY entry_date`,
+      `SELECT entry_date FROM public.get_unlinked_gl_lines(
+         p_company_id => $1, p_date_from => $2, p_date_to => $3
+       ) ORDER BY entry_date`,
       [companyId, '2026-07-01', '2026-12-31'],
     )
 
@@ -155,11 +158,11 @@ describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
     })
 
     const { rows: rowsA } = await getPool().query(
-      `SELECT 1 FROM public.get_unlinked_1930_lines($1)`,
+      `SELECT 1 FROM public.get_unlinked_gl_lines($1)`,
       [companyA],
     )
     const { rows: rowsB } = await getPool().query(
-      `SELECT 1 FROM public.get_unlinked_1930_lines($1)`,
+      `SELECT 1 FROM public.get_unlinked_gl_lines($1)`,
       [companyB],
     )
     expect(rowsA).toHaveLength(1)

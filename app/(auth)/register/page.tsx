@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Mail, ArrowLeft } from 'lucide-react'
 import Image from 'next/image'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -46,6 +47,8 @@ function RegisterPageContent() {
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  const t = useTranslations('register')
+  const errorLocale = useLocale() as ErrorLocale
 
   // When arriving from an invite link, fetch the invite info to pre-fill
   // and lock the email field so the user registers with the correct address.
@@ -74,8 +77,8 @@ function RegisterPageContent() {
 
     if (result.error) {
       toast({
-        title: 'BankID misslyckades',
-        description: 'Kunde inte verifiera din identitet.',
+        title: t('bankid_failed_title'),
+        description: t('bankid_failed_description'),
         variant: 'destructive',
       })
       return
@@ -108,21 +111,21 @@ function RegisterPageContent() {
       if (!res.ok) {
         if (json.error === 'already_linked') {
           toast({
-            title: 'BankID redan kopplat',
-            description: 'Detta BankID ar redan kopplat till ett konto. Forsok logga in istallet.',
+            title: t('bankid_already_linked_title'),
+            description: t('bankid_already_linked_description'),
             variant: 'destructive',
           })
         } else if (json.error === 'account_exists') {
           toast({
-            title: 'Kontot finns redan',
-            description: 'Ett konto med den har e-postadressen finns redan. Logga in och koppla BankID i installningarna.',
+            title: t('account_exists_title'),
+            description: t('account_exists_description'),
             variant: 'destructive',
           })
           router.push('/login')
         } else {
           toast({
-            title: 'Registrering misslyckades',
-            description: json.message || json.error || 'Ett ovantat fel uppstod.',
+            title: t('register_failed_title'),
+            description: json.message || json.error || t('register_failed_default'),
             variant: 'destructive',
           })
         }
@@ -138,8 +141,8 @@ function RegisterPageContent() {
       if (error) {
         console.error('[register] BankID verifyOtp failed', error)
         toast({
-          title: 'Kunde inte slutfora registreringen',
-          description: getErrorMessage(error, { context: 'auth' }),
+          title: t('register_failed_complete'),
+          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -150,8 +153,8 @@ function RegisterPageContent() {
     } catch (error) {
       console.error('[register] BankID signup error', error)
       toast({
-        title: 'Registrering misslyckades',
-        description: getErrorMessage(error, { context: 'auth' }),
+        title: t('register_failed_title'),
+        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
@@ -178,8 +181,8 @@ function RegisterPageContent() {
 
     if (!isStrongPassword(passwordValue)) {
       toast({
-        title: 'Lösenordet är för svagt',
-        description: 'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
+        title: t('weak_password_title'),
+        description: t('weak_password_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -188,8 +191,8 @@ function RegisterPageContent() {
 
     if (passwordValue !== confirmValue) {
       toast({
-        title: 'Lösenorden matchar inte',
-        description: 'Kontrollera att du skrev samma lösenord i båda fälten.',
+        title: t('password_mismatch_title'),
+        description: t('password_mismatch_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -224,8 +227,8 @@ function RegisterPageContent() {
           fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
         })
         toast({
-          title: 'Registrering misslyckades',
-          description: getErrorMessage(error, { context: 'auth' }),
+          title: t('register_failed_title'),
+          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -298,8 +301,8 @@ function RegisterPageContent() {
         constructor: error?.constructor?.name,
       })
       toast({
-        title: 'Registrering misslyckades',
-        description: getErrorMessage(error, { context: 'auth' }),
+        title: t('register_failed_title'),
+        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
@@ -318,23 +321,23 @@ function RegisterPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">Kontot finns redan</h1>
+            <h1 className="text-2xl font-medium tracking-tight">{t('duplicate_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              Det finns redan ett konto kopplat till{' '}
+              {t('duplicate_body_prefix')}{' '}
               <span className="font-medium text-foreground">{duplicateEmail}</span>.
             </p>
           </div>
 
           <div className="rounded-xl border bg-card p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              Logga in med din e-post och lösenord. Om du har glömt lösenordet kan du återställa det via &quot;Glömt lösenord?&quot; på inloggningssidan.
+              {t('duplicate_hint')}
             </p>
           </div>
 
           <div className="space-y-2">
             <Button className="w-full" asChild>
               <Link href={`/login?email=${encodeURIComponent(duplicateEmail)}`}>
-                Logga in
+                {t('sign_in')}
               </Link>
             </Button>
             <Button
@@ -343,7 +346,7 @@ function RegisterPageContent() {
               onClick={() => setDuplicateEmail(null)}
             >
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Tillbaka
+              {t('back')}
             </Button>
           </div>
         </div>
@@ -362,24 +365,25 @@ function RegisterPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">Bekräfta din e-post</h1>
+            <h1 className="text-2xl font-medium tracking-tight">{t('confirm_email_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              Vi har skickat en bekräftelselänk till{' '}
-              <span className="font-medium text-foreground">{email}</span>
+              {t.rich('confirm_email_body', {
+                email,
+                strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+              })}
             </p>
           </div>
 
           <div className="rounded-xl border bg-card p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              Klicka på länken i e-posten för att aktivera ditt konto.
-              Länken är giltig i 24 timmar.
+              {t('confirm_email_hint')}
             </p>
           </div>
 
           <Button variant="ghost" className="w-full text-muted-foreground" asChild>
             <Link href="/login">
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Tillbaka till inloggning
+              {t('back_to_login')}
             </Link>
           </Button>
         </div>
@@ -400,7 +404,7 @@ function RegisterPageContent() {
             priority
           />
           <p className="text-muted-foreground text-sm mt-3">
-            Skapa ett konto för att komma igång
+            {t('subtitle')}
           </p>
         </div>
 
@@ -415,7 +419,7 @@ function RegisterPageContent() {
                   <div className="w-full border-t" />
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">eller skapa konto med e-post</span>
+                  <span className="bg-card px-2 text-muted-foreground">{t('or_email_divider')}</span>
                 </div>
               </div>
             </>
@@ -424,7 +428,7 @@ function RegisterPageContent() {
           {bankIdUnavailable && !bankIdUser && (
             <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
               <p className="text-sm text-blue-700 dark:text-blue-300">
-                Skapa konto med e-post och lösenord nedan istället. Du kan koppla BankID i inställningar senare.
+                {t('bankid_unavailable_body')}
               </p>
             </div>
           )}
@@ -436,17 +440,17 @@ function RegisterPageContent() {
                   {bankIdUser.givenName} {bankIdUser.surname}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Verifierad med BankID
+                  {t('bankid_verified')}
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="bankid_email">E-postadress</Label>
+                <Label htmlFor="bankid_email">{t('email_label')}</Label>
                 <Input
                   id="bankid_email"
                   name="bankid_email"
                   type="email"
                   autoComplete="email"
-                  placeholder="namn@exempel.se"
+                  placeholder={t('email_placeholder')}
                   value={bankIdEmail}
                   onChange={(e) => setBankIdEmail(e.target.value)}
                   required
@@ -454,17 +458,17 @@ function RegisterPageContent() {
                   className="h-11"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Anvands for inloggning och notifieringar.
+                  {t('bankid_email_hint')}
                 </p>
               </div>
               <Button type="submit" className="w-full h-11" disabled={isLoading}>
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Skapar konto...
+                    {t('creating')}
                   </>
                 ) : (
-                  'Skapa konto'
+                  t('create_account')
                 )}
               </Button>
               <Button
@@ -477,19 +481,19 @@ function RegisterPageContent() {
                 }}
               >
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                Tillbaka
+                {t('back')}
               </Button>
             </form>
           ) : (
           <form onSubmit={handleRegister} className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="email">E-postadress</Label>
+              <Label htmlFor="email">{t('email_label')}</Label>
               <Input
                 id="email"
                 name="email"
                 type="email"
                 autoComplete="email"
-                placeholder="namn@exempel.se"
+                placeholder={t('email_placeholder')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -499,18 +503,18 @@ function RegisterPageContent() {
               />
               {inviteEmail && (
                 <p className="text-xs text-muted-foreground">
-                  Inbjudan skickades till denna adress.
+                  {t('invite_email_hint')}
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Lösenord</Label>
+              <Label htmlFor="password">{t('password_label')}</Label>
               <Input
                 id="password"
                 name="password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Minst 8 tecken, Aa1!"
+                placeholder={t('password_placeholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -520,13 +524,13 @@ function RegisterPageContent() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirm_password">Bekräfta lösenord</Label>
+              <Label htmlFor="confirm_password">{t('confirm_password_label')}</Label>
               <Input
                 id="confirm_password"
                 name="confirm_password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Upprepa lösenordet"
+                placeholder={t('confirm_password_placeholder')}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
@@ -539,10 +543,10 @@ function RegisterPageContent() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Skapar konto...
+                  {t('creating')}
                 </>
               ) : (
-                'Skapa konto'
+                t('create_account')
               )}
             </Button>
           </form>
@@ -550,23 +554,23 @@ function RegisterPageContent() {
         </div>
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          Har du redan ett konto?{' '}
+          {t('already_have_account')}{' '}
           <Link
             href="/login"
             className="font-medium text-foreground underline underline-offset-2 hover:text-primary transition-colors"
           >
-            Logga in
+            {t('sign_in')}
           </Link>
         </p>
 
         <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
-          Genom att skapa konto godkänner du våra{' '}
+          {t('terms_prefix')}{' '}
           <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            villkor
+            {t('terms_link')}
           </a>{' '}
-          och{' '}
+          {t('terms_and')}{' '}
           <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            integritetspolicy
+            {t('privacy_link')}
           </a>
           .
         </p>

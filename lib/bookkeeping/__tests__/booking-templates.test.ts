@@ -12,6 +12,7 @@ import {
   getCommonTemplates,
   getAdvancedTemplates,
   validateTemplateForEntity,
+  stripBankNoise,
   type BookingTemplate,
 } from '../booking-templates'
 
@@ -20,8 +21,8 @@ import {
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 51 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(51)
+  it('has exactly 60 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(60)
   })
 
   it('all template IDs are unique', () => {
@@ -140,7 +141,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(51)
+    expect(allTemplates).toHaveLength(60)
   })
 })
 
@@ -266,6 +267,130 @@ describe('findMatchingTemplates', () => {
     for (let i = 1; i < matches.length; i++) {
       expect(matches[i - 1].confidence).toBeGreaterThanOrEqual(matches[i].confidence)
     }
+  })
+})
+
+// ============================================================
+// stripBankNoise — protects the matcher from bank-prefix noise
+// ============================================================
+
+describe('stripBankNoise', () => {
+  it('strips "överföring via internet" before keyword matching', () => {
+    expect(stripBankNoise('milersättning april överföring via internet')).toBe(
+      'milersättning april'
+    )
+  })
+
+  it('strips "autogiro" suffix', () => {
+    expect(stripBankNoise('elräkning autogiro')).toBe('elräkning')
+  })
+
+  it('strips "bg-betalning" and "bgmax"', () => {
+    expect(stripBankNoise('vattenfall bg-betalning')).toBe('vattenfall')
+    expect(stripBankNoise('kund x bgmax')).toBe('kund x')
+  })
+
+  it('strips multiple noise phrases at once', () => {
+    expect(stripBankNoise('swish till anna överföring')).toBe('anna')
+  })
+
+  it('preserves real merchant text after stripping', () => {
+    expect(stripBankNoise('kortköp ica supermarket')).toBe('ica supermarket')
+  })
+
+  it('is a no-op when no noise phrases are present', () => {
+    expect(stripBankNoise('lokalhyra mars 2026')).toBe('lokalhyra mars 2026')
+  })
+})
+
+// ============================================================
+// Milersättning / traktamente routing — regression guards for
+// the "Överföring via internet" → 6230 Internet miscategorization
+// ============================================================
+
+describe('milersättning routing', () => {
+  it('matches personnel_mileage_taxfree (7331) for "milersättning"', () => {
+    const tx = makeTransaction({
+      amount: -1496,
+      description: 'milersättning april',
+    })
+    const matches = findMatchingTemplates(tx)
+    expect(matches[0]?.template.id).toBe('personnel_mileage_taxfree')
+    expect(matches[0]?.template.debit_account).toBe('7331')
+  })
+
+  it('does NOT match telecom_internet when description contains "överföring via internet"', () => {
+    const tx = makeTransaction({
+      amount: -1496,
+      description: 'milersättning april Överföring via internet',
+    })
+    const matches = findMatchingTemplates(tx)
+    // The fragile substring match used to fire telecom_internet (6230 + 25% VAT)
+    // because the bank suffix contains the word "internet". After stripping
+    // bank noise, only milersättning should match.
+    expect(matches.find((m) => m.template.id === 'telecom_internet')).toBeUndefined()
+    expect(matches[0]?.template.id).toBe('personnel_mileage_taxfree')
+  })
+
+  it('emits no VAT lines for milersättning (employee reimbursement, not a purchase)', () => {
+    const template = getTemplateById('personnel_mileage_taxfree')
+    expect(template).toBeDefined()
+    const tx = makeTransaction({ amount: -1496 })
+    const result = buildMappingResultFromTemplate(template!, tx, 'aktiebolag')
+    expect(result.debit_account).toBe('7331')
+    expect(result.vat_lines).toHaveLength(0)
+  })
+
+  it('"körersättning" also matches personnel_mileage_taxfree', () => {
+    const tx = makeTransaction({
+      amount: -1850,
+      description: 'körersättning Q1',
+    })
+    const matches = findMatchingTemplates(tx)
+    expect(matches[0]?.template.id).toBe('personnel_mileage_taxfree')
+  })
+
+  it('still resolves real internet bills via the telecom_internet template', () => {
+    // Make sure we didn't break legitimate internet-bill matching by adding
+    // noise stripping. The merchant signal carries the match.
+    const tx = makeTransaction({
+      amount: -399,
+      description: 'Bahnhof bredband mars',
+      merchant_name: 'Bahnhof',
+    })
+    const matches = findMatchingTemplates(tx)
+    expect(matches[0]?.template.id).toBe('telecom_internet')
+  })
+})
+
+describe('traktamente routing', () => {
+  it('matches personnel_per_diem_sweden_taxfree (7321) for "traktamente"', () => {
+    const tx = makeTransaction({
+      amount: -290,
+      description: 'traktamente Stockholm april',
+    })
+    const matches = findMatchingTemplates(tx)
+    expect(matches[0]?.template.id).toBe('personnel_per_diem_sweden_taxfree')
+    expect(matches[0]?.template.debit_account).toBe('7321')
+  })
+
+  it('matches utlandstraktamente → 7323', () => {
+    const tx = makeTransaction({
+      amount: -800,
+      description: 'utlandstraktamente Tyskland',
+    })
+    const matches = findMatchingTemplates(tx)
+    expect(matches[0]?.template.id).toBe('personnel_per_diem_abroad_taxfree')
+    expect(matches[0]?.template.debit_account).toBe('7323')
+  })
+
+  it('emits no VAT lines for traktamente', () => {
+    const template = getTemplateById('personnel_per_diem_sweden_taxfree')
+    expect(template).toBeDefined()
+    const tx = makeTransaction({ amount: -290 })
+    const result = buildMappingResultFromTemplate(template!, tx, 'aktiebolag')
+    expect(result.debit_account).toBe('7321')
+    expect(result.vat_lines).toHaveLength(0)
   })
 })
 
@@ -519,7 +644,7 @@ describe('buildMappingResultFromTemplate', () => {
     expect(result.vat_lines[0].debit_amount).toBe(250)   // 2645
     expect(result.vat_lines[1].credit_amount).toBe(250)  // 2614
     expect(result.vat_lines[2].debit_amount).toBe(1000)  // 4535 basbelopp
-    expect(result.vat_lines[3].credit_amount).toBe(1000) // 4598
+    expect(result.vat_lines[3].credit_amount).toBe(1000) // 4608
   })
 
   it('emits SEK amounts for output VAT on non-SEK income', () => {

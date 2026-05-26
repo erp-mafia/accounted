@@ -16,7 +16,13 @@ export async function generateIncomeStatement(
   companyId: string,
   fiscalPeriodId: string
 ): Promise<IncomeStatementReport> {
-  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  // Exclude year-end closing entries: after closing, P&L accounts (3-8) are
+  // zeroed by the closing verifikat (8999 → 2099). Including them collapses
+  // the resultaträkning to zero. The income statement must reflect the
+  // pre-closing activity for the year.
+  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    excludeYearEndClosing: true,
+  })
 
   // Filter to income/expense accounts (class 3-8)
   const incomeExpenseRows = rows.filter(

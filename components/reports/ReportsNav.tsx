@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import {
   Select,
@@ -14,53 +15,53 @@ import type { EntityType } from '@/types'
 
 interface ReportItem {
   value: string
-  label: string
+  labelKey: string
   entityType?: EntityType
 }
 
 interface ReportCategory {
-  label: string
+  labelKey: string
   items: ReportItem[]
 }
 
 const CATEGORIES: ReportCategory[] = [
   {
-    label: 'Löpande',
+    labelKey: 'group_interim',
     items: [
-      { value: 'resultatrapport', label: 'Resultatrapport' },
-      { value: 'balansrapport', label: 'Balansrapport' },
-      { value: 'trial-balance', label: 'Saldobalans' },
+      { value: 'resultatrapport', labelKey: 'name_resultatrapport' },
+      { value: 'balansrapport', labelKey: 'name_balansrapport' },
+      { value: 'trial-balance', labelKey: 'name_trial_balance' },
     ],
   },
   {
-    label: 'Bokslut',
+    labelKey: 'group_year_end',
     items: [
-      { value: 'income-statement', label: 'Resultaträkning' },
-      { value: 'balance-sheet', label: 'Balansräkning' },
+      { value: 'income-statement', labelKey: 'name_income_statement' },
+      { value: 'balance-sheet', labelKey: 'name_balance_sheet' },
     ],
   },
   {
-    label: 'Skatt & moms',
+    labelKey: 'group_tax_vat',
     items: [
-      { value: 'vat-declaration', label: 'Momsdeklaration' },
-      { value: 'periodisk-sammanstallning', label: 'Periodisk sammanställning' },
-      { value: 'ne-declaration', label: 'NE-bilaga', entityType: 'enskild_firma' },
-      { value: 'ink2-declaration', label: 'INK2', entityType: 'aktiebolag' },
+      { value: 'vat-declaration', labelKey: 'name_vat_declaration' },
+      { value: 'periodisk-sammanstallning', labelKey: 'name_periodisk_sammanstallning' },
+      { value: 'ne-declaration', labelKey: 'name_ne_declaration', entityType: 'enskild_firma' },
+      { value: 'ink2-declaration', labelKey: 'name_ink2_declaration', entityType: 'aktiebolag' },
     ],
   },
   {
-    label: 'Huvudböcker',
+    labelKey: 'group_ledgers',
     items: [
-      { value: 'huvudbok', label: 'Huvudbok' },
-      { value: 'grundbok', label: 'Grundbok' },
-      { value: 'kundreskontra', label: 'Kundreskontra' },
-      { value: 'supplier-ledger', label: 'Leverantörsreskontra' },
+      { value: 'huvudbok', labelKey: 'name_huvudbok' },
+      { value: 'grundbok', labelKey: 'name_grundbok' },
+      { value: 'kundreskontra', labelKey: 'name_kundreskontra' },
+      { value: 'supplier-ledger', labelKey: 'name_supplier_ledger' },
     ],
   },
   {
-    label: 'Avstämning',
+    labelKey: 'group_reconciliation',
     items: [
-      { value: 'bank-reconciliation', label: 'Bankavstämning' },
+      { value: 'bank-reconciliation', labelKey: 'name_bank_reconciliation' },
     ],
   },
 ]
@@ -72,6 +73,7 @@ interface ReportsNavProps {
 }
 
 export function ReportsNav({ active, onChange, entityType }: ReportsNavProps) {
+  const t = useTranslations('reports')
   const filtered = CATEGORIES
     .map(cat => ({
       ...cat,
@@ -89,11 +91,11 @@ export function ReportsNav({ active, onChange, entityType }: ReportsNavProps) {
           </SelectTrigger>
           <SelectContent>
             {filtered.map(cat => (
-              <SelectGroup key={cat.label}>
-                <SelectLabel>{cat.label}</SelectLabel>
+              <SelectGroup key={cat.labelKey}>
+                <SelectLabel>{t(cat.labelKey)}</SelectLabel>
                 {cat.items.map(item => (
                   <SelectItem key={item.value} value={item.value}>
-                    {item.label}
+                    {t(item.labelKey)}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -105,13 +107,13 @@ export function ReportsNav({ active, onChange, entityType }: ReportsNavProps) {
       {/* Desktop: vertical left rail */}
       <nav
         className="hidden sm:block w-56 flex-shrink-0 sticky top-8 self-start"
-        aria-label="Rapportkategorier"
+        aria-label={t('categories_aria')}
       >
         <ul className="space-y-6">
           {filtered.map(cat => (
-            <li key={cat.label}>
+            <li key={cat.labelKey}>
               <p className="text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-[0.08em] mb-2 px-3">
-                {cat.label}
+                {t(cat.labelKey)}
               </p>
               <ul className="space-y-px">
                 {cat.items.map(item => {
@@ -129,7 +131,7 @@ export function ReportsNav({ active, onChange, entityType }: ReportsNavProps) {
                             : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
                         )}
                       >
-                        {item.label}
+                        {t(item.labelKey)}
                       </button>
                     </li>
                   )

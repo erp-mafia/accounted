@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,25 +14,32 @@ interface TaxSettingsFormProps {
 }
 
 export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
+  const t = useTranslations('settings_tax_form')
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
   const [paysSalaries, setPaysSalaries] = useState(settings.pays_salaries ?? false)
 
   const isEnskildFirma = settings.entity_type === 'enskild_firma'
 
+  const months = [
+    t('month_jan'), t('month_feb'), t('month_mar'), t('month_apr'),
+    t('month_may'), t('month_jun'), t('month_jul'), t('month_aug'),
+    t('month_sep'), t('month_oct'), t('month_nov'), t('month_dec'),
+  ]
+
   return (
     <div className="space-y-8">
       {/* Entity type — read-only */}
       <section className="space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Företagsform
+          {t('entity_form_heading')}
         </h2>
         <div className="flex items-center gap-3">
           <Badge variant="secondary" className="text-sm">
-            {settings.entity_type === 'aktiebolag' ? 'Aktiebolag' : 'Enskild firma'}
+            {settings.entity_type === 'aktiebolag' ? t('entity_aktiebolag') : t('entity_enskild_firma')}
           </Badge>
           <p className="text-xs text-muted-foreground">
-            Företagsform kan inte ändras. Kontakta support vid behov.
+            {t('entity_form_help')}
           </p>
         </div>
       </section>
@@ -39,7 +47,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       {/* F-skatt */}
       <section className="border-t border-border/8 pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Skatt & moms
+          {t('tax_vat_heading')}
         </h2>
 
         <div className="space-y-4">
@@ -51,9 +59,9 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             />
             <input type="hidden" name="f_skatt" value={fSkatt ? 'true' : 'false'} />
             <div className="space-y-1">
-              <Label htmlFor="f_skatt" className="cursor-pointer">F-skattsedel</Label>
+              <Label htmlFor="f_skatt" className="cursor-pointer">{t('f_skatt_label')}</Label>
               <p className="text-xs text-muted-foreground">
-                Godkänd för F-skatt (självständig näringsverksamhet).
+                {t('f_skatt_help')}
               </p>
             </div>
           </div>
@@ -66,9 +74,9 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             />
             <input type="hidden" name="vat_registered" value={vatRegistered ? 'true' : 'false'} />
             <div className="space-y-1">
-              <Label htmlFor="vat_registered" className="cursor-pointer">Momsregistrerad</Label>
+              <Label htmlFor="vat_registered" className="cursor-pointer">{t('vat_registered_label')}</Label>
               <p className="text-xs text-muted-foreground">
-                Obligatoriskt om omsättningen överstiger 120 000 kr per år.
+                {t('vat_registered_help')}
               </p>
             </div>
           </div>
@@ -76,7 +84,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
           {vatRegistered && (
             <div className="space-y-4 pl-7">
               <div className="max-w-xs space-y-2">
-                <Label htmlFor="vat_number">Momsregistreringsnummer</Label>
+                <Label htmlFor="vat_number">{t('vat_number_label')}</Label>
                 <Input
                   id="vat_number"
                   name="vat_number"
@@ -84,47 +92,46 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
                   defaultValue={settings.vat_number || ''}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Format: SE + organisationsnummer + 01
+                  {t('vat_number_help')}
                 </p>
               </div>
 
               <div className="max-w-xs space-y-2">
-                <Label>Momsredovisningsperiod</Label>
+                <Label>{t('moms_period_label')}</Label>
                 <Select
                   name="moms_period"
                   defaultValue={settings.moms_period || undefined}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj period" />
+                    <SelectValue placeholder={t('select_period_placeholder')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Månad</SelectItem>
-                    <SelectItem value="quarterly">Kvartal</SelectItem>
-                    <SelectItem value="yearly">År</SelectItem>
+                    <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
+                    <SelectItem value="quarterly">{t('period_quarterly')}</SelectItem>
+                    <SelectItem value="yearly">{t('period_yearly')}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Enligt beslut från Skatteverket.
+                  {t('moms_period_help')}
                 </p>
               </div>
 
               <div className="max-w-xs space-y-2">
-                <Label>Period för periodisk sammanställning</Label>
+                <Label>{t('periodisk_label')}</Label>
                 <Select
                   name="periodisk_sammanstallning_period"
                   defaultValue={settings.periodisk_sammanstallning_period || 'monthly'}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj period" />
+                    <SelectValue placeholder={t('select_period_placeholder')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Månad</SelectItem>
-                    <SelectItem value="quarterly">Kvartal</SelectItem>
+                    <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
+                    <SelectItem value="quarterly">{t('period_quarterly')}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Varuförsäljning till EU ska normalt rapporteras månadsvis (35 kap. 2 § SFL).
-                  Kvartal kräver tillstånd från Skatteverket och gäller endast tjänsteförsäljning.
+                  {t('periodisk_help')}
                 </p>
               </div>
             </div>
@@ -135,24 +142,24 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       {/* Tax contact — required for SKV-filings */}
       <section className="border-t border-border/8 pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Kontaktperson för skatteärenden
+          {t('tax_contact_heading')}
         </h2>
         <p className="text-xs text-muted-foreground -mt-2">
-          Används som avsändare på filer till Skatteverket (periodisk sammanställning m.m.).
+          {t('tax_contact_help')}
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
           <div className="space-y-2">
-            <Label htmlFor="tax_contact_name">Namn</Label>
+            <Label htmlFor="tax_contact_name">{t('tax_contact_name_label')}</Label>
             <Input
               id="tax_contact_name"
               name="tax_contact_name"
               defaultValue={settings.tax_contact_name || ''}
-              placeholder="Anna Andersson"
+              placeholder={t('tax_contact_name_placeholder')}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="tax_contact_phone">Telefon</Label>
+            <Label htmlFor="tax_contact_phone">{t('tax_contact_phone_label')}</Label>
             <Input
               id="tax_contact_phone"
               name="tax_contact_phone"
@@ -161,7 +168,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             />
           </div>
           <div className="space-y-2 sm:col-span-2">
-            <Label htmlFor="tax_contact_email">E-post</Label>
+            <Label htmlFor="tax_contact_email">{t('tax_contact_email_label')}</Label>
             <Input
               id="tax_contact_email"
               name="tax_contact_email"
@@ -176,17 +183,17 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       {/* Fiscal year & salaries */}
       <section className="border-t border-border/8 pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Räkenskapsår & löner
+          {t('fiscal_year_salaries_heading')}
         </h2>
 
         <div className="max-w-xs space-y-2">
-          <Label>Räkenskapsårets startmånad</Label>
+          <Label>{t('fiscal_year_start_label')}</Label>
           {isEnskildFirma ? (
             <>
-              <Input value="Januari" disabled />
+              <Input value={t('month_jan')} disabled />
               <input type="hidden" name="fiscal_year_start_month" value="1" />
               <p className="text-xs text-muted-foreground">
-                Enskild firma måste använda kalenderår (BFL 3 kap.).
+                {t('fiscal_year_ef_help')}
               </p>
             </>
           ) : (
@@ -199,16 +206,13 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {[
-                    'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
-                    'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December',
-                  ].map((month, i) => (
+                  {months.map((month, i) => (
                     <SelectItem key={i + 1} value={String(i + 1)}>{month}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Ändring påverkar framtida räkenskapsår.
+                {t('fiscal_year_change_help')}
               </p>
             </>
           )}
@@ -222,9 +226,9 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
           />
           <input type="hidden" name="pays_salaries" value={paysSalaries ? 'true' : 'false'} />
           <div className="space-y-1">
-            <Label htmlFor="pays_salaries" className="cursor-pointer">Betalar löner</Label>
+            <Label htmlFor="pays_salaries" className="cursor-pointer">{t('pays_salaries_label')}</Label>
             <p className="text-xs text-muted-foreground">
-              Påverkar vilka skattedeadlines som visas (arbetsgivardeklaration m.m.).
+              {t('pays_salaries_help')}
             </p>
           </div>
         </div>
@@ -233,12 +237,12 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       {/* Preliminary tax */}
       <section className="border-t border-border/8 pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Preliminärskatt
+          {t('preliminary_tax_heading')}
         </h2>
 
         <div className="max-w-xs space-y-2">
           <Label htmlFor="preliminary_tax_monthly">
-            Månatlig preliminärskatt (F-skatt)
+            {t('preliminary_tax_monthly_label')}
           </Label>
           <Input
             id="preliminary_tax_monthly"
@@ -247,7 +251,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             defaultValue={settings.preliminary_tax_monthly || ''}
           />
           <p className="text-xs text-muted-foreground">
-            Belopp i SEK som betalas varje månad.
+            {t('preliminary_tax_monthly_help')}
           </p>
         </div>
       </section>

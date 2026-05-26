@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -27,32 +28,10 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
+import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany } from '@/contexts/CompanyContext'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType } from '@/types'
-
-const itemSchema = z.object({
-  description: z.string().min(1, 'Beskrivning krävs'),
-  quantity: z.number().min(0.01, 'Minst 0.01'),
-  unit: z.string().min(1, 'Enhet krävs'),
-  unit_price: z.number().min(0, 'Pris måste vara positivt'),
-  vat_rate: z.number().min(0).max(25),
-})
-
-const schema = z.object({
-  customer_id: z.string().min(1, 'Välj en kund'),
-  invoice_date: z.string().min(1, 'Fakturadatum krävs'),
-  due_date: z.string().min(1, 'Förfallodatum krävs'),
-  delivery_date: z.string().optional(),
-  currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
-  document_type: z.enum(['invoice', 'proforma', 'delivery_note']),
-  your_reference: z.string().optional(),
-  our_reference: z.string().optional(),
-  notes: z.string().optional(),
-  items: z.array(itemSchema).min(1, 'Minst en rad krävs'),
-})
-
-type FormData = z.infer<typeof schema>
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -67,6 +46,31 @@ export default function NewInvoicePage() {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
   const supabase = createClient()
+  const t = useTranslations('invoice_editor')
+
+  const schema = useMemo(() => {
+    const itemSchema = z.object({
+      description: z.string().min(1, t('validation_description_required')),
+      quantity: z.number().min(0.01, t('validation_quantity_min')),
+      unit: z.string().min(1, t('validation_unit_required')),
+      unit_price: z.number().min(0, t('validation_price_positive')),
+      vat_rate: z.number().min(0).max(25),
+    })
+    return z.object({
+      customer_id: z.string().min(1, t('validation_customer_required')),
+      invoice_date: z.string().min(1, t('validation_invoice_date_required')),
+      due_date: z.string().min(1, t('validation_due_date_required')),
+      delivery_date: z.string().optional(),
+      currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+      document_type: z.enum(['invoice', 'proforma', 'delivery_note']),
+      your_reference: z.string().optional(),
+      our_reference: z.string().optional(),
+      notes: z.string().optional(),
+      items: z.array(itemSchema).min(1, t('validation_min_one_row')),
+    })
+  }, [t])
+
+  type FormData = z.infer<typeof schema>
 
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -86,6 +90,12 @@ export default function NewInvoicePage() {
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
+  const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  // True only when the user had zero invoices when this page loaded. The
+  // post-create flow uses this to offer a one-shot "upload a logo?" prompt
+  // — issue #520. Self-limits: once count > 0 it stays false.
+  const [hadZeroInvoices, setHadZeroInvoices] = useState<boolean | null>(null)
+  const [showLogoPrompt, setShowLogoPrompt] = useState(false)
   const pendingCustomerRef = useRef<Customer | null>(null)
 
   const {
@@ -145,7 +155,7 @@ export default function NewInvoicePage() {
     if (!company?.id) return
     const { data } = await supabase
       .from('company_settings')
-      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding')
+      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url')
       .eq('company_id', company.id)
       .single()
     if (data?.invoice_default_notes) {
@@ -161,7 +171,28 @@ export default function NewInvoicePage() {
     if (typeof data?.ore_rounding === 'boolean') {
       setOreRounding(data.ore_rounding)
     }
+    setLogoUrl(data?.logo_url ?? null)
   }
+
+  // First-invoice detection (issue #520): captured at page load so the
+  // post-create flow can offer the logo prompt for genuinely first-time
+  // invoices only. head:true keeps it cheap — no rows pulled.
+  useEffect(() => {
+    if (!company?.id) return
+    let cancelled = false
+    ;(async () => {
+      const { count } = await supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', company.id)
+      if (!cancelled) setHadZeroInvoices(count === 0 || count === null)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // supabase is a stable reference from createClient() at top of component
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id])
 
   // Preview the next invoice number so the user can catch a mis-set
   // sequence/prefix before committing. The actual allocator still runs
@@ -222,8 +253,8 @@ export default function NewInvoicePage() {
 
     if (error) {
       toast({
-        title: 'Kunde inte ladda kunder',
-        description: 'Kontrollera din anslutning och försök igen.',
+        title: t('load_customers_failed_title'),
+        description: t('load_customers_failed_description'),
         variant: 'destructive',
       })
     } else {
@@ -245,14 +276,14 @@ export default function NewInvoicePage() {
 
     if (!response.ok) {
       toast({
-        title: 'Kunde inte skapa kund',
+        title: t('create_customer_failed_title'),
         description: getErrorMessage(result, { context: 'customer' }),
         variant: 'destructive',
       })
     } else {
       toast({
-        title: 'Kund skapad',
-        description: `${data.name} har lagts till`,
+        title: t('customer_created_title'),
+        description: t('customer_created_description', { name: data.name }),
       })
       pendingCustomerRef.current = result.data
       setCustomers(prev => [...prev, result.data])
@@ -320,6 +351,22 @@ export default function NewInvoicePage() {
     }
   }
 
+  function getDocLabel(type: InvoiceDocumentType): string {
+    if (type === 'proforma') return t('doc_label_proforma')
+    if (type === 'delivery_note') return t('doc_label_delivery_note')
+    return t('doc_label_invoice')
+  }
+
+  function handleLogoPromptClose() {
+    setShowLogoPrompt(false)
+    // Resume the post-create flow that was deferred by the logo prompt.
+    if (selectedCustomer?.email && createdInvoiceId) {
+      setShowSendPrompt(true)
+    } else if (createdInvoiceId) {
+      router.push(`/invoices/${createdInvoiceId}`)
+    }
+  }
+
   async function handleConfirm() {
     if (!pendingData) return
     setIsSubmitting(true)
@@ -337,24 +384,29 @@ export default function NewInvoicePage() {
         throw new Error(getErrorMessage(result, { context: 'invoice', statusCode: response.status }))
       }
 
-      const docLabel = watchDocumentType === 'proforma' ? 'Proformafaktura' : watchDocumentType === 'delivery_note' ? 'Följesedel' : 'Faktura'
+      const docLabel = getDocLabel(watchDocumentType)
       toast({
-        title: `${docLabel} skapad`,
-        description: `${docLabel} ${result.data.invoice_number} har skapats`,
+        title: t('doc_created_title', { docLabel }),
+        description: t('doc_created_description', { docLabel, number: result.data.invoice_number }),
       })
 
       setShowReview(false)
+      setCreatedInvoiceId(result.data.id)
 
-      // If customer has email, offer to send immediately
-      if (selectedCustomer?.email) {
-        setCreatedInvoiceId(result.data.id)
+      // First-invoice-only logo prompt (issue #520) takes priority over the
+      // send-now dialog so a fresh upload makes it onto the just-sent PDF
+      // (pdf-template reads logo_url live from company_settings). Once the
+      // prompt closes, handleLogoPromptClose resumes the regular flow.
+      if (hadZeroInvoices === true && !logoUrl) {
+        setShowLogoPrompt(true)
+      } else if (selectedCustomer?.email) {
         setShowSendPrompt(true)
       } else {
         router.push(`/invoices/${result.data.id}`)
       }
     } catch (error) {
       toast({
-        title: 'Kunde inte skapa faktura',
+        title: t('create_invoice_failed_title'),
         description: getErrorMessage(error, { context: 'invoice' }),
         variant: 'destructive',
       })
@@ -378,12 +430,12 @@ export default function NewInvoicePage() {
       }
 
       toast({
-        title: 'Faktura skickad',
-        description: `Fakturan har skickats till ${selectedCustomer?.email}`,
+        title: t('invoice_sent_title'),
+        description: t('invoice_sent_description', { email: selectedCustomer?.email ?? '' }),
       })
     } catch (error) {
       toast({
-        title: 'Kunde inte skicka faktura',
+        title: t('send_invoice_failed_title'),
         description: getErrorMessage(error, { context: 'invoice' }),
         variant: 'destructive',
       })
@@ -412,6 +464,7 @@ export default function NewInvoicePage() {
           your_reference: pendingData.your_reference,
           our_reference: pendingData.our_reference,
           notes: pendingData.notes,
+          invoice_number: numberPreview,
         }),
       })
 
@@ -425,7 +478,7 @@ export default function NewInvoicePage() {
       window.open(url, '_blank')
     } catch (error) {
       toast({
-        title: 'Kunde inte generera PDF',
+        title: t('preview_pdf_failed'),
         description: getErrorMessage(error, { context: 'invoice' }),
         variant: 'destructive',
       })
@@ -442,24 +495,33 @@ export default function NewInvoicePage() {
     )
   }
 
+  const titleText = watchDocumentType === 'proforma'
+    ? t('title_proforma')
+    : watchDocumentType === 'delivery_note'
+      ? t('title_delivery_note')
+      : t('title_invoice')
+  const subtitleText = watchDocumentType === 'proforma'
+    ? t('subtitle_proforma')
+    : watchDocumentType === 'delivery_note'
+      ? t('subtitle_delivery_note')
+      : t('subtitle_invoice')
+
   return (
     <div className="space-y-8">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label="Tillbaka">
+        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1 min-w-0">
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
-            {watchDocumentType === 'proforma' ? 'Ny proformafaktura' : watchDocumentType === 'delivery_note' ? 'Ny följesedel' : 'Ny faktura'}
+            {titleText}
             {numberPreview && (
               <span className="ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl">
                 ({numberPreview})
               </span>
             )}
           </h1>
-          <p className="text-muted-foreground">
-            {watchDocumentType === 'proforma' ? 'Skapa en proformafaktura (ingen bokföring)' : watchDocumentType === 'delivery_note' ? 'Skapa en följesedel (utan priser)' : 'Skapa en ny faktura'}
-          </p>
+          <p className="text-muted-foreground">{subtitleText}</p>
         </div>
         <AgentSparkleButton
           intentId="invoice.draft"
@@ -471,9 +533,9 @@ export default function NewInvoicePage() {
       {hasBankDetails === false && (
         <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3 text-sm">
           <Landmark className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <p className="text-muted-foreground">Betalningsuppgifter saknas — du behöver lägga till dem innan du skapar en faktura.</p>
+          <p className="text-muted-foreground">{t('bank_missing_warning')}</p>
           <Button variant="link" size="sm" className="ml-auto shrink-0 px-0" onClick={() => setShowBankSetup(true)}>
-            Lägg till nu
+            {t('bank_add_now')}
           </Button>
         </div>
       )}
@@ -485,8 +547,8 @@ export default function NewInvoicePage() {
             {/* Customer selection */}
             <Card>
             <CardHeader>
-              <CardTitle>Kund<RequiredMark /></CardTitle>
-              <CardDescription>Välj vilken kund fakturan ska skickas till</CardDescription>
+              <CardTitle>{t('customer_card_title')}<RequiredMark /></CardTitle>
+              <CardDescription>{t('customer_card_description')}</CardDescription>
             </CardHeader>
             <CardContent>
               <Controller
@@ -495,7 +557,7 @@ export default function NewInvoicePage() {
                 render={({ field }) => (
                   <Select value={field.value} onValueChange={field.onChange}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Välj kund" />
+                      <SelectValue placeholder={t('select_customer_placeholder')} />
                     </SelectTrigger>
                     <SelectContent>
                       {customers.map((customer) => (
@@ -515,7 +577,7 @@ export default function NewInvoicePage() {
                 onClick={() => setIsCreateCustomerOpen(true)}
               >
                 <Plus className="mr-2 h-4 w-4" />
-                Skapa kund
+                {t('create_customer')}
               </Button>
               {errors.customer_id && (
                 <p className="text-sm text-destructive mt-2">{errors.customer_id.message}</p>
@@ -527,8 +589,8 @@ export default function NewInvoicePage() {
             {/* Invoice items */}
             <Card>
               <CardHeader>
-                <CardTitle>Fakturarader</CardTitle>
-              <CardDescription>Lägg till produkter eller tjänster</CardDescription>
+                <CardTitle>{t('items_card_title')}</CardTitle>
+              <CardDescription>{t('items_card_description')}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -543,9 +605,9 @@ export default function NewInvoicePage() {
                       {/* Description + mobile delete button */}
                       <div className="flex items-start gap-2 md:contents">
                         <div className="flex-1 space-y-1 md:col-span-3 md:space-y-2">
-                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">Beskrivning</Label>
+                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('description_label')}</Label>
                           <Input
-                            placeholder="T.ex. Instagram-kampanj"
+                            placeholder={t('description_placeholder')}
                             {...register(`items.${index}.description`)}
                           />
                           {errors.items?.[index]?.description && (
@@ -569,7 +631,7 @@ export default function NewInvoicePage() {
                       {/* Antal, Enhet, à-pris */}
                       <div className="grid grid-cols-3 gap-2 md:contents">
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
-                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">Antal</Label>
+                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('quantity_label')}</Label>
                           <Input
                             type="number"
                             step="0.01"
@@ -579,7 +641,7 @@ export default function NewInvoicePage() {
                           />
                         </div>
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
-                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">Enhet</Label>
+                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('unit_label')}</Label>
                           <Controller
                             name={`items.${index}.unit`}
                             control={control}
@@ -600,7 +662,7 @@ export default function NewInvoicePage() {
                           />
                         </div>
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
-                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">à-pris</Label>
+                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('unit_price_label')}</Label>
                           <Input
                             type="number"
                             step="any"
@@ -613,7 +675,7 @@ export default function NewInvoicePage() {
 
                       {/* Moms */}
                       <div className="space-y-1 md:col-span-2 md:space-y-2">
-                        <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">Moms</Label>
+                        <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('vat_label')}</Label>
                         <Controller
                           name={`items.${index}.vat_rate`}
                           control={control}
@@ -653,7 +715,7 @@ export default function NewInvoicePage() {
 
                       {/* Mobile summary row */}
                       <div className="flex justify-between text-sm pt-1 border-t border-border/40 md:hidden">
-                        <span className="text-muted-foreground">Rad {index + 1}</span>
+                        <span className="text-muted-foreground">{t('row_label', { index: index + 1 })}</span>
                         <span className="font-medium tabular-nums">{formatCurrency(lineTotal + lineVat, watchCurrency)}</span>
                       </div>
                     </div>
@@ -669,7 +731,7 @@ export default function NewInvoicePage() {
                   }
                 >
                   <Plus className="mr-2 h-4 w-4" />
-                  Lägg till rad
+                  {t('add_row')}
                 </Button>
               </div>
             </CardContent>
@@ -678,12 +740,12 @@ export default function NewInvoicePage() {
             {/* Notes */}
             <Card>
               <CardHeader>
-                <CardTitle>Anteckningar</CardTitle>
-              <CardDescription>Valfritt meddelande på fakturan</CardDescription>
+                <CardTitle>{t('notes_card_title')}</CardTitle>
+              <CardDescription>{t('notes_card_description')}</CardDescription>
             </CardHeader>
               <CardContent>
                 <Textarea
-                  placeholder="T.ex. betalningsvillkor eller tack för samarbetet..."
+                  placeholder={t('notes_placeholder')}
                   {...register('notes')}
                 />
               </CardContent>
@@ -695,11 +757,11 @@ export default function NewInvoicePage() {
             {/* Invoice details */}
             <Card>
               <CardHeader>
-                <CardTitle>Fakturadetaljer</CardTitle>
+                <CardTitle>{t('details_card_title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Dokumenttyp</Label>
+                <Label>{t('document_type_label')}</Label>
                 <Controller
                   name="document_type"
                   control={control}
@@ -709,9 +771,9 @@ export default function NewInvoicePage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="invoice">Faktura</SelectItem>
-                        <SelectItem value="proforma">Proformafaktura</SelectItem>
-                        <SelectItem value="delivery_note">Följesedel</SelectItem>
+                        <SelectItem value="invoice">{t('doctype_invoice')}</SelectItem>
+                        <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
+                        <SelectItem value="delivery_note">{t('doctype_delivery_note')}</SelectItem>
                       </SelectContent>
                     </Select>
                   )}
@@ -719,7 +781,7 @@ export default function NewInvoicePage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Valuta</Label>
+                <Label>{t('currency_label')}</Label>
                 <Controller
                   name="currency"
                   control={control}
@@ -741,26 +803,26 @@ export default function NewInvoicePage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Fakturadatum<RequiredMark /></Label>
+                <Label>{t('invoice_date_label')}<RequiredMark /></Label>
                 <Input type="date" {...register('invoice_date')} aria-required="true" />
               </div>
 
               <div className="space-y-2">
-                <Label>Förfallodatum<RequiredMark /></Label>
+                <Label>{t('due_date_label')}<RequiredMark /></Label>
                 <Input type="date" {...register('due_date')} aria-required="true" />
               </div>
 
               {watchDocumentType === 'invoice' && (
                 <div className="space-y-2">
-                  <Label>Leveransdatum</Label>
-                  <Input type="date" {...register('delivery_date')} placeholder="Om det skiljer sig från fakturadatum" />
+                  <Label>{t('delivery_date_label')}</Label>
+                  <Input type="date" {...register('delivery_date')} placeholder={t('delivery_date_placeholder')} />
                 </div>
               )}
 
               <Separator />
 
               <div className="space-y-2">
-                <Label>Er referens</Label>
+                <Label>{t('your_reference_label')}</Label>
                 <Controller
                   name="your_reference"
                   control={control}
@@ -768,14 +830,14 @@ export default function NewInvoicePage() {
                     <TagInput
                       value={field.value ?? ''}
                       onChange={field.onChange}
-                      placeholder="Kontaktperson hos kund"
+                      placeholder={t('your_reference_placeholder')}
                     />
                   )}
                 />
               </div>
 
               <div className="space-y-2">
-                <Label>Vår referens</Label>
+                <Label>{t('our_reference_label')}</Label>
                 <Controller
                   name="our_reference"
                   control={control}
@@ -783,7 +845,7 @@ export default function NewInvoicePage() {
                     <TagInput
                       value={field.value ?? ''}
                       onChange={field.onChange}
-                      placeholder="Ditt namn"
+                      placeholder={t('our_reference_placeholder')}
                     />
                   )}
                 />
@@ -794,11 +856,11 @@ export default function NewInvoicePage() {
           {/* Summary */}
             <Card>
               <CardHeader>
-                <CardTitle>Summering</CardTitle>
+                <CardTitle>{t('summary_card_title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Delsumma</span>
+                <span className="text-muted-foreground">{t('subtotal_label')}</span>
                 <span>{formatCurrency(subtotal, watchCurrency)}</span>
               </div>
               {Array.from(vatByRate.entries())
@@ -807,13 +869,13 @@ export default function NewInvoicePage() {
                   <div key={rate}>
                     {vatByRate.size > 1 && (
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Netto {rate}%</span>
+                        <span className="text-muted-foreground">{t('net_at_rate', { rate })}</span>
                         <span>{formatCurrency(group.base, watchCurrency)}</span>
                       </div>
                     )}
                     {group.vat > 0 && (
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Moms {rate}%</span>
+                        <span className="text-muted-foreground">{t('vat_at_rate', { rate })}</span>
                         <span>{formatCurrency(group.vat, watchCurrency)}</span>
                       </div>
                     )}
@@ -821,13 +883,13 @@ export default function NewInvoicePage() {
                 ))}
               {vatByRate.size === 0 && (
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Moms</span>
+                  <span className="text-muted-foreground">{t('vat_label_short')}</span>
                   <span>{formatCurrency(0, watchCurrency)}</span>
                 </div>
               )}
               <Separator />
               <div className="flex justify-between font-bold text-lg">
-                <span>Totalt</span>
+                <span>{t('total_label')}</span>
                 <span>{formatCurrency(total, watchCurrency)}</span>
               </div>
             </CardContent>
@@ -839,10 +901,10 @@ export default function NewInvoicePage() {
               className="w-full hidden md:block"
               size="lg"
               disabled={isSubmitting || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              Granska & skapa
+              {t('review_and_create')}
             </Button>
           </div>
         </div>
@@ -851,16 +913,16 @@ export default function NewInvoicePage() {
         <div className="md:hidden fixed left-0 right-0 z-40 bg-card/98 backdrop-blur-sm border-t border-border/40 px-5 py-3" style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}>
           <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
             <div>
-              <p className="text-xs text-muted-foreground">Totalt</p>
+              <p className="text-xs text-muted-foreground">{t('total_label')}</p>
               <p className="text-lg font-bold tabular-nums">{formatCurrency(total, watchCurrency)}</p>
             </div>
             <Button
               type="submit"
               disabled={isSubmitting || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              Granska & skapa
+              {t('review_and_create')}
             </Button>
           </div>
         </div>
@@ -872,15 +934,23 @@ export default function NewInvoicePage() {
           onOpenChange={setShowReview}
           onConfirm={handleConfirm}
           isSubmitting={isSubmitting}
-          title={watchDocumentType === 'proforma' ? 'Granska proformafaktura' : watchDocumentType === 'delivery_note' ? 'Granska följesedel' : 'Granska faktura'}
+          title={watchDocumentType === 'proforma'
+            ? t('review_dialog_title_proforma')
+            : watchDocumentType === 'delivery_note'
+              ? t('review_dialog_title_delivery_note')
+              : t('review_dialog_title_invoice')}
           warningText={watchDocumentType === 'invoice'
             ? accountingMethod === 'cash'
-              ? 'En faktura skapas och tilldelas ett fakturanummer. Verifikationen bokförs först när fakturan markeras som betald (kontantmetoden).'
-              : 'En faktura skapas och tilldelas ett fakturanummer. När den skickas eller markeras som skickad bokförs en verifikation, som inte kan redigeras direkt men kan korrigeras via en kreditnota.'
+              ? t('review_warning_invoice_cash')
+              : t('review_warning_invoice_accrual')
             : watchDocumentType === 'proforma'
-              ? 'En proformafaktura skapas. Ingen verifikation bokförs. Proforman kan senare konverteras till en riktig faktura.'
-              : 'En följesedel skapas utan priser. Ingen verifikation bokförs.'}
-          confirmLabel={watchDocumentType === 'proforma' ? 'Skapa proformafaktura' : watchDocumentType === 'delivery_note' ? 'Skapa följesedel' : 'Bekräfta & skapa'}
+              ? t('review_warning_proforma')
+              : t('review_warning_delivery_note')}
+          confirmLabel={watchDocumentType === 'proforma'
+            ? t('confirm_create_proforma')
+            : watchDocumentType === 'delivery_note'
+              ? t('confirm_create_delivery_note')
+              : t('confirm_create_invoice')}
           extraActions={
             <Button
               variant="outline"
@@ -892,7 +962,7 @@ export default function NewInvoicePage() {
               ) : (
                 <Eye className="mr-2 h-4 w-4" />
               )}
-              {isPreviewing ? 'Genererar...' : 'Förhandsgranska PDF'}
+              {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
             </Button>
           }
         >
@@ -921,7 +991,7 @@ export default function NewInvoicePage() {
       <Dialog open={isCreateCustomerOpen} onOpenChange={setIsCreateCustomerOpen}>
         <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Lägg till kund</DialogTitle>
+            <DialogTitle>{t('create_customer_dialog_title')}</DialogTitle>
           </DialogHeader>
           <CustomerForm
             onSubmit={handleCreateCustomer}
@@ -937,6 +1007,14 @@ export default function NewInvoicePage() {
         onComplete={handleBankSetupComplete}
       />
 
+      {/* First-invoice logo prompt (issue #520) */}
+      <FirstInvoiceLogoPrompt
+        open={showLogoPrompt}
+        onClose={handleLogoPromptClose}
+        logoUrl={logoUrl}
+        onLogoUpdate={(url) => setLogoUrl(url)}
+      />
+
       {/* Send now prompt dialog */}
       <Dialog open={showSendPrompt} onOpenChange={(open) => {
         if (!open && createdInvoiceId) {
@@ -946,9 +1024,9 @@ export default function NewInvoicePage() {
       }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Skicka fakturan nu?</DialogTitle>
+            <DialogTitle>{t('send_now_dialog_title')}</DialogTitle>
             <DialogDescription>
-              Fakturan skapades. Vill du skicka den till {selectedCustomer?.email} direkt?
+              {t('send_now_dialog_description', { email: selectedCustomer?.email ?? '' })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex gap-2 sm:gap-0">
@@ -960,7 +1038,7 @@ export default function NewInvoicePage() {
               }}
               disabled={isSending}
             >
-              Skicka senare
+              {t('send_later')}
             </Button>
             <Button onClick={handleSendNow} disabled={isSending}>
               {isSending ? (
@@ -968,7 +1046,7 @@ export default function NewInvoicePage() {
               ) : (
                 <Send className="mr-2 h-4 w-4" />
               )}
-              {isSending ? 'Skickar...' : 'Skicka nu'}
+              {isSending ? t('send_now_sending') : t('send_now')}
             </Button>
           </DialogFooter>
         </DialogContent>

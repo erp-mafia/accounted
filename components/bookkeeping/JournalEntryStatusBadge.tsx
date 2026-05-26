@@ -1,35 +1,53 @@
+'use client'
+
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import type { JournalEntry } from '@/types'
 
-const statusConfig: Record<string, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
-  draft: { label: 'Utkast', variant: 'secondary' },
-  posted: { label: 'Bokförd', variant: 'success' },
-  reversed: { label: 'Omförd', variant: 'warning' },
-  cancelled: { label: 'Makulerad', variant: 'secondary' },
+type BadgeVariant = 'default' | 'secondary' | 'success' | 'warning' | 'destructive'
+
+const statusVariants: Record<string, BadgeVariant> = {
+  draft: 'secondary',
+  posted: 'success',
+  reversed: 'warning',
+  cancelled: 'secondary',
 }
 
-const sourceTypeBadges: Record<string, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
-  storno: { label: 'Storno', variant: 'destructive' },
-  correction: { label: 'Rättelse', variant: 'default' },
+const sourceTypeVariants: Record<string, BadgeVariant> = {
+  storno: 'destructive',
+  correction: 'default',
 }
 
-export const sourceTypeLabels: Record<string, string> = {
-  manual: 'Manuell',
-  bank_transaction: 'Banktransaktion',
-  invoice_created: 'Faktura skapad',
-  invoice_paid: 'Fakturabetalning',
-  credit_note: 'Kreditfaktura',
-  salary_payment: 'Lön',
-  opening_balance: 'Ingående balans',
-  year_end: 'Årsbokslut',
-  storno: 'Storno',
-  correction: 'Rättelse',
-  import: 'Import',
-  system: 'System',
-  supplier_invoice_registered: 'Leverantörsfaktura',
-  supplier_invoice_paid: 'Leverantörsbetalning',
-  supplier_invoice_cash_payment: 'Kontantbetalning',
-  currency_revaluation: 'Valutaomvärdering',
+const SOURCE_TYPES = [
+  'manual',
+  'bank_transaction',
+  'invoice_created',
+  'invoice_paid',
+  'credit_note',
+  'salary_payment',
+  'opening_balance',
+  'year_end',
+  'storno',
+  'correction',
+  'import',
+  'system',
+  'supplier_invoice_registered',
+  'supplier_invoice_paid',
+  'supplier_invoice_cash_payment',
+  'currency_revaluation',
+] as const
+
+/**
+ * Hook returning the translated source-type label map. Use this in client
+ * components that need to render the human-readable label for a source_type.
+ */
+export function useSourceTypeLabels(): Record<string, string> {
+  const t = useTranslations('journal_status')
+  const out: Record<string, string> = {}
+  for (const key of SOURCE_TYPES) {
+    out[key] = t(`source_label_${key}`)
+  }
+  return out
 }
 
 interface Props {
@@ -38,19 +56,32 @@ interface Props {
 }
 
 export default function JournalEntryStatusBadge({ entry, showStatus = true }: Props) {
-  const status = statusConfig[entry.status]
-  const sourceType = sourceTypeBadges[entry.source_type]
+  const t = useTranslations('journal_status')
+  const statusVariant = statusVariants[entry.status]
+  const sourceVariant = sourceTypeVariants[entry.source_type]
+
+  const statusLabelKey =
+    entry.status === 'draft' ? 'status_draft'
+      : entry.status === 'posted' ? 'status_posted'
+      : entry.status === 'reversed' ? 'status_reversed'
+      : entry.status === 'cancelled' ? 'status_cancelled'
+      : null
+
+  const sourceLabelKey =
+    entry.source_type === 'storno' ? 'source_storno'
+      : entry.source_type === 'correction' ? 'source_correction'
+      : null
 
   return (
     <span className="inline-flex items-center gap-1">
-      {showStatus && status && (
-        <Badge variant={status.variant} className="text-[10px] px-1.5 py-0">
-          {status.label}
+      {showStatus && statusVariant && statusLabelKey && (
+        <Badge variant={statusVariant} className="text-[10px] px-1.5 py-0">
+          {t(statusLabelKey)}
         </Badge>
       )}
-      {sourceType && (
-        <Badge variant={sourceType.variant} className="text-[10px] px-1.5 py-0">
-          {sourceType.label}
+      {sourceVariant && sourceLabelKey && (
+        <Badge variant={sourceVariant} className="text-[10px] px-1.5 py-0">
+          {t(sourceLabelKey)}
         </Badge>
       )}
     </span>

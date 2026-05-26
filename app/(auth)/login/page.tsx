@@ -2,6 +2,7 @@
 
 import { Suspense, useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -10,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Mail, ArrowLeft, KeyRound } from 'lucide-react'
 import Image from 'next/image'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
@@ -43,6 +44,9 @@ function LoginPageContent() {
   const callbackError = searchParams.get('error')
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  const tAuth = useTranslations('auth')
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
 
   // Reset cooldown timer
   useEffect(() => {
@@ -72,8 +76,8 @@ function LoginPageContent() {
 
     if (result.error) {
       toast({
-        title: 'Inloggning misslyckades',
-        description: 'Kunde inte slutföra BankID-inloggningen.',
+        title: tAuth('login_failed_title'),
+        description: tAuth('login_failed_bankid'),
         variant: 'destructive',
       })
       return
@@ -89,8 +93,8 @@ function LoginPageContent() {
         if (error) {
           console.error('[login] BankID verifyOtp failed', error)
           toast({
-            title: 'Inloggning misslyckades',
-            description: 'Kunde inte slutfora BankID-inloggningen.',
+            title: tAuth('login_failed_title'),
+            description: tAuth('login_failed_bankid'),
             variant: 'destructive',
           })
           return
@@ -126,8 +130,8 @@ function LoginPageContent() {
       } catch (error) {
         console.error('[login] BankID complete error', error)
         toast({
-          title: 'Inloggning misslyckades',
-          description: getErrorMessage(error, { context: 'auth' }),
+          title: tAuth('login_failed_title'),
+          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',
         })
       }
@@ -150,10 +154,10 @@ function LoginPageContent() {
 
       if (error) {
         toast({
-          title: 'Inloggning misslyckades',
+          title: tAuth('login_failed_title'),
           description: error.message === 'Invalid login credentials'
-            ? 'Fel e-post eller lösenord.'
-            : getErrorMessage(error, { context: 'auth' }),
+            ? tAuth('login_invalid_credentials')
+            : getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -195,8 +199,8 @@ function LoginPageContent() {
       router.refresh()
     } catch (error) {
       toast({
-        title: 'Inloggning misslyckades',
-        description: getErrorMessage(error, { context: 'auth' }),
+        title: tAuth('login_failed_title'),
+        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
@@ -218,8 +222,8 @@ function LoginPageContent() {
 
       if (error) {
         toast({
-          title: 'Kunde inte skicka återställningslänk',
-          description: getErrorMessage(error, { context: 'auth' }),
+          title: tAuth('reset_failed_title'),
+          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -229,13 +233,13 @@ function LoginPageContent() {
       setResetCooldownUntil(Date.now() + 60_000)
       setIsEmailSent(true)
       toast({
-        title: 'Återställningslänk skickad!',
-        description: 'Kolla din inkorg för att återställa lösenordet.',
+        title: tAuth('reset_sent_title'),
+        description: tAuth('reset_sent_body'),
       })
     } catch (error) {
       toast({
-        title: 'Kunde inte skicka återställningslänk',
-        description: getErrorMessage(error, { context: 'auth' }),
+        title: tAuth('reset_failed_title'),
+        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
@@ -255,17 +259,23 @@ function LoginPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">Kolla din e-post</h1>
+            <h1 className="text-2xl font-medium tracking-tight">{tAuth('email_sent_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              Vi har skickat en {showResetPassword ? 'återställningslänk' : 'inloggningslänk'} till{' '}
-              <span className="font-medium text-foreground">{email}</span>
+              {showResetPassword
+                ? tAuth.rich('email_sent_body_reset', {
+                    email,
+                    strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                  })
+                : tAuth.rich('email_sent_body_login', {
+                    email,
+                    strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                  })}
             </p>
           </div>
 
           <div className="rounded-xl border bg-card p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              Klicka på länken i e-posten för att {showResetPassword ? 'återställa ditt lösenord' : 'logga in'}.
-              Länken är giltig i 1 timme.
+              {showResetPassword ? tAuth('email_sent_hint_reset') : tAuth('email_sent_hint_login')}
             </p>
           </div>
 
@@ -278,7 +288,7 @@ function LoginPageContent() {
             }}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Tillbaka
+            {tCommon('back')}
           </Button>
         </div>
       </div>
@@ -296,22 +306,22 @@ function LoginPageContent() {
                 <KeyRound className="h-7 w-7 text-primary" />
               </div>
             </div>
-            <h1 className="text-2xl font-medium tracking-tight">Återställ lösenord</h1>
+            <h1 className="text-2xl font-medium tracking-tight">{tAuth('reset_title')}</h1>
             <p className="text-muted-foreground text-sm mt-2">
-              Ange din e-postadress så skickar vi en återställningslänk
+              {tAuth('reset_subtitle')}
             </p>
           </div>
 
           <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
             <form onSubmit={handleResetPassword} className="space-y-5">
               <div className="space-y-2">
-                <Label htmlFor="email">E-postadress</Label>
+                <Label htmlFor="email">{tAuth('email_label')}</Label>
                 <Input
                   id="email"
                   name="email"
                   type="email"
                   autoComplete="email"
-                  placeholder="namn@exempel.se"
+                  placeholder={tAuth('email_placeholder')}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -323,12 +333,12 @@ function LoginPageContent() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Skickar...
+                    {tAuth('reset_sending')}
                   </>
                 ) : resetCooldownUntil ? (
-                  `Vänta ${resetCooldownRemaining}s`
+                  tAuth('reset_cooldown', { seconds: resetCooldownRemaining })
                 ) : (
-                  'Skicka återställningslänk'
+                  tAuth('reset_button')
                 )}
               </Button>
             </form>
@@ -340,7 +350,7 @@ function LoginPageContent() {
             onClick={() => setShowResetPassword(false)}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Tillbaka till inloggning
+            {tAuth('back_to_login')}
           </Button>
         </div>
       </div>
@@ -360,7 +370,7 @@ function LoginPageContent() {
             priority
           />
           <p className="text-muted-foreground text-sm mt-3">
-            Logga in för att hantera din ekonomi
+            {tAuth('login_subtitle')}
           </p>
         </div>
 
@@ -368,16 +378,16 @@ function LoginPageContent() {
           {callbackError === 'auth_error' && (
             <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
               <p className="text-sm font-medium text-destructive">
-                Återställningslänken fungerade inte
+                {tAuth('callback_error_title')}
               </p>
               <p className="mt-1 text-sm text-destructive/90">
-                Länken har gått ut eller använts redan.{' '}
+                {tAuth('callback_error_body')}{' '}
                 <button
                   type="button"
                   onClick={() => setShowResetPassword(true)}
                   className="font-medium underline underline-offset-2"
                 >
-                  Begär en ny återställningslänk
+                  {tAuth('request_new_reset_link')}
                 </button>
                 .
               </p>
@@ -388,10 +398,10 @@ function LoginPageContent() {
               {bankIdNoAccount ? (
                 <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                    Hej {bankIdNoAccount.givenName}!
+                    {tAuth('bankid_no_account_greeting', { name: bankIdNoAccount.givenName ?? '' })}
                   </p>
                   <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                    Vi hittade inget konto kopplat till ditt BankID. Logga in med e-post nedan och koppla sedan BankID i installningar.
+                    {tAuth('bankid_no_account_body')}
                   </p>
                   <p className="mt-2">
                     <button
@@ -399,7 +409,7 @@ function LoginPageContent() {
                       onClick={() => setBankIdNoAccount(null)}
                       className="text-xs text-amber-600 underline underline-offset-2 hover:text-amber-800 dark:text-amber-400"
                     >
-                      Eller skapa ett nytt konto
+                      {tAuth('bankid_no_account_create')}
                     </button>
                   </p>
                 </div>
@@ -413,7 +423,7 @@ function LoginPageContent() {
                   <div className="w-full border-t" />
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">eller logga in med e-post</span>
+                  <span className="bg-card px-2 text-muted-foreground">{tAuth('or_email_divider')}</span>
                 </div>
               </div>
             </>
@@ -421,30 +431,22 @@ function LoginPageContent() {
           {bankIdUnavailable && (
             <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
               <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                Har du inget lösenord?
+                {tAuth('bankid_unavailable_title')}
               </p>
               <p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
-                Om du skapade ditt konto med BankID kan du använda{' '}
-                <button
-                  type="button"
-                  onClick={() => setShowResetPassword(true)}
-                  className="font-medium underline underline-offset-2"
-                >
-                  &quot;Glömt lösenord?&quot;
-                </button>{' '}
-                för att få en inloggningslänk via e-post.
+                {tAuth('bankid_unavailable_body')}
               </p>
             </div>
           )}
           <form onSubmit={handlePasswordLogin} className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="email">E-postadress</Label>
+              <Label htmlFor="email">{tAuth('email_label')}</Label>
               <Input
                 id="email"
                 name="email"
                 type="email"
                 autoComplete="email"
-                placeholder="namn@exempel.se"
+                placeholder={tAuth('email_placeholder')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -454,13 +456,13 @@ function LoginPageContent() {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="password">Lösenord</Label>
+                <Label htmlFor="password">{tAuth('password_label')}</Label>
                 <button
                   type="button"
                   onClick={() => setShowResetPassword(true)}
                   className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
                 >
-                  Glömt lösenord?
+                  {tAuth('forgot_password')}
                 </button>
               </div>
               <Input
@@ -468,7 +470,7 @@ function LoginPageContent() {
                 name="password"
                 type="password"
                 autoComplete="current-password"
-                placeholder="Ditt lösenord"
+                placeholder={tAuth('password_placeholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -480,10 +482,10 @@ function LoginPageContent() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Loggar in...
+                  {tAuth('logging_in')}
                 </>
               ) : (
-                'Logga in'
+                tAuth('login_button')
               )}
             </Button>
           </form>
@@ -493,7 +495,7 @@ function LoginPageContent() {
               <div className="w-full border-t" />
             </div>
             <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">eller</span>
+              <span className="bg-card px-2 text-muted-foreground">{tAuth('or_divider')}</span>
             </div>
           </div>
 
@@ -503,19 +505,19 @@ function LoginPageContent() {
             asChild
           >
             <Link href="/register">
-              Skapa konto
+              {tAuth('no_account')}
             </Link>
           </Button>
         </div>
 
         <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
-          Genom att logga in godkänner du våra{' '}
+          {tAuth('terms_prefix')}{' '}
           <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            villkor
+            {tAuth('terms_link')}
           </a>{' '}
-          och{' '}
+          {tAuth('terms_and')}{' '}
           <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            integritetspolicy
+            {tAuth('privacy_link')}
           </a>
           .
         </p>

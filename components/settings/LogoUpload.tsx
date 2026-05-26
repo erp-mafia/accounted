@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
@@ -12,6 +13,7 @@ interface LogoUploadProps {
 }
 
 export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
+  const t = useTranslations('settings_company')
   const { toast } = useToast()
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -23,11 +25,11 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
 
   function validateAndUpload(file: File) {
     if (!ALLOWED_TYPES.includes(file.type)) {
-      toast({ title: 'Otillåten filtyp', description: 'PNG, JPG, SVG eller WebP.', variant: 'destructive' })
+      toast({ title: t('logo_disallowed_type_title'), description: t('logo_disallowed_type_description'), variant: 'destructive' })
       return
     }
     if (file.size > 2 * 1024 * 1024) {
-      toast({ title: 'Filen är för stor (max 2 MB)', variant: 'destructive' })
+      toast({ title: t('logo_too_large'), variant: 'destructive' })
       return
     }
     handleUpload(file)
@@ -48,15 +50,15 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       const result = await response.json()
 
       if (!response.ok) {
-        throw new Error(result.error || 'Uppladdning misslyckades')
+        throw new Error(result.error || t('logo_upload_failed_default'))
       }
 
       setPreview(result.data.logo_url)
       onUpdate(result.data.logo_url)
     } catch (error) {
       toast({
-        title: 'Kunde inte ladda upp',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('logo_upload_failed_title'),
+        description: error instanceof Error ? error.message : t('logo_try_again'),
         variant: 'destructive',
       })
     }
@@ -75,7 +77,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       onUpdate(null)
       if (inputRef.current) inputRef.current.value = ''
     } catch {
-      toast({ title: 'Kunde inte ta bort logotyp', variant: 'destructive' })
+      toast({ title: t('logo_delete_failed'), variant: 'destructive' })
     }
 
     setIsDeleting(false)
@@ -107,10 +109,10 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Logotyp
+        {t('logo_heading')}
       </h2>
       <p className="text-xs text-muted-foreground -mt-2">
-        Visas i sidhuvudet på dina fakturor. Max 2 MB, PNG/JPG/SVG.
+        {t('logo_help')}
       </p>
 
       {preview ? (
@@ -119,7 +121,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={preview}
-              alt="Företagslogotyp"
+              alt={t('logo_alt')}
               className="max-h-16 max-w-[200px] object-contain"
             />
           </div>
@@ -131,7 +133,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               disabled={isUploading}
             >
               {isUploading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-2 h-3.5 w-3.5" />}
-              Byt logotyp
+              {t('logo_change')}
             </Button>
             <Button
               variant="ghost"
@@ -141,7 +143,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               className="text-muted-foreground hover:text-destructive"
             >
               {isDeleting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-2 h-3.5 w-3.5" />}
-              Ta bort
+              {t('logo_remove')}
             </Button>
           </div>
         </div>
@@ -164,7 +166,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             <Upload className="h-6 w-6 text-muted-foreground/50 mb-2" />
           )}
           <Label className="text-sm text-muted-foreground cursor-pointer">
-            {isUploading ? 'Laddar upp...' : 'Välj fil eller dra hit'}
+            {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
           </Label>
         </button>
       )}

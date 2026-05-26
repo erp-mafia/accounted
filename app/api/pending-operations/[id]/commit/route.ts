@@ -43,7 +43,7 @@ export async function POST(
       user.id,
       companyId,
       op as PendingOperation,
-      { userEmail: user.email }
+      { userEmail: user.email, commitMethod: 'user_accept' }
     )
 
     if (result.status === 'committed') {

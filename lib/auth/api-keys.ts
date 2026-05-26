@@ -28,6 +28,8 @@ export const API_KEY_SCOPES = {
   'documents:write':    { label: 'Dokument — skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
   'compliance:read':    { label: 'Compliance — läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet' },
   'agent:read':         { label: 'Agent — läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
+  'pending_operations:read':    { label: 'Stagade operationer — läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
+  'pending_operations:approve': { label: 'Stagade operationer — godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP — agenten ersätter web-UI:s granskning' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -43,15 +45,92 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
   'reports:read',
 ]
 
+/**
+ * Default scope grant for OAuth-issued keys when the client did not pass an
+ * explicit `scope` parameter at /authorize. Read-only by design — every
+ * write or approval scope must be requested explicitly by the client AND
+ * affirmatively ticked by the user on the consent screen.
+ *
+ * Rationale (do not weaken without a documented security decision):
+ *   - GDPR Art. 25(2) data-protection-by-default: the minimum-necessary
+ *     access set must be the silent baseline.
+ *   - ISO 27001:2022 A.5.18 / A.8.2 / SOC 2 CC6.3: privileged capabilities
+ *     (write, approve) must not be bundled into a default grant.
+ *   - Segregation of Duties (findStageApproveConflict below): granting any
+ *     STAGING_SCOPES member together with `pending_operations:approve` on a
+ *     single key lets an automated agent both stage AND commit financial
+ *     postings without a human-in-the-loop review. Keeping the default
+ *     read-only prevents this combination from being silently issued.
+ *   - BFL 5 kap 5§ / BFNAR 2013:2 behandlingshistorik: write paths that
+ *     create or modify verifikationer must be opt-in at the authorization
+ *     layer; conversational acknowledgement at the agent layer is not an
+ *     auditable substitute.
+ */
+export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
+  'transactions:read',
+  'customers:read',
+  'invoices:read',
+  'suppliers:read',
+  'reports:read',
+  'companies:read',
+  'events:read',
+  'operations:read',
+  'documents:read',
+  'compliance:read',
+  'payroll:read',
+  'pending_operations:read',
+]
+
+/**
+ * Scopes advertised in the RFC 8414 authorization-server metadata document
+ * (/.well-known/oauth-authorization-server). Restricted to the same set that
+ * /authorize will grant by default — destructive scopes still work when
+ * requested explicitly, they just aren't enumerated for unauthenticated
+ * callers (defense-in-depth against scope-escalation reconnaissance).
+ */
+export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCOPES]
+
+/**
+ * Scopes that allow staging a pending_operation. Used to detect a
+ * segregation-of-duties conflict when paired with `pending_operations:approve`
+ * on the same API key (ISO 27001:2022 A.5.3, SOC 2 CC6.1).
+ */
+export const STAGING_SCOPES: ApiKeyScope[] = [
+  'transactions:write',
+  'customers:write',
+  'invoices:write',
+  'suppliers:write',
+  'bookkeeping:write',
+  'payroll:write',
+  'documents:write',
+]
+
+/**
+ * Detect a segregation-of-duties conflict between staging and approval scopes
+ * on the same key. Returns the offending staging scope, or null when the
+ * combination is clean. Callers may choose to block, warn, or record an
+ * acknowledged risk acceptance.
+ *
+ * Granting both stage+approve to the same actor lets an automated agent both
+ * stage AND commit financial postings without a human-in-the-loop review,
+ * which is the explicit control surface for BFNAR 2013:2 (behandlingshistorik)
+ * and BFL 5 kap 5§ traceability requirements.
+ */
+export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | null {
+  if (!scopes.includes('pending_operations:approve')) return null
+  return scopes.find((s) => STAGING_SCOPES.includes(s)) ?? null
+}
+
 /** Scope domain groups for UI rendering */
 export const SCOPE_GROUPS = [
-  { domain: 'transactions', label: 'Transaktioner',  read: 'transactions:read' as const, write: 'transactions:write' as const },
-  { domain: 'customers',    label: 'Kunder',         read: 'customers:read' as const,    write: 'customers:write' as const },
-  { domain: 'invoices',     label: 'Fakturor',       read: 'invoices:read' as const,     write: 'invoices:write' as const },
-  { domain: 'suppliers',    label: 'Leverantörer',   read: 'suppliers:read' as const,    write: 'suppliers:write' as const },
-  { domain: 'reports',      label: 'Rapporter',      read: 'reports:read' as const,      write: null },
-  { domain: 'bookkeeping',  label: 'Bokföring',      read: null,                          write: 'bookkeeping:write' as const },
-  { domain: 'payroll',      label: 'Löner',          read: 'payroll:read' as const,      write: 'payroll:write' as const },
+  { domain: 'transactions',        label: 'Transaktioner',        read: 'transactions:read' as const,        write: 'transactions:write' as const },
+  { domain: 'customers',           label: 'Kunder',               read: 'customers:read' as const,           write: 'customers:write' as const },
+  { domain: 'invoices',            label: 'Fakturor',             read: 'invoices:read' as const,            write: 'invoices:write' as const },
+  { domain: 'suppliers',           label: 'Leverantörer',         read: 'suppliers:read' as const,           write: 'suppliers:write' as const },
+  { domain: 'reports',             label: 'Rapporter',            read: 'reports:read' as const,             write: null },
+  { domain: 'bookkeeping',         label: 'Bokföring',            read: null,                                 write: 'bookkeeping:write' as const },
+  { domain: 'payroll',             label: 'Löner',                read: 'payroll:read' as const,             write: 'payroll:write' as const },
+  { domain: 'pending_operations',  label: 'Stagade operationer',  read: 'pending_operations:read' as const,  write: 'pending_operations:approve' as const },
 ] as const
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
@@ -123,10 +202,13 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_export_sie:                      'reports:read',
   gnubok_audit_package:                   'reports:read',
   gnubok_import_sie:                      'bookkeeping:write',
+  // Supplier CRUD
+  gnubok_create_supplier:                 'suppliers:write',
   // Supplier invoice lifecycle
   gnubok_approve_supplier_invoice:        'suppliers:write',
   gnubok_credit_supplier_invoice:         'suppliers:write',
   gnubok_create_supplier_invoice_from_inbox: 'suppliers:write',
+  gnubok_set_inbox_extracted_data:        'suppliers:write',
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',
@@ -139,6 +221,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // stay unscoped (discovery + static Markdown bodies + globally-readable atom
   // registry — no per-company data).
   gnubok_get_agent_briefing:              'agent:read',
+  // Pending operations approval (mirrors the /pending web UI)
+  gnubok_list_pending_operations:         'pending_operations:read',
+  gnubok_approve_pending_operation:       'pending_operations:approve',
+  gnubok_reject_pending_operation:        'pending_operations:approve',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {

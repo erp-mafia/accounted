@@ -22,14 +22,63 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { z } from 'zod'
 import {
   generateAGIXml,
   buildIndividuppgifterSnapshot,
   AGIIncompleteDataError,
+  AGIPayloadTooLargeError,
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
+
+// Strict runtime validation of the joined salary_run_employees row. Without
+// this, columns added by recent migrations (removed_from_agi,
+// benefits_adjusted, vaxa_stod_eligible, employment_start,
+// housing_benefit_type) reaching the mapper as null/undefined would silently
+// fall back to Boolean(undefined) = false and mis-emit regulatory flags.
+// Zod produces an explicit error instead.
+const EmployeeJoinSchema = z
+  .object({
+    personnummer: z.string().min(1, 'employee.personnummer saknas'),
+    specification_number: z.number().int().min(1, 'employee.specification_number måste vara ≥ 1'),
+    f_skatt_status: z.string(),
+    monthly_salary: z.number().nullable().optional(),
+    vaxa_stod_eligible: z.boolean().nullable().optional(),
+    employment_start: z.string().nullable().optional(),
+    housing_benefit_type: z.enum(['smahus', 'ej_smahus']).nullable().optional(),
+  })
+  .passthrough()
+
+const LineItemSchema = z
+  .object({
+    item_type: z.string(),
+    amount: z.number().nullable().optional(),
+    quantity: z.number().nullable().optional(),
+  })
+  .passthrough()
+
+const SalaryRunEmployeeRowSchema = z
+  .object({
+    employee_id: z.string().uuid(),
+    gross_salary: z.number(),
+    tax_withheld: z.number(),
+    avgifter_basis: z.number(),
+    avgifter_amount: z.number(),
+    avgifter_rate: z.number(),
+    avgifter_category: z.string().nullable().optional(),
+    removed_from_agi: z.boolean().nullable().optional(),
+    benefits_adjusted: z.boolean().nullable().optional(),
+    sick_days: z.number().nullable().optional(),
+    vab_days: z.number().nullable().optional(),
+    parental_days: z.number().nullable().optional(),
+    employee: EmployeeJoinSchema.nullable(),
+    line_items: z.array(LineItemSchema).nullable().optional(),
+  })
+  .passthrough()
+
+type SalaryRunEmployeeRow = z.infer<typeof SalaryRunEmployeeRowSchema>
 
 const ELIGIBLE_STATUSES = ['review', 'approved', 'paid', 'booked', 'corrected'] as const
 
@@ -124,7 +173,7 @@ export async function generateAgiDeclaration(
   const { data: runEmployees } = await supabase
     .from('salary_run_employees')
     .select(
-      '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary), line_items:salary_line_items(*)',
+      '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary, vaxa_stod_eligible, employment_start, housing_benefit_type), line_items:salary_line_items(*)',
     )
     .eq('salary_run_id', salaryRunId)
 
@@ -153,12 +202,17 @@ export async function generateAgiDeclaration(
 
   const absenceByEmployee = new Map<
     string,
-    Array<{ date: string; type: 'vab' | 'parental'; hours: number }>
+    Array<{
+      date: string
+      type: 'vab' | 'parental'
+      hours: number
+      specifikationsnummer: number
+    }>
   >()
   if (employeeIds.length > 0) {
     const { data: absenceRows } = await supabase
       .from('salary_absence_days')
-      .select('employee_id, absence_date, absence_type, hours')
+      .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer')
       .eq('company_id', companyId)
       .in('absence_type', ['vab', 'parental'])
       .gte('absence_date', periodStart)
@@ -169,73 +223,153 @@ export async function generateAgiDeclaration(
       absence_date: string
       absence_type: 'vab' | 'parental'
       hours: number
+      franvaro_specifikationsnummer: number | null
     }>) {
+      // Row should always have a number for vab/parental (trigger assigns
+      // on insert + backfill migration covers existing data). Defensive
+      // fallback: skip rows missing the number rather than emit a bogus 0,
+      // which would collide with Skatteverket's unique key.
+      if (row.franvaro_specifikationsnummer == null) continue
       const list = absenceByEmployee.get(row.employee_id) ?? []
       list.push({
         date: row.absence_date,
         type: row.absence_type,
         hours: Number(row.hours ?? 8),
+        specifikationsnummer: row.franvaro_specifikationsnummer,
       })
       absenceByEmployee.set(row.employee_id, list)
     }
   }
 
-  const employeeData: AGIEmployeeData[] = (runEmployees as Array<Record<string, unknown>>).map(
-    (sre) => {
-      const emp = sre.employee as {
-        personnummer: string
-        specification_number: number
-        f_skatt_status: string
-      } | null
-      const lineItems = (sre.line_items || []) as Array<Record<string, unknown>>
+  // Validate the joined rows up-front so a malformed Supabase response
+  // (missing column, wrong type, null specification_number, …) surfaces as
+  // a clean AGIIncompleteDataError instead of silently emitting wrong
+  // flags later. See SalaryRunEmployeeRowSchema definition above.
+  const parsedRows: SalaryRunEmployeeRow[] = (runEmployees as unknown[]).map((raw, idx) => {
+    const parsed = SalaryRunEmployeeRowSchema.safeParse(raw)
+    if (!parsed.success) {
+      const fields = parsed.error.issues.map((iss) => iss.path.join('.')).join(', ')
+      throw new AGIIncompleteDataError(
+        `salary_run_employees rad ${idx} har ogiltig form (saknar/felaktiga fält: ${fields}). ` +
+          'Detta blockerar AGI-generering eftersom Skatteverket annars skulle få bogus värden ' +
+          '(till exempel emitterade flaggor eller specifikationsnummer = 0).',
+        ['salary_run_employees'],
+      )
+    }
+    return parsed.data
+  })
+
+  // Cutoff for the Växa-stöd FK062/FK063 split: pre-2024-05-01 hires get the
+  // legacy "första anställda"-flag (FK062); 2024-05-01 and later get the
+  // utvidgat växa-stöd flag (FK063). Cutoff from Skatteverket spec (Prop.
+  // 2023/24:80, RAML revisionshistorik 1.19).
+  const VAXA_STOD_FK063_CUTOFF = '2024-05-01'
+
+  const employeeData: AGIEmployeeData[] = parsedRows.map((sre) => {
+      const emp = sre.employee
+      const lineItems = (sre.line_items ?? []) as Array<{ item_type: string; amount?: number | null; quantity?: number | null }>
 
       const benefitCar = sumLineItemAmounts(lineItems, ['benefit_car'])
-      const benefitMeals = sumLineItemAmounts(lineItems, ['benefit_meals'])
+      const benefitFuel = sumLineItemAmounts(lineItems, ['benefit_fuel'])
       const benefitHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
-      const benefitOther = sumLineItemAmounts(lineItems, ['benefit_wellness', 'benefit_other'])
-      const absenceEvents = absenceByEmployee.get(sre.employee_id as string)
+      // FK015 kostförmån has its own field — never fold into FK012.
+      // Skatteverket cross-checks the krona-amount against the PBB-schablon.
+      const benefitMeals = sumLineItemAmounts(lineItems, ['benefit_meals'])
+      // FK012 SkatteplOvrigaFormanerUlagAG is the catch-all for taxable
+      // benefits without their own FK code (bike, wellness, "other") PLUS
+      // the krona-amount for housing (since FK041/FK043 carry only the flag).
+      const benefitOther = sumLineItemAmounts(lineItems, [
+        'benefit_bike',
+        'benefit_wellness',
+        'benefit_other',
+      ]) + benefitHousing
 
+      // Default housing type: if the employee got a housing benefit line
+      // item but no housing_benefit_type is set, treat as 'ej_smahus' (the
+      // more common case). NULL with no benefit line item → no flag emitted.
+      let housingBenefit: 'smahus' | 'ej_smahus' | undefined
+      if (benefitHousing > 0) {
+        housingBenefit = emp?.housing_benefit_type ?? 'ej_smahus'
+      }
+
+      const absenceEvents = absenceByEmployee.get(sre.employee_id)
+
+      let vaxaStod: 'forsta_anstalld' | 'vaxa_stod' | undefined
+      if (emp?.vaxa_stod_eligible) {
+        vaxaStod =
+          emp.employment_start && emp.employment_start < VAXA_STOD_FK063_CUTOFF
+            ? 'forsta_anstalld'
+            : 'vaxa_stod'
+      }
+
+      // Växa-stöd (employment-start-gated relief, 10.21 % avgifter) and the
+      // ungdomsrabatt (age-gated relief, 'youth' avgifter_category) are
+      // distinct statutory programs and must not be claimed for the same
+      // employee in the same period. Catching this at generation time
+      // avoids emitting an FK062/FK063 flag inconsistent with the FK061
+      // category total.
+      if (vaxaStod && sre.avgifter_category === 'youth') {
+        throw new AGIIncompleteDataError(
+          `Anställd ${emp?.specification_number ?? '?'}: kan inte kombinera växa-stöd ` +
+            '(FK062/FK063) med ungdomsrabatt (avgifter_category="youth") — programmen är ömsesidigt uteslutande. ' +
+            'Välj ett av dem under anställdas inställningar.',
+          ['vaxa_stod_eligible', 'avgifter_category'],
+        )
+      }
+
+      const isFSkatt = emp?.f_skatt_status === 'f_skatt'
       return {
-        personnummer: emp?.personnummer || '',
-        specificationNumber: emp?.specification_number || 0,
-        grossSalary: sre.gross_salary as number,
-        taxWithheld: sre.tax_withheld as number,
-        avgifterBasis: sre.avgifter_basis as number,
-        fSkattPayment:
-          emp?.f_skatt_status === 'f_skatt' ? (sre.gross_salary as number) : undefined,
+        personnummer: emp?.personnummer ?? '',
+        specificationNumber: emp?.specification_number ?? 0,
+        removed: Boolean(sre.removed_from_agi),
+        grossSalary: sre.gross_salary,
+        taxWithheld: sre.tax_withheld,
+        avgifterBasis: sre.avgifter_basis,
+        fSkattPayment: isFSkatt ? sre.gross_salary : undefined,
+        // F-skatt payees: cash goes to FK131 and benefits to the ej-UlagSA
+        // variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular employees
+        // get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
+        benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
         benefitCar: benefitCar > 0 ? benefitCar : undefined,
-        benefitHousing: benefitHousing > 0 ? benefitHousing : undefined,
+        benefitFuel: benefitFuel > 0 ? benefitFuel : undefined,
         benefitMeals: benefitMeals > 0 ? benefitMeals : undefined,
+        housingBenefit,
         benefitOther: benefitOther > 0 ? benefitOther : undefined,
-        sickDays: (sre.sick_days as number) > 0 ? (sre.sick_days as number) : undefined,
-        vabDays: (sre.vab_days as number) > 0 ? (sre.vab_days as number) : undefined,
+        benefitsAdjusted: Boolean(sre.benefits_adjusted),
+        vaxaStod,
+        sickDays: (sre.sick_days ?? 0) > 0 ? (sre.sick_days ?? 0) : undefined,
+        vabDays: (sre.vab_days ?? 0) > 0 ? (sre.vab_days ?? 0) : undefined,
         parentalDays:
-          (sre.parental_days as number) > 0 ? (sre.parental_days as number) : undefined,
+          (sre.parental_days ?? 0) > 0 ? (sre.parental_days ?? 0) : undefined,
         absenceEvents: absenceEvents && absenceEvents.length > 0 ? absenceEvents : undefined,
       }
     },
   )
 
   // 5. Build totals: avgifter by category (with rate-heuristic fallback for legacy runs).
+  // Removed-from-AGI rows (FK205 borttag) are tombstones — they must not
+  // contribute to FK497/FK487/FK499 because the prior submission's amounts
+  // remain on file at Skatteverket; the borttag just removes the IU itself.
+  const activeEmployees = parsedRows.filter((sre) => !sre.removed_from_agi)
   const avgifterByCategory: AGITotals['avgifterByCategory'] = {}
-  for (const sre of runEmployees as Array<Record<string, unknown>>) {
-    const dbCategory = sre.avgifter_category as string | null
+  for (const sre of activeEmployees) {
+    const dbCategory = sre.avgifter_category ?? null
     const category = dbCategory
       ? dbCategory === 'reduced_65plus'
         ? 'reduced65plus'
         : dbCategory === 'vaxa_stod'
           ? 'standard'
           : dbCategory
-      : (sre.avgifter_rate as number) <= 0.1022
+      : sre.avgifter_rate <= 0.1022
         ? 'reduced65plus'
-        : (sre.avgifter_rate as number) <= 0.2082
+        : sre.avgifter_rate <= 0.2082
           ? 'youth'
           : 'standard'
     const cat = (avgifterByCategory as Record<string, { basis: number; amount: number }>)[
       category
     ] || { basis: 0, amount: 0 }
-    cat.basis += sre.avgifter_basis as number
-    cat.amount += sre.avgifter_amount as number
+    cat.basis += sre.avgifter_basis
+    cat.amount += sre.avgifter_amount
     ;(avgifterByCategory as Record<string, { basis: number; amount: number }>)[category] = cat
   }
   const totalAvgifterAmount = Object.values(avgifterByCategory).reduce(
@@ -251,29 +385,60 @@ export async function generateAgiDeclaration(
   }
   const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.8
   let totalSjuklonekostnad = 0
-  for (const sre of runEmployees as Array<Record<string, unknown>>) {
-    const monthly =
-      ((sre.employee as { monthly_salary?: number } | null)?.monthly_salary as number) ?? 0
+  for (const sre of activeEmployees) {
+    const monthly = sre.employee?.monthly_salary ?? 0
     if (!monthly) continue
     const dailyRate = monthly / 21
-    const lineItems = (sre.line_items || []) as Array<Record<string, unknown>>
+    const lineItems = (sre.line_items ?? []) as Array<{ item_type: string; amount?: number | null; quantity?: number | null }>
     for (const li of lineItems) {
       if (li.item_type === 'sick_day2_14') {
-        const days = (li.quantity as number) || 0
+        const days = li.quantity ?? 0
         totalSjuklonekostnad += dailyRate * sjuklonRate * days
       }
     }
   }
 
+  // FK497 SummaSkatteavdr must equal the sum of FK001 on active IUs (not
+  // run.total_tax, which includes removed rows). Same for FK487.
+  const totalTax = activeEmployees.reduce(
+    (sum, sre) => sum + (sre.tax_withheld || 0),
+    0,
+  )
+
   const totals: AGITotals = {
-    totalTax: run.total_tax,
-    totalAvgifterBasis: (runEmployees as Array<{ avgifter_basis: number }>).reduce(
-      (s, e) => s + e.avgifter_basis,
+    totalTax: Math.round(totalTax * 100) / 100,
+    totalAvgifterBasis: activeEmployees.reduce(
+      (s, e) => s + (e.avgifter_basis || 0),
       0,
     ),
     totalAvgifterAmount: Math.round(totalAvgifterAmount * 100) / 100,
     totalSjuklonekostnad: Math.round(totalSjuklonekostnad * 100) / 100,
     avgifterByCategory,
+  }
+
+  // Soft AGI deadline check: warn (but don't block) when generating for a
+  // future period or one whose Skatteverket correction window is clearly
+  // past. Filing deadline is the 12th (17th in Jan/Aug for small employers)
+  // of the month after the period; SKV accepts corrections for a long time
+  // after, but a period > 13 months in the past is almost certainly a
+  // misclick. Surface via the logger so audit log + Sentry both see it.
+  {
+    const now = new Date()
+    const currentYM = now.getUTCFullYear() * 100 + (now.getUTCMonth() + 1)
+    const periodYM = run.period_year * 100 + run.period_month
+    if (periodYM > currentYM) {
+      opLog.warn('AGI generated for future period', {
+        companyId,
+        periodYear: run.period_year,
+        periodMonth: run.period_month,
+      })
+    } else if (currentYM - periodYM > 13) {
+      opLog.warn('AGI generated for period > 13 months past', {
+        companyId,
+        periodYear: run.period_year,
+        periodMonth: run.period_month,
+      })
+    }
   }
 
   // 6. Existing AGI determines correction status. Use `.maybeSingle()`
@@ -300,6 +465,18 @@ export async function generateAgiDeclaration(
         ok: false,
         code: 'AGI_INCOMPLETE_DATA',
         details: { missing_fields: err.missingFields, message: err.message },
+      }
+    }
+    if (err instanceof AGIPayloadTooLargeError) {
+      return {
+        ok: false,
+        code: 'AGI_PAYLOAD_TOO_LARGE',
+        details: {
+          message: err.message,
+          size_bytes: err.sizeBytes,
+          limit_bytes: err.limitBytes,
+        },
+        status: 413,
       }
     }
     throw err

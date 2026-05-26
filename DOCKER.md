@@ -44,13 +44,19 @@ Open `.env` and fill in the **required** values:
 | `NEXT_PUBLIC_APP_URL` | The URL where you'll access gnubok (e.g. `https://gnubok.example.com`) |
 | `CRON_SECRET` | Any random string — `openssl rand -hex 32` works |
 
+Once `.env` is filled in, **restrict its permissions** so other users on the host can't read your service-role key or cron secret:
+
+```bash
+chmod 600 .env
+```
+
 ### 3. Start
 
 ```bash
 docker compose up -d
 ```
 
-That's it. The app is now running at `http://localhost:3000` (or whatever port you set with `PORT`).
+The app is now reachable on **loopback only** at `http://127.0.0.1:3000`. This is intentional — direct internet exposure over HTTP is not safe for an accounting app. The next section enables HTTPS.
 
 ### 4. Verify
 
@@ -58,6 +64,42 @@ That's it. The app is now running at `http://localhost:3000` (or whatever port y
 # Should return {"status":"healthy",...}
 curl http://localhost:3000/api/health
 ```
+
+---
+
+## Enable HTTPS (recommended)
+
+Ship a Caddy reverse proxy alongside the app — it auto-provisions Let's Encrypt certificates and renews them forever.
+
+### 1. Point a domain at the host
+
+`gnubok.example.com → <your-public-ip>` (A record). Ports 80 and 443 must be reachable from the internet (Let's Encrypt's HTTP-01 challenge uses port 80).
+
+### 2. Set `DOMAIN` in `.env`
+
+```env
+DOMAIN=gnubok.example.com
+NEXT_PUBLIC_APP_URL=https://gnubok.example.com
+```
+
+### 3. Download the overlay + Caddyfile
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/docker-compose.caddy.yml
+mkdir -p docker
+curl -fsSL -o docker/Caddyfile \
+  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/Caddyfile
+```
+
+### 4. Start with the overlay
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+Caddy obtains a cert on first boot (takes ~10 s). Visit `https://gnubok.example.com`.
+
+If you already have nginx / a managed load balancer / Cloudflare in front, skip Caddy and point your existing proxy at `127.0.0.1:3000` — set `NEXT_PUBLIC_APP_URL` to match the public URL.
 
 ---
 
@@ -98,12 +140,27 @@ No env vars needed — always available.
 
 ## Updating
 
-```bash
-docker compose pull        # pulls latest app image from GHCR
-docker compose up -d       # recreates containers if image changed
+The default `IMAGE_TAG=latest` follows `main` and updates on every `docker compose pull`. For production, **pin to a specific release** so updates are deliberate:
+
+```env
+# .env
+IMAGE_TAG=1.2.3
 ```
 
-The `latest` tag always points to the newest build from `main`. The cron sidecar is a small Alpine image built locally — it updates automatically on `up` if you re-download `docker/cron.Dockerfile`.
+Browse available tags at https://github.com/erp-mafia/gnubok/pkgs/container/gnubok. For maximum integrity, pin by digest:
+
+```env
+IMAGE_TAG=1.2.3@sha256:abcdef...
+```
+
+Apply updates:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The cron sidecar is a small Alpine image built locally — it rebuilds automatically on `up --build` if you re-download `docker/cron.Dockerfile`. Base-image digests (node, alpine, caddy) are pinned in source; [Dependabot](.github/dependabot.yml) opens PRs weekly when upstream ships security updates.
 
 ---
 
@@ -137,33 +194,43 @@ The cron container waits for the app's healthcheck to pass before starting. It c
 
 ### How NEXT_PUBLIC_* injection works
 
-The Docker image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. When the container starts, `docker-entrypoint.sh` replaces those placeholders with your actual env vars via `sed`. This means the same image works for any Supabase project — no rebuilding needed.
+The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. At container start, `docker-entrypoint.sh` runs as `root`, `sed`-substitutes the placeholders with your runtime env vars, then runs `chmod -R a-w /app/.next/static` and drops privileges with `su-exec nextjs:nodejs` before exec'ing Node. The served JS bundle is owned by `root` and read-only by the time the application starts — a runtime RCE in the Node process cannot rewrite what other users will receive.
 
 ---
 
 ## Ports
 
-The app listens on port 3000 inside the container. To map it to a different host port:
+The app listens on port 3000 inside the container. The base compose binds it to `127.0.0.1:3000` on the host — change `PORT` in `.env` to remap. To expose on all interfaces (only do this if you're putting your own reverse proxy in front), override the port binding in a local `docker-compose.override.yml`:
 
-```env
-PORT=8080
+```yaml
+services:
+  app:
+    ports: !override
+      - "${PORT:-3000}:3000"
 ```
-
-Then access at `http://localhost:8080`.
 
 ---
 
 ## Reverse Proxy
 
-For production, put the app behind a reverse proxy (nginx, Caddy, Traefik) that handles TLS. Example with Caddy:
+The preferred path is the bundled Caddy overlay — see [Enable HTTPS](#enable-https-recommended). If you already run nginx, Traefik, or sit behind Cloudflare, leave the app on `127.0.0.1:3000` and point your existing proxy at it. Set `NEXT_PUBLIC_APP_URL` to the public URL.
 
-```
-gnubok.example.com {
-    reverse_proxy localhost:3000
+Example nginx upstream:
+
+```nginx
+server {
+    server_name gnubok.example.com;
+    listen 443 ssl http2;
+    # ssl_certificate / ssl_certificate_key / etc.
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 }
 ```
-
-Make sure `NEXT_PUBLIC_APP_URL` matches the public URL (e.g. `https://gnubok.example.com`).
 
 ---
 

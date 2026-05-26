@@ -126,6 +126,13 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     // Side-effect failure must not roll back the (compliant) document attach.
     expect(status).toBe(200)
     expect(body.data.transaction_id).toBe('tx-1')
+    // The Supabase client resolves with { error } rather than rejecting, so
+    // we additionally assert that the error was actually inspected and logged
+    // (not silently dropped by a try/catch that never fires).
+    expect(spy).toHaveBeenCalledWith(
+      '[attach-document] Failed to link inbox item:',
+      expect.objectContaining({ message: 'rls denied' }),
+    )
     spy.mockRestore()
   })
 })

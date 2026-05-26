@@ -1129,6 +1129,48 @@ describe('UpdateSettingsSchema', () => {
     const result = UpdateSettingsSchema.safeParse({ invoice_default_days: 30.5 })
     expect(result.success).toBe(false)
   })
+
+  describe('swish', () => {
+    it('accepts a Swish-företag number (123XXXXXXX)', () => {
+      const result = UpdateSettingsSchema.safeParse({ swish: '1234567890' })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.swish).toBe('1234567890')
+    })
+
+    it('accepts a Swedish mobile number (07XXXXXXXX)', () => {
+      const result = UpdateSettingsSchema.safeParse({ swish: '0701234567' })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.swish).toBe('0701234567')
+    })
+
+    it('strips whitespace and hyphens before validating', () => {
+      const result = UpdateSettingsSchema.safeParse({ swish: '123 456 78 90' })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.swish).toBe('1234567890')
+    })
+
+    it('rejects a non-Swish-företag, non-mobile number', () => {
+      const result = UpdateSettingsSchema.safeParse({ swish: '0123456789' })
+      expect(result.success).toBe(false)
+    })
+
+    it('accepts empty string for clearing the value', () => {
+      const result = UpdateSettingsSchema.safeParse({ swish: '' })
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts invoice_show_swish toggle', () => {
+      const result = UpdateSettingsSchema.safeParse({ invoice_show_swish: false })
+      expect(result.success).toBe(true)
+    })
+  })
+
+  describe('send_invoice_reminders', () => {
+    it('accepts the kill-switch toggle', () => {
+      const result = UpdateSettingsSchema.safeParse({ send_invoice_reminders: false })
+      expect(result.success).toBe(true)
+    })
+  })
 })
 
 // ============================================================

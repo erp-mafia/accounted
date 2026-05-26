@@ -47,6 +47,17 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
 }))
 
+const mockFindMissingActiveAccounts = vi.fn()
+vi.mock('@/lib/bookkeeping/account-validation', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/account-validation')>(
+    '@/lib/bookkeeping/account-validation',
+  )
+  return {
+    ...actual,
+    findMissingActiveAccounts: (...args: unknown[]) => mockFindMissingActiveAccounts(...args),
+  }
+})
+
 import { POST } from '../route'
 
 describe('POST /api/transactions/[id]/categorize', () => {
@@ -69,6 +80,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
     eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     mockBuildMappingResultFromCategory.mockReturnValue(defaultMappingResult)
+    // Default: every mapped account exists and is active. Tests covering the
+    // missing-account path override this per-case.
+    mockFindMissingActiveAccounts.mockResolvedValue([])
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -523,5 +537,115 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.category).toBe('private')
     // Should NOT save mapping rule for private transactions
     expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 ACCOUNTS_NOT_IN_CHART when the mapped debit account is not active in the chart', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'GitHub',
+      journal_entry_id: null,
+    })
+
+    // Fetch transaction
+    enqueue({ data: tx, error: null })
+    // Fetch company settings
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    // Mapping built from category — but the debit account is missing/inactive
+    // in this company's kontoplan. findMissingActiveAccounts is mocked at the
+    // module level; flag the debit account here to simulate the same outcome
+    // the engine would otherwise hit at AccountsNotInChartError.
+    mockFindMissingActiveAccounts.mockResolvedValueOnce(['6200'])
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; account_numbers: string[]; message: string }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(body.error.account_numbers).toEqual(['6200'])
+    expect(body.error.message).toMatch(/Följande konton behöver aktiveras/)
+    // Engine must NOT be called once validation flagged a missing account.
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    // No save of mapping rule either — the categorization didn't go through.
+    expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 ACCOUNTS_NOT_IN_CHART listing every missing/inactive account', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -1000,
+      merchant_name: 'Acme',
+      journal_entry_id: null,
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    // Multiple accounts missing — covers the common "imported a template with
+    // accounts that this kontoplan never enabled" case.
+    mockFindMissingActiveAccounts.mockResolvedValueOnce(['5410', '2641'])
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_office' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; account_numbers: string[]; message: string }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    // AccountsNotInChartError sorts + dedupes its input.
+    expect(body.error.account_numbers).toEqual(['2641', '5410'])
+    expect(body.error.message).toContain('2641')
+    expect(body.error.message).toContain('5410')
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 ACCOUNTS_NOT_IN_CHART when the engine throws AccountsNotInChartError (defense in depth)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'GitHub',
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    // ensureFiscalPeriod existing-period check
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+
+    // Pre-validation says everything is fine — simulates a race where an
+    // account got deactivated between our chart_of_accounts read and the
+    // engine's resolveAccountIds read. The engine throws and the route must
+    // surface a structured 400 rather than the partial-success path that
+    // would have marked the row bokförd with no verifikation.
+    const { AccountsNotInChartError } = await import('@/lib/bookkeeping/errors')
+    mockCreateTransactionJournalEntry.mockRejectedValue(
+      new AccountsNotInChartError(['6200']),
+    )
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; account_numbers: string[] }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(body.error.account_numbers).toEqual(['6200'])
+    // Transaction update must NOT have run — if it had, the test would have
+    // had to enqueue a response for it. The absence of an enqueue here plus
+    // the 400 status is the assertion that the route did not fall through.
   })
 })

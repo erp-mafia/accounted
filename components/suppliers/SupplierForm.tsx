@@ -1,8 +1,10 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,36 +12,12 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { CreateSupplierInput, SupplierType } from '@/types'
-
-const schema = z.object({
-  name: z.string().min(1, 'Namn krävs'),
-  supplier_type: z.enum(['swedish_business', 'eu_business', 'non_eu_business']),
-  email: z.string().email('Ogiltig e-postadress').optional().or(z.literal('')),
-  phone: z.string().optional(),
-  address_line1: z.string().optional(),
-  address_line2: z.string().optional(),
-  postal_code: z.string().optional(),
-  city: z.string().optional(),
-  country: z.string().optional(),
-  org_number: z.string().optional(),
-  vat_number: z.string().optional(),
-  bankgiro: z.string().optional(),
-  plusgiro: z.string().optional(),
-  iban: z.string().optional(),
-  bic: z.string().optional(),
-  default_expense_account: z.string().optional(),
-  default_payment_terms: z.number().min(1).optional(),
-  default_currency: z.string().optional(),
-  notes: z.string().optional(),
-})
-
-type FormData = z.infer<typeof schema>
+import type { CreateSupplierInput } from '@/types'
 
 interface SupplierFormProps {
   onSubmit: (data: CreateSupplierInput) => Promise<void>
   isLoading: boolean
-  initialData?: Partial<FormData>
+  initialData?: Partial<CreateSupplierInput>
 }
 
 export default function SupplierForm({
@@ -48,6 +26,32 @@ export default function SupplierForm({
   initialData,
 }: SupplierFormProps) {
   const { canWrite } = useCanWrite()
+  const t = useTranslations('form_supplier')
+
+  const schema = useMemo(() => z.object({
+    name: z.string().min(1, t('name_required')),
+    supplier_type: z.enum(['swedish_business', 'eu_business', 'non_eu_business']),
+    email: z.string().email(t('email_invalid')).optional().or(z.literal('')),
+    phone: z.string().optional(),
+    address_line1: z.string().optional(),
+    address_line2: z.string().optional(),
+    postal_code: z.string().optional(),
+    city: z.string().optional(),
+    country: z.string().optional(),
+    org_number: z.string().optional(),
+    vat_number: z.string().optional(),
+    bankgiro: z.string().optional(),
+    plusgiro: z.string().optional(),
+    iban: z.string().optional(),
+    bic: z.string().optional(),
+    default_expense_account: z.string().optional(),
+    default_payment_terms: z.number().min(1).optional(),
+    default_currency: z.string().optional(),
+    notes: z.string().optional(),
+  }), [t])
+
+  type FormData = z.infer<typeof schema>
+
   const {
     register,
     handleSubmit,
@@ -88,19 +92,19 @@ export default function SupplierForm({
     <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
       {/* Supplier Type */}
       <div className="space-y-2">
-        <Label>Leverantörstyp *</Label>
+        <Label>{t('type_label')}</Label>
         <Controller
           name="supplier_type"
           control={control}
           render={({ field }) => (
             <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
               <SelectTrigger>
-                <SelectValue placeholder="Välj typ" />
+                <SelectValue placeholder={t('type_label')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="swedish_business">Svenskt företag eller organisation</SelectItem>
-                <SelectItem value="eu_business">EU-företag</SelectItem>
-                <SelectItem value="non_eu_business">Företag utanför EU</SelectItem>
+                <SelectItem value="swedish_business">{t('type_swedish_business')}</SelectItem>
+                <SelectItem value="eu_business">{t('type_eu_business')}</SelectItem>
+                <SelectItem value="non_eu_business">{t('type_non_eu_business')}</SelectItem>
               </SelectContent>
             </Select>
           )}
@@ -109,10 +113,10 @@ export default function SupplierForm({
 
       {/* Name */}
       <div className="space-y-2">
-        <Label htmlFor="name">Namn *</Label>
+        <Label htmlFor="name">{t('name_label')}</Label>
         <Input
           id="name"
-          placeholder="Leverantörens namn"
+          placeholder={t('name_placeholder')}
           {...register('name')}
         />
         {errors.name && (
@@ -123,11 +127,11 @@ export default function SupplierForm({
       {/* Contact */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="email">E-post</Label>
+          <Label htmlFor="email">{t('email_label')}</Label>
           <Input
             id="email"
             type="email"
-            placeholder="fakturor@foretag.se"
+            placeholder={t('email_placeholder')}
             {...register('email')}
           />
           {errors.email && (
@@ -135,7 +139,7 @@ export default function SupplierForm({
           )}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="phone">Telefon</Label>
+          <Label htmlFor="phone">{t('phone_label')}</Label>
           <Input
             id="phone"
             placeholder="+46 8 123 45 67"
@@ -146,21 +150,21 @@ export default function SupplierForm({
 
       {/* Business info */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">Företagsuppgifter</h3>
+        <h3 className="font-medium">{t('business_section')}</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="org_number">Organisationsnummer</Label>
+            <Label htmlFor="org_number">{t('org_number_label')}</Label>
             <Input
               id="org_number"
-              placeholder="XXXXXX-XXXX"
+              placeholder={t('org_number_placeholder')}
               {...register('org_number')}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="vat_number">VAT-nummer</Label>
+            <Label htmlFor="vat_number">{t('vat_label')}</Label>
             <Input
               id="vat_number"
-              placeholder="SE123456789001"
+              placeholder={t('vat_placeholder_se')}
               {...register('vat_number')}
             />
           </div>
@@ -169,9 +173,9 @@ export default function SupplierForm({
 
       {/* Address */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">Adress</h3>
+        <h3 className="font-medium">{t('address_section')}</h3>
         <div className="space-y-2">
-          <Label htmlFor="address_line1">Gatuadress</Label>
+          <Label htmlFor="address_line1">{t('street_label')}</Label>
           <Input
             id="address_line1"
             placeholder="Storgatan 1"
@@ -180,15 +184,15 @@ export default function SupplierForm({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="postal_code">Postnummer</Label>
+            <Label htmlFor="postal_code">{t('postal_label')}</Label>
             <Input id="postal_code" placeholder="123 45" {...register('postal_code')} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="city">Ort</Label>
+            <Label htmlFor="city">{t('city_label')}</Label>
             <Input id="city" placeholder="Stockholm" {...register('city')} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="country">Land</Label>
+            <Label htmlFor="country">{t('country_label')}</Label>
             <Input id="country" placeholder="SE" {...register('country')} />
           </div>
         </div>
@@ -196,24 +200,24 @@ export default function SupplierForm({
 
       {/* Payment details */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">Betalningsuppgifter</h3>
+        <h3 className="font-medium">{t('payment_section')}</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="bankgiro">Bankgiro</Label>
-            <Input id="bankgiro" placeholder="XXX-XXXX" {...register('bankgiro')} />
+            <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
+            <Input id="bankgiro" placeholder={t('bankgiro_placeholder')} {...register('bankgiro')} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="plusgiro">Plusgiro</Label>
+            <Label htmlFor="plusgiro">{t('plusgiro_label')}</Label>
             <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="iban">IBAN</Label>
-            <Input id="iban" placeholder="SE00 0000 0000 0000 0000 0000" {...register('iban')} />
+            <Label htmlFor="iban">{t('iban_label')}</Label>
+            <Input id="iban" placeholder={t('iban_placeholder')} {...register('iban')} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="bic">BIC/SWIFT</Label>
+            <Label htmlFor="bic">{t('swift_label')}</Label>
             <Input id="bic" placeholder="SWEDSESS" {...register('bic')} />
           </div>
         </div>
@@ -221,19 +225,17 @@ export default function SupplierForm({
 
       {/* Defaults */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">Standardvärden</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="default_expense_account">Kostnadskonto</Label>
+            <Label htmlFor="default_expense_account">{t('default_account_label')}</Label>
             <Input
               id="default_expense_account"
-              placeholder="5010"
+              placeholder={t('default_account_placeholder')}
               {...register('default_expense_account')}
             />
-            <p className="text-xs text-muted-foreground">Standardkonto för denna leverantör</p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="payment_terms">Betalningsvillkor (dagar)</Label>
+            <Label htmlFor="payment_terms">{t('default_payment_terms_label')}</Label>
             <Input
               id="payment_terms"
               type="number"
@@ -241,7 +243,7 @@ export default function SupplierForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="default_currency">Valuta</Label>
+            <Label htmlFor="default_currency">{t('default_account_label')}</Label>
             <Controller
               name="default_currency"
               control={control}
@@ -267,10 +269,10 @@ export default function SupplierForm({
 
       {/* Notes */}
       <div className="space-y-2">
-        <Label htmlFor="notes">Anteckningar</Label>
+        <Label htmlFor="notes">{t('notes_label')}</Label>
         <Textarea
           id="notes"
-          placeholder="Interna anteckningar..."
+          placeholder={t('notes_placeholder')}
           {...register('notes')}
         />
       </div>
@@ -280,20 +282,20 @@ export default function SupplierForm({
         <Button
           type="submit"
           disabled={isLoading || !canWrite}
-          title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
           {isLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Sparar...
+              {t('submit_saving')}
             </>
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-4 w-4" />
-              Spara leverantör
+              {t('submit_save')}
             </>
           ) : (
-            'Spara leverantör'
+            t('submit_save')
           )}
         </Button>
       </div>

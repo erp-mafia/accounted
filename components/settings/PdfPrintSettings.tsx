@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useCallback } from 'react'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -13,6 +14,7 @@ interface PdfPrintSettingsProps {
 }
 
 export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) {
+  const t = useTranslations('settings_pdf_print')
   const { toast } = useToast()
   const [lateFeeText, setLateFeeText] = useState(settings.invoice_late_fee_text || '')
   const [creditTermsText, setCreditTermsText] = useState(settings.invoice_credit_terms_text || '')
@@ -27,9 +29,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
       if (!response.ok) throw new Error()
       onUpdate({ [field]: value } as Partial<CompanySettings>)
     } catch {
-      toast({ title: 'Kunde inte spara', variant: 'destructive' })
+      toast({ title: t('toast_save_failed'), variant: 'destructive' })
     }
-  }, [onUpdate, toast])
+  }, [onUpdate, toast, t])
 
   const savePosition = useCallback(async (value: 'header' | 'footer') => {
     try {
@@ -41,9 +43,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
       if (!response.ok) throw new Error()
       onUpdate({ invoice_company_name_position: value })
     } catch {
-      toast({ title: 'Kunde inte spara', variant: 'destructive' })
+      toast({ title: t('toast_save_failed'), variant: 'destructive' })
     }
-  }, [onUpdate, toast])
+  }, [onUpdate, toast, t])
 
   const saveText = useCallback(async (field: string, value: string) => {
     try {
@@ -55,21 +57,21 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
       if (!response.ok) throw new Error()
       onUpdate({ [field]: value || null } as Partial<CompanySettings>)
     } catch {
-      toast({ title: 'Kunde inte spara', variant: 'destructive' })
+      toast({ title: t('toast_save_failed'), variant: 'destructive' })
     }
-  }, [onUpdate, toast])
+  }, [onUpdate, toast, t])
 
   return (
     <section className="space-y-6">
       <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Utskrift & PDF
+        {t('heading')}
       </h2>
 
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <Label>Öresavrundning</Label>
-            <p className="text-xs text-muted-foreground">Avrunda fakturatotal till hel krona</p>
+            <Label>{t('ore_rounding_label')}</Label>
+            <p className="text-xs text-muted-foreground">{t('ore_rounding_help')}</p>
           </div>
           <Switch
             checked={settings.ore_rounding ?? true}
@@ -79,8 +81,8 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
 
         <div className="flex items-center justify-between">
           <div>
-            <Label>Visa OCR-referens</Label>
-            <p className="text-xs text-muted-foreground">Visa OCR-nummer på fakturautskrift</p>
+            <Label>{t('show_ocr_label')}</Label>
+            <p className="text-xs text-muted-foreground">{t('show_ocr_help')}</p>
           </div>
           <Switch
             checked={settings.invoice_show_ocr ?? true}
@@ -90,8 +92,8 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
 
         <div className="flex items-center justify-between">
           <div>
-            <Label>Visa bankgiro</Label>
-            <p className="text-xs text-muted-foreground">Visa bankgironummer på fakturautskrift</p>
+            <Label>{t('show_bankgiro_label')}</Label>
+            <p className="text-xs text-muted-foreground">{t('show_bankgiro_help')}</p>
           </div>
           <Switch
             checked={settings.invoice_show_bankgiro ?? true}
@@ -101,8 +103,8 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
 
         <div className="flex items-center justify-between">
           <div>
-            <Label>Visa plusgiro</Label>
-            <p className="text-xs text-muted-foreground">Visa plusgironummer på fakturautskrift</p>
+            <Label>{t('show_plusgiro_label')}</Label>
+            <p className="text-xs text-muted-foreground">{t('show_plusgiro_help')}</p>
           </div>
           <Switch
             checked={settings.invoice_show_plusgiro ?? true}
@@ -112,8 +114,19 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
 
         <div className="flex items-center justify-between">
           <div>
-            <Label>Visa logga</Label>
-            <p className="text-xs text-muted-foreground">Visa uppladdad logga i fakturahuvudet</p>
+            <Label>{t('show_swish_label')}</Label>
+            <p className="text-xs text-muted-foreground">{t('show_swish_help')}</p>
+          </div>
+          <Switch
+            checked={settings.invoice_show_swish ?? true}
+            onCheckedChange={(v) => saveToggle('invoice_show_swish', v)}
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>{t('show_logo_label')}</Label>
+            <p className="text-xs text-muted-foreground">{t('show_logo_help')}</p>
           </div>
           <Switch
             checked={settings.invoice_show_logo ?? true}
@@ -124,8 +137,8 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <Label>Visa företagsnamn i faktura</Label>
-              <p className="text-xs text-muted-foreground">Visa företagsnamn i fakturan</p>
+              <Label>{t('show_company_name_label')}</Label>
+              <p className="text-xs text-muted-foreground">{t('show_company_name_help')}</p>
             </div>
             <Switch
               checked={settings.invoice_show_company_name ?? true}
@@ -134,10 +147,10 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           </div>
           {(settings.invoice_show_company_name ?? true) && (
             <div className="flex items-center justify-between pl-0">
-              <p className="text-xs text-muted-foreground">Placering</p>
+              <p className="text-xs text-muted-foreground">{t('placement_label')}</p>
               <div
                 role="group"
-                aria-label="Placering av företagsnamn"
+                aria-label={t('placement_aria_label')}
                 className="inline-flex rounded-md border border-border/60 p-0.5"
               >
                 {(['header', 'footer'] as const).map((pos) => {
@@ -155,7 +168,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
                           : 'text-muted-foreground hover:text-foreground')
                       }
                     >
-                      {pos === 'header' ? 'Huvud' : 'Sidfot'}
+                      {pos === 'header' ? t('placement_header') : t('placement_footer')}
                     </button>
                   )
                 })}
@@ -167,11 +180,11 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
 
       <div className="space-y-4 pt-2">
         <div className="space-y-2">
-          <Label htmlFor="invoice_late_fee_text">Dröjsmålsränta</Label>
+          <Label htmlFor="invoice_late_fee_text">{t('late_fee_label')}</Label>
           <Textarea
             id="invoice_late_fee_text"
             rows={2}
-            placeholder="T.ex. Vid betalning efter förfallodagen debiteras ränta enligt räntelagen."
+            placeholder={t('late_fee_placeholder')}
             value={lateFeeText}
             onChange={(e) => setLateFeeText(e.target.value)}
             onBlur={() => saveText('invoice_late_fee_text', lateFeeText)}
@@ -179,14 +192,33 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="invoice_credit_terms_text">Betalningsvillkor (fotnot)</Label>
+          <Label htmlFor="invoice_credit_terms_text">{t('credit_terms_label')}</Label>
           <Textarea
             id="invoice_credit_terms_text"
             rows={2}
-            placeholder="T.ex. Betalning sker till angivet bankgiro."
+            placeholder={t('credit_terms_placeholder')}
             value={creditTermsText}
             onChange={(e) => setCreditTermsText(e.target.value)}
             onBlur={() => saveText('invoice_credit_terms_text', creditTermsText)}
+          />
+        </div>
+      </div>
+
+      <div className="pt-6 space-y-4">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          Automatisering
+        </h2>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Skicka automatiska påminnelser</Label>
+            <p className="text-xs text-muted-foreground">
+              Skicka påminnelser till kunder för försenade fakturor enligt din inställning för påminnelseintervall.
+            </p>
+          </div>
+          <Switch
+            checked={settings.send_invoice_reminders ?? true}
+            onCheckedChange={(v) => saveToggle('send_invoice_reminders', v)}
           />
         </div>
       </div>

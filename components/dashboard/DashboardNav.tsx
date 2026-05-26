@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -30,13 +31,15 @@ import {
   Package,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
-import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import { SupportLink } from '@/components/ui/support-link'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import type { EntityType } from '@/types'
+
+void _ENABLED_EXTENSION_IDS
 
 interface ExtensionNavItem {
   href: string
@@ -53,51 +56,83 @@ interface DashboardNavProps {
   extensionNavItems?: ExtensionNavItem[]
 }
 
+type NavLabelKey =
+  | 'dashboard'
+  | 'home'
+  | 'kpi'
+  | 'invoice_inbox'
+  | 'invoices'
+  | 'customers'
+  | 'supplier_invoices'
+  | 'suppliers'
+  | 'review'
+  | 'transactions'
+  | 'bookkeeping'
+  | 'assets'
+  | 'reports'
+  | 'import'
+  | 'salary'
+  | 'employees'
+  | 'help'
+  | 'settings'
+
+type GroupKey = 'main' | 'försäljning' | 'inköp' | 'redovisning' | 'personal' | 'övrigt'
+
 interface NavItem {
   href: string
-  label: string
+  labelKey: NavLabelKey
   icon: typeof LayoutDashboard
-  group: string
-  modes?: EntityType[] // If set, only visible for these entity types. If not set, visible to all.
-  hidden?: boolean // Temporarily hide from sidebar
-  comingSoon?: boolean // Visible but disabled; shows "Kommer snart" badge
-  devBadge?: boolean // Shows a "Dev" badge to indicate dev-only feature
-  betaBadge?: boolean // Clickable; shows a "Beta" badge to indicate feature in testing
+  group: GroupKey
+  modes?: EntityType[]
+  hidden?: boolean
+  comingSoon?: boolean
+  devBadge?: boolean
+  betaBadge?: boolean
 }
 
-// All nav items for sidebar and mobile drawer
 const navItems: NavItem[] = [
-  { href: '/chat', label: 'Hem', icon: Home, group: 'main' },
-  { href: '/kpi', label: 'Nyckeltal', icon: TrendingUp, group: 'main' },
-  { href: '/e/general/invoice-inbox', label: 'Dokumentinkorg', icon: Inbox, group: 'main', betaBadge: true },
+  // Home points to the agent chat — the agent IS the entry point on this build.
+  // labelKey 'home' resolves to "Hem" / "Home"; keeping the i18n primitive even
+  // though the underlying route changed.
+  { href: '/chat', labelKey: 'home', icon: Home, group: 'main' },
+  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'main' },
+  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'main', betaBadge: true },
   // AR — Accounts Receivable
-  { href: '/invoices', label: 'Fakturor', icon: Receipt, group: 'försäljning' },
-  { href: '/customers', label: 'Kunder', icon: Users, group: 'försäljning' },
+  { href: '/invoices', labelKey: 'invoices', icon: Receipt, group: 'försäljning' },
+  { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
   // AP — Accounts Payable
-  { href: '/supplier-invoices', label: 'Leverantörsfakturor', icon: Wallet, group: 'inköp' },
-  { href: '/suppliers', label: 'Leverantörer', icon: Building2, group: 'inköp' },
+  { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'inköp' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp', hidden: true },
   // General accounting
-  { href: '/pending', label: 'Granskning', icon: ClipboardCheck, group: 'redovisning' },
-  { href: '/transactions', label: 'Transaktioner', icon: ArrowLeftRight, group: 'redovisning' },
-  { href: '/bookkeeping', label: 'Bokföring', icon: BookOpen, group: 'redovisning' },
-  { href: '/assets', label: 'Anläggningstillgångar', icon: Package, group: 'redovisning' },
-  { href: '/reports', label: 'Rapporter', icon: BarChart3, group: 'redovisning' },
-  { href: '/import', label: 'Importera', icon: Upload, group: 'redovisning' },
+  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'redovisning' },
+  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'redovisning' },
+  { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
+  { href: '/assets', labelKey: 'assets', icon: Package, group: 'redovisning' },
+  { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
+  { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },
   // Personal — enabled in production with a "Beta" badge while we validate the
   // end-to-end salary + AGI flow with real customers.
-  { href: '/salary', label: 'Löner', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
-  { href: '/salary/employees', label: 'Anställda', icon: Users, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
-  { href: '/help', label: 'Hjälp', icon: HelpCircle, group: 'övrigt' },
-  { href: '/settings', label: 'Inställningar', icon: Settings, group: 'övrigt' },
+  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
+  { href: '/help', labelKey: 'help', icon: HelpCircle, group: 'övrigt' },
+  { href: '/settings', labelKey: 'settings', icon: Settings, group: 'övrigt' },
 ]
 
-const groupLabels: Record<string, string> = {
-  main: 'Huvudmeny',
-  försäljning: 'Försäljning',
-  inköp: 'Inköp',
-  personal: 'Personal',
-  redovisning: 'Redovisning',
-  övrigt: 'Övrigt',
+// Map known extension hrefs to nav translation keys so sidebar labels translate.
+// Extensions whose manifest label happens to be English-ready can stay null.
+function extensionLabelKey(href: string): string | null {
+  if (href === '/e/general/tic') return 'ext_tic'
+  if (href === '/e/general/invoice-inbox') return 'ext_invoice_inbox'
+  return null
+}
+
+const groupLabelKey: Record<GroupKey, string> = {
+  main: 'group_main',
+  försäljning: 'group_sales',
+  inköp: 'group_purchases',
+  redovisning: 'group_accounting',
+  personal: 'group_personnel',
+  övrigt: 'group_other',
 }
 
 export default function DashboardNav({ companyName: _companyName, entityType, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [] }: DashboardNavProps) {
@@ -105,22 +140,19 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   const router = useRouter()
   const supabase = createClient()
   const { company } = useCompany()
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // When the user has no active company (e.g. just archived their last
-  // one), every company-scoped route is unreachable. We keep them visible
-  // so the sidebar doesn't collapse, but render them as disabled.
-  // Only /settings remains navigable — from there the user can either
-  // create a new company or delete their account.
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
-  // Auto-expand Övrigt when the user is on one of its pages, or when manually toggled
   const isOnOvrigtPage = ['/help', '/settings', '/e/'].some(p => pathname.startsWith(p))
   const [manualOvrigtExpanded, setManualOvrigtExpanded] = useState(false)
   const isOvrigtExpanded = isOnOvrigtPage || manualOvrigtExpanded
+
   const openMobileMenu = () => {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current)
@@ -140,8 +172,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     if (href === '/') {
       return pathname === '/'
     }
-    // For parent routes that have a sibling sub-route in the nav (e.g. /salary vs /salary/employees),
-    // only match the parent for exact or non-overlapping sub-paths
     if (href === '/salary') {
       return pathname === '/salary' || pathname.startsWith('/salary/runs')
     }
@@ -159,12 +189,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 
-  // Filter nav items by entity type, hidden flag, and conditional visibility
   const filteredItems = navItems.filter(item => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
     if (item.modes && !item.modes.includes(entityType)) return false
-    // Only show Granskning when there are pending operations
     if (item.href === '/pending' && pendingOperationsCount === 0) return false
     return true
   })
@@ -172,19 +200,29 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   const mainItems = filteredItems.filter(i => i.group === 'main')
   const övrigtItems = filteredItems.filter(i => i.group === 'övrigt')
 
-  // Groups rendered as distinct sidebar sections (AR, AP, Accounting)
-  const sidebarGroups = [
+  const sidebarGroups: { key: GroupKey; items: NavItem[]; spacing: string }[] = [
     { key: 'försäljning', items: filteredItems.filter(i => i.group === 'försäljning'), spacing: 'mb-4' },
     { key: 'inköp', items: filteredItems.filter(i => i.group === 'inköp'), spacing: 'mb-4' },
     { key: 'redovisning', items: filteredItems.filter(i => i.group === 'redovisning'), spacing: 'mb-4' },
     { key: 'personal', items: filteredItems.filter(i => i.group === 'personal'), spacing: 'mb-6' },
-  ] as const
-
-  const mobileNavItems = [
-    { href: '/chat', label: 'Hem', icon: Home },
-    { href: '/invoices', label: 'Fakturor', icon: Receipt },
-    { href: '/transactions', label: 'Transaktioner', icon: ArrowLeftRight },
   ]
+
+  const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
+    { href: '/chat', labelKey: 'home', icon: Home },
+    { href: '/invoices', labelKey: 'invoices', icon: Receipt },
+    { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
+  ]
+
+  const renderBadge = (item: NavItem | { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }, position: 'sidebar' | 'mobile') => {
+    const baseClass =
+      position === 'sidebar'
+        ? 'ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
+        : 'rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
+    if (item.comingSoon) return <span className={baseClass}>{tNav('badge_coming_soon')}</span>
+    if (item.devBadge) return <span className={baseClass}>{tNav('badge_dev')}</span>
+    if (item.betaBadge) return <span className={baseClass}>{tNav('badge_beta')}</span>
+    return null
+  }
 
   return (
     <>
@@ -198,11 +236,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
             </div>
 
             {/* Navigation with group headers */}
-            <nav className="px-3" aria-label="Huvudnavigation">
-              {/* Huvudmeny group */}
+            <nav className="px-3" aria-label={tNav('main_navigation')}>
+              {/* Main group */}
               <div className="mb-6">
                 <p className="px-3 mb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
-                  {groupLabels.main}
+                  {tNav('group_main')}
                 </p>
                 <div className="space-y-px">
                   {mainItems.map((item) => {
@@ -215,20 +253,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
                           active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                         )} />
-                        <span className="flex-1">{item.label}</span>
-                        {item.comingSoon ? (
-                          <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                            Kommer snart
-                          </span>
-                        ) : item.devBadge ? (
-                          <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                            Dev
-                          </span>
-                        ) : item.betaBadge ? (
-                          <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                            Beta
-                          </span>
-                        ) : null}
+                        <span className="flex-1">{tNav(item.labelKey)}</span>
+                        {renderBadge(item, 'sidebar')}
                       </>
                     )
                     const baseClass = cn(
@@ -251,7 +277,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                         key={item.href}
                         className={baseClass}
                         aria-disabled="true"
-                        title="Lägg till ett företag för att aktivera"
+                        title={tNav('needs_company_tooltip')}
                       >
                         {content}
                       </div>
@@ -264,7 +290,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
               {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items, spacing }) => (
                 <div key={key} className={spacing}>
                   <p className="px-3 mb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
-                    {groupLabels[key]}
+                    {tNav(groupLabelKey[key])}
                   </p>
                   <div className="space-y-px">
                     {items.map((item) => {
@@ -276,26 +302,15 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                         : item.href === '/pending' && pendingOperationsCount > 0
                           ? pendingOperationsCount
                           : null
+                      const decorBadge = renderBadge(item, 'sidebar')
                       const content = (
                         <>
                           <Icon className={cn(
                             "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
                             active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                           )} />
-                          <span className="flex-1">{item.label}</span>
-                          {item.comingSoon ? (
-                            <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                              Kommer snart
-                            </span>
-                          ) : item.devBadge ? (
-                            <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                              Dev
-                            </span>
-                          ) : item.betaBadge ? (
-                            <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                              Beta
-                            </span>
-                          ) : badge !== null && (
+                          <span className="flex-1">{tNav(item.labelKey)}</span>
+                          {decorBadge ? decorBadge : badge !== null && (
                             <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
                               {badge > 99 ? '99+' : badge}
                             </span>
@@ -322,7 +337,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           key={item.href}
                           className={baseClass}
                           aria-disabled="true"
-                          title={item.comingSoon ? 'Kommer snart' : 'Lägg till ett företag för att aktivera'}
+                          title={item.comingSoon ? tNav('badge_coming_soon') : tNav('needs_company_tooltip')}
                         >
                           {content}
                         </div>
@@ -338,7 +353,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   onClick={() => setManualOvrigtExpanded(!isOvrigtExpanded)}
                   className="w-full flex items-center justify-between px-3 mb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] hover:text-muted-foreground transition-colors"
                 >
-                  <span>{groupLabels.övrigt}</span>
+                  <span>{tNav('group_other')}</span>
                   <ChevronDown className={cn(
                     "h-3 w-3 transition-transform duration-200",
                     isOvrigtExpanded && "rotate-180"
@@ -349,15 +364,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                     {extensionNavItems.map((item) => {
                       const Icon = resolveIcon(item.icon)
                       const active = isActive(item.href)
-                      // Extension nav items are always company-scoped.
                       const enabled = hasCompany
+                      const labelTranslationKey = extensionLabelKey(item.href)
+                      const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
                       const content = (
                         <>
                           <Icon className={cn(
                             "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
                             active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                           )} />
-                          {item.label}
+                          {label}
                         </>
                       )
                       const baseClass = cn(
@@ -380,7 +396,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           key={item.href}
                           className={baseClass}
                           aria-disabled="true"
-                          title="Lägg till ett företag för att aktivera"
+                          title={tNav('needs_company_tooltip')}
                         >
                           {content}
                         </div>
@@ -396,7 +412,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                             "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
                             active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                           )} />
-                          {item.label}
+                          {tNav(item.labelKey)}
                         </>
                       )
                       const baseClass = cn(
@@ -419,7 +435,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           key={item.href}
                           className={baseClass}
                           aria-disabled="true"
-                          title="Lägg till ett företag för att aktivera"
+                          title={tNav('needs_company_tooltip')}
                         >
                           {content}
                         </div>
@@ -442,14 +458,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
               onClick={handleLogout}
             >
               <LogOut className="mr-2.5 h-[15px] w-[15px]" />
-              {isSandbox ? 'Avsluta sandbox' : 'Logga ut'}
+              {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
             </Button>
           </div>
         </div>
       </aside>
 
       {/* Mobile bottom navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label="Mobilnavigation">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-16 px-2">
           {mobileNavItems.map((item) => {
             const Icon = item.icon
@@ -475,7 +491,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                 <span className={cn(
                   "truncate",
                   active && "font-medium"
-                )}>{item.label}</span>
+                )}>{tNav(item.labelKey)}</span>
               </>
             )
             const baseClass = cn(
@@ -501,11 +517,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
           {/* Menu button */}
           <button
             onClick={openMobileMenu}
-            aria-label="Öppna meny"
+            aria-label={tNav('open_menu')}
             className="flex flex-col items-center justify-center flex-1 h-full text-xs text-muted-foreground transition-colors duration-200"
           >
             <Menu className="h-5 w-5 mb-1" />
-            <span>Meny</span>
+            <span>{tNav('menu')}</span>
           </button>
         </div>
       </nav>
@@ -532,7 +548,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
             )}
             style={{ maxHeight: '85dvh', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
             role="dialog"
-            aria-label="Navigeringsmeny"
+            aria-label={tNav('navigation_menu')}
           >
             {/* Drag handle */}
             <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-2xl">
@@ -549,7 +565,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                 size="icon"
                 className="h-8 w-8 -mr-1"
                 onClick={closeMobileMenu}
-                aria-label="Stäng meny"
+                aria-label={tNav('close_menu')}
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -566,20 +582,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   const content = (
                     <>
                       <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                      <span className="text-sm flex-1">{item.label}</span>
-                      {item.comingSoon ? (
-                        <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                          Kommer snart
-                        </span>
-                      ) : item.devBadge ? (
-                        <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                          Dev
-                        </span>
-                      ) : item.betaBadge ? (
-                        <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                          Beta
-                        </span>
-                      ) : null}
+                      <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
+                      {renderBadge(item, 'mobile')}
                     </>
                   )
                   const baseClass = cn(
@@ -614,7 +618,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
               {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items }) => (
                 <div key={key}>
                   <div className="flex items-center gap-3 my-1.5 px-3">
-                    <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{groupLabels[key]}</span>
+                    <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav(groupLabelKey[key])}</span>
                     <div className="flex-1 h-px bg-border/30" />
                   </div>
                   <div className="space-y-0.5">
@@ -627,23 +631,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                         : item.href === '/pending' && pendingOperationsCount > 0
                           ? pendingOperationsCount
                           : null
+                      const decorBadge = renderBadge(item, 'mobile')
                       const content = (
                         <>
                           <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                          <span className="text-sm flex-1">{item.label}</span>
-                          {item.comingSoon ? (
-                            <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                              Kommer snart
-                            </span>
-                          ) : item.devBadge ? (
-                            <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                              Dev
-                            </span>
-                          ) : item.betaBadge ? (
-                            <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
-                              Beta
-                            </span>
-                          ) : badge !== null && (
+                          <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
+                          {decorBadge ? decorBadge : badge !== null && (
                             <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
                               {badge > 99 ? '99+' : badge}
                             </span>
@@ -682,7 +675,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
 
               {/* Övrigt divider */}
               <div className="flex items-center gap-3 my-1.5 px-3">
-                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">Övrigt</span>
+                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_other')}</span>
                 <div className="flex-1 h-px bg-border/30" />
               </div>
 
@@ -692,10 +685,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   const Icon = resolveIcon(item.icon)
                   const active = isActive(item.href)
                   const enabled = hasCompany
+                  const labelTranslationKey = extensionLabelKey(item.href)
+                  const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
                   const content = (
                     <>
                       <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                      <span className="text-sm">{item.label}</span>
+                      <span className="text-sm">{label}</span>
                     </>
                   )
                   const baseClass = cn(
@@ -731,7 +726,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   const content = (
                     <>
                       <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                      <span className="text-sm">{item.label}</span>
+                      <span className="text-sm">{tNav(item.labelKey)}</span>
                     </>
                   )
                   const baseClass = cn(
@@ -777,7 +772,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                 }}
               >
                 <LogOut className="mr-3 h-[18px] w-[18px]" />
-                {isSandbox ? 'Avsluta sandbox' : 'Logga ut'}
+                {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
               </Button>
             </div>
           </div>

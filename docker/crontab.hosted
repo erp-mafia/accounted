@@ -1,6 +1,5 @@
 0 5 * * *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/ext/enable-banking/sync/cron
 0 6 * * *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/deadlines/status/cron
-0 8 * * *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/invoices/reminders/cron
 0 0 2 1 *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/tax-deadlines/cron
 0 2 * * *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/events/cleanup/cron
 0 3 * * 0   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/verify/cron

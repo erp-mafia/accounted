@@ -54,7 +54,7 @@ export interface ExtractionOutput {
   rawText: string | null
 }
 
-const ExtractionSchema = z.object({
+export const ExtractionSchema = z.object({
   supplier: z.object({
     name: z.string().nullable(),
     orgNumber: z.string().nullable(),
@@ -159,7 +159,7 @@ Rules:
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
 
-function emptyResult(): InvoiceExtractionResult {
+export function emptyResult(): InvoiceExtractionResult {
   return {
     supplier: {
       name: null,

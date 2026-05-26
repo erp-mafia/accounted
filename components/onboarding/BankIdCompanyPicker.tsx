@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Building2, ArrowRight, Loader2, Plus, Check, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -40,6 +41,8 @@ type SetupState =
   | { kind: 'opening'; companyId: string }
   | { kind: 'creating'; orgNumber: string; step: 'lookup' | 'provision' }
 
+// Swedish legal entity names (Aktiebolag, Enskild firma, etc.) are statutory
+// terms — kept in Swedish in both locales.
 function humanEntityType(t: string | null | undefined): string {
   if (!t) return ''
   if (t === 'aktiebolag') return 'Aktiebolag'
@@ -74,11 +77,12 @@ export default function BankIdCompanyPicker({
 }: BankIdCompanyPickerProps) {
   const router = useRouter()
   const { toast } = useToast()
+  const t = useTranslations('select_company')
   const [setup, setSetup] = useState<SetupState>({ kind: 'idle' })
   const [isPending, startTransition] = useTransition()
 
   const hour = new Date().getHours()
-  const greeting = hour < 5 ? 'God natt' : hour < 10 ? 'Godmorgon' : hour < 14 ? 'Hej' : hour < 18 ? 'God eftermiddag' : 'God kväll'
+  const greeting = hour < 5 ? t('greeting_night') : hour < 10 ? t('greeting_morning') : hour < 14 ? t('greeting_hello') : hour < 18 ? t('greeting_afternoon') : t('greeting_evening')
 
   const busy = setup.kind !== 'idle' || isPending
 
@@ -127,8 +131,8 @@ export default function BankIdCompanyPicker({
     // Route to the manual wizard with the known fields pre-filled instead.
     if (!lookup) {
       toast({
-        title: 'Kunde inte hämta företagsuppgifter',
-        description: 'Fyll i resterande uppgifter manuellt.',
+        title: t('toast_lookup_failed_title'),
+        description: t('toast_lookup_failed_description'),
       })
       setSetup({ kind: 'idle' })
       router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
@@ -139,8 +143,8 @@ export default function BankIdCompanyPicker({
     // Under BFL 2 kap, bokföringsskyldighet ends when a company is struck off.
     if (lookup.isCeased) {
       toast({
-        title: 'Företaget är avregistrerat',
-        description: 'Det går inte att sätta upp bokföring för ett avregistrerat företag.',
+        title: t('toast_company_ceased_title'),
+        description: t('toast_company_ceased_description'),
         variant: 'destructive',
       })
       setSetup({ kind: 'idle' })
@@ -168,8 +172,8 @@ export default function BankIdCompanyPicker({
 
       if (result.error === 'org_number_exists') {
         toast({
-          title: 'Företaget finns redan',
-          description: 'Be en befintlig administratör att bjuda in dig.',
+          title: t('toast_company_exists_title'),
+          description: t('toast_company_exists_description'),
           variant: 'destructive',
         })
         setSetup({ kind: 'idle' })
@@ -181,8 +185,8 @@ export default function BankIdCompanyPicker({
         // above, but the server-side guard catches any race where TIC's
         // cached result differs between the two calls.
         toast({
-          title: 'Företaget är avregistrerat',
-          description: 'Det går inte att sätta upp bokföring för ett avregistrerat företag.',
+          title: t('toast_company_ceased_title'),
+          description: t('toast_company_ceased_description'),
           variant: 'destructive',
         })
         setSetup({ kind: 'idle' })
@@ -191,8 +195,8 @@ export default function BankIdCompanyPicker({
 
       if (result.error === 'org_number_invalid') {
         toast({
-          title: 'Ogiltigt organisationsnummer',
-          description: 'Fortsätt med manuell uppsättning.',
+          title: t('toast_org_invalid_title'),
+          description: t('toast_org_invalid_description'),
           variant: 'destructive',
         })
         setSetup({ kind: 'idle' })
@@ -202,15 +206,15 @@ export default function BankIdCompanyPicker({
 
       if (result.error || !result.companyId) {
         toast({
-          title: 'Kunde inte skapa företag',
-          description: result.error ?? 'Försök igen eller lägg till manuellt.',
+          title: t('toast_create_failed_title'),
+          description: result.error ?? t('toast_create_failed_description'),
           variant: 'destructive',
         })
         setSetup({ kind: 'idle' })
         return
       }
 
-      toast({ title: 'Välkommen!', description: 'Ditt företag är nu redo.' })
+      toast({ title: t('toast_welcome_title'), description: t('toast_company_ready') })
       window.location.assign('/')
     })
   }
@@ -224,21 +228,21 @@ export default function BankIdCompanyPicker({
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
             {greeting}{firstName ? `, ${firstName}` : ''}
           </h1>
-          <p className="text-muted-foreground text-sm mt-1.5">Sätter upp ditt företag…</p>
+          <p className="text-muted-foreground text-sm mt-1.5">{t('setting_up')}</p>
         </header>
 
         <div className="max-w-lg rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
           <div className="flex items-start gap-3">
             <Building2 className="h-5 w-5 text-muted-foreground mt-0.5" />
             <div className="flex-1">
-              <p className="font-medium text-sm">Org.nr {setup.orgNumber}</p>
+              <p className="font-medium text-sm">{t('org_nr_prefix', { orgNumber: setup.orgNumber })}</p>
               <ul className="mt-3 space-y-2 text-sm">
                 <li className="flex items-center gap-2">
                   {lookupDone
                     ? <Check className="h-4 w-4 text-sage" />
                     : <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                   <span className={cn(!lookupDone && 'text-muted-foreground')}>
-                    Hämtar uppgifter från Bolagsverket
+                    {t('progress_lookup')}
                   </span>
                 </li>
                 <li className="flex items-center gap-2">
@@ -246,7 +250,7 @@ export default function BankIdCompanyPicker({
                     ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                     : <span className="h-4 w-4 inline-block rounded-full border border-border" />}
                   <span className={cn(!lookupDone && 'text-muted-foreground/50')}>
-                    Skapar företag och kontoplan
+                    {t('progress_provision')}
                   </span>
                 </li>
               </ul>
@@ -264,7 +268,7 @@ export default function BankIdCompanyPicker({
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
         <p className="text-muted-foreground text-sm mt-1.5">
-          Välj ett företag att öppna eller lägg till ett nytt.
+          {t('subtitle')}
         </p>
       </header>
 
@@ -274,7 +278,7 @@ export default function BankIdCompanyPicker({
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
               <p className="text-sm text-amber-800 dark:text-amber-200">
-                Uppgifterna från BankID är äldre än en vecka. Logga in med BankID igen för att uppdatera listan.
+                {t('enrichment_stale')}
               </p>
             </div>
           </div>
@@ -283,7 +287,7 @@ export default function BankIdCompanyPicker({
         {memberCompanies.length > 0 && (
           <section>
             <h2 className="text-xs uppercase tracking-[0.08em] text-muted-foreground mb-3">
-              Dina företag i {branding.appName.toLowerCase()}
+              {t('section_your_companies', { appName: branding.appName.toLowerCase() })}
             </h2>
             <ul className="space-y-2">
               {memberCompanies.map((c) => {
@@ -330,7 +334,7 @@ export default function BankIdCompanyPicker({
         {ticCompanies.length > 0 && (
           <section>
             <h2 className="text-xs uppercase tracking-[0.08em] text-muted-foreground mb-3">
-              Företag kopplade till ditt BankID
+              {t('section_bankid_companies')}
             </h2>
             <ul className="space-y-2">
               {ticCompanies.map(({ role, status }) => {
@@ -351,11 +355,11 @@ export default function BankIdCompanyPicker({
                             </p>
                           </div>
                           <span className="text-[10px] uppercase tracking-wide text-muted-foreground flex-shrink-0">
-                            Finns redan i {branding.appName.toLowerCase()}
+                            {t('already_in_app', { appName: branding.appName.toLowerCase() })}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground/70 mt-2">
-                          Be en befintlig administratör att bjuda in dig.
+                          {t('ask_admin_invite')}
                         </p>
                       </div>
                     </li>
@@ -382,7 +386,7 @@ export default function BankIdCompanyPicker({
                             </p>
                           </div>
                           <span className="text-[10px] uppercase tracking-wide text-muted-foreground flex-shrink-0">
-                            Sätts upp manuellt
+                            {t('setup_manually')}
                           </span>
                         </div>
                       </Link>
@@ -422,7 +426,7 @@ export default function BankIdCompanyPicker({
 
         {memberCompanies.length === 0 && ticCompanies.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Inga företag hittades. Lägg till ditt första företag nedan.
+            {t('no_companies_found')}
           </p>
         )}
 
@@ -432,7 +436,7 @@ export default function BankIdCompanyPicker({
           </div>
           <div className="relative flex justify-center">
             <span className="bg-background px-3 text-xs uppercase tracking-[0.08em] text-muted-foreground">
-              eller
+              {t('or_separator')}
             </span>
           </div>
         </div>
@@ -446,7 +450,7 @@ export default function BankIdCompanyPicker({
           )}
         >
           <Plus className="h-4 w-4" />
-          Lägg till företag manuellt
+          {t('add_company_manually')}
         </Link>
       </div>
     </div>

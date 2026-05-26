@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,23 +22,23 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import type { Asset, AssetCategory } from '@/types'
 import { CreateAssetDialog } from '@/components/bookkeeping/assets/CreateAssetDialog'
 
-const CATEGORY_LABELS: Record<AssetCategory, string> = {
-  immaterial: 'Immateriell',
-  building: 'Byggnad',
-  land_improvement: 'Markanläggning',
-  machinery: 'Maskin',
-  equipment: 'Inventarier',
-  vehicle: 'Fordon',
-  computer: 'Dator',
-  other_tangible: 'Övriga materiella',
+const CATEGORY_LABEL_KEYS: Record<AssetCategory, string> = {
+  immaterial: 'category_immaterial',
+  building: 'category_building',
+  land_improvement: 'category_land_improvement',
+  machinery: 'category_machinery',
+  equipment: 'category_equipment',
+  vehicle: 'category_vehicle',
+  computer: 'category_computer',
+  other_tangible: 'category_other_tangible',
 }
 
 export default function AssetsPage() {
+  const t = useTranslations('assets')
   const [assets, setAssets] = useState<Asset[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  // Bumped on create to re-trigger the effect.
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
@@ -46,7 +47,7 @@ export default function AssetsPage() {
       .then(async (res) => {
         if (cancelled) return
         if (!res.ok) {
-          setError('Kunde inte ladda tillgångar')
+          setError(t('load_failed'))
           return
         }
         const { data } = (await res.json()) as { data: Asset[] }
@@ -55,12 +56,12 @@ export default function AssetsPage() {
         setAssets(data)
       })
       .catch(() => {
-        if (!cancelled) setError('Kunde inte ladda tillgångar')
+        if (!cancelled) setError(t('load_failed'))
       })
     return () => {
       cancelled = true
     }
-  }, [reloadKey])
+  }, [reloadKey, t])
 
   const handleCreated = useCallback(() => {
     setDialogOpen(false)
@@ -70,10 +71,10 @@ export default function AssetsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Anläggningstillgångar"
+        title={t('title')}
         action={
           <Button onClick={() => setDialogOpen(true)}>
-            <Plus className="mr-1 h-4 w-4" /> Ny tillgång
+            <Plus className="mr-1 h-4 w-4" /> {t('new_asset')}
           </Button>
         }
       />
@@ -96,9 +97,9 @@ export default function AssetsPage() {
       {assets !== null && assets.length === 0 && (
         <EmptyState
           icon={Package}
-          title="Inga tillgångar än"
-          description="Lägg till anläggningstillgångar (datorer, möbler, fordon, maskiner) så räknar bokslutet planenliga avskrivningar automatiskt."
-          actionLabel="Ny tillgång"
+          title={t('empty_title')}
+          description={t('empty_description')}
+          actionLabel={t('new_asset')}
           onAction={() => setDialogOpen(true)}
         />
       )}
@@ -109,12 +110,12 @@ export default function AssetsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Namn</TableHead>
-                  <TableHead>Kategori</TableHead>
-                  <TableHead>Anskaffat</TableHead>
-                  <TableHead className="text-right">Anskaffningsvärde</TableHead>
-                  <TableHead>Avskrivningstid</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t('th_name')}</TableHead>
+                  <TableHead>{t('th_category')}</TableHead>
+                  <TableHead>{t('th_acquired')}</TableHead>
+                  <TableHead className="text-right">{t('th_acquisition_cost')}</TableHead>
+                  <TableHead>{t('th_useful_life')}</TableHead>
+                  <TableHead>{t('th_status')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -123,7 +124,7 @@ export default function AssetsPage() {
                   return (
                     <TableRow key={asset.id}>
                       <TableCell className="font-medium">{asset.name}</TableCell>
-                      <TableCell className="text-sm">{CATEGORY_LABELS[asset.category]}</TableCell>
+                      <TableCell className="text-sm">{t(CATEGORY_LABEL_KEYS[asset.category])}</TableCell>
                       <TableCell className="tabular-nums">
                         {formatDate(asset.acquisition_date)}
                       </TableCell>
@@ -131,13 +132,13 @@ export default function AssetsPage() {
                         {formatCurrency(Number(asset.acquisition_cost))}
                       </TableCell>
                       <TableCell className="text-sm">
-                        {years} år ({asset.useful_life_months} mån)
+                        {t('useful_life_format', { years, months: asset.useful_life_months })}
                       </TableCell>
                       <TableCell>
                         {asset.disposed_at ? (
-                          <Badge variant="secondary">Avyttrad</Badge>
+                          <Badge variant="secondary">{t('status_disposed')}</Badge>
                         ) : (
-                          <Badge variant="success">Aktiv</Badge>
+                          <Badge variant="success">{t('status_active')}</Badge>
                         )}
                       </TableCell>
                     </TableRow>

@@ -31,6 +31,7 @@ const FORMAT_NAMES: Record<string, string> = {
   ica_banken: 'ICA Banken',
   skandia: 'Skandia',
   lunar: 'Lunar',
+  northmill: 'Northmill',
   generic_csv: 'CSV (manuell mappning)',
   camt053: 'ISO 20022 camt.053',
 }
@@ -131,6 +132,7 @@ export default function BankFileUploadStep({
                 <SelectItem value="ica_banken">ICA Banken</SelectItem>
                 <SelectItem value="skandia">Skandia</SelectItem>
                 <SelectItem value="lunar">Lunar</SelectItem>
+                <SelectItem value="northmill">Northmill</SelectItem>
                 <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>
                 <SelectItem value="generic_csv">Annan CSV (manuell mappning)</SelectItem>
               </SelectContent>
@@ -261,6 +263,12 @@ export default function BankFileUploadStep({
             <p className="font-medium">Lunar</p>
             <p className="text-muted-foreground">
               Logga in → Konto → Transaktioner → Exportera (CSV)
+            </p>
+          </div>
+          <div>
+            <p className="font-medium">Northmill</p>
+            <p className="text-muted-foreground">
+              Logga in → Konto → Kontoutdrag → Ladda ner (CSV)
             </p>
           </div>
         </CardContent>

@@ -1,4 +1,7 @@
 import type { NextConfig } from "next";
+import createNextIntlPlugin from "next-intl/plugin";
+
+const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -14,7 +17,7 @@ const cspDirectives = [
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
-  `frame-src 'self' ${supabaseUrl}${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
+  `frame-src 'self' blob: ${supabaseUrl}${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
   "frame-ancestors 'none'",
 ].join("; ");
 
@@ -49,9 +52,16 @@ const nextConfig: NextConfig = {
     ]
   },
   async headers() {
+    // The catch-all excludes /api/documents/:id/inline so the strict
+    // X-Frame-Options: DENY + frame-ancestors 'none' don't conflict with
+    // the embeddable override below. Multiple matching header rules in
+    // Next.js can end up sending duplicate header values to the browser
+    // (Chrome/Firefox then fall back to the most restrictive), which was
+    // showing up as "Det här innehållet har blockerats" in the verifikat
+    // document preview Sheet.
     return [
       {
-        source: "/(.*)",
+        source: "/((?!api/documents/[^/]+/inline$).*)",
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -79,8 +89,41 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // Document inline-preview proxy must be embeddable in same-origin
+      // iframes (used by the verifikat document preview Sheet). Excluded
+      // from the catch-all above so these values aren't shadowed by the
+      // stricter defaults.
+      {
+        source: "/api/documents/:id/inline",
+        headers: [
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains; preload",
+          },
+          {
+            key: "X-Frame-Options",
+            value: "SAMEORIGIN",
+          },
+          {
+            key: "X-Content-Type-Options",
+            value: "nosniff",
+          },
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
+          },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(), microphone=(), geolocation=(), payment=()",
+          },
+          {
+            key: "Content-Security-Policy",
+            value: "default-src 'none'; script-src 'none'; object-src 'none'; frame-ancestors 'self'",
+          },
+        ],
+      },
     ];
   },
 };
 
-export default nextConfig;
+export default withNextIntl(nextConfig);

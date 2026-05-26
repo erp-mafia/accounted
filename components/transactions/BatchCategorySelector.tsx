@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
@@ -27,6 +28,8 @@ export default function BatchCategorySelector({
   onSelectCategory,
   progress,
 }: BatchCategorySelectorProps) {
+  const t = useTranslations('tx_batch_selector')
+  const tCat = useTranslations('tx_categories')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>('standard_25')
   const isProcessing = progress !== null
 
@@ -41,13 +44,13 @@ export default function BatchCategorySelector({
         <DialogHeader>
           <DialogTitle>
             {isProcessing
-              ? `Bokför ${progress.done}/${progress.total}...`
-              : `Bokför ${selectedCount} transaktioner`}
+              ? t('title_processing', { done: progress.done, total: progress.total })
+              : t('title_default', { count: selectedCount })}
           </DialogTitle>
           <DialogDescription>
             {isProcessing
-              ? 'Vänta medan transaktionerna bokförs'
-              : 'Välj en kategori som ska tillämpas på alla valda transaktioner'}
+              ? t('description_processing')
+              : t('description_default')}
           </DialogDescription>
         </DialogHeader>
 
@@ -55,7 +58,7 @@ export default function BatchCategorySelector({
           <div className="py-4">
             <Progress value={(progress.done / progress.total) * 100} />
             <p className="text-sm text-muted-foreground mt-2 text-center">
-              {progress.done} av {progress.total} klara
+              {t('progress_label', { done: progress.done, total: progress.total })}
             </p>
           </div>
         ) : (
@@ -64,19 +67,19 @@ export default function BatchCategorySelector({
             <div className="flex items-start gap-2 rounded-lg bg-warning/10 border border-warning/30 p-3">
               <Paperclip className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
               <p className="text-xs text-warning-foreground">
-                Underlag behöver bifogas separat för varje transaktion efter bokföring.
+                {t('underlag_reminder')}
               </p>
             </div>
 
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">Momsbehandling</h4>
+              <h4 className="text-sm font-medium text-muted-foreground mb-2">{t('vat_label')}</h4>
               <VatTreatmentSelect
                 value={vatTreatment}
                 onValueChange={setVatTreatment}
               />
             </div>
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">Kostnader</h4>
+              <h4 className="text-sm font-medium text-muted-foreground mb-2">{t('expenses_label')}</h4>
               <div className="grid grid-cols-2 gap-1.5">
                 {expenseCategories.map((cat) => (
                   <Button
@@ -86,13 +89,13 @@ export default function BatchCategorySelector({
                     className="justify-start text-xs"
                     onClick={() => handleSelectCategory(cat.value)}
                   >
-                    {cat.label}
+                    {tCat(cat.labelKey)}
                   </Button>
                 ))}
               </div>
             </div>
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">Intäkter</h4>
+              <h4 className="text-sm font-medium text-muted-foreground mb-2">{t('income_label')}</h4>
               <div className="grid grid-cols-2 gap-1.5">
                 {incomeCategories.map((cat) => (
                   <Button
@@ -102,7 +105,7 @@ export default function BatchCategorySelector({
                     className="justify-start text-xs"
                     onClick={() => handleSelectCategory(cat.value)}
                   >
-                    {cat.label}
+                    {tCat(cat.labelKey)}
                   </Button>
                 ))}
               </div>

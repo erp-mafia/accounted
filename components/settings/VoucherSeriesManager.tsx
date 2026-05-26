@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -18,6 +19,7 @@ interface VoucherSeriesManagerProps {
 }
 
 export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProps) {
+  const t = useTranslations('settings_voucher_series')
   const { company } = useCompany()
   const [series, setSeries] = useState<VoucherSeries[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -48,7 +50,7 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Verifikationsserier
+        {t('heading')}
       </h2>
 
       {isLoading ? (
@@ -58,22 +60,22 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
         </div>
       ) : seriesEntries.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Inga verifikationsserier ännu. Serie {defaultSeries || 'A'} skapas automatiskt vid första verifikationen.
+          {t('empty_state', { series: defaultSeries || 'A' })}
         </p>
       ) : (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Aktiva serier</Label>
+          <Label className="text-xs text-muted-foreground">{t('active_series_label')}</Label>
           <div className="divide-y divide-border/8">
             {seriesEntries.map(([letter, lastNum]) => (
               <div key={letter} className="flex items-center justify-between py-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium tabular-nums">Serie {letter}</span>
+                  <span className="text-sm font-medium tabular-nums">{t('series_prefix')} {letter}</span>
                   {letter === (defaultSeries || 'A') && (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">standard</Badge>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">{t('default_badge')}</Badge>
                   )}
                 </div>
                 <span className="text-sm text-muted-foreground tabular-nums">
-                  Senaste nr: {lastNum}
+                  {t('latest_number')}: {lastNum}
                 </span>
               </div>
             ))}
@@ -82,7 +84,7 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
       )}
 
       <p className="text-xs text-muted-foreground">
-        Nya serier skapas automatiskt första gången de används vid bokföring.
+        {t('footnote')}
       </p>
     </section>
   )

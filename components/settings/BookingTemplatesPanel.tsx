@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,15 +22,16 @@ import { TEMPLATE_CATEGORY_LABELS } from '@/lib/bookkeeping/template-library'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { BookingTemplateLibrary, BookingTemplateCategory, BookingTemplateLibraryLine } from '@/types'
 
-const ENTITY_LABELS: Record<string, string> = {
-  all: 'Alla',
-  enskild_firma: 'Enskild firma',
-  aktiebolag: 'Aktiebolag',
-}
-
 export function BookingTemplatesPanel() {
+  const t = useTranslations('settings_booking_templates')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+
+  const ENTITY_LABELS: Record<string, string> = {
+    all: t('entity_all'),
+    enskild_firma: t('entity_enskild_firma'),
+    aktiebolag: t('entity_aktiebolag'),
+  }
 
   const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -44,11 +46,11 @@ export function BookingTemplatesPanel() {
       const json = await res.json()
       if (json.data) setTemplates(json.data)
     } catch {
-      toast({ title: 'Kunde inte hämta mallar', variant: 'destructive' })
+      toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
@@ -61,11 +63,11 @@ export function BookingTemplatesPanel() {
         body: JSON.stringify({ id }),
       })
       if (!res.ok) {
-        toast({ title: 'Kunde inte ta bort mall', variant: 'destructive' })
+        toast({ title: t('toast_delete_failed'), variant: 'destructive' })
         return
       }
-      setTemplates((prev) => prev.filter((t) => t.id !== id))
-      toast({ title: 'Mall borttagen' })
+      setTemplates((prev) => prev.filter((tt) => tt.id !== id))
+      toast({ title: t('toast_deleted') })
     } finally {
       setDeletingId(null)
     }
@@ -82,7 +84,7 @@ export function BookingTemplatesPanel() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      toast({ title: 'Kunde inte exportera mallar', variant: 'destructive' })
+      toast({ title: t('toast_export_failed'), variant: 'destructive' })
     }
   }
 
@@ -99,13 +101,13 @@ export function BookingTemplatesPanel() {
       })
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Importfel', description: json.error || 'Kunde inte importera', variant: 'destructive' })
+        toast({ title: t('toast_import_error'), description: json.error || t('toast_import_generic'), variant: 'destructive' })
         return
       }
-      toast({ title: 'Import klar', description: `${json.imported} mall(ar) importerade.` })
+      toast({ title: t('toast_import_done'), description: t('toast_import_count', { count: json.imported }) })
       fetchTemplates()
     } catch {
-      toast({ title: 'Importfel', description: 'Ogiltig fil', variant: 'destructive' })
+      toast({ title: t('toast_import_error'), description: t('toast_invalid_file'), variant: 'destructive' })
     } finally {
       // Reset input so same file can be imported again
       if (importRef.current) importRef.current.value = ''
@@ -113,29 +115,29 @@ export function BookingTemplatesPanel() {
   }
 
   // Group templates by scope
-  const systemTemplates = templates.filter((t) => t.is_system)
-  const teamTemplates = templates.filter((t) => t.team_id && !t.is_system)
-  const companyTemplates = templates.filter((t) => t.company_id && !t.is_system)
+  const systemTemplates = templates.filter((tt) => tt.is_system)
+  const teamTemplates = templates.filter((tt) => tt.team_id && !tt.is_system)
+  const companyTemplates = templates.filter((tt) => tt.company_id && !tt.is_system)
 
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Bokföringsmallar</CardTitle>
+            <CardTitle>{t('title')}</CardTitle>
             <CardDescription>
-              Återanvändbara mallar för vanliga bokföringstransaktioner. Standardmallar visas för alla, egna mallar kan skapas och delas.
+              {t('description')}
             </CardDescription>
           </div>
           {canWrite && (
             <div className="flex gap-2 shrink-0">
               <Button variant="outline" size="sm" onClick={handleExport}>
                 <Download className="h-3.5 w-3.5 mr-1.5" />
-                Exportera
+                {t('export')}
               </Button>
               <Button variant="outline" size="sm" onClick={() => importRef.current?.click()}>
                 <Upload className="h-3.5 w-3.5 mr-1.5" />
-                Importera
+                {t('import')}
               </Button>
               <input
                 ref={importRef}
@@ -148,14 +150,15 @@ export function BookingTemplatesPanel() {
                 <DialogTrigger asChild>
                   <Button size="sm">
                     <Plus className="h-3.5 w-3.5 mr-1.5" />
-                    Ny mall
+                    {t('new_template')}
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-lg">
                   <DialogHeader>
-                    <DialogTitle>Skapa bokföringsmall</DialogTitle>
+                    <DialogTitle>{t('create_dialog_title')}</DialogTitle>
                   </DialogHeader>
                   <CreateTemplateForm
+                    entityLabels={ENTITY_LABELS}
                     onCreated={() => {
                       setShowCreate(false)
                       fetchTemplates()
@@ -174,14 +177,14 @@ export function BookingTemplatesPanel() {
           </div>
         ) : templates.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-12">
-            Inga mallar hittades.
+            {t('empty_state')}
           </p>
         ) : (
           <div className="space-y-6">
             {/* System templates */}
             {systemTemplates.length > 0 && (
               <TemplateSection
-                title="Standardmallar"
+                title={t('section_system')}
                 icon={Globe}
                 templates={systemTemplates}
                 expandedId={expandedId}
@@ -189,13 +192,14 @@ export function BookingTemplatesPanel() {
                 deletingId={deletingId}
                 onDelete={handleDelete}
                 canDelete={false}
+                entityLabels={ENTITY_LABELS}
               />
             )}
 
             {/* Team templates */}
             {teamTemplates.length > 0 && (
               <TemplateSection
-                title="Teammallar"
+                title={t('section_team')}
                 icon={Users}
                 templates={teamTemplates}
                 expandedId={expandedId}
@@ -203,13 +207,14 @@ export function BookingTemplatesPanel() {
                 deletingId={deletingId}
                 onDelete={handleDelete}
                 canDelete={canWrite}
+                entityLabels={ENTITY_LABELS}
               />
             )}
 
             {/* Company templates */}
             {companyTemplates.length > 0 && (
               <TemplateSection
-                title="Företagsmallar"
+                title={t('section_company')}
                 icon={Building2}
                 templates={companyTemplates}
                 expandedId={expandedId}
@@ -217,6 +222,7 @@ export function BookingTemplatesPanel() {
                 deletingId={deletingId}
                 onDelete={handleDelete}
                 canDelete={canWrite}
+                entityLabels={ENTITY_LABELS}
               />
             )}
           </div>
@@ -235,6 +241,7 @@ function TemplateSection({
   deletingId,
   onDelete,
   canDelete,
+  entityLabels,
 }: {
   title: string
   icon: React.ComponentType<{ className?: string }>
@@ -244,7 +251,9 @@ function TemplateSection({
   deletingId: string | null
   onDelete: (id: string) => void
   canDelete: boolean
+  entityLabels: Record<string, string>
 }) {
+  const t = useTranslations('settings_booking_templates')
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
@@ -253,28 +262,28 @@ function TemplateSection({
         <Badge variant="secondary" className="text-xs">{templates.length}</Badge>
       </div>
       <div className="space-y-1">
-        {templates.map((t) => {
-          const isExpanded = expandedId === t.id
+        {templates.map((tt) => {
+          const isExpanded = expandedId === tt.id
           return (
             <div
-              key={t.id}
+              key={tt.id}
               className="rounded-lg border"
             >
               <button
                 type="button"
-                onClick={() => onToggle(isExpanded ? null : t.id)}
+                onClick={() => onToggle(isExpanded ? null : tt.id)}
                 className="w-full flex items-center gap-3 p-3 text-left hover:bg-muted/50 transition-colors"
               >
                 <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-0' : '-rotate-90'}`} />
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium">{t.name}</span>
+                  <span className="text-sm font-medium">{tt.name}</span>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                      {TEMPLATE_CATEGORY_LABELS[t.category]}
+                      {TEMPLATE_CATEGORY_LABELS[tt.category]}
                     </Badge>
-                    {t.entity_type !== 'all' && (
+                    {tt.entity_type !== 'all' && (
                       <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                        {ENTITY_LABELS[t.entity_type]}
+                        {entityLabels[tt.entity_type]}
                       </Badge>
                     )}
                   </div>
@@ -285,12 +294,12 @@ function TemplateSection({
                     size="sm"
                     onClick={(e) => {
                       e.stopPropagation()
-                      onDelete(t.id)
+                      onDelete(tt.id)
                     }}
-                    disabled={deletingId === t.id}
+                    disabled={deletingId === tt.id}
                     className="h-8 w-8 p-0 shrink-0"
                   >
-                    {deletingId === t.id ? (
+                    {deletingId === tt.id ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <Trash2 className="h-3.5 w-3.5" />
@@ -300,31 +309,31 @@ function TemplateSection({
               </button>
               {isExpanded && (
                 <div className="px-3 pb-3 pt-0">
-                  {t.description && (
-                    <p className="text-xs text-muted-foreground mb-2">{t.description}</p>
+                  {tt.description && (
+                    <p className="text-xs text-muted-foreground mb-2">{tt.description}</p>
                   )}
                   <table className="w-full text-xs">
                     <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                       <tr className="border-b">
-                        <th className="text-left py-1 w-14">Konto</th>
-                        <th className="text-left py-1">Beskrivning</th>
-                        <th className="text-center py-1 w-16">Typ</th>
-                        <th className="text-right py-1 w-12">Debet</th>
-                        <th className="text-right py-1 w-12">Kredit</th>
+                        <th className="text-left py-1 w-14">{t('th_account')}</th>
+                        <th className="text-left py-1">{t('th_description')}</th>
+                        <th className="text-center py-1 w-16">{t('th_type')}</th>
+                        <th className="text-right py-1 w-12">{t('th_debit')}</th>
+                        <th className="text-right py-1 w-12">{t('th_credit')}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {t.lines.map((line: BookingTemplateLibraryLine, i: number) => (
+                      {tt.lines.map((line: BookingTemplateLibraryLine, i: number) => (
                         <tr key={i} className="border-b last:border-0">
                           <td className="py-1 font-mono">{line.account}</td>
                           <td className="py-1">{line.label}</td>
                           <td className="py-1 text-center">
                             {line.type === 'vat' && line.vat_rate
-                              ? `Moms ${(line.vat_rate * 100).toFixed(0)}%`
-                              : line.type === 'settlement' ? 'Betalning' : 'Kostnad/Intäkt'}
+                              ? t('vat_with_rate', { rate: (line.vat_rate * 100).toFixed(0) })
+                              : line.type === 'settlement' ? t('type_settlement') : t('type_cost_revenue')}
                           </td>
-                          <td className="py-1 text-right">{line.side === 'debit' ? 'D' : ''}</td>
-                          <td className="py-1 text-right">{line.side === 'credit' ? 'K' : ''}</td>
+                          <td className="py-1 text-right">{line.side === 'debit' ? t('debit_short') : ''}</td>
+                          <td className="py-1 text-right">{line.side === 'credit' ? t('credit_short') : ''}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -339,7 +348,8 @@ function TemplateSection({
   )
 }
 
-function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
+function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void; entityLabels: Record<string, string> }) {
+  const t = useTranslations('settings_booking_templates')
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [name, setName] = useState('')
@@ -371,7 +381,7 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!name || lines.some((l) => !l.account || !l.label)) {
-      toast({ title: 'Fyll i alla fält', variant: 'destructive' })
+      toast({ title: t('toast_fill_all_fields'), variant: 'destructive' })
       return
     }
 
@@ -384,10 +394,10 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
       })
       if (!res.ok) {
         const json = await res.json()
-        toast({ title: json.error || 'Kunde inte skapa mall', variant: 'destructive' })
+        toast({ title: json.error || t('toast_create_failed'), variant: 'destructive' })
         return
       }
-      toast({ title: 'Mall skapad' })
+      toast({ title: t('toast_created') })
       onCreated()
     } finally {
       setIsSubmitting(false)
@@ -397,16 +407,16 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <Label>Namn</Label>
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="T.ex. Inköp EU-varor" />
+        <Label>{t('name_label')}</Label>
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('name_placeholder')} />
       </div>
       <div>
-        <Label>Beskrivning <span className="text-muted-foreground font-normal">(valfritt)</span></Label>
-        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="När ska denna mall användas?" rows={2} className="resize-none" />
+        <Label>{t('description_label')} <span className="text-muted-foreground font-normal">{t('optional_suffix')}</span></Label>
+        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('description_placeholder')} rows={2} className="resize-none" />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <Label>Kategori</Label>
+          <Label>{t('category_label')}</Label>
           <Select value={category} onValueChange={(v) => setCategory(v as BookingTemplateCategory)}>
             <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -417,11 +427,11 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
           </Select>
         </div>
         <div>
-          <Label>Företagstyp</Label>
+          <Label>{t('entity_type_label')}</Label>
           <Select value={entityType} onValueChange={(v) => setEntityType(v as typeof entityType)}>
             <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {Object.entries(ENTITY_LABELS).map(([k, v]) => (
+              {Object.entries(entityLabels).map(([k, v]) => (
                 <SelectItem key={k} value={k}>{v}</SelectItem>
               ))}
             </SelectContent>
@@ -430,36 +440,36 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
       </div>
 
       <div>
-        <Label>Rader</Label>
+        <Label>{t('lines_label')}</Label>
         <div className="space-y-2 mt-1">
           {lines.map((line, i) => (
             <div key={i} className="flex items-center gap-2">
               <Input
                 value={line.account}
                 onChange={(e) => updateLine(i, 'account', e.target.value.replace(/\D/g, '').slice(0, 4))}
-                placeholder="Konto"
+                placeholder={t('account_placeholder')}
                 className="w-20 font-mono"
                 maxLength={4}
               />
               <Input
                 value={line.label}
                 onChange={(e) => updateLine(i, 'label', e.target.value)}
-                placeholder="Beskrivning"
+                placeholder={t('description_short_placeholder')}
                 className="flex-1"
               />
               <Select value={line.side} onValueChange={(v) => updateLine(i, 'side', v)}>
                 <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="debit">Debet</SelectItem>
-                  <SelectItem value="credit">Kredit</SelectItem>
+                  <SelectItem value="debit">{t('debit_label')}</SelectItem>
+                  <SelectItem value="credit">{t('credit_label')}</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={line.type} onValueChange={(v) => updateLine(i, 'type', v)}>
                 <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="business">Kostnad</SelectItem>
-                  <SelectItem value="vat">Moms</SelectItem>
-                  <SelectItem value="settlement">Betalning</SelectItem>
+                  <SelectItem value="business">{t('type_cost')}</SelectItem>
+                  <SelectItem value="vat">{t('type_vat')}</SelectItem>
+                  <SelectItem value="settlement">{t('type_settlement')}</SelectItem>
                 </SelectContent>
               </Select>
               <Button
@@ -476,14 +486,14 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
           ))}
           <Button type="button" variant="outline" size="sm" onClick={addLine}>
             <Plus className="h-3 w-3 mr-1" />
-            Lägg till rad
+            {t('add_line')}
           </Button>
         </div>
       </div>
 
       <Button type="submit" disabled={isSubmitting} className="w-full">
         {isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-        Skapa mall
+        {t('create_button')}
       </Button>
     </form>
   )

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import Image from 'next/image'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -22,19 +23,23 @@ import Step2CompanyDetails from '@/components/onboarding/Step2CompanyDetails'
 import Step3TaxRegistration from '@/components/onboarding/Step3TaxRegistration'
 import Step4VatAccounting from '@/components/onboarding/Step4VatAccounting'
 
-const STEP_INFO = [
-  { title: 'Nytt företag', subtitle: 'Välj företagsform för det nya företaget.', label: 'Företagsform' },
-  { title: 'Företagsuppgifter', subtitle: 'Uppgifterna visas på fakturor och dokument.', label: 'Uppgifter' },
-  { title: 'F-skatt & räkenskapsår', subtitle: 'Skatteregistrering och räkenskapsår.', label: 'Skatt' },
-  { title: 'Moms & bokföring', subtitle: 'Momsregistrering och bokföringsmetod.', label: 'Moms' },
-]
+type TFn = (key: string, values?: Record<string, string | number>) => string
 
-function translatePeriodError(msg: string): string {
-  if (msg.includes('end must be after')) return 'Slutdatumet måste vara efter startdatumet.'
-  if (msg.includes('start must be the 1st')) return 'Startdatumet måste vara den 1:a i en månad.'
-  if (msg.includes('end must be the last day')) return 'Slutdatumet måste vara sista dagen i en månad.'
-  if (msg.includes('exceeds maximum 18 months')) return 'Räkenskapsåret får inte överstiga 18 månader (BFL 3 kap.).'
-  return 'Ogiltigt räkenskapsår. Kontrollera datumen och försök igen.'
+function buildStepInfo(t: TFn) {
+  return [
+    { title: t('step1_title'), subtitle: t('step1_subtitle'), label: t('step1_label') },
+    { title: t('step2_title'), subtitle: t('step2_subtitle'), label: t('step2_label') },
+    { title: t('step3_title'), subtitle: t('step3_subtitle'), label: t('step3_label') },
+    { title: t('step4_title'), subtitle: t('step4_subtitle'), label: t('step4_label') },
+  ]
+}
+
+function translatePeriodError(msg: string, t: TFn): string {
+  if (msg.includes('end must be after')) return t('period_error_end_after_start')
+  if (msg.includes('start must be the 1st')) return t('period_error_start_first')
+  if (msg.includes('end must be the last day')) return t('period_error_end_last_day')
+  if (msg.includes('exceeds maximum 18 months')) return t('period_error_max_18')
+  return t('period_error_invalid')
 }
 
 export default function NewCompanyPage() {
@@ -64,6 +69,8 @@ function NewCompanyContent() {
   const router = useRouter()
   const { toast } = useToast()
   const supabase = createClient()
+  const t = useTranslations('companies_new')
+  const STEP_INFO = buildStepInfo(t)
 
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -119,8 +126,8 @@ function NewCompanyContent() {
       const periodResult = computeFiscalPeriod(mergedSettings)
       if (periodResult.error) {
         toast({
-          title: 'Ogiltigt räkenskapsår',
-          description: translatePeriodError(periodResult.error),
+          title: t('toast_invalid_fiscal_year'),
+          description: translatePeriodError(periodResult.error, t),
           variant: 'destructive',
         })
         return
@@ -140,8 +147,8 @@ function NewCompanyContent() {
     const periodResult = computeFiscalPeriod(mergedSettings)
     if (periodResult.error) {
       toast({
-        title: 'Ogiltigt räkenskapsår',
-        description: translatePeriodError(periodResult.error),
+        title: t('toast_invalid_fiscal_year'),
+        description: translatePeriodError(periodResult.error, t),
         variant: 'destructive',
       })
       return
@@ -149,7 +156,7 @@ function NewCompanyContent() {
 
     if (!teamId) {
       logError('handleNext aborted: no teamId')
-      toast({ title: 'Fel', description: 'Kunde inte hitta team. Ladda om sidan.', variant: 'destructive' })
+      toast({ title: t('toast_error_title'), description: t('toast_no_team'), variant: 'destructive' })
       return
     }
 
@@ -168,8 +175,8 @@ function NewCompanyContent() {
       if (result.error || !result.companyId) {
         logError('create company action failed', { error: result.error })
         toast({
-          title: 'Fel',
-          description: result.error || 'Kunde inte skapa företag. Försök igen.',
+          title: t('toast_error_title'),
+          description: result.error || t('toast_create_failed'),
           variant: 'destructive',
         })
         return
@@ -177,14 +184,14 @@ function NewCompanyContent() {
 
       console.log(LOG, 'created company', result.companyId)
       toast({
-        title: 'Företag skapat!',
-        description: 'Du har nu bytt till det nya företaget.',
+        title: t('toast_company_created'),
+        description: t('toast_switched_to_new'),
       })
       router.push('/')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logError('create company action threw', { error: message })
-      toast({ title: 'Fel', description: 'Ett oväntat fel uppstod. Försök igen.', variant: 'destructive' })
+      toast({ title: t('toast_error_title'), description: t('toast_unexpected_error'), variant: 'destructive' })
     } finally {
       setIsSaving(false)
     }

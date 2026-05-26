@@ -25,12 +25,17 @@ export function formatDate(date: Date | string): string {
 }
 
 /**
- * Long-form Swedish date for metadata/audit contexts (e.g. "9 maj 2026").
+ * Long-form date for metadata/audit contexts (e.g. "9 maj 2026" / "May 9, 2026").
  * Use formatDate for transaction/voucher/invoice dates that need to align in tables.
+ *
+ * The locale arg is the UI language ('sv' | 'en'); default 'sv' keeps existing
+ * server-side callers (logs, audit) Swedish without churn. For client UI use
+ * the useFormat() hook which pulls the active locale from next-intl.
  */
-export function formatDateLong(date: Date | string): string {
+export function formatDateLong(date: Date | string, locale: string = 'sv'): string {
   const d = typeof date === 'string' ? parseISO(date) : date
-  return d.toLocaleDateString('sv-SE', {
+  const intlLocale = locale === 'en' ? 'en-US' : 'sv-SE'
+  return d.toLocaleDateString(intlLocale, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

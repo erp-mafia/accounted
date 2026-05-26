@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -18,86 +19,122 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
+import type { ApiKeyScope } from '@/lib/auth/api-keys'
 
 const branding = getBranding()
 const connectorName = branding.appName.toLowerCase()
 
-const SCOPE_GROUPS = [
+type ScopeEntry = {
+  scope: ApiKeyScope
+  labelKey: string
+  /** Number of MCP tools gated by this scope. 0 = REST-API-only scope. */
+  tools: number
+}
+
+type ScopeGroup = {
+  domain: string
+  labelKey: string
+  read: ScopeEntry | null
+  write: ScopeEntry | null
+}
+
+const SCOPE_GROUPS: ScopeGroup[] = [
   {
     domain: 'transactions',
-    label: 'Transaktioner',
-    read: 'transactions:read' as const,
-    readLabel: 'Läs — lista transaktioner, mallar, kategorier',
-    readTools: 3,
-    write: 'transactions:write' as const,
-    writeLabel: 'Skriv — kategorisera, kvittomatchning, koppling mot faktura',
-    writeTools: 3,
+    labelKey: 'group_transactions',
+    read: { scope: 'transactions:read', labelKey: 'scope_transactions_read', tools: 8 },
+    write: { scope: 'transactions:write', labelKey: 'scope_transactions_write', tools: 8 },
   },
   {
     domain: 'customers',
-    label: 'Kunder',
-    read: 'customers:read' as const,
-    readLabel: 'Läs — lista kunder',
-    readTools: 1,
-    write: 'customers:write' as const,
-    writeLabel: 'Skriv — skapa kunder',
-    writeTools: 1,
+    labelKey: 'group_customers',
+    read: { scope: 'customers:read', labelKey: 'scope_customers_read', tools: 1 },
+    write: { scope: 'customers:write', labelKey: 'scope_customers_write', tools: 1 },
   },
   {
     domain: 'invoices',
-    label: 'Fakturor',
-    read: 'invoices:read' as const,
-    readLabel: 'Läs — lista fakturor',
-    readTools: 1,
-    write: 'invoices:write' as const,
-    writeLabel: 'Skriv — skapa, skicka, markera betald/skickad',
-    writeTools: 4,
+    labelKey: 'group_invoices',
+    read: { scope: 'invoices:read', labelKey: 'scope_invoices_read', tools: 1 },
+    write: { scope: 'invoices:write', labelKey: 'scope_invoices_write', tools: 6 },
   },
   {
     domain: 'suppliers',
-    label: 'Leverantörer',
-    read: 'suppliers:read' as const,
-    readLabel: 'Läs — lista leverantörer och leverantörsfakturor',
-    readTools: 2,
-    write: null,
-    writeLabel: null,
-    writeTools: 0,
+    labelKey: 'group_suppliers',
+    read: { scope: 'suppliers:read', labelKey: 'scope_suppliers_read', tools: 2 },
+    write: { scope: 'suppliers:write', labelKey: 'scope_suppliers_write', tools: 3 },
   },
   {
     domain: 'reports',
-    label: 'Rapporter',
-    read: 'reports:read' as const,
-    readLabel: 'Läs — kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, kundreskontra, leverantörsreskontra, räkenskapsperioder, bankavstämning',
-    readTools: 11,
+    labelKey: 'group_reports',
+    read: { scope: 'reports:read', labelKey: 'scope_reports_read', tools: 18 },
     write: null,
-    writeLabel: null,
-    writeTools: 0,
   },
-] as const
+  {
+    domain: 'bookkeeping',
+    labelKey: 'group_bookkeeping',
+    read: null,
+    write: { scope: 'bookkeeping:write', labelKey: 'scope_bookkeeping_write', tools: 11 },
+  },
+  {
+    domain: 'payroll',
+    labelKey: 'group_payroll',
+    read: { scope: 'payroll:read', labelKey: 'scope_payroll_read', tools: 3 },
+    write: { scope: 'payroll:write', labelKey: 'scope_payroll_write', tools: 3 },
+  },
+  {
+    domain: 'pending_operations',
+    labelKey: 'group_pending_operations',
+    read: { scope: 'pending_operations:read', labelKey: 'scope_pending_operations_read', tools: 1 },
+    write: { scope: 'pending_operations:approve', labelKey: 'scope_pending_operations_approve', tools: 2 },
+  },
+  {
+    domain: 'documents',
+    labelKey: 'group_documents',
+    read: { scope: 'documents:read', labelKey: 'scope_documents_read', tools: 0 },
+    write: { scope: 'documents:write', labelKey: 'scope_documents_write', tools: 0 },
+  },
+  {
+    domain: 'companies',
+    labelKey: 'group_companies',
+    read: { scope: 'companies:read', labelKey: 'scope_companies_read', tools: 0 },
+    write: null,
+  },
+  {
+    domain: 'events',
+    labelKey: 'group_events',
+    read: { scope: 'events:read', labelKey: 'scope_events_read', tools: 0 },
+    write: null,
+  },
+  {
+    domain: 'webhooks',
+    labelKey: 'group_webhooks',
+    read: null,
+    write: { scope: 'webhooks:manage', labelKey: 'scope_webhooks_manage', tools: 0 },
+  },
+  {
+    domain: 'operations',
+    labelKey: 'group_operations',
+    read: { scope: 'operations:read', labelKey: 'scope_operations_read', tools: 0 },
+    write: null,
+  },
+  {
+    domain: 'compliance',
+    labelKey: 'group_compliance',
+    read: { scope: 'compliance:read', labelKey: 'scope_compliance_read', tools: 0 },
+    write: null,
+  },
+]
 
-type Scope =
-  | 'transactions:read' | 'transactions:write'
-  | 'customers:read' | 'customers:write'
-  | 'invoices:read' | 'invoices:write'
-  | 'suppliers:read'
-  | 'reports:read'
+type Scope = ApiKeyScope
 
-const ALL_SCOPES: Scope[] = SCOPE_GROUPS.flatMap((g) =>
-  g.write ? [g.read, g.write] : [g.read]
-)
-
-/** Map scope key → display label for badges */
-const SCOPE_LABELS: Record<Scope, string> = {
-  'transactions:read': 'Transaktioner (läs)',
-  'transactions:write': 'Transaktioner (skriv)',
-  'customers:read': 'Kunder (läs)',
-  'customers:write': 'Kunder (skriv)',
-  'invoices:read': 'Fakturor (läs)',
-  'invoices:write': 'Fakturor (skriv)',
-  'suppliers:read': 'Leverantörer (läs)',
-  'reports:read': 'Rapporter (läs)',
-}
+const ALL_SCOPES: Scope[] = SCOPE_GROUPS.flatMap((g) => {
+  const out: Scope[] = []
+  if (g.read) out.push(g.read.scope)
+  if (g.write) out.push(g.write.scope)
+  return out
+})
 
 interface ApiKey {
   id: string
@@ -110,7 +147,7 @@ interface ApiKey {
   created_at: string
 }
 
-function CopyBlock({ text }: { text: string }) {
+function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: string }) {
   const [copied, setCopied] = useState(false)
 
   async function handleCopy() {
@@ -133,7 +170,7 @@ function CopyBlock({ text }: { text: string }) {
         size="sm"
         className="absolute right-1.5 top-1.5 h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={handleCopy}
-        aria-label="Kopiera"
+        aria-label={copyAriaLabel}
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-green-600" />
@@ -145,7 +182,52 @@ function CopyBlock({ text }: { text: string }) {
   )
 }
 
+function ScopeCard({
+  entry,
+  checked,
+  onCheckedChange,
+}: {
+  entry: ScopeEntry
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  const t = useTranslations('settings_api_keys')
+  const label = t(entry.labelKey)
+  const dashIdx = label.indexOf(' — ')
+  const verb = dashIdx > 0 ? label.slice(0, dashIdx) : label
+  const description = dashIdx > 0 ? label.slice(dashIdx + 3) : ''
+
+  return (
+    <label
+      className={cn(
+        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-md border p-2 transition-colors',
+        checked
+          ? 'border-foreground/30 bg-secondary'
+          : 'border-border hover:bg-secondary/60'
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Checkbox
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          className="shrink-0"
+        />
+        <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
+        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          {entry.tools > 0 ? t('tools_count', { count: entry.tools }) : t('rest_badge')}
+        </span>
+      </div>
+      {description && (
+        <p className="ml-6 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+          {description}
+        </p>
+      )}
+    </label>
+  )
+}
+
 export function ApiKeysPanel() {
+  const t = useTranslations('settings_api_keys')
   const { toast } = useToast()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
 
@@ -168,11 +250,11 @@ export function ApiKeysPanel() {
         setKeys(json.data.filter((k: ApiKey) => !k.revoked_at))
       }
     } catch {
-      toast({ title: 'Kunde inte hämta API-nycklar', variant: 'destructive' })
+      toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   useEffect(() => {
     fetchKeys()
@@ -184,7 +266,7 @@ export function ApiKeysPanel() {
       const res = await fetch('/api/settings/api-keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newKeyName || 'MCP-nyckel', scopes: Array.from(newKeyScopes) }),
+        body: JSON.stringify({ name: newKeyName || t('default_key_name'), scopes: Array.from(newKeyScopes) }),
       })
       const json = await res.json()
 
@@ -200,7 +282,7 @@ export function ApiKeysPanel() {
       setNewKeyScopes(new Set(ALL_SCOPES))
       fetchKeys()
     } catch {
-      toast({ title: 'Kunde inte skapa nyckel', variant: 'destructive' })
+      toast({ title: t('toast_create_failed'), variant: 'destructive' })
     } finally {
       setIsCreating(false)
     }
@@ -208,18 +290,18 @@ export function ApiKeysPanel() {
 
   async function handleRevoke(id: string, name: string) {
     const ok = await confirmRevoke({
-      title: 'Återkalla API-nyckel',
-      description: `"${name}" återkallas permanent. Alla klienter som använder nyckeln slutar fungera omedelbart.`,
-      confirmLabel: 'Återkalla',
+      title: t('revoke_dialog_title'),
+      description: t('revoke_dialog_description', { name }),
+      confirmLabel: t('revoke_confirm'),
     })
     if (!ok) return
 
     try {
       await fetch(`/api/settings/api-keys/${id}`, { method: 'DELETE' })
       setKeys((prev) => prev.filter((k) => k.id !== id))
-      toast({ title: 'Nyckel återkallad' })
+      toast({ title: t('toast_revoked') })
     } catch {
-      toast({ title: 'Kunde inte återkalla nyckel', variant: 'destructive' })
+      toast({ title: t('toast_revoke_failed'), variant: 'destructive' })
     }
   }
 
@@ -248,9 +330,9 @@ export function ApiKeysPanel() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>API-nycklar</CardTitle>
+              <CardTitle>{t('title')}</CardTitle>
               <CardDescription>
-                Hantera nycklar för MCP-klienter (Claude, Cursor) och andra integrationer.
+                {t('description')}
               </CardDescription>
             </div>
             <Button
@@ -259,7 +341,7 @@ export function ApiKeysPanel() {
               disabled={keys.length >= 10}
             >
               <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Skapa nyckel
+              {t('create_key')}
             </Button>
           </div>
         </CardHeader>
@@ -271,9 +353,9 @@ export function ApiKeysPanel() {
           ) : keys.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <Key className="h-8 w-8 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">Inga API-nycklar ännu.</p>
+              <p className="text-sm text-muted-foreground">{t('empty_title')}</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Skapa en nyckel för att koppla din MCP-klient.
+                {t('empty_help')}
               </p>
             </div>
           ) : (
@@ -290,23 +372,23 @@ export function ApiKeysPanel() {
                         <p className="text-sm font-medium truncate">{key.name}</p>
                         <span className="text-xs text-muted-foreground">
                           {scopeCount === ALL_SCOPES.length
-                            ? 'Alla behörigheter'
+                            ? t('all_permissions')
                             : scopeCount === 0
-                              ? 'Inga behörigheter'
-                              : `${scopeCount} behörigheter`}
+                              ? t('no_permissions')
+                              : t('permissions_count', { count: scopeCount })}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 mt-1">
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                         <code className="text-xs text-muted-foreground font-mono">
                           {key.key_prefix}...
                         </code>
                         <span className="text-xs text-muted-foreground">
-                          Skapad {formatDate(key.created_at)}
+                          {t('created')} {formatDate(key.created_at)}
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {key.last_used_at
-                            ? `Använd ${formatDate(key.last_used_at)}`
-                            : 'Aldrig använd'}
+                            ? t('used_on', { date: formatDate(key.last_used_at) })
+                            : t('never_used')}
                         </span>
                       </div>
                     </div>
@@ -314,7 +396,7 @@ export function ApiKeysPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleRevoke(key.id, key.name)}
-                      aria-label={`Återkalla ${key.name}`}
+                      aria-label={t('revoke_aria', { name: key.name })}
                       className="text-destructive hover:text-destructive"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -329,27 +411,29 @@ export function ApiKeysPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Anslut MCP-klient</CardTitle>
+          <CardTitle className="text-base">{t('connect_mcp_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div>
             <div className="flex items-center gap-2 mb-2">
               <p className="text-sm font-medium">Claude.ai</p>
-              <Badge variant="secondary" className="text-[10px] font-normal px-1.5 py-0">Rekommenderat</Badge>
+              <Badge variant="secondary" className="text-[10px] font-normal px-1.5 py-0">{t('recommended_badge')}</Badge>
             </div>
             <p className="text-xs text-muted-foreground mb-2">
-              Gå till <strong>Settings &rarr; Integrations &rarr; Add Integration</strong> och klistra in MCP-serverns URL.
-              Du loggas in via ditt {connectorName}-konto — ingen API-nyckel behövs.
+              {t.rich('claude_ai_instructions', {
+                connectorName,
+                path: (chunks) => <strong>{chunks}</strong>,
+              })}
             </p>
-            <CopyBlock text={mcpUrl} />
+            <CopyBlock text={mcpUrl} copyAriaLabel={t('copy_aria')} />
           </div>
 
           <div>
-            <p className="text-sm font-medium mb-2">Claude Code / Cursor</p>
+            <p className="text-sm font-medium mb-2">{t('claude_code_cursor')}</p>
             <p className="text-xs text-muted-foreground mb-2">
-              Kör i terminalen — loggar in via webbläsaren:
+              {t('terminal_runs_browser_login')}
             </p>
-            <CopyBlock text={`claude mcp add ${connectorName} --transport http ${mcpUrl}`} />
+            <CopyBlock text={`claude mcp add ${connectorName} --transport http ${mcpUrl}`} copyAriaLabel={t('copy_aria')} />
           </div>
 
           <div className="border-t pt-4">
@@ -359,14 +443,16 @@ export function ApiKeysPanel() {
               onClick={() => setShowApiKeyMethods(!showApiKeyMethods)}
             >
               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showApiKeyMethods ? '' : '-rotate-90'}`} />
-              Anslut med API-nyckel istället
+              {t('connect_with_api_key')}
             </button>
             {showApiKeyMethods && (
               <div className="space-y-6 pt-4 animate-in slide-in-from-top-1 duration-150">
                 <div>
                   <p className="text-sm font-medium mb-1">Claude Desktop</p>
                   <p className="text-xs text-muted-foreground mb-2">
-                    Lägg till i <code className="text-xs">claude_desktop_config.json</code> (Inställningar &rarr; Developer):
+                    {t.rich('claude_desktop_instructions', {
+                      code: (chunks) => <code className="text-xs">{chunks}</code>,
+                    })}
                   </p>
                   <CopyBlock text={`{
   "mcpServers": {
@@ -378,17 +464,17 @@ export function ApiKeysPanel() {
       }
     }
   }
-}`} />
+}`} copyAriaLabel={t('copy_aria')} />
                 </div>
 
                 <div>
-                  <p className="text-sm font-medium mb-1">Claude Code / Cursor</p>
+                  <p className="text-sm font-medium mb-1">{t('claude_code_cursor')}</p>
                   <p className="text-xs text-muted-foreground mb-2">
-                    Kör i terminalen med en API-nyckel:
+                    {t('terminal_with_api_key')}
                   </p>
                   <CopyBlock text={`claude mcp add ${connectorName} --transport http \\
   --url ${mcpUrl} \\
-  --header "Authorization: Bearer gnubok_sk_..."`} />
+  --header "Authorization: Bearer gnubok_sk_..."`} copyAriaLabel={t('copy_aria')} />
                 </div>
               </div>
             )}
@@ -398,75 +484,76 @@ export function ApiKeysPanel() {
 
       {/* Create key dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl p-4 sm:max-w-3xl sm:p-6">
           <DialogHeader>
-            <DialogTitle>Skapa API-nyckel</DialogTitle>
+            <DialogTitle>{t('create_dialog_title')}</DialogTitle>
             <DialogDescription>
-              Ge nyckeln ett namn så du vet vad den används till.
+              {t('create_dialog_description')}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="key-name">Namn</Label>
+              <Label htmlFor="key-name">{t('name_label')}</Label>
               <Input
                 id="key-name"
-                placeholder="t.ex. Claude Desktop"
+                placeholder={t('name_placeholder')}
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
               />
             </div>
-            <div className="space-y-2">
-              <Label>Behörigheter</Label>
-              <p className="text-xs text-muted-foreground">
-                Välj vad nyckeln ska ha åtkomst till.
-              </p>
-              <div className="space-y-3 pt-1">
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <div className="space-y-1">
+                  <Label>{t('permissions_label')}</Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('permissions_help')}
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                  {t('selected_count', { selected: newKeyScopes.size, total: ALL_SCOPES.length })}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {SCOPE_GROUPS.map((group) => (
-                  <div key={group.domain} className="space-y-1.5">
-                    <p className="text-sm font-medium">{group.label}</p>
-                    <div className="space-y-1 pl-1">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <Checkbox
-                          checked={newKeyScopes.has(group.read)}
+                  <div key={group.domain} className="space-y-2">
+                    <h4 className="text-sm font-medium">{t(group.labelKey)}</h4>
+                    <div className="space-y-2 px-2">
+                      {group.read && (
+                        <ScopeCard
+                          entry={group.read}
+                          checked={newKeyScopes.has(group.read.scope)}
                           onCheckedChange={(checked) => {
                             setNewKeyScopes((prev) => {
                               const next = new Set(prev)
                               if (checked) {
-                                next.add(group.read)
+                                next.add(group.read!.scope)
                               } else {
-                                next.delete(group.read)
-                                // Remove write too — write without read makes no sense
-                                if (group.write) next.delete(group.write)
+                                next.delete(group.read!.scope)
+                                if (group.write) next.delete(group.write.scope)
                               }
                               return next
                             })
                           }}
                         />
-                        <span className="text-xs text-muted-foreground">{group.readLabel}</span>
-                        <span className="text-[10px] tabular-nums text-muted-foreground/60">{group.readTools} verktyg</span>
-                      </label>
+                      )}
                       {group.write && (
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <Checkbox
-                            checked={newKeyScopes.has(group.write)}
-                            onCheckedChange={(checked) => {
-                              setNewKeyScopes((prev) => {
-                                const next = new Set(prev)
-                                if (checked) {
-                                  next.add(group.write!)
-                                  // Auto-check read when write is checked
-                                  next.add(group.read)
-                                } else {
-                                  next.delete(group.write!)
-                                }
-                                return next
-                              })
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">{group.writeLabel}</span>
-                          <span className="text-[10px] tabular-nums text-muted-foreground/60">{group.writeTools} verktyg</span>
-                        </label>
+                        <ScopeCard
+                          entry={group.write}
+                          checked={newKeyScopes.has(group.write.scope)}
+                          onCheckedChange={(checked) => {
+                            setNewKeyScopes((prev) => {
+                              const next = new Set(prev)
+                              if (checked) {
+                                next.add(group.write!.scope)
+                                if (group.read) next.add(group.read.scope)
+                              } else {
+                                next.delete(group.write!.scope)
+                              }
+                              return next
+                            })
+                          }}
+                        />
                       )}
                     </div>
                   </div>
@@ -476,11 +563,11 @@ export function ApiKeysPanel() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-              Avbryt
+              {t('cancel')}
             </Button>
             <Button onClick={handleCreate} disabled={isCreating || newKeyScopes.size === 0}>
               {isCreating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Skapa
+              {t('create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -498,9 +585,9 @@ export function ApiKeysPanel() {
       }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Din nya API-nyckel</DialogTitle>
+            <DialogTitle>{t('new_key_dialog_title')}</DialogTitle>
             <DialogDescription>
-              Kopiera nyckeln nu. Den visas bara en gång.
+              {t('new_key_dialog_description')}
             </DialogDescription>
           </DialogHeader>
           <div className="relative">
@@ -526,7 +613,7 @@ export function ApiKeysPanel() {
               setNewKeyValue('')
               setCopied(false)
             }}>
-              Klar
+              {t('done')}
             </Button>
           </DialogFooter>
         </DialogContent>

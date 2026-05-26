@@ -220,6 +220,7 @@ export interface CompanySettings {
   account_number: string | null
   bankgiro: string | null
   plusgiro: string | null
+  swish: string | null
   iban: string | null
   bic: string | null
 
@@ -245,11 +246,15 @@ export interface CompanySettings {
   invoice_show_ocr: boolean
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
+  invoice_show_swish: boolean
   invoice_show_logo: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'
   invoice_late_fee_text: string | null
   invoice_credit_terms_text: string | null
+
+  // Automation
+  send_invoice_reminders: boolean
 
   // Logo
   logo_url: string | null
@@ -315,6 +320,32 @@ export interface BankAccount {
   currency: Currency
   balance: number | null
   balance_updated_at?: string | null
+}
+
+// Cash account — first-class entity for ledger-account routing decisions.
+// Backed by the cash_accounts table; bank_connections.accounts_data remains
+// the source for PSD2 sync metadata + UI display until a follow-up migration
+// drops it 30 days after this PR.
+export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
+
+export interface CashAccount {
+  id: string
+  company_id: string
+  bank_connection_id: string | null
+  external_uid: string | null    // PSD2 StoredAccount.uid
+  iban: string | null
+  bg_pg: string | null
+  name: string | null
+  currency: string                // 3-char ISO; broader than Currency union to
+                                  // tolerate future currencies without DB-driven enum drift
+  ledger_account: string
+  balance: number | null
+  balance_updated_at: string | null
+  enabled: boolean
+  is_primary: boolean
+  source: CashAccountSource
+  created_at: string
+  updated_at: string
 }
 
 // Import source identifiers
@@ -384,6 +415,13 @@ export interface Transaction {
   import_source: string | null
   reference: string | null  // OCR number, Bankgiro reference
 
+  // Counterparty identification from PSD2 (creditor for outflows, debtor for
+  // inflows). The own-account transfer detector matches `counterparty_iban`
+  // against cash_accounts.iban for the same company. `counterparty_account`
+  // is the BG/PG/BBAN fallback for Swedish domestic transfers without IBAN.
+  counterparty_iban: string | null
+  counterparty_account: string | null
+
   // Notes
   notes: string | null
 
@@ -439,6 +477,10 @@ export interface Customer {
   vat_number: string | null
   vat_number_validated: boolean
   vat_number_validated_at: string | null
+  personal_number: string | null
+
+  // Language for customer-facing invoice PDF and email
+  language: 'sv' | 'en'
 
   // Payment
   default_payment_terms: number  // Days
@@ -707,6 +749,57 @@ export interface InvoiceItem {
   created_at: string
 }
 
+// Recurring Invoice Schedule (template + monthly cadence)
+export type RecurringInvoiceScheduleStatus = 'active' | 'paused'
+
+export interface RecurringInvoiceSchedule {
+  id: string
+  company_id: string
+  user_id: string
+  customer_id: string
+
+  name: string
+
+  // Monthly cadence, day-of-month 1-31. Clamped to last day of month in
+  // shorter months (handled by computeNextRunDate).
+  day_of_month: number
+  payment_terms_days: number
+
+  currency: Currency
+  your_reference: string | null
+  our_reference: string | null
+  notes: string | null
+
+  auto_send: boolean
+  status: RecurringInvoiceScheduleStatus
+
+  next_run_date: string
+  last_run_at: string | null
+  last_invoice_id: string | null
+  last_run_warning: string | null
+  generated_count: number
+
+  created_at: string
+  updated_at: string
+
+  // Relations
+  customer?: Customer
+  items?: RecurringInvoiceScheduleItem[]
+}
+
+export interface RecurringInvoiceScheduleItem {
+  id: string
+  schedule_id: string
+  sort_order: number
+  description: string
+  quantity: number
+  unit: string
+  unit_price: number
+  // null = inherit customer's default VAT rate at spawn time
+  vat_rate: number | null
+  created_at: string
+}
+
 // Tax Rates (reference table)
 export interface TaxRate {
   id: string
@@ -739,6 +832,8 @@ export interface CreateCustomerInput {
   country?: string
   org_number?: string
   vat_number?: string
+  personal_number?: string
+  language?: 'sv' | 'en'
   default_payment_terms?: number
   notes?: string
 }
@@ -1292,6 +1387,13 @@ export interface SIEExportOptions {
   company_name: string
   org_number: string | null
   program_name?: string
+  /**
+   * When true, omit year-end closing verifikat (source_type = 'year_end')
+   * from #VER and from #RES/#UB calculations. Use when handing the file
+   * to systems (e.g. eDeklarera) that do their own closing — including
+   * our closing entry would zero out the P&L accounts.
+   */
+  exclude_year_end_closing?: boolean
 }
 
 // Input types for creating entries
@@ -1330,6 +1432,7 @@ export interface CreateFiscalPeriodInput {
 export type PendingOperationType =
   | 'categorize_transaction'
   | 'create_customer'
+  | 'create_supplier'
   | 'create_invoice'
   | 'mark_invoice_paid'
   | 'send_invoice'
@@ -1355,6 +1458,8 @@ export type PendingOperationType =
   // Stream 1 Phase 1: supplier invoice lifecycle
   | 'approve_supplier_invoice'
   | 'credit_supplier_invoice'
+  // Phase 5: convert an OCR'd inbox item to a leverantörsfaktura + registration JE
+  | 'create_supplier_invoice_from_inbox'
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
@@ -2478,6 +2583,18 @@ export interface RawTransaction {
   reference?: string | null
   bank_connection_id?: string | null
   import_source?: string
+  /**
+   * Counterparty IBAN from PSD2 (creditor for outflows, debtor for inflows).
+   * Used by the own-account transfer detector — when this matches another
+   * cash_accounts row for the same company, both legs auto-book as a transfer.
+   */
+  counterparty_iban?: string | null
+  /**
+   * Bankgiro / Plusgiro / BBAN fallback when no IBAN is available (typical
+   * for Swedish domestic transfers). Kept distinct from IBAN so matching
+   * doesn't accidentally collide BG numbers with IBAN strings.
+   */
+  counterparty_account?: string | null
 }
 
 /** Options for the transaction ingestion pipeline */
@@ -2504,6 +2621,8 @@ export interface IngestResult {
   auto_matched_invoices: number
   errors: number
   transaction_ids: string[]
+  /** First insert error encountered, surfaced for debugging. Optional. */
+  first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
 }
 
 // ── Invoice extraction (used by invoice-inbox extension and core utils) ──

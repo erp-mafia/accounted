@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -36,35 +37,30 @@ interface ReferenceAccount extends BASReferenceAccount {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const CLASS_LABELS: Record<number, string> = {
-  1: 'Tillgångar',
-  2: 'Eget kapital och skulder',
-  3: 'Rörelseintäkter',
-  4: 'Varuinköp och material',
-  5: 'Övriga externa kostnader',
-  6: 'Övriga externa kostnader',
-  7: 'Personalkostnader och avskrivningar',
-  8: 'Finansiella poster och resultat',
-}
-
-const TYPE_LABELS: Record<string, string> = {
-  asset: 'Tillgång',
-  liability: 'Skuld',
-  equity: 'EK',
-  revenue: 'Intakt',
-  expense: 'Kostnad',
-  untaxed_reserves: 'Ob. reserver',
-}
-
-// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export default function ChartOfAccountsManager() {
   const { toast } = useToast()
+  const t = useTranslations('chart_of_accounts')
+
+  const classLabel = (cls: number): string => {
+    const key = `class_${cls}` as const
+    try {
+      return t(key)
+    } catch {
+      return ''
+    }
+  }
+
+  const typeLabel = (type: string): string => {
+    const key = `type_${type}` as const
+    try {
+      return t(key)
+    } catch {
+      return type
+    }
+  }
 
   // View state
   const [view, setView] = useState<'my-accounts' | 'bas-catalog'>('my-accounts')
@@ -142,17 +138,17 @@ export default function ChartOfAccountsManager() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_active: !account.is_active }),
       })
-      if (!res.ok) throw new Error('Kunde inte uppdatera kontot')
+      if (!res.ok) throw new Error(t('toast_update_failed'))
       await refreshAll()
     } catch {
-      toast({ title: 'Kunde inte uppdatera kontot', variant: 'destructive' })
+      toast({ title: t('toast_update_failed'), variant: 'destructive' })
     } finally {
       setTogglingAccount(null)
     }
   }
 
   async function deleteAccount(account: BASAccount) {
-    const confirmed = window.confirm(`Vill du ta bort konto ${account.account_number} ${account.account_name}?`)
+    const confirmed = window.confirm(t('delete_confirm', { number: account.account_number, name: account.account_name }))
     if (!confirmed) return
     setDeletingAccount(account.account_number)
     try {
@@ -161,13 +157,13 @@ export default function ChartOfAccountsManager() {
       })
       if (!res.ok) {
         const data = await res.json()
-        throw new Error(data.error || 'Kunde inte ta bort kontot')
+        throw new Error(data.error || t('toast_delete_failed'))
       }
-      toast({ title: 'Konto borttaget', description: `${account.account_number} ${account.account_name}` })
+      toast({ title: t('toast_account_deleted'), description: `${account.account_number} ${account.account_name}` })
       await refreshAll()
     } catch (err) {
       toast({
-        title: err instanceof Error ? err.message : 'Kunde inte ta bort kontot',
+        title: err instanceof Error ? err.message : t('toast_delete_failed'),
         variant: 'destructive',
       })
     } finally {
@@ -183,14 +179,14 @@ export default function ChartOfAccountsManager() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_numbers: [accountNumber] }),
       })
-      if (!res.ok) throw new Error('Kunde inte aktivera kontot')
+      if (!res.ok) throw new Error(t('toast_activate_failed'))
       const { activated } = await res.json()
       if (activated > 0) {
-        toast({ title: 'Konto aktiverat', description: `Konto ${accountNumber} har lagts till i din kontoplan` })
+        toast({ title: t('toast_activated_title'), description: t('toast_activated_description', { number: accountNumber }) })
       }
       await refreshAll()
     } catch {
-      toast({ title: 'Kunde inte aktivera kontot', variant: 'destructive' })
+      toast({ title: t('toast_activate_failed'), variant: 'destructive' })
     } finally {
       setActivatingAccounts((prev) => {
         const next = new Set(prev)
@@ -271,7 +267,7 @@ export default function ChartOfAccountsManager() {
       <Card>
         <CardContent className="p-8 text-center text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-          Laddar kontoplan...
+          {t('loading')}
         </CardContent>
       </Card>
     )
@@ -290,14 +286,14 @@ export default function ChartOfAccountsManager() {
         >
           <TabsList>
             <TabsTrigger value="my-accounts">
-              Mina konton
+              {t('tab_my_accounts')}
               <Badge variant="secondary" className="ml-1.5 text-xs">
                 {accounts.length}
               </Badge>
             </TabsTrigger>
             <TabsTrigger value="bas-catalog">
               <BookOpen className="mr-1.5 h-3.5 w-3.5" />
-              BAS-katalog
+              {t('tab_bas_catalog')}
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -305,7 +301,7 @@ export default function ChartOfAccountsManager() {
         {view === 'my-accounts' && (
           <Button size="sm" onClick={() => setAddDialogOpen(true)}>
             <Plus className="mr-1.5 h-3.5 w-3.5" />
-            Eget konto
+            {t('add_own')}
           </Button>
         )}
 
@@ -316,7 +312,7 @@ export default function ChartOfAccountsManager() {
               onCheckedChange={setHideK2Excluded}
               className="scale-75"
             />
-            <span className="text-muted-foreground">Dölj K2-undantagna</span>
+            <span className="text-muted-foreground">{t('hide_k2_excluded')}</span>
           </label>
         )}
       </div>
@@ -325,7 +321,7 @@ export default function ChartOfAccountsManager() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Sök konto (nummer eller namn)..."
+          placeholder={t('search_placeholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-9"
@@ -355,7 +351,7 @@ export default function ChartOfAccountsManager() {
                         <ChevronRight className="h-4 w-4 shrink-0" />
                       )}
                       <span className="font-semibold text-left">
-                        Klass {cls}: {CLASS_LABELS[classNum] || ''}
+                        {t('class_heading', { cls, label: classLabel(classNum) })}
                       </span>
                       <Badge variant="secondary" className="text-xs">
                         {activeCount}/{classAccounts.length}
@@ -368,11 +364,11 @@ export default function ChartOfAccountsManager() {
                       <table className="w-full text-sm">
                         <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                           <tr className="border-b text-left">
-                            <th className="py-2 w-24">Konto</th>
-                            <th className="py-2">Namn</th>
-                            <th className="py-2 w-20 text-center">SRU</th>
-                            <th className="py-2 w-24 text-center">Typ</th>
-                            <th className="py-2 w-16 text-center">Aktiv</th>
+                            <th className="py-2 w-24">{t('col_account')}</th>
+                            <th className="py-2">{t('col_name')}</th>
+                            <th className="py-2 w-20 text-center">{t('col_sru')}</th>
+                            <th className="py-2 w-24 text-center">{t('col_type')}</th>
+                            <th className="py-2 w-16 text-center">{t('col_active')}</th>
                             <th className="py-2 w-20 text-right"></th>
                           </tr>
                         </thead>
@@ -392,7 +388,7 @@ export default function ChartOfAccountsManager() {
                                   {account.account_name}
                                   {account.is_system_account && (
                                     <Badge variant="outline" className="text-[10px] px-1 py-0">
-                                      System
+                                      {t('system_badge')}
                                     </Badge>
                                   )}
                                 </span>
@@ -404,7 +400,7 @@ export default function ChartOfAccountsManager() {
                               </td>
                               <td className="py-2 text-center">
                                 <Badge variant="outline" className="text-xs">
-                                  {TYPE_LABELS[account.account_type] || account.account_type}
+                                  {typeLabel(account.account_type)}
                                 </Badge>
                               </td>
                               <td className="py-2 text-center">
@@ -455,7 +451,7 @@ export default function ChartOfAccountsManager() {
           {filteredAccounts.length === 0 && (
             <Card>
               <CardContent className="p-8 text-center text-muted-foreground">
-                {searchQuery ? 'Inga konton matchar sökningen' : 'Inga konton i kontoplanen'}
+                {searchQuery ? t('no_matches') : t('no_accounts')}
               </CardContent>
             </Card>
           )}
@@ -485,10 +481,10 @@ export default function ChartOfAccountsManager() {
                         <ChevronRight className="h-4 w-4 shrink-0" />
                       )}
                       <span className="font-semibold text-left">
-                        Klass {cls}: {CLASS_LABELS[classNum] || ''}
+                        {t('class_heading', { cls, label: classLabel(classNum) })}
                       </span>
                       <Badge variant="secondary" className="text-xs">
-                        {activatedCount}/{classAccounts.length} aktiva
+                        {t('active_count_label', { active: activatedCount, total: classAccounts.length })}
                       </Badge>
                     </div>
                   </button>
@@ -498,11 +494,11 @@ export default function ChartOfAccountsManager() {
                       <table className="w-full text-sm">
                         <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                           <tr className="border-b text-left">
-                            <th className="py-2 w-24">Konto</th>
-                            <th className="py-2">Namn</th>
-                            <th className="py-2 w-20 text-center">SRU</th>
-                            <th className="py-2 w-24 text-center">Typ</th>
-                            <th className="py-2 w-28 text-right">Status</th>
+                            <th className="py-2 w-24">{t('col_account')}</th>
+                            <th className="py-2">{t('col_name')}</th>
+                            <th className="py-2 w-20 text-center">{t('col_sru')}</th>
+                            <th className="py-2 w-24 text-center">{t('col_type')}</th>
+                            <th className="py-2 w-28 text-right">{t('col_status')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -533,14 +529,14 @@ export default function ChartOfAccountsManager() {
                               </td>
                               <td className="py-2 text-center">
                                 <Badge variant="outline" className="text-xs">
-                                  {TYPE_LABELS[account.account_type] || account.account_type}
+                                  {typeLabel(account.account_type)}
                                 </Badge>
                               </td>
                               <td className="py-2 text-right">
                                 {account.is_activated ? (
                                   <span className="inline-flex items-center gap-1 text-xs text-success">
                                     <CheckCircle2 className="h-3.5 w-3.5" />
-                                    Aktiverat
+                                    {t('activated')}
                                   </span>
                                 ) : (
                                   <Button
@@ -555,7 +551,7 @@ export default function ChartOfAccountsManager() {
                                     ) : (
                                       <Plus className="mr-1 h-3 w-3" />
                                     )}
-                                    Lägg till
+                                    {t('add')}
                                   </Button>
                                 )}
                               </td>
@@ -572,7 +568,7 @@ export default function ChartOfAccountsManager() {
           {filteredReference.length === 0 && (
             <Card>
               <CardContent className="p-8 text-center text-muted-foreground">
-                Inga konton matchar sökningen
+                {t('no_matches')}
               </CardContent>
             </Card>
           )}

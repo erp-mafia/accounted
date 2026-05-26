@@ -2,12 +2,8 @@ import type { KPIPreferences } from '@/types'
 
 export interface KPIDefinition {
   id: string
-  label: string
-  subtitle: string
-  description: string
-  formula: string
+  // Translation key suffix; used as `kpi.def_<id>_label` / `_description` / `_formula` / `_accounts`.
   defaultAccounts: string[]
-  accountDescription: string
   customizableAccounts: boolean
   defaultVisible: boolean
   format: 'currency' | 'percentage' | 'days'
@@ -17,12 +13,7 @@ export interface KPIDefinition {
 export const KPI_DEFINITIONS: KPIDefinition[] = [
   {
     id: 'netResult',
-    label: 'Resultat',
-    subtitle: 'netto',
-    description: 'Nettoresultat för perioden (intäkter minus kostnader)',
-    formula: 'Totala intäkter − Totala kostnader ± Finansiella poster',
     defaultAccounts: [],
-    accountDescription: 'Intäkter (klass 3), Kostnader (klass 4–7), Finansiellt (klass 8)',
     customizableAccounts: false,
     defaultVisible: true,
     format: 'currency',
@@ -30,12 +21,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'cashPosition',
-    label: 'Kassa',
-    subtitle: 'likvida medel',
-    description: 'Totala likvida medel (bank- och kassakonton)',
-    formula: 'Summa utgående saldon för valda 19xx-konton',
     defaultAccounts: ['1910', '1920', '1930', '1940', '1950', '1960', '1970', '1980'],
-    accountDescription: 'Bank- och kassakonton (19xx)',
     customizableAccounts: true,
     defaultVisible: true,
     format: 'currency',
@@ -43,12 +29,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'outstandingReceivables',
-    label: 'Kundfordringar',
-    subtitle: 'utestående',
-    description: 'Utestående kundfordringar',
-    formula: 'Summa obetalda kundfakturor',
     defaultAccounts: ['1510'],
-    accountDescription: 'Kundfordringar (1510)',
     customizableAccounts: false,
     defaultVisible: true,
     format: 'currency',
@@ -56,12 +37,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'vatLiability',
-    label: 'Moms',
-    subtitle: '',
-    description: 'Momsskuld eller momsfordran för perioden',
-    formula: 'Utgående moms (2611 + 2621 + 2631) − Ingående moms (2641 + 2645)',
     defaultAccounts: ['2611', '2621', '2631', '2641', '2645'],
-    accountDescription: 'Utgående moms (2611, 2621, 2631), Ingående moms (2641, 2645)',
     customizableAccounts: true,
     defaultVisible: true,
     format: 'currency',
@@ -69,12 +45,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'grossMargin',
-    label: 'Bruttomarginal',
-    subtitle: 'av intäkter',
-    description: 'Andel av intäkterna som blir kvar efter varuinköp',
-    formula: '(Intäkter − Varukostnad klass 4) ÷ Intäkter × 100',
     defaultAccounts: [],
-    accountDescription: 'Intäkter (klass 3), Varor och material (klass 4)',
     customizableAccounts: false,
     defaultVisible: false,
     format: 'percentage',
@@ -82,12 +53,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'expenseRatio',
-    label: 'Kostnadsandel',
-    subtitle: 'av intäkter',
-    description: 'Andel av intäkterna som går till kostnader',
-    formula: 'Totala kostnader ÷ Totala intäkter × 100',
     defaultAccounts: [],
-    accountDescription: 'Intäkter (klass 3), Kostnader (klass 4–7)',
     customizableAccounts: false,
     defaultVisible: false,
     format: 'percentage',
@@ -95,12 +61,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'avgPaymentDays',
-    label: 'Betalningstid',
-    subtitle: 'snitt',
-    description: 'Genomsnittligt antal dagar till kundbetalning',
-    formula: 'Summa betaldagar ÷ Antal betalda fakturor (minst 5 krävs)',
     defaultAccounts: [],
-    accountDescription: 'Beräknas från betalda kundfakturor, inte konton',
     customizableAccounts: false,
     defaultVisible: false,
     format: 'days',

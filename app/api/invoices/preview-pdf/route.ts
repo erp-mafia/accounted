@@ -24,22 +24,66 @@ export async function POST(request: Request) {
   const companyId = await requireCompanyId(supabase, user.id)
 
   const body = await request.json()
-  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type } = body
+  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number } = body
 
-  if (!customer_id || !items || items.length === 0) {
-    return NextResponse.json({ error: 'Kunduppgifter och rader krävs' }, { status: 400 })
+  if (!items || items.length === 0) {
+    return NextResponse.json({ error: 'Rader krävs' }, { status: 400 })
   }
 
-  // Fetch customer
-  const { data: customer, error: customerError } = await supabase
-    .from('customers')
-    .select('*')
-    .eq('id', customer_id)
-    .eq('company_id', companyId)
-    .single()
+  // When customer_id is omitted, only allow the synthetic preview if the
+  // company has no real customers — this is the settings-preview dead-end
+  // case. Derived server-side so a client can't bypass the ownership check
+  // by passing a flag.
+  const isMockCustomer = !customer_id
 
-  if (customerError || !customer) {
-    return NextResponse.json({ error: 'Kunden hittades inte' }, { status: 404 })
+  let customer: Customer
+  if (isMockCustomer) {
+    const { count, error: countError } = await supabase
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+
+    if (countError || (count ?? 0) > 0) {
+      return NextResponse.json({ error: 'Kunduppgifter krävs' }, { status: 400 })
+    }
+
+    const nowIso = new Date().toISOString()
+    customer = {
+      id: 'preview-customer',
+      user_id: 'preview-user',
+      company_id: 'preview-company',
+      name: 'Exempel AB',
+      customer_type: 'swedish_business',
+      email: 'kund@exempel.se',
+      phone: null,
+      address_line1: 'Storgatan 1',
+      address_line2: null,
+      postal_code: '111 22',
+      city: 'Stockholm',
+      country: 'SE',
+      org_number: '556677-8899',
+      vat_number: null,
+      vat_number_validated: false,
+      vat_number_validated_at: null,
+      personal_number: null,
+      language: 'sv',
+      default_payment_terms: 30,
+      notes: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    }
+  } else {
+    const { data, error: customerError } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', customer_id)
+      .eq('company_id', companyId)
+      .single()
+
+    if (customerError || !data) {
+      return NextResponse.json({ error: 'Kunden hittades inte' }, { status: 404 })
+    }
+    customer = data as Customer
   }
 
   // Fetch company settings
@@ -88,9 +132,11 @@ export async function POST(request: Request) {
   // Construct a temporary Invoice-like object
   const previewInvoice = {
     id: 'preview',
-    user_id: user.id,
-    customer_id,
-    invoice_number: 'FÖRHANDSGRANSKNING',
+    user_id: isMockCustomer ? 'preview-user' : user.id,
+    customer_id: customer.id,
+    invoice_number: typeof invoice_number === 'string' && invoice_number.trim()
+      ? invoice_number
+      : isMockCustomer ? '1' : null,
     invoice_date: invoice_date || new Date().toISOString().split('T')[0],
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,
@@ -124,9 +170,10 @@ export async function POST(request: Request) {
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: previewInvoice,
-        customer: customer as Customer,
+        customer,
         items: invoiceItems,
         company: company as CompanySettings,
+        isPreview: true,
       })
     )
 

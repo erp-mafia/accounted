@@ -20,6 +20,10 @@ function makeBuilder() {
 function makeClient() {
   return {
     from: vi.fn().mockImplementation(() => makeBuilder()),
+    // `rpc` drains the same queue so tests can intersperse RPC + table fetches.
+    // SIE export calls `compute_prior_opening_balances` via getOpeningBalances
+    // whenever `opening_balance_entry_id` is null (the multi-year-import path).
+    rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }
@@ -67,6 +71,8 @@ describe('generateSIEExport', () => {
       { data: [], error: null },
       // 5: projects (empty)
       { data: [], error: null },
+      // 6: compute_prior_opening_balances RPC (empty — no IB)
+      { data: [], error: null },
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -90,6 +96,7 @@ describe('generateSIEExport', () => {
       { data: [], error: null },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', {
@@ -114,6 +121,7 @@ describe('generateSIEExport', () => {
       { data: [], error: null },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -150,6 +158,7 @@ describe('generateSIEExport', () => {
       },
       { data: [], error: null }, // cost_centers
       { data: [], error: null }, // projects
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -180,6 +189,7 @@ describe('generateSIEExport', () => {
         ],
         error: null,
       },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -214,6 +224,7 @@ describe('generateSIEExport', () => {
       },
       { data: [{ code: 'CC1', name: 'Avdelning 1', is_active: true }], error: null },
       { data: [{ code: 'P001', name: 'Projekt Alpha', is_active: true }], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -247,6 +258,7 @@ describe('generateSIEExport', () => {
       },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -283,6 +295,7 @@ describe('generateSIEExport', () => {
       },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -298,6 +311,7 @@ describe('generateSIEExport', () => {
       { data: [], error: null },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -321,6 +335,7 @@ describe('generateSIEExport', () => {
       { data: [], error: null },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
@@ -337,11 +352,75 @@ describe('generateSIEExport', () => {
       { data: [], error: null },
       { data: [], error: null },
       { data: [], error: null },
+      { data: [], error: null }, // RPC fallback
     ]
 
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
 
     expect(output).not.toContain('#DIM')
     expect(output).not.toContain('#OBJEKT')
+  })
+
+  it('emits #IB from compute_prior_opening_balances RPC fallback when opening_balance_entry_id is null', async () => {
+    // Reproduces the user-reported bug: after a multi-year SIE import the
+    // continuation-import guard intentionally leaves opening_balance_entry_id
+    // NULL, and previously the SIE export silently produced zero #IB records,
+    // collapsing #UB to current-period movements only. The fix wires SIE
+    // export to getOpeningBalances() so the RPC backs up the missing link.
+    results = [
+      // period — note: no opening_balance_entry_id, so getOpeningBalances
+      // falls through to the RPC path
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries (no movements this period)
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      // RPC fallback returns prior IBs derived from historical journal lines
+      {
+        data: [
+          { account_number: '1930', debit: 50000, credit: 0 },
+          { account_number: '2440', debit: 0, credit: 50000 },
+        ],
+        error: null,
+      },
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#IB 0 1930 50000.00')
+    expect(output).toContain('#IB 0 2440 -50000.00')
+    // UB = IB + period movements (zero this period), so #UB mirrors #IB
+    expect(output).toContain('#UB 0 1930 50000.00')
+    expect(output).toContain('#UB 0 2440 -50000.00')
+  })
+
+  it('reads #IB from explicit opening_balance_entry_id when set', async () => {
+    // When opening_balance_entry_id is set, getOpeningBalances uses the
+    // journal_entry_lines path (fetchAllRows) instead of the RPC, so the
+    // queue here serves the line rows rather than RPC rows.
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: 'ob-entry-1' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      // fetchAllRows page 1 — explicit OB entry lines
+      {
+        data: [
+          { account_number: '1930', debit_amount: 12000, credit_amount: 0 },
+          { account_number: '2440', debit_amount: 0, credit_amount: 12000 },
+        ],
+        error: null,
+      },
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#IB 0 1930 12000.00')
+    expect(output).toContain('#IB 0 2440 -12000.00')
+    expect(output).toContain('#UB 0 1930 12000.00')
+    expect(output).toContain('#UB 0 2440 -12000.00')
   })
 })

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -11,7 +12,7 @@ import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Penc
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
-import JournalEntryStatusBadge, { sourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
+import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -24,6 +25,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const router = useRouter()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const t = useTranslations('journal_detail')
+  const sourceTypeLabels = useSourceTypeLabels()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
   const [chain, setChain] = useState<JournalEntry[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -45,7 +48,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       const res = await fetch(`/api/bookkeeping/journal-entries/${id}/chain`)
       if (!res.ok) {
         const { error: msg } = await res.json()
-        setError(msg || 'Kunde inte hämta verifikation')
+        setError(msg || t('error_load_failed'))
         return
       }
       const { data } = await res.json()
@@ -53,11 +56,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setChain(data.chain)
       setIsLastInSeries(data.is_last_in_series ?? false)
     } catch {
-      setError('Kunde inte hämta verifikation')
+      setError(t('error_load_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [id])
+  }, [id, t])
 
   const saveNotes = useCallback(async (value: string) => {
     setSavingNotes(true)
@@ -71,14 +74,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         setEntry(prev => prev ? { ...prev, notes: value || null } : prev)
         setEditingNotes(false)
       } else {
-        toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' })
+        toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
       }
     } catch {
-      toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' })
+      toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
     } finally {
       setSavingNotes(false)
     }
-  }, [id, toast])
+  }, [id, toast, t])
 
   const handleCommit = useCallback(async () => {
     setIsCommitting(true)
@@ -88,19 +91,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       if (res.ok) {
         const posted = result.data
         toast({
-          title: 'Verifikat bokfört',
-          description: `Verifikat ${posted?.voucher_series ?? ''}${posted?.voucher_number ?? ''} har bokförts.`,
+          title: t('toast_posted_title'),
+          description: t('toast_posted_description', { voucher: `${posted?.voucher_series ?? ''}${posted?.voucher_number ?? ''}` }),
         })
         await fetchData()
       } else {
-        toast({ title: 'Kunde inte bokföra', description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+        toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
     } catch {
-      toast({ title: 'Kunde inte bokföra verifikat', variant: 'destructive' })
+      toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
       setIsCommitting(false)
     }
-  }, [id, toast, fetchData])
+  }, [id, toast, fetchData, t])
 
   const handleDelete = useCallback(async () => {
     setIsDeleting(true)
@@ -110,23 +113,23 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       if (res.ok) {
         const wasDraft = result.data?.was_draft === true
         toast({
-          title: wasDraft ? 'Utkast raderat' : 'Verifikat raderat',
+          title: wasDraft ? t('toast_delete_draft_title') : t('toast_delete_entry_title'),
           description: wasDraft
-            ? 'Utkastet har tagits bort.'
-            : `Verifikat ${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''} har raderats.`,
+            ? t('toast_delete_draft_description')
+            : t('toast_delete_entry_description', { voucher: `${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''}` }),
         })
         router.push('/bookkeeping')
       } else {
-        toast({ title: 'Kunde inte radera', description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+        toast({ title: t('toast_delete_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
         setShowDeleteConfirm(false)
       }
     } catch {
-      toast({ title: 'Kunde inte radera verifikat', variant: 'destructive' })
+      toast({ title: t('toast_delete_failed_generic'), variant: 'destructive' })
       setShowDeleteConfirm(false)
     } finally {
       setIsDeleting(false)
     }
-  }, [id, router, toast])
+  }, [id, router, toast, t])
 
   useEffect(() => {
     fetchData()
@@ -136,7 +139,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     return (
       <div className="flex flex-col items-center justify-center py-24">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">Laddar verifikation...</p>
+        <p className="text-sm text-muted-foreground">{t('loading')}</p>
       </div>
     )
   }
@@ -149,11 +152,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Tillbaka till bokföring
+          {t('back')}
         </Link>
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-muted-foreground">{error || 'Verifikation hittades inte'}</p>
+            <p className="text-sm text-muted-foreground">{error || t('error_not_found')}</p>
           </CardContent>
         </Card>
       </div>
@@ -190,7 +193,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
-        Tillbaka till bokföring
+        {t('back')}
       </Link>
 
       {/* Header */}
@@ -213,10 +216,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 className="w-full sm:w-auto"
                 onClick={handleCommit}
                 disabled={!canWrite || isCommitting}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
               >
                 {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isCommitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Bokför
+                {t('post')}
               </Button>
             )}
             {(entry.status === 'draft' || isLastInSeries) && (
@@ -226,10 +229,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 className="w-full sm:w-auto"
                 onClick={() => setShowDeleteConfirm(true)}
                 disabled={!canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-                {entry.status === 'draft' ? 'Radera utkast' : 'Radera verifikat'}
+                {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
               </Button>
             )}
             {canCorrect && (
@@ -239,10 +242,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 className="w-full sm:w-auto"
                 onClick={() => setShowCorrection(true)}
                 disabled={!canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-                Skapa ändringsverifikation
+                {t('create_correction')}
               </Button>
             )}
             {entry.status === 'posted' && (
@@ -252,10 +255,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 className="w-full sm:w-auto"
                 onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
                 disabled={!canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
               >
                 {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-                Kopiera verifikat
+                {t('copy_entry')}
               </Button>
             )}
           </div>
@@ -266,26 +269,26 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Verifikationsdetaljer</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t('details_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Datum</span>
+              <span className="text-muted-foreground">{t('field_date')}</span>
               <span>{formatDate(entry.entry_date)}</span>
             </div>
             {entry.committed_at && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Bokförd</span>
+                <span className="text-muted-foreground">{t('field_posted_at')}</span>
                 <span>{new Date(entry.committed_at).toLocaleDateString('sv-SE')}</span>
               </div>
             )}
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Typ</span>
+              <span className="text-muted-foreground">{t('field_type')}</span>
               <span>{sourceTypeLabels[entry.source_type] || entry.source_type}</span>
             </div>
             {entry.source_voucher_series && entry.source_voucher_number != null && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Ursprungligt verifikat</span>
+                <span className="text-muted-foreground">{t('field_source_voucher')}</span>
                 <span className="font-mono tabular-nums">
                   {entry.source_voucher_series}{entry.source_voucher_number}
                 </span>
@@ -296,14 +299,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <div className="flex items-center justify-between mb-1">
                 <span className="text-muted-foreground flex items-center gap-1">
                   <MessageSquare className="h-3.5 w-3.5" />
-                  Anteckning
+                  {t('field_note')}
                 </span>
                 {!editingNotes && canWrite && (
                   <Button
                     variant="ghost"
                     size="icon"
                     onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
-                    aria-label="Redigera anteckning"
+                    aria-label={t('edit_note_aria')}
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -314,7 +317,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   <Textarea
                     value={notesValue}
                     onChange={(e) => setNotesValue(e.target.value)}
-                    placeholder="Intern anteckning..."
+                    placeholder={t('note_placeholder')}
                     className="resize-none text-sm"
                     rows={3}
                     maxLength={2000}
@@ -342,7 +345,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground italic">
-                  {entry.notes || 'Ingen anteckning'}
+                  {entry.notes || t('no_note')}
                 </p>
               )}
             </div>
@@ -351,23 +354,23 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Summering</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t('summary_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Debet</span>
+              <span className="text-muted-foreground">{t('summary_debit')}</span>
               <span className="tabular-nums font-medium">
                 {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Kredit</span>
+              <span className="text-muted-foreground">{t('summary_credit')}</span>
               <span className="tabular-nums font-medium">
                 {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Antal rader</span>
+              <span className="text-muted-foreground">{t('summary_lines')}</span>
               <span>{lines.length}</span>
             </div>
           </CardContent>
@@ -375,19 +378,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Underlag</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t('attachments_title')}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
             <div className="flex items-center gap-2">
               {attachmentCount > 0 ? (
                 <>
                   <Paperclip className="h-4 w-4 text-muted-foreground" />
-                  <span>{attachmentCount} {attachmentCount === 1 ? 'dokument' : 'dokument'}</span>
+                  <span>{t('attachments_count', { count: attachmentCount })}</span>
                 </>
               ) : (
                 <>
                   <AlertTriangle className="h-4 w-4 text-warning-foreground" />
-                  <span className="text-muted-foreground">Inga underlag bifogade</span>
+                  <span className="text-muted-foreground">{t('no_attachments')}</span>
                 </>
               )}
             </div>
@@ -400,11 +403,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         <Card>
           <CardContent className="p-4">
             <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-              Valutaomräkning
+              {t('currency_title')}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
               <div className="flex justify-between sm:block">
-                <span className="text-muted-foreground">Kurs</span>
+                <span className="text-muted-foreground">{t('currency_rate')}</span>
                 <span className="tabular-nums sm:block">
                   {foreignExchangeRate
                     ? `1 ${foreignCurrency} = ${foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK`
@@ -412,7 +415,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </span>
               </div>
               <div className="flex justify-between sm:block">
-                <span className="text-muted-foreground">Ursprungsbelopp</span>
+                <span className="text-muted-foreground">{t('currency_original_amount')}</span>
                 <span className="tabular-nums sm:block">
                   {foreignTotal.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {foreignCurrency}
                 </span>
@@ -425,7 +428,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       {/* Lines table */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Kontorader</CardTitle>
+          <CardTitle className="text-sm font-medium">{t('lines_title')}</CardTitle>
         </CardHeader>
         <CardContent>
           {/* Desktop table */}
@@ -433,10 +436,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <table className="w-full text-sm">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
-                  <th className="py-2 w-48">Konto</th>
-                  <th className="py-2">Beskrivning</th>
-                  <th className="py-2 w-28 text-right">Debet</th>
-                  <th className="py-2 w-28 text-right">Kredit</th>
+                  <th className="py-2 w-48">{t('col_account')}</th>
+                  <th className="py-2">{t('col_description')}</th>
+                  <th className="py-2 w-28 text-right">{t('col_debit')}</th>
+                  <th className="py-2 w-28 text-right">{t('col_credit')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -476,7 +479,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               </tbody>
               <tfoot>
                 <tr className="font-semibold">
-                  <td colSpan={2} className="py-2">Summa</td>
+                  <td colSpan={2} className="py-2">{t('sum')}</td>
                   <td className="py-2 text-right tabular-nums">
                     {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
                   </td>
@@ -526,7 +529,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               )
             })}
             <div className="flex justify-between font-semibold text-sm pt-1">
-              <span>Summa</span>
+              <span>{t('sum')}</span>
               <div className="flex gap-3 tabular-nums">
                 <span>D: {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
                 <span>K: {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
@@ -539,7 +542,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       {/* Attachments */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Underlag</CardTitle>
+          <CardTitle className="text-sm font-medium">{t('attachments_title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <JournalEntryAttachments
@@ -553,7 +556,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       {chain.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm font-medium">Ändringshistorik</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('history_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <CorrectionChain currentEntryId={id} chain={fullChain} />
@@ -580,22 +583,20 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         onOpenChange={setShowDeleteConfirm}
         onConfirm={handleDelete}
         isSubmitting={isDeleting}
-        title={entry?.status === 'draft' ? 'Radera utkast' : 'Radera verifikat'}
+        title={entry?.status === 'draft' ? t('delete_draft') : t('delete_entry')}
         warningText={
           entry?.status === 'draft'
-            ? 'Utkastet har aldrig bokförts och kan tas bort utan att påverka verifikationsserien. Eventuella kopplade underlag behålls men avlänkas. Denna åtgärd kan inte ångras.'
-            : `Verifikat ${entry?.voucher_series ?? ''}${entry?.voucher_number ?? ''} raderas permanent. Eventuella kopplade underlag behålls men avlänkas. Denna åtgärd kan inte ångras.`
+            ? t('delete_warning_draft')
+            : t('delete_warning_entry', { voucher: `${entry?.voucher_series ?? ''}${entry?.voucher_number ?? ''}` })
         }
-        confirmLabel="Radera permanent"
+        confirmLabel={t('delete_confirm_label')}
       >
         <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4">
           <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
           <div className="text-sm">
-            <p className="font-medium mb-1">Permanent radering</p>
+            <p className="font-medium mb-1">{t('delete_dialog_heading')}</p>
             <p className="text-muted-foreground">
-              {entry?.status === 'draft'
-                ? 'Utkastet och dess kontorader tas bort. Kopplade fakturor och transaktioner påverkas inte — de stannar kvar som obokförda. Underlag (kvitton, dokument) behålls men avlänkas.'
-                : 'Verifikatet och dess kontorader tas bort. Kopplade transaktioner och fakturor behåller sina uppgifter men markeras som ej bokförda. Underlag (kvitton, dokument) behålls men avlänkas.'}
+              {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
             </p>
           </div>
         </div>

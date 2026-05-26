@@ -235,7 +235,10 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       'user-1',
       'company-1',
       expect.objectContaining({ id: VALID_ID_1 }),
-      { userEmail: 'test@test.se' }
+      // commit_method must be 'bulk_accept' so any journal_entries created
+      // during bulk approval are tagged distinctly from single-approval ones
+      // (BFNAR 2013:2 behandlingshistorik).
+      { userEmail: 'test@test.se', commitMethod: 'bulk_accept' }
     )
   })
 

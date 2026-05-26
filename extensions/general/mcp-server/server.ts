@@ -31,6 +31,8 @@ import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { z } from 'zod'
 import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
@@ -61,10 +63,12 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { uploadDocument, MAX_DOCUMENT_SIZE } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler — no duplicate call needed here.
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -197,6 +201,13 @@ interface StageOptions {
   dateForPeriodCheck?: string
 }
 
+function buildApprovalGuidance(operationId: string, riskLevel: 'low' | 'medium' | 'high'): string {
+  if (riskLevel === 'high') {
+    return `This is an irreversible posting under BFL 5 kap 5§ — surface the irreversibility implications to the user and obtain an explicit acknowledgment before committing. Once the user has acknowledged, call gnubok_approve_pending_operation with operation_id="${operationId}" and confirmed=true.`
+  }
+  return `When the user authorises, call gnubok_approve_pending_operation with operation_id="${operationId}".`
+}
+
 async function stagePendingOperation(
   supabase: SupabaseClient,
   companyId: string,
@@ -216,6 +227,7 @@ async function stagePendingOperation(
   risk_level: 'low' | 'medium' | 'high'
   actor: ActorContext
   message: string
+  approve?: { tool: string; args: Record<string, unknown> }
   preview: Record<string, unknown>
   period_status?: PeriodStatusForDate
   next?: NextActionHint
@@ -269,12 +281,19 @@ async function stagePendingOperation(
   if (options.idempotencyKey && requestHash) {
     const cached = await checkIdempotencyKey(supabase, userId, companyId, options.idempotencyKey, requestHash)
     if (cached) {
+      const cachedBody = cached.body as Record<string, unknown>
+      const cachedOpId = typeof cachedBody.operation_id === 'string' ? cachedBody.operation_id : undefined
       return {
-        ...(cached.body as Record<string, unknown>),
+        ...cachedBody,
         idempotency_replay: true,
         risk_level: riskLevel,
         actor,
-        message: `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
+        message: cachedOpId
+          ? `Replayed cached response for idempotency_key "${options.idempotencyKey}" — already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel)}`
+          : `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
+        ...(cachedOpId
+          ? { approve: { tool: 'gnubok_approve_pending_operation', args: { operation_id: cachedOpId } } }
+          : {}),
         preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
         ...(periodStatus ? { period_status: periodStatus } : {}),
       } as Awaited<ReturnType<typeof stagePendingOperation>>
@@ -300,12 +319,22 @@ async function stagePendingOperation(
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
+  // approve.args carries only the operation_id. For high-risk operations the
+  // LLM must supply confirmed=true itself after surfacing the BFL 5 kap 5§
+  // irreversibility implications to the user — pre-filling it server-side
+  // would collapse the explicit-acknowledgment gate (mirrors the web UI's
+  // warning dialog). The server-side check in gnubok_approve_pending_operation
+  // remains authoritative.
   const response = {
     staged: true,
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Operation staged for review (risk: ${riskLevel}). Open the ${branding} web app to approve or reject it.`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.`,
+    approve: {
+      tool: 'gnubok_approve_pending_operation',
+      args: { operation_id: data.id } as Record<string, unknown>,
+    },
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
     ...(periodStatus ? { period_status: periodStatus } : {}),
     ...(next ? { next } : {}),
@@ -318,6 +347,80 @@ async function stagePendingOperation(
     )
   }
   return response
+}
+
+// ── Journal entry reference resolution ────────────────────────
+
+/**
+ * Resolve a journal entry reference to a journal_entries.id UUID.
+ *
+ * Accepts either a raw UUID (returned as-is) or a voucher reference like
+ * "A-113" / "A113" / "A/113" (resolved by voucher_series + voucher_number
+ * scoped to the company).
+ *
+ * Voucher refs are the preferred input shape for LLM-driven callers: short,
+ * semantically meaningful, and resistant to UUID hallucination — a failure
+ * mode where the agent reproduces the first 8 hex chars correctly but
+ * fabricates the remaining 24, so a downstream lookup rejects the ID even
+ * though the entry exists.
+ */
+async function resolveJournalEntryRef(
+  supabase: SupabaseClient,
+  companyId: string,
+  ref: string
+): Promise<string> {
+  const trimmed = ref.trim()
+
+  // UUIDs pass through. If the UUID was hallucinated, the caller's own
+  // lookup surfaces the "not found" diagnostic with the supplied value.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return trimmed
+  }
+
+  // Voucher ref: letters (series) + optional separator + digits (number).
+  const match = trimmed.match(/^([A-Za-z]+)\s*[-:/ ]?\s*(\d+)$/)
+  if (!match) {
+    throw new Error(
+      `Could not parse entry reference "${ref}". Expected a UUID or a voucher ref like "A-113".`
+    )
+  }
+  const series = match[1].toUpperCase()
+  const number = parseInt(match[2], 10)
+
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, entry_date, description')
+    .eq('company_id', companyId)
+    .eq('voucher_series', series)
+    .eq('voucher_number', number)
+    .order('entry_date', { ascending: false })
+
+  if (error) {
+    throw new Error(`Database error resolving voucher "${series}-${number}": ${error.message}`)
+  }
+
+  const matches = (data ?? []) as Array<{ id: string; entry_date: string; description: string }>
+
+  if (matches.length === 0) {
+    throw new Error(
+      `No journal entry found for voucher "${series}-${number}" in this company. ` +
+      `Verify the series and number, or supply the full UUID.`
+    )
+  }
+
+  // Voucher numbers reset per fiscal period. The same (series, number) pair
+  // can therefore appear in multiple years — refuse to guess.
+  if (matches.length > 1) {
+    const summary = matches
+      .map((m) => `${m.entry_date} "${m.description}" (id=${m.id})`)
+      .join('; ')
+    throw new Error(
+      `Voucher "${series}-${number}" matches multiple entries across fiscal periods: ${summary}. ` +
+      `Supply the specific UUID instead.`
+    )
+  }
+
+  return matches[0].id
 }
 
 // ── Shared categorization logic ──────────────────────────────
@@ -560,6 +663,7 @@ const STAGED_OPERATION_SCHEMA = {
     dry_run: { type: 'boolean' },
     idempotency_replay: { type: 'boolean' },
     message: { type: 'string' },
+    approve: { type: 'object' },
     preview: { type: 'object' },
     period_status: {
       type: 'object',
@@ -1825,7 +1929,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_transactions',
-    description: 'Stage one or more transactions for the user to approve. Each item creates a separate pending operation that the user confirms or rejects in the web app. Useful for ingesting rows from external sources (Airtable, CSVs, etc.). Max 10 per call.',
+    description: 'Stage one or more transactions for the user to approve. Each item creates a separate pending operation; commit each via gnubok_approve_pending_operation when the user authorises. Useful for ingesting rows from external sources (Airtable, CSVs, etc.). Max 10 per call.',
     outputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2086,7 +2190,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_categorize_transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry for the user to approve in the web app — no DB write until approval.',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation when the user authorises — no DB write until approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2113,7 +2217,7 @@ export const tools: McpTool[] = [
         userId,
         companyId,
         supabase,
-        false // preview mode — execution happens via web UI commit
+        false // preview mode — execution happens at approval time via gnubok_approve_pending_operation
       )
 
       // If already has a journal entry, pass through as-is
@@ -3114,6 +3218,141 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_create_supplier',
+    description: 'Stage a new supplier (leverantör). Stages for user approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', maxLength: 255, description: 'Supplier name' },
+        supplier_type: {
+          type: 'string',
+          enum: ['swedish_business', 'eu_business', 'non_eu_business'],
+          description: 'Supplier type (default swedish_business). eu_business requires vat_number.',
+        },
+        email: { type: 'string', maxLength: 255, format: 'email', description: 'Email address' },
+        phone: { type: 'string', maxLength: 50, description: 'Phone number' },
+        org_number: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^\\d{6}-?\\d{4}$|^\\d{12}$',
+          description: 'Swedish org number (10 digits with optional hyphen XXXXXX-XXXX, or 12 digits).',
+        },
+        vat_number: {
+          type: 'string',
+          maxLength: 20,
+          description: 'EU VAT number with country prefix (e.g. SE556677778800, DE123456789). Required when supplier_type is eu_business.',
+        },
+        address_line1: { type: 'string', maxLength: 255, description: 'Street address' },
+        address_line2: { type: 'string', maxLength: 255 },
+        postal_code: { type: 'string', maxLength: 20 },
+        city: { type: 'string', maxLength: 100 },
+        country: {
+          type: 'string',
+          maxLength: 2,
+          pattern: '^[A-Za-z]{2}$',
+          description: 'ISO 3166-1 alpha-2 country code (default SE)',
+        },
+        bankgiro: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^\\d{3,4}-?\\d{4}$',
+          description: 'Swedish Bankgiro number (7-8 digits with valid Luhn check digit).',
+        },
+        plusgiro: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^\\d{1,7}-?\\d{1}$',
+          description: 'Swedish Plusgiro number (2-8 digits).',
+        },
+        bank_account: { type: 'string', maxLength: 50, description: 'Bank account number' },
+        iban: {
+          type: 'string',
+          maxLength: 34,
+          pattern: '^[A-Z]{2}\\d{2}[A-Z0-9]{11,30}$',
+          description: 'IBAN (ISO 13616). Country code + 2 check digits + alphanumeric.',
+        },
+        bic: {
+          type: 'string',
+          maxLength: 11,
+          pattern: '^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$',
+          description: 'BIC/SWIFT code (8 or 11 chars).',
+        },
+        default_expense_account: {
+          type: 'string',
+          maxLength: 10,
+          pattern: '^[4567]\\d{3}$',
+          description: '4-digit BAS expense account (class 4, 5, 6, or 7). e.g. "5010".',
+        },
+        default_payment_terms: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 365,
+          description: 'Payment terms in days (default 30). Use 0 for due-on-receipt.',
+        },
+        default_currency: {
+          type: 'string',
+          minLength: 3,
+          maxLength: 3,
+          description: 'Default invoice currency, 3-letter ISO code (default SEK).',
+        },
+        notes: { type: 'string', maxLength: 2000 },
+        dry_run: {
+          type: 'boolean',
+          description: 'If true, validate inputs and return the would-be preview without staging or creating. No DB writes, no side-effects.',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+        },
+      },
+      required: ['name'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      // Server-side validation (defense in depth): MCP transport already
+      // checks the JSON Schema, but we re-validate with Zod so financial
+      // identifiers (IBAN, BIC, bankgiro Luhn, org_number, VAT format) are
+      // rejected at the ingestion boundary rather than persisted.
+      // Strip MCP control fields before parsing — the strict schema rejects
+      // unknown keys to satisfy ASVS V4.5 field-allow-listing.
+      const { dry_run, idempotency_key, ...supplierArgs } = args
+      let params
+      try {
+        params = CreateSupplierParamsSchema.parse(supplierArgs)
+      } catch (err) {
+        if (err instanceof z.ZodError) {
+          const issue = err.issues[0]
+          const path = issue?.path?.join('.') ?? 'params'
+          throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+        }
+        throw err
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_supplier',
+        `Ny leverantör: ${params.name}`,
+        params,
+        params,
+        actor,
+        {
+          description: 'Once approved, you can book supplier invoices against this supplier with gnubok_create_supplier_invoice_from_inbox using the returned supplier_id.',
+          tool: 'gnubok_create_supplier_invoice_from_inbox',
+        },
+        {
+          dryRun: Boolean(dry_run),
+          idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
     name: 'gnubok_list_supplier_invoices',
     description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
     inputSchema: {
@@ -3752,7 +3991,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_transaction_to_invoice',
-    description: 'Match a bank transaction (income, amount>0) to a customer invoice. Stages for approval. Supports partial payments and auto-storno of prior categorization.',
+    description: 'Match a bank transaction (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number/customer match before staging — preview mirrors what you pass. Supports partial payments and auto-storno of prior categorization.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3777,7 +4016,7 @@ export const tools: McpTool[] = [
       // Validate both exist and are matchable
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, invoice_id')
+        .select('id, description, merchant_name, amount, currency, date, invoice_id')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
@@ -3807,9 +4046,14 @@ export const tools: McpTool[] = [
           transaction_description: txDesc,
           transaction_amount: transaction.amount,
           transaction_currency: transaction.currency,
+          // Surface both dates so the reviewer can spot a material mismatch
+          // between the payment and the invoice it's being matched against
+          // before approving.
+          transaction_date: transaction.date,
           invoice_number: invoice.invoice_number,
           invoice_total: invoice.total,
           invoice_currency: invoice.currency,
+          invoice_date: invoice.invoice_date,
           customer_name: (invoice.customer as Record<string, unknown>)?.name as string,
         },
         actor,
@@ -4718,7 +4962,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_attach_document_to_transaction',
-    description: 'Stage attaching a document to a bank transaction. The document is pinned to the tx; when the tx is later categorized the link propagates to the journal entry. Stages for approval.',
+    description: 'Stage attaching a document to a bank transaction. Verify tx (date, amount, counterparty) and document (filename, vendor, amount) match first — the preview shown to the human reviewer mirrors what you pass here. Stages for approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6065,7 +6309,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_voucher',
-    description: 'Stage a manual verifikation with arbitrary balanced lines. Use for capitalization (e.g. 1010), period-end accruals, FX adjustments, and rättelseposter outside categorize_transaction. HIGH risk — always staged, never auto-committed.',
+    description: 'Stage a manual verifikation with arbitrary balanced lines. Use for capitalization (1010), period-end accruals, FX adjustments, rättelseposter outside categorize_transaction. Pass inbox_item_id to book a kvitto direct — links inbox + attaches doc. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6075,6 +6319,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: { type: 'string', description: 'UUID of fiscal period. If omitted, resolved from entry_date.' },
         voucher_series: { type: 'string', description: 'Single letter A–Z. Defaults to A.' },
         notes: { type: 'string', description: 'Internal notes (max 2000 chars) — visible on the verifikation but not on reports.' },
+        inbox_item_id: { type: 'string', description: 'Optional inbox item UUID to book directly. On confirm, the inbox item is linked to the new verifikat and its OCR document is attached to the journal entry. Fails if the inbox item is already booked (as voucher) or converted (to supplier invoice).' },
         lines: {
           type: 'array',
           description: 'At least 2 balanced lines. sum(debit_amount) === sum(credit_amount), both > 0.',
@@ -6217,6 +6462,38 @@ export const tools: McpTool[] = [
         line_description: l.line_description ?? null,
       }))
 
+      // Optional inbox-direct booking. Validate at staging so the agent gets a
+      // tight rejection signal — once staged, an already-booked inbox item
+      // would only surface at commit time with a generic 409. The executor
+      // re-checks idempotently via UNIQUE constraint on
+      // invoice_inbox_items.created_journal_entry_id.
+      const inboxItemId = (args.inbox_item_id as string | undefined) ?? null
+      let inboxDocumentId: string | null = null
+      if (inboxItemId) {
+        const { data: inbox, error: inboxErr } = await supabase
+          .from('invoice_inbox_items')
+          .select('id, document_id, created_journal_entry_id, created_supplier_invoice_id')
+          .eq('id', inboxItemId)
+          .eq('company_id', companyId)
+          .single()
+        if (inboxErr || !inbox) {
+          throw new Error(`Inbox item ${inboxItemId} not found for this company.`)
+        }
+        if (inbox.created_journal_entry_id) {
+          throw new Error(
+            `Inbox item is already booked as journal entry ${inbox.created_journal_entry_id}. ` +
+            'Use gnubok_correct_entry or gnubok_reverse_entry if it needs to be changed.'
+          )
+        }
+        if (inbox.created_supplier_invoice_id) {
+          throw new Error(
+            `Inbox item is already converted to supplier invoice ${inbox.created_supplier_invoice_id}. ` +
+            'Cancel that path before booking it as a verifikat.'
+          )
+        }
+        inboxDocumentId = (inbox.document_id as string | null) ?? null
+      }
+
       // NOTE: source_type is intentionally NOT included in the staged params.
       // The executor hardcodes 'manual' so a tampered or future direct-staged
       // pending_operations row can't misrepresent the entry's origin.
@@ -6228,6 +6505,8 @@ export const tools: McpTool[] = [
           fiscal_period_id: fiscalPeriodId,
           voucher_series: (args.voucher_series as string) || undefined,
           notes: (args.notes as string) || undefined,
+          inbox_item_id: inboxItemId,
+          document_id: inboxDocumentId,
           lines,
         },
         {
@@ -6239,7 +6518,11 @@ export const tools: McpTool[] = [
           total_credit: balance.totalCredit,
           line_count: lines.length,
           lines: previewLines,
-          will: 'create a posted journal entry with a fresh sequential voucher number',
+          inbox_item_id: inboxItemId,
+          document_attached: Boolean(inboxDocumentId),
+          will: inboxItemId
+            ? 'create a posted journal entry with a fresh sequential voucher number, link the inbox item to it, and attach the OCR document to the verifikat'
+            : 'create a posted journal entry with a fresh sequential voucher number',
         },
         actor,
         {
@@ -6258,7 +6541,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        entry_id: { type: 'string', description: 'UUID of the posted journal entry to correct' },
+        entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
         lines: {
           type: 'array',
           description: 'Replacement lines (≥ 2, balanced). Use the same accounts as the original where unchanged.',
@@ -6285,10 +6568,10 @@ export const tools: McpTool[] = [
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
-      const entryId = args.entry_id as string
+      const entryRef = args.entry_id as string
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
 
-      if (!entryId || !Array.isArray(rawLines) || rawLines.length < 2) {
+      if (!entryRef || !Array.isArray(rawLines) || rawLines.length < 2) {
         throw new Error('entry_id and at least two lines are required')
       }
 
@@ -6312,6 +6595,8 @@ export const tools: McpTool[] = [
           'Both must be positive and equal.'
         )
       }
+
+      const entryId = await resolveJournalEntryRef(supabase, companyId, entryRef)
 
       // Pre-flight: the executor checks again, but failing fast here gives the
       // agent a clearer error message than waiting until commit-time.
@@ -6344,7 +6629,16 @@ export const tools: McpTool[] = [
         .maybeSingle()
       const original = data as OriginalRow | null
 
-      if (origErr || !original) throw new Error('Journal entry not found')
+      if (origErr) {
+        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+      }
+      if (!original) {
+        throw new Error(
+          `Journal entry not found: id=${entryId}. ` +
+          `If this UUID came from an earlier tool result, re-fetch via gnubok_query_journal — ` +
+          `UUIDs are frequently hallucinated when reused across turns. You can also pass a voucher ref like "A-113".`
+        )
+      }
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be corrected. Current status: ${original.status}.`)
       }
@@ -6408,7 +6702,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        entry_id: { type: 'string', description: 'UUID of the posted journal entry to reverse' },
+        entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
         reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
         reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason — shown in pending_operations review. Not stored on the storno itself. Max 500 chars.' },
       },
@@ -6417,11 +6711,11 @@ export const tools: McpTool[] = [
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
-      const entryId = args.entry_id as string
+      const entryRef = args.entry_id as string
       const reversalDate = typeof args.reversal_date === 'string' ? args.reversal_date : undefined
       const reason = typeof args.reason === 'string' ? args.reason : undefined
 
-      if (!entryId) {
+      if (!entryRef) {
         throw new Error('entry_id is required')
       }
       // Belt-and-braces runtime check: inputSchema declares the pattern, but the
@@ -6433,6 +6727,8 @@ export const tools: McpTool[] = [
       if (reason !== undefined && reason.length > 500) {
         throw new Error('reason must be 500 characters or fewer')
       }
+
+      const entryId = await resolveJournalEntryRef(supabase, companyId, entryRef)
 
       // Pre-flight mirrors commitReverseEntry: posted + period not closed/locked.
       // Failing fast gives a clearer Swedish error than waiting until commit-time.
@@ -6467,7 +6763,16 @@ export const tools: McpTool[] = [
         .maybeSingle()
       const original = data as OriginalRow | null
 
-      if (origErr || !original) throw new Error('Journal entry not found')
+      if (origErr) {
+        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+      }
+      if (!original) {
+        throw new Error(
+          `Journal entry not found: id=${entryId}. ` +
+          `If this UUID came from an earlier tool result, re-fetch via gnubok_query_journal — ` +
+          `UUIDs are frequently hallucinated when reused across turns. You can also pass a voucher ref like "A-113".`
+        )
+      }
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be reversed. Current status: ${original.status}.`)
       }
@@ -6755,6 +7060,401 @@ export const tools: McpTool[] = [
         expansionsfondExistingBalance: args.expansionsfond_existing_balance as number | undefined,
         expansionsfondDesiredChange: args.expansionsfond_desired_change as number | undefined,
       })
+    },
+  },
+
+  // ── Pending operations: list / approve / reject ──────────────
+  // Mirrors the /pending web UI for agents that self-review before committing.
+  {
+    name: 'gnubok_list_pending_operations',
+    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Use to review the queue before calling gnubok_approve_pending_operation or gnubok_reject_pending_operation.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['pending', 'committing', 'committed', 'rejected'], description: 'Default: pending' },
+        risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
+        operation_type: { type: 'string', description: 'Filter to a single operation_type (e.g. "create_invoice")' },
+        limit: { type: 'number', minimum: 1, maximum: 200, description: 'Default 50' },
+        offset: { type: 'number', minimum: 0, description: 'Default 0' },
+      },
+      required: [],
+    },
+    outputSchema: paginatedSchema('operations'),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const status = (args.status as string) ?? 'pending'
+      const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
+      const offset = Math.max(0, (args.offset as number) ?? 0)
+
+      // `params` holds the raw operation inputs (invoice line items, supplier
+      // PII, voucher descriptions) — excluded from the list response to
+      // satisfy data-minimisation (GDPR Art. 5(1)(b)). Use preview_data for
+      // a redacted, human-readable summary, or call the underlying entity
+      // endpoint when the agent needs the full payload.
+      let query = supabase
+        .from('pending_operations')
+        .select(
+          'id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data',
+          { count: 'exact' }
+        )
+        .eq('company_id', companyId)
+        .eq('status', status)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+
+      if (args.risk_level) query = query.eq('risk_level', args.risk_level as string)
+      if (args.operation_type) query = query.eq('operation_type', args.operation_type as string)
+
+      const { data, error, count } = await query
+      if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
+
+      const operations = data ?? []
+      const totalCount = count ?? operations.length
+      const hasMore = offset + operations.length < totalCount
+      return {
+        operations,
+        count: operations.length,
+        total_count: totalCount,
+        has_more: hasMore,
+        ...(hasMore ? { next_offset: offset + operations.length } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_approve_pending_operation',
+    description: "Commit a staged pending_operation when the user has explicitly authorised the operation_id. risk_level=high requires confirmed=true — surface the BFL 5 kap 5§ irreversibility to the user first. The /pending web UI offers an equivalent commit path.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        operation_id: { type: 'string', description: 'UUID of the pending_operations row to approve' },
+        confirmed: {
+          type: 'boolean',
+          description: 'Required when the operation has risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close). Acknowledges the BFL/BFNAR irreversibility implications. The web UI surfaces the same gate via an explicit warning dialog.',
+        },
+      },
+      required: ['operation_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['committed', 'rejected', 'failed'] },
+        operation_id: { type: 'string' },
+        data: { type: 'object' },
+        error: { type: 'string' },
+        auto_rejected: { type: 'boolean' },
+      },
+      required: ['status', 'operation_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const operationId = args.operation_id as string
+      if (!operationId) throw new Error('operation_id is required')
+
+      const { data: op, error: fetchError } = await supabase
+        .from('pending_operations')
+        .select('*')
+        .eq('id', operationId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !op) throw new Error('Pending operation not found')
+
+      // High-risk operations require explicit confirmation in addition to the
+      // standard pending_operations:approve scope. Mirrors the web-UI gate
+      // (BFL 5 kap 5§ — irreversible postings require positive acknowledgment).
+      const operation = op as PendingOperation
+      if (operation.risk_level === 'high' && args.confirmed !== true) {
+        throw new Error(
+          `Operation "${operation.operation_type}" is risk_level=high — pass confirmed=true to approve. The web UI requires the same positive acknowledgment per BFL 5 kap 5§ (irreversible postings).`
+        )
+      }
+
+      // Resolve the user's email so commitPendingOperation can attribute the
+      // journal_entries.committed_by_email and any user-facing email side
+      // effects (send_invoice cc) to the actor — matches the web-UI commit
+      // path attribution (V8.2.1, GDPR Art. 25(1)).
+      let userEmail: string | undefined
+      try {
+        const { data: userData } = await supabase.auth.admin.getUserById(userId)
+        userEmail = userData.user?.email ?? undefined
+      } catch (err) {
+        log.warn('Failed to resolve user email for MCP approval', { userId, err })
+      }
+
+      const result = await commitPendingOperation(
+        supabase,
+        userId,
+        companyId,
+        operation,
+        { commitMethod: 'user_accept', ...(userEmail ? { userEmail } : {}) }
+      )
+
+      // Audit the MCP-initiated approval. Failure must not break the user
+      // flow — the side-effects have already happened.
+      try {
+        await appendProcessingHistory({
+          companyId,
+          correlationId: operationId,
+          aggregateType: 'System',
+          aggregateId: operationId,
+          eventType: 'PendingOperationApproved',
+          payload: {
+            operation_id: operationId,
+            operation_type: operation.operation_type,
+            risk_level: operation.risk_level,
+            outcome: result.status,
+            commit_method: 'user_accept',
+            channel: 'mcp',
+            confirmed: args.confirmed === true,
+          },
+          actor: {
+            type: actor?.type === 'api_key' ? 'api_key' : 'user',
+            id: actor?.id ?? userId,
+            ...(actor?.label ? { label: actor.label } : {}),
+          },
+          occurredAt: new Date(),
+        })
+      } catch (auditErr) {
+        log.warn('Failed to append PendingOperationApproved audit event', auditErr)
+      }
+
+      return {
+        status: result.status,
+        operation_id: operationId,
+        ...(result.data ? { data: result.data } : {}),
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.auto_rejected ? { auto_rejected: true } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_reject_pending_operation',
+    description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        operation_id: { type: 'string', description: 'UUID of the pending_operations row to reject' },
+        reason: {
+          type: 'string',
+          description: 'Optional human-readable reason recorded in result_data for the audit trail',
+          maxLength: 500,
+        },
+      },
+      required: ['operation_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['rejected'] },
+        operation_id: { type: 'string' },
+      },
+      required: ['status', 'operation_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const operationId = args.operation_id as string
+      if (!operationId) throw new Error('operation_id is required')
+
+      const reason = typeof args.reason === 'string' ? args.reason.slice(0, 500) : undefined
+
+      const { data: op, error: fetchError } = await supabase
+        .from('pending_operations')
+        .select('id, status, operation_type, risk_level')
+        .eq('id', operationId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !op) throw new Error('Pending operation not found')
+      if (op.status !== 'pending') throw new Error(`Operation already ${op.status}`)
+
+      // Atomic claim — flips pending → rejected only when the row is still
+      // pending AND in the caller's tenant (V8.3.1, CC6.3 tenant isolation).
+      // The .eq('status', 'pending') guard makes this a CAS so a concurrent
+      // approval cannot lose to a parallel reject.
+      const { data: updated, error: updateError } = await supabase
+        .from('pending_operations')
+        .update({
+          status: 'rejected',
+          resolved_at: new Date().toISOString(),
+          result_data: {
+            rejected_by: userId,
+            rejected_via: actor?.type ?? 'user',
+            ...(actor?.id ? { actor_id: actor.id } : {}),
+            ...(reason ? { reason } : {}),
+          },
+        })
+        .eq('id', operationId)
+        .eq('company_id', companyId)
+        .eq('status', 'pending')
+        .select('id')
+
+      if (updateError) throw new Error(`Failed to reject operation: ${updateError.message}`)
+      if (!updated || updated.length === 0) {
+        throw new Error('Operation no longer pending — another caller claimed it')
+      }
+
+      // Audit the rejection so the trail mirrors the approval path.
+      try {
+        await appendProcessingHistory({
+          companyId,
+          correlationId: operationId,
+          aggregateType: 'System',
+          aggregateId: operationId,
+          eventType: 'PendingOperationRejected',
+          payload: {
+            operation_id: operationId,
+            operation_type: op.operation_type,
+            risk_level: op.risk_level,
+            channel: 'mcp',
+            ...(reason ? { has_reason: true } : { has_reason: false }),
+          },
+          actor: {
+            type: actor?.type === 'api_key' ? 'api_key' : 'user',
+            id: actor?.id ?? userId,
+            ...(actor?.label ? { label: actor.label } : {}),
+          },
+          occurredAt: new Date(),
+        })
+      } catch (auditErr) {
+        log.warn('Failed to append PendingOperationRejected audit event', auditErr)
+      }
+
+      return { status: 'rejected' as const, operation_id: operationId }
+    },
+  },
+
+  // ── Bring-your-own-extraction for inbox items ────────────────
+  {
+    name: 'gnubok_set_inbox_extracted_data',
+    description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than gnubok\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inbox_item_id: { type: 'string', description: 'UUID of the invoice_inbox_items row' },
+        extracted_data: {
+          type: 'object',
+          description: 'Full InvoiceExtractionResult (supplier, invoice, lineItems, totals, vatBreakdown). Validated server-side via the same Zod schema as the AI extractor.',
+        },
+      },
+      required: ['inbox_item_id', 'extracted_data'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inbox_item_id: { type: 'string' },
+        matched_supplier_id: { type: ['string', 'null'] },
+        extracted_data: { type: 'object' },
+      },
+      required: ['inbox_item_id', 'extracted_data'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const inboxItemId = args.inbox_item_id as string
+      if (!inboxItemId) throw new Error('inbox_item_id is required')
+
+      const parsed = InvoiceExtractionSchema.parse(args.extracted_data)
+      // BYO extraction: confidence 0.95 marks the result as agent-supplied
+      // (vs 1.0 the AI extractor uses on a perfect parse) so downstream UI
+      // can render the provenance differently (ISO 27001 A.8.12).
+      const extracted = { ...parsed, confidence: 0.95 }
+
+      const { data: item, error: fetchError } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, company_id, created_supplier_invoice_id')
+        .eq('id', inboxItemId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (fetchError) throw new Error(`Failed to fetch inbox item: ${fetchError.message}`)
+      if (!item) throw new Error('Inbox item not found')
+      // Explicit defense-in-depth tenant check (V4.5.1) alongside the .eq()
+      // filter on the SELECT — surfaces a tampered service-role query
+      // before it reaches the UPDATE.
+      if (item.company_id !== companyId) {
+        throw new Error('Inbox item belongs to a different company')
+      }
+      if (item.created_supplier_invoice_id) {
+        throw new Error('Inbox item is already linked to a supplier invoice and cannot be modified')
+      }
+
+      // Re-run supplier match so agent-supplied fields trigger the same
+      // auto-link the AI path does (org-nr → name, ILIKE).
+      let matchedSupplierId: string | null = null
+      if (extracted.supplier.orgNumber) {
+        const { data: s } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('org_number', extracted.supplier.orgNumber)
+          .limit(1)
+          .maybeSingle()
+        if (s) matchedSupplierId = s.id
+      }
+      if (!matchedSupplierId && extracted.supplier.name) {
+        const { data: s } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', companyId)
+          .ilike('name', extracted.supplier.name)
+          .limit(1)
+          .maybeSingle()
+        if (s) matchedSupplierId = s.id
+      }
+
+      const { error: updateError } = await supabase
+        .from('invoice_inbox_items')
+        .update({
+          extracted_data: extracted as unknown as Record<string, unknown>,
+          matched_supplier_id: matchedSupplierId,
+        })
+        .eq('id', inboxItemId)
+        .eq('company_id', companyId)
+
+      if (updateError) throw new Error(`Failed to update inbox item: ${updateError.message}`)
+
+      // Audit the BYO override so financial-data provenance is traceable
+      // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure must not block the user
+      // flow — the override has already landed in the DB.
+      try {
+        await appendProcessingHistory({
+          companyId,
+          correlationId: inboxItemId,
+          aggregateType: 'Document',
+          aggregateId: inboxItemId,
+          eventType: 'DocumentExtractionOverridden',
+          payload: {
+            inbox_item_id: inboxItemId,
+            channel: 'mcp',
+            has_supplier_org_number: extracted.supplier.orgNumber != null,
+            has_invoice_number: extracted.invoice.invoiceNumber != null,
+            extracted_total: extracted.totals.total,
+            matched_supplier_id: matchedSupplierId,
+          },
+          actor: {
+            type: actor?.type === 'api_key' ? 'api_key' : 'user',
+            id: actor?.id ?? userId,
+            ...(actor?.label ? { label: actor.label } : {}),
+          },
+          occurredAt: new Date(),
+        })
+      } catch (auditErr) {
+        log.warn('Failed to append DocumentExtractionOverridden audit event', auditErr)
+      }
+
+      return {
+        inbox_item_id: inboxItemId,
+        matched_supplier_id: matchedSupplierId,
+        extracted_data: extracted as unknown as Record<string, unknown>,
+      }
     },
   },
 ]
@@ -7080,14 +7780,18 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first — domain workflows are documented as loadable skills with tool references.',
             '',
             'Common workflows:',
-            '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages for user approval). Use gnubok_match_transaction_to_invoice to apply income to a specific invoice.',
+            '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat). Use gnubok_match_transaction_to_invoice to apply income to a specific invoice.',
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
+            '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative).',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger — all default to the most recent fiscal period.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → review/approve in web UI → gnubok_generate_agi.',
+            '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',
-            'Write operations stage a pending_operation (risk_level: low/medium/high) — the user approves in the gnubok web app before any DB write. Pass dry_run=true to preview without staging. Pass idempotency_key to make a write safely retryable.',
+            'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly — this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
+            'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
+            'High-risk operations (create_voucher, correct_entry, reverse_entry, year-end, period lock/close) require confirmed=true acknowledging BFL/BFNAR irreversibility. Pass dry_run=true to preview without staging. Pass idempotency_key to make a write safely retryable.',
             'All amounts are SEK unless currency is specified. All dates ISO YYYY-MM-DD. Account numbers are strings (e.g. "1930").',
           ].join('\n'),
         })

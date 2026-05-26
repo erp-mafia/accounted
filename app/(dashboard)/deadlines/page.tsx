@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
@@ -15,6 +16,7 @@ const supabase = createClient()
 
 export default function DeadlinesPage() {
   const { company } = useCompany()
+  const t = useTranslations('deadlines')
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
   const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number }>({ count: 0, total: 0 })
@@ -49,14 +51,14 @@ export default function DeadlinesPage() {
       setOverdueInvoices({ count: overdueCount, total: overdueTotal })
     } catch {
       toast({
-        title: 'Kunde inte ladda deadlines',
-        description: 'Kontrollera din anslutning och försök igen.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   useEffect(() => {
     fetchData()
@@ -78,15 +80,15 @@ export default function DeadlinesPage() {
       }
 
       toast({
-        title: 'Deadline skapad',
-        description: 'Din deadline har sparats',
+        title: t('created_title'),
+        description: t('created_description'),
       })
 
       fetchData()
     } catch (error) {
       toast({
-        title: 'Kunde inte skapa deadline',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('create_failed_title'),
+        description: error instanceof Error ? error.message : t('retry'),
         variant: 'destructive',
       })
       throw error
@@ -113,9 +115,9 @@ export default function DeadlinesPage() {
 
       if (newCompleted) {
         toast({
-          title: `"${deadline.title}" markerad som klar`,
+          title: t('marked_done', { title: deadline.title }),
           action: (
-            <ToastAction altText="Ångra" onClick={async () => {
+            <ToastAction altText={t('undo')} onClick={async () => {
               try {
                 await fetch(`/api/deadlines/${deadline.id}/complete`, {
                   method: 'POST',
@@ -124,22 +126,22 @@ export default function DeadlinesPage() {
                 })
               } catch {
                 toast({
-                  title: 'Kunde inte ångra',
+                  title: t('undo_failed'),
                   variant: 'destructive',
                 })
               }
             }}>
-              Ångra
+              {t('undo')}
             </ToastAction>
           ),
         })
       } else {
-        toast({ title: `"${deadline.title}" markerad som ej klar` })
+        toast({ title: t('marked_not_done', { title: deadline.title }) })
       }
     } catch (error) {
       toast({
-        title: 'Kunde inte uppdatera status',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('toggle_failed_title'),
+        description: error instanceof Error ? error.message : t('retry'),
         variant: 'destructive',
       })
     }
@@ -159,15 +161,15 @@ export default function DeadlinesPage() {
       }
 
       toast({
-        title: 'Deadline uppdaterad',
-        description: 'Dina ändringar har sparats',
+        title: t('updated_title'),
+        description: t('updated_description'),
       })
 
       fetchData()
     } catch (error) {
       toast({
-        title: 'Kunde inte spara ändringar',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('update_failed_title'),
+        description: error instanceof Error ? error.message : t('retry'),
         variant: 'destructive',
       })
     }
@@ -184,12 +186,12 @@ export default function DeadlinesPage() {
         throw new Error(result.error || 'Failed to delete deadline')
       }
 
-      toast({ title: 'Deadline borttagen' })
+      toast({ title: t('deleted_title') })
       fetchData()
     } catch (error) {
       toast({
-        title: 'Kunde inte ta bort deadline',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('delete_failed_title'),
+        description: error instanceof Error ? error.message : t('retry'),
         variant: 'destructive',
       })
     }
@@ -198,7 +200,7 @@ export default function DeadlinesPage() {
   if (isLoading) {
     return (
       <div className="space-y-8">
-        <PageHeader title="Deadlines" />
+        <PageHeader title={t('title')} />
         <div className="space-y-3">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="rounded-lg border p-4 animate-pulse">
@@ -223,7 +225,7 @@ export default function DeadlinesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Deadlines" />
+      <PageHeader title={t('title')} />
 
       {/* Overdue invoices alert */}
       {overdueInvoices.count > 0 && (
@@ -232,7 +234,7 @@ export default function DeadlinesPage() {
             <div className="flex items-center gap-3">
               <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" />
               <p className="text-sm">
-                <span className="font-medium">{overdueInvoices.count} förfallna fakturor</span>
+                <span className="font-medium">{t('overdue_invoices', { count: overdueInvoices.count })}</span>
                 <span className="text-muted-foreground ml-1.5">
                   {overdueInvoices.total.toLocaleString('sv-SE')} kr
                 </span>

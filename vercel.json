@@ -4,11 +4,7 @@
       "path": "/api/deadlines/status/cron",
       "schedule": "0 6 * * *"
     },
-    {
-      "path": "/api/invoices/reminders/cron",
-      "schedule": "0 8 * * *"
-    },
-    {
+{
       "path": "/api/tax-deadlines/cron",
       "schedule": "0 0 2 1 *"
     },

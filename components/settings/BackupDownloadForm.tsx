@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,6 +29,7 @@ interface EstimateResponse {
 const LAST_DOWNLOAD_STORAGE_KEY = 'gnubok:last-backup-download'
 
 export function BackupDownloadForm() {
+  const t = useTranslations('settings_backup_download')
   const { toast } = useToast()
   const { company } = useCompany()
 
@@ -132,16 +134,16 @@ export function BackupDownloadForm() {
           const body = await res.json().catch(() => ({}))
           const sizeMb = body.size_bytes ? Math.round(body.size_bytes / (1024 * 1024)) : null
           toast({
-            title: 'Arkivet är för stort för direktnedladdning',
+            title: t('toast_too_large_title'),
             description: sizeMb
-              ? `Ditt arkiv är cirka ${sizeMb} MB. Exportera en period i taget tills vidare — automatisk molnsynkronisering kommer i senare version.`
-              : 'Exportera en period i taget tills vidare — automatisk molnsynkronisering kommer i senare version.',
+              ? t('toast_too_large_with_size', { size: sizeMb })
+              : t('toast_too_large_generic'),
             variant: 'destructive',
           })
           return
         }
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte skapa arkivet')
+        throw new Error(body.error || t('error_create_archive'))
       }
 
       const blob = await res.blob()
@@ -164,17 +166,17 @@ export function BackupDownloadForm() {
         setLastDownloadedAt(now)
       }
 
-      toast({ title: 'Säkerhetsbackup skapad', description: filename })
+      toast({ title: t('toast_backup_created'), description: filename })
     } catch (err) {
       toast({
-        title: 'Kunde inte skapa säkerhetsbackup',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        title: t('toast_backup_failed'),
+        description: err instanceof Error ? err.message : t('toast_try_again'),
         variant: 'destructive',
       })
     } finally {
       setIsDownloading(false)
     }
-  }, [downloadUrl, scope, selectedPeriodId, storageKey, toast])
+  }, [downloadUrl, scope, selectedPeriodId, storageKey, toast, t])
 
   const isOverLimit = !!estimate && !estimate.within_limit && includeDocuments
   const canDownload = !isDownloading && !isOverLimit && (scope === 'all' || !!selectedPeriodId)
@@ -183,31 +185,33 @@ export function BackupDownloadForm() {
     <div className="space-y-8">
       <Card>
         <CardHeader>
-          <CardTitle>Skapa backup</CardTitle>
+          <CardTitle>{t('create_backup_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label>Omfattning</Label>
+            <Label>{t('scope_label')}</Label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <ScopeRadio
                 checked={scope === 'all'}
                 onChange={() => setScope('all')}
-                label="Hela historiken"
-                description="Alla räkenskapsår och verifikationer"
+                label={t('scope_all_label')}
+                description={t('scope_all_desc')}
+                recommendedLabel={t('recommended')}
                 recommended
               />
               <ScopeRadio
                 checked={scope === 'period'}
                 onChange={() => setScope('period')}
-                label="En period"
-                description="Välj ett specifikt räkenskapsår"
+                label={t('scope_period_label')}
+                description={t('scope_period_desc')}
+                recommendedLabel={t('recommended')}
               />
             </div>
           </div>
 
           {scope === 'period' && (
             <div className="space-y-2">
-              <Label htmlFor="backup-period">Räkenskapsår</Label>
+              <Label htmlFor="backup-period">{t('fiscal_year_label')}</Label>
               <select
                 id="backup-period"
                 value={selectedPeriodId}
@@ -215,7 +219,7 @@ export function BackupDownloadForm() {
                 className="flex h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 disabled={periods.length === 0}
               >
-                {periods.length === 0 && <option value="">Inga räkenskapsår</option>}
+                {periods.length === 0 && <option value="">{t('no_fiscal_years')}</option>}
                 {periods.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.period_start} – {p.period_end}
@@ -227,10 +231,9 @@ export function BackupDownloadForm() {
 
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
-              <Label htmlFor="include-documents">Inkludera kvitton och underlag</Label>
+              <Label htmlFor="include-documents">{t('include_docs_label')}</Label>
               <p className="text-xs text-muted-foreground max-w-prose">
-                Bilagor till verifikationer (kvitton, fakturor, PDF:er) packas med i ZIP:en.
-                Stäng av för en mindre backup med bara bokföringsdata.
+                {t('include_docs_help')}
               </p>
             </div>
             <Switch
@@ -244,21 +247,19 @@ export function BackupDownloadForm() {
             <div className="flex items-center gap-2 text-muted-foreground">
               <Info className="h-3.5 w-3.5" />
               {isLoadingEstimate ? (
-                <span>Beräknar storlek…</span>
+                <span>{t('calculating_size')}</span>
               ) : estimate ? (
                 <span>
-                  Uppskattad storlek: <strong className="text-foreground">{formatBytes(estimate.total_bytes)}</strong>
-                  {' '}({estimate.document_count} {estimate.document_count === 1 ? 'bilaga' : 'bilagor'})
+                  {t('estimated_size')} <strong className="text-foreground">{formatBytes(estimate.total_bytes)}</strong>
+                  {' '}({estimate.document_count} {estimate.document_count === 1 ? t('attachment_singular') : t('attachment_plural')})
                 </span>
               ) : (
-                <span>Storlek beräknas när omfattning är vald.</span>
+                <span>{t('size_will_calculate')}</span>
               )}
             </div>
             {isOverLimit && (
               <p className="mt-2 text-xs text-destructive">
-                Arkivet är större än {formatBytes(estimate!.size_limit_bytes)} och kan inte laddas ner
-                direkt. Välj en enskild period eller stäng av bilagor tills vidare —
-                automatisk molnsynkronisering kommer i senare version.
+                {t('over_limit_message', { limit: formatBytes(estimate!.size_limit_bytes) })}
               </p>
             )}
           </div>
@@ -268,18 +269,18 @@ export function BackupDownloadForm() {
               {isDownloading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Skapar backup…
+                  {t('creating_backup')}
                 </>
               ) : (
                 <>
                   <Download className="mr-2 h-4 w-4" />
-                  Skapa och ladda ner
+                  {t('create_and_download')}
                 </>
               )}
             </Button>
             {lastDownloadedAt && (
               <p className="text-xs text-muted-foreground">
-                Senaste nedladdning: {formatDate(lastDownloadedAt)}
+                {t('last_download')}: {formatDate(lastDownloadedAt)}
               </p>
             )}
           </div>
@@ -293,13 +294,12 @@ export function BackupDownloadForm() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Cloud className="h-4 w-4 text-muted-foreground" />
-              Molnsynkronisering
+              {t('cloud_sync_title')}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground max-w-prose">
-              Aktivera tillägget &ldquo;Molnsynkronisering&rdquo; för att koppla Google
-              Drive och ladda upp säkerhetsbackupen med ett klick.
+              {t('cloud_sync_disabled_help')}
             </p>
           </CardContent>
         </Card>
@@ -314,9 +314,10 @@ interface ScopeRadioProps {
   label: string
   description: string
   recommended?: boolean
+  recommendedLabel: string
 }
 
-function ScopeRadio({ checked, onChange, label, description, recommended }: ScopeRadioProps) {
+function ScopeRadio({ checked, onChange, label, description, recommended, recommendedLabel }: ScopeRadioProps) {
   return (
     <button
       type="button"
@@ -329,7 +330,7 @@ function ScopeRadio({ checked, onChange, label, description, recommended }: Scop
         <span className="font-medium text-sm">{label}</span>
         {recommended && (
           <span className="text-[10px] font-medium uppercase tracking-wider text-primary">
-            Rekommenderas
+            {recommendedLabel}
           </span>
         )}
       </div>

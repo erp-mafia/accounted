@@ -86,12 +86,28 @@ async function extractAndPersist(
   }
 
   // Dedup against inbox: if invoice-inbox already extracted this exact file
-  // (same document_id), copy its result to avoid a second AI call.
+  // (same document_id), copy its result to avoid a second AI call. If the
+  // inbox row marked the upload as skip_extraction=true, the inbox row's
+  // extracted_data is an empty skeleton — we must stamp the doc with a
+  // 'skipped:*' model so the client-side useDocumentExtraction hook reports
+  // 'unsupported' rather than 'succeeded' (otherwise the UI would claim AI
+  // finished reading a doc it never opened).
   const { data: inboxRow } = await supabase
     .from('invoice_inbox_items')
-    .select('extracted_data')
+    .select('extracted_data, extraction_skipped')
     .eq('document_id', document.id)
     .maybeSingle()
+
+  if (inboxRow?.extraction_skipped) {
+    await supabase
+      .from('document_attachments')
+      .update({
+        extracted_at: new Date().toISOString(),
+        extraction_model: 'skipped:invoice_inbox_gate',
+      })
+      .eq('id', document.id)
+    return
+  }
 
   let extractedData: Record<string, unknown> | null = null
   let model: string = 'copied-from-invoice-inbox'

@@ -256,9 +256,11 @@ export const enableBankingExtension: Extension = {
         })
         if (!rl.ok) return rl.response!
 
-        // Default 90 days: most callers (Sync Now button, post-activation gap fill)
+        // Default 120 days: most callers (Sync Now button, post-activation gap fill)
         // want a deep refresh, not a 30-day blip. Cron uses 7-day incrementals separately.
-        const { connection_id, days_back: rawDaysBack = 90 } = await request.json()
+        // Bank may still cap at ~90 days per PSD2 without fresh SCA — asking for more
+        // is harmless and surfaces whatever the ASPSP is willing to return.
+        const { connection_id, days_back: rawDaysBack = 120 } = await request.json()
         const days_back = Math.min(Math.max(1, rawDaysBack), 365)
 
         const { data: connection, error: connectionError } = await supabase
@@ -456,6 +458,7 @@ export const enableBankingExtension: Extension = {
         const connection_id = body?.connection_id
         const enabled_uids = body?.enabled_uids
         const rawLookback = body?.initial_lookback_days
+        const rawLookbackFromDate = body?.initial_lookback_from_date
         const account_mappings = body?.account_mappings
 
         if (typeof connection_id !== 'string' || !connection_id) {
@@ -514,9 +517,39 @@ export const enableBankingExtension: Extension = {
         }
 
         // initial_lookback_days only applies on the pending_selection→active transition.
-        // Default 90 (PSD2 standard); clamp to [30, 365]. Ignored for selection edits.
+        // Default 120; clamp to [30, 365]. Ignored for selection edits.
+        // PSD2 obliges ASPSPs to ~90 days without fresh SCA, but many Swedish banks
+        // return more if asked — request 120 and accept whatever the bank gives back.
+        //
+        // If the client sent initial_lookback_from_date (preferred for fiscal-year-anchored
+        // backfills), derive days from that and reject future dates outright. Otherwise
+        // fall back to initial_lookback_days (or the 120-day default).
+        if (typeof rawLookbackFromDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawLookbackFromDate)) {
+          const from = new Date(rawLookbackFromDate + 'T00:00:00Z')
+          if (!Number.isFinite(from.getTime())) {
+            return NextResponse.json(
+              { error: 'initial_lookback_from_date är inte ett giltigt datum.' },
+              { status: 400 }
+            )
+          }
+          const diffMs = Date.now() - from.getTime()
+          const daysFromDate = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
+          if (daysFromDate <= 0) {
+            return NextResponse.json(
+              { error: 'initial_lookback_from_date måste ligga i det förflutna.' },
+              { status: 400 }
+            )
+          }
+        }
         const initialLookbackDays = (() => {
-          const n = typeof rawLookback === 'number' && Number.isFinite(rawLookback) ? rawLookback : 90
+          if (typeof rawLookbackFromDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawLookbackFromDate)) {
+            const from = new Date(rawLookbackFromDate + 'T00:00:00Z')
+            // Future/invalid dates already rejected above; days > 0 is guaranteed.
+            const diffMs = Date.now() - from.getTime()
+            const days = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
+            return Math.min(365, Math.max(1, days))
+          }
+          const n = typeof rawLookback === 'number' && Number.isFinite(rawLookback) ? rawLookback : 120
           return Math.min(365, Math.max(30, Math.round(n)))
         })()
 
@@ -625,6 +658,34 @@ export const enableBankingExtension: Extension = {
             companyId,
           })
           return NextResponse.json({ error: 'Kunde inte spara kontoval' }, { status: 500 })
+        }
+
+        // Mirror the user's selection into cash_accounts so routing decisions
+        // and reconciliation pick up the new enabled state + ledger mapping
+        // without reading the JSONB column.
+        {
+          const { upsertFromPsd2 } = await import('@/lib/cash-accounts/service')
+          for (const a of updatedAccounts) {
+            try {
+              await upsertFromPsd2(supabase, companyId, {
+                bank_connection_id: connection.id,
+                external_uid: a.uid,
+                currency: a.currency,
+                ledger_account: a.ledger_account ?? '1930',
+                iban: a.iban ?? null,
+                name: a.name ?? null,
+                balance: a.balance ?? null,
+                balance_updated_at: a.balance_updated_at ?? null,
+                enabled: a.enabled ?? true,
+              })
+            } catch (cashErr) {
+              log.error('[enable-banking] Failed to mirror cash_account on selection save', {
+                connectionId: connection.id,
+                uid: a.uid,
+                error: cashErr instanceof Error ? cashErr.message : String(cashErr),
+              })
+            }
+          }
         }
 
         const newStatus = updatePayload.status ?? connection.status

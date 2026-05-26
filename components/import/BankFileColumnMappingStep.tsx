@@ -22,8 +22,26 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeft, ArrowRight, Columns3 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { getCSVPreview } from '@/lib/import/bank-file/formats/generic-csv'
+import { getCSVPreview, normalizeMinusSign } from '@/lib/import/bank-file/formats/generic-csv'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
+
+const HEADER_KEYWORDS = [
+  'datum',
+  'bokföringsdag',
+  'bokforingsdag',
+  'transaktionsdatum',
+  'reskontradatum',
+  'beskrivning',
+  'belopp',
+  'transaktion',
+  'text',
+  'mottagare',
+  'saldo',
+  'valuta',
+  'amount',
+  'description',
+  'date',
+]
 
 interface BankFileColumnMappingStepProps {
   rawFileContent: string
@@ -59,39 +77,70 @@ export default function BankFileColumnMappingStep({
   const [decimalSep, setDecimalSep] = useState<',' | '.'>(',')
   const [dateFormat, setDateFormat] = useState<string>('YYYY-MM-DD')
 
-  // Re-parse headers and preview whenever delimiter or file content changes
+  // Re-parse headers and preview whenever delimiter or file content changes.
+  // Pull a generous slice (30 rows) so we can scan past metadata preambles like
+  // Northmill's 5-line Kontonummer/Saldo/Kontohavare/Org.Nr/Period header.
   const parsedRows = useMemo(
-    () => getCSVPreview(rawFileContent, delimiter, 10),
+    () => getCSVPreview(rawFileContent, delimiter, 30),
     [rawFileContent, delimiter]
   )
 
-  // Auto-detect whether the first row is a header: if any cell on row 0 looks
-  // like a date (YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, YYYYMMDD), it's data, not a header.
-  // Users can still override via the switch.
+  // Auto-detect the header row index by scanning for a row whose cells
+  // contain known column-name keywords (bokföringsdag, beskrivning, belopp, …).
+  // A row needs ≥ 2 keyword hits to qualify, which excludes metadata rows where
+  // only the label cell happens to match (e.g. "Saldo,251495,41,SEK").
+  // Falls back to row 0 if nothing qualifies — preserves prior behavior for
+  // simple files where the header truly is the first row.
   const DATE_PATTERNS = [/^\d{4}-\d{2}-\d{2}$/, /^\d{2}[./]\d{2}[./]\d{4}$/, /^\d{8}$/]
+  const detectedHeaderRow = useMemo(() => {
+    let best: { idx: number; score: number; cells: number } | null = null
+    for (let i = 0; i < Math.min(parsedRows.length, 20); i++) {
+      const row = parsedRows[i]
+      if (!row || row.length < 2) continue
+      const hits = row.filter((cell) => {
+        const c = cell.trim().toLowerCase()
+        return c.length > 0 && HEADER_KEYWORDS.some((kw) => c === kw || c.includes(kw))
+      }).length
+      if (hits < 2) continue
+      if (!best || hits > best.score || (hits === best.score && row.length > best.cells)) {
+        best = { idx: i, score: hits, cells: row.length }
+      }
+    }
+    return best?.idx ?? 0
+  }, [parsedRows])
+
+  // Detect whether the file actually has a header row at all: if the auto-detect
+  // landed on row 0 but row 0 already looks like data (any cell is a date), assume
+  // no header. Otherwise trust the detection.
   const detectedHasHeader = useMemo(() => {
-    const firstRow = parsedRows[0]
-    if (!firstRow) return true
-    const hasDateCell = firstRow.some((cell) =>
+    const headerRow = parsedRows[detectedHeaderRow]
+    if (!headerRow) return true
+    const looksLikeData = headerRow.some((cell) =>
       DATE_PATTERNS.some((re) => re.test(cell.trim()))
     )
-    return !hasDateCell
-  }, [parsedRows])
+    return !looksLikeData
+  }, [parsedRows, detectedHeaderRow])
 
   const [hasHeaderOverride, setHasHeaderOverride] = useState<boolean | null>(null)
   const hasHeader = hasHeaderOverride ?? detectedHasHeader
 
+  // skip_rows = number of rows to skip before transaction data starts.
+  // When hasHeader: skip past the header row (detectedHeaderRow + 1).
+  // When no header: skip nothing — data starts at row 0.
+  const skipRows = hasHeader ? detectedHeaderRow + 1 : 0
+
   const columnHeaders = useMemo(() => {
-    if (hasHeader && parsedRows[0]) return parsedRows[0]
+    if (hasHeader && parsedRows[detectedHeaderRow]) return parsedRows[detectedHeaderRow]
     const count = parsedRows[0]?.length ?? 0
     return Array.from({ length: count }, (_, i) => `Kolumn ${i + 1}`)
-  }, [parsedRows, hasHeader])
+  }, [parsedRows, hasHeader, detectedHeaderRow])
 
-  const dataRows = hasHeader ? parsedRows.slice(1) : parsedRows
+  const dataRows = hasHeader ? parsedRows.slice(detectedHeaderRow + 1) : parsedRows
 
   // Auto-guess date/description/amount columns from the first data row.
   // Only used as initial defaults — user can override any pick.
-  const AMOUNT_RE = /^-?\d+([.,]\d+)?$/
+  // Match ASCII and Unicode minus; some banks (e.g. Northmill) use U+2212.
+  const AMOUNT_RE = /^[-\u2212\u2013\u2014\u2010]?\d+([.,]\d+)?$/
   useEffect(() => {
     if (dateCol !== -1 || descCol !== -1 || amountCol !== -1) return
     const sample = dataRows[0]
@@ -124,7 +173,7 @@ export default function BankFileColumnMappingStep({
       ...(balanceCol >= 0 && { balance: balanceCol }),
       delimiter,
       decimal_separator: decimalSep,
-      skip_rows: hasHeader ? 1 : 0,
+      skip_rows: skipRows,
       date_format: dateFormat,
     }
     onConfirm(mapping)
@@ -150,7 +199,9 @@ export default function BankFileColumnMappingStep({
             <div className="space-y-0.5">
               <Label htmlFor="has-header">Har filen rubrikrad?</Label>
               <p className="text-xs text-muted-foreground">
-                Slå av om filen saknar rubrikrad och första raden redan innehåller transaktionsdata.
+                {hasHeader && detectedHeaderRow > 0
+                  ? `Hoppar över ${detectedHeaderRow} metadatarader. Rubrikraden upptäcktes på rad ${detectedHeaderRow + 1}.`
+                  : 'Slå av om filen saknar rubrikrad och första raden redan innehåller transaktionsdata.'}
               </p>
             </div>
             <Switch id="has-header" checked={hasHeader} onCheckedChange={setHasHeaderOverride} />
@@ -350,11 +401,12 @@ export default function BankFileColumnMappingStep({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {dataRows.slice(0, 5).map((row, i) => {
+                    {dataRows.slice(0, 5).map((row, i) => {
                     const amountStr = row[amountCol] || '0'
+                    const normalizedAmountStr = normalizeMinusSign(amountStr)
                     const amount = decimalSep === ','
-                      ? parseFloat(amountStr.replace(/\s/g, '').replace(',', '.'))
-                      : parseFloat(amountStr.replace(/\s/g, ''))
+                      ? parseFloat(normalizedAmountStr.replace(/\s/g, '').replace(',', '.'))
+                      : parseFloat(normalizedAmountStr.replace(/\s/g, ''))
 
                     return (
                       <TableRow key={i}>

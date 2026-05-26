@@ -4,6 +4,7 @@ import type {
   SkatteverketAGIErrorBody,
   SkatteverketAGIGranskningsunderlagResponse,
   SkatteverketAGIKontrollresultat,
+  SkatteverketAGIKontrollsvar,
   SkatteverketAGIKvittenserResponse,
   SkatteverketAGIUnderlagResponse,
 } from '../types'
@@ -353,5 +354,67 @@ export async function agiLasUppPeriod(
     return { ok: false, status: response.status, error, body }
   }
   const data = await response.json().catch(() => ({}))
+  return { ok: true, status: response.status, data }
+}
+
+/**
+ * POST /underlag/huvuduppgift/kontrollera — pre-flight validation of a single
+ * HU as JSON without saving anything. Returns the kontrollsvar (OK / INFO /
+ * ARENDE / STOPP / AVVISANDE) and a list of any fel that fired.
+ *
+ * Use this to surface validation errors per HU to the user before they
+ * generate and submit a full XML underlag. The JSON property names follow
+ * the v1.7 spec §7 — see lib/salary/agi/huvuduppgift-json.ts for the typed
+ * builder.
+ */
+export async function agiKontrolleraHU(
+  supabase: SupabaseClient,
+  userId: string,
+  hu: Record<string, unknown>,
+): Promise<Result<SkatteverketAGIKontrollsvar>> {
+  const response = await skvRequest(
+    supabase,
+    userId,
+    'POST',
+    '/underlag/huvuduppgift/kontrollera',
+    hu,
+    { baseUrl: getInlamningBaseUrl() },
+  )
+
+  if (!response.ok) {
+    const { error, body } = await readErrorBody(response)
+    return { ok: false, status: response.status, error, body }
+  }
+
+  const data = (await response.json()) as SkatteverketAGIKontrollsvar
+  return { ok: true, status: response.status, data }
+}
+
+/**
+ * POST /underlag/individuppgift/kontrollera — pre-flight validation of a
+ * single IU as JSON without saving anything. JSON property names follow
+ * the v1.7 spec §8 — see lib/salary/agi/individuppgift-json.ts for the
+ * typed builder.
+ */
+export async function agiKontrolleraIU(
+  supabase: SupabaseClient,
+  userId: string,
+  iu: Record<string, unknown>,
+): Promise<Result<SkatteverketAGIKontrollsvar>> {
+  const response = await skvRequest(
+    supabase,
+    userId,
+    'POST',
+    '/underlag/individuppgift/kontrollera',
+    iu,
+    { baseUrl: getInlamningBaseUrl() },
+  )
+
+  if (!response.ok) {
+    const { error, body } = await readErrorBody(response)
+    return { ok: false, status: response.status, error, body }
+  }
+
+  const data = (await response.json()) as SkatteverketAGIKontrollsvar
   return { ok: true, status: response.status, data }
 }

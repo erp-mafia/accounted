@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { formatCurrency } from '@/lib/utils'
@@ -11,75 +12,73 @@ interface KPIHeroCardsProps {
   preferences?: KPIPreferences
 }
 
-function getKPIValue(
+function getKPISubtitleKey(
   report: KPIReport,
-  id: string
-): { value: number | null; subtitle: string } {
+  id: string,
+): { key: string; args?: Record<string, string | number> } {
   switch (id) {
     case 'netResult':
-      return { value: report.netResult, subtitle: 'netto' }
+      return { key: 'sub_netto' }
     case 'cashPosition':
-      return { value: report.cashPosition, subtitle: 'likvida medel' }
+      return { key: 'sub_likvida_medel' }
     case 'outstandingReceivables':
-      return {
-        value: report.outstandingReceivables,
-        subtitle:
-          report.overdueReceivables > 0
-            ? `varav förfallet: ${formatCurrency(report.overdueReceivables)}`
-            : 'utestående',
+      if (report.overdueReceivables > 0) {
+        return { key: 'sub_overdue', args: { amount: formatCurrency(report.overdueReceivables) } }
       }
+      return { key: 'sub_utestaende' }
     case 'vatLiability':
-      return {
-        value: report.vatLiability,
-        subtitle:
-          report.vatLiability > 0
-            ? 'att betala'
-            : report.vatLiability < 0
-              ? 'att återfå'
-              : 'jämnt',
-      }
+      if (report.vatLiability > 0) return { key: 'sub_att_betala' }
+      if (report.vatLiability < 0) return { key: 'sub_att_aterfa' }
+      return { key: 'sub_jamnt' }
     case 'grossMargin':
-      return { value: report.grossMargin, subtitle: 'av intäkter' }
+      return { key: 'sub_av_intakter' }
     case 'expenseRatio':
-      return { value: report.expenseRatio, subtitle: 'av intäkter' }
+      return { key: 'sub_av_intakter' }
     case 'avgPaymentDays':
-      return { value: report.avgPaymentDays, subtitle: 'snitt' }
+      return { key: 'sub_snitt' }
     default:
-      return { value: null, subtitle: '' }
+      return { key: '' }
   }
 }
 
-function formatKPIValue(value: number | null, format: string, id: string): string {
+function getKPIValue(report: KPIReport, id: string): number | null {
+  switch (id) {
+    case 'netResult': return report.netResult
+    case 'cashPosition': return report.cashPosition
+    case 'outstandingReceivables': return report.outstandingReceivables
+    case 'vatLiability': return report.vatLiability
+    case 'grossMargin': return report.grossMargin
+    case 'expenseRatio': return report.expenseRatio
+    case 'avgPaymentDays': return report.avgPaymentDays
+    default: return null
+  }
+}
+
+function formatKPIValue(value: number | null, format: string, id: string, daysSuffix: string): string {
   if (value === null) return '—'
   if (format === 'currency') {
     if (id === 'vatLiability') return formatCurrency(Math.abs(value))
     return formatCurrency(value)
   }
   if (format === 'percentage') return `${value}%`
-  if (format === 'days') return `${value} dagar`
+  if (format === 'days') return `${value} ${daysSuffix}`
   return String(value)
 }
 
-function getValueColor(
-  value: number | null,
-  colorLogic: string
-): string {
+function getValueColor(value: number | null, colorLogic: string): string {
   if (value === null) return 'text-muted-foreground'
   if (colorLogic === 'neutral') return ''
   if (colorLogic === 'positive-good') {
-    return value >= 0
-      ? 'text-[hsl(var(--chart-1))]'
-      : 'text-[hsl(var(--chart-2))]'
+    return value >= 0 ? 'text-[hsl(var(--chart-1))]' : 'text-[hsl(var(--chart-2))]'
   }
   if (colorLogic === 'negative-good') {
-    return value <= 0
-      ? 'text-[hsl(var(--chart-1))]'
-      : 'text-[hsl(var(--chart-2))]'
+    return value <= 0 ? 'text-[hsl(var(--chart-1))]' : 'text-[hsl(var(--chart-2))]'
   }
   return ''
 }
 
 export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
+  const t = useTranslations('kpi')
   const prefs = preferences ?? getDefaultPreferences()
 
   const visibleDefs = prefs.kpiOrder
@@ -90,7 +89,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
     return (
       <Card>
         <CardContent className="py-8 text-center text-muted-foreground text-sm">
-          Inga nyckeltal valda. Klicka på &quot;Anpassa&quot; för att välja vilka som ska visas.
+          {t('empty_no_kpis_chosen')}
         </CardContent>
       </Card>
     )
@@ -106,8 +105,9 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
   return (
     <div className={`grid ${gridCols} gap-4`}>
       {visibleDefs.map((def) => {
-        const { value, subtitle } = getKPIValue(report, def.id)
-        const formatted = formatKPIValue(value, def.format, def.id)
+        const value = getKPIValue(report, def.id)
+        const sub = getKPISubtitleKey(report, def.id)
+        const formatted = formatKPIValue(value, def.format, def.id, t('value_days_suffix'))
         const color = getValueColor(value, def.colorLogic)
         const hasOverride =
           prefs.accountOverrides[def.id] &&
@@ -115,18 +115,18 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
 
         const tooltipContent = (
           <div className="space-y-1.5 text-xs">
-            <p className="text-foreground/90">{def.description}</p>
+            <p className="text-foreground/90">{t(`def_${def.id}_description`)}</p>
             <div>
-              <span className="font-medium">Formel: </span>
-              <span className="font-mono">{def.formula}</span>
+              <span className="font-medium">{t('tooltip_formula')} </span>
+              <span className="font-mono">{t(`def_${def.id}_formula`)}</span>
             </div>
             <div>
-              <span className="font-medium">Konton: </span>
-              {def.accountDescription}
+              <span className="font-medium">{t('tooltip_accounts')} </span>
+              {t(`def_${def.id}_accounts`)}
             </div>
             {hasOverride && (
               <div className="text-primary">
-                <span className="font-medium">Anpassade: </span>
+                <span className="font-medium">{t('tooltip_overrides')} </span>
                 <span className="font-mono">
                   {prefs.accountOverrides[def.id].join(', ')}
                 </span>
@@ -144,7 +144,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
                 maxWidth="320px"
                 iconClassName="h-3 w-3"
               >
-                <p className="text-xs text-muted-foreground">{def.label}</p>
+                <p className="text-xs text-muted-foreground">{t(`def_${def.id}_label`)}</p>
               </InfoTooltip>
               <p
                 className={`font-display text-2xl font-medium tabular-nums tracking-tight mt-2 ${color}`}
@@ -152,7 +152,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
                 {formatted}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                {subtitle}
+                {sub.key ? t(sub.key, sub.args) : ''}
               </p>
             </CardContent>
           </Card>

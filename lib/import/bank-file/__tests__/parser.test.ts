@@ -8,7 +8,7 @@
 
 import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats } from '../parser'
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
-import { parseGenericCSV } from '../formats/generic-csv'
+import { parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
 
 // ---------------------------------------------------------------------------
@@ -169,6 +169,25 @@ const LUNAR_CSV = [
   '2024-01-15,SPOTIFY AB,"-99,00","12.345,67"',
   '2024-01-14,ICA MAXI LINDHAGEN,"-432,50","12.444,67"',
   '2024-01-13,LÖNEUTBETALNING,"25.000,00","12.877,17"',
+].join('\n')
+
+// Northmill exports include a 5-line metadata preamble (Kontonummer, Saldo,
+// Kontohavare, Org. Nr, Period) plus blank lines before the actual transaction
+// header. Negative amounts use Unicode minus (U+2212), not ASCII hyphen.
+const NORTHMILL_CSV = [
+  'Kontonummer,9750-8770139',
+  'Saldo,"251495,41",SEK',
+  'Kontohavare,Arcim Technology AB',
+  'Org. Nr,559538-6219',
+  'Period,2025-10-01,2026-04-07',
+  '',
+  '',
+  '',
+  'Bokföringsdag,Beskrivning,Belopp,Saldo,Valuta',
+  '2026-04-01,Månadsavgift företagspaket april,"\u2212139,00","251495,41",SEK',
+  '2026-01-22,200176580348155,"\u22121000,00","251912,41",SEK',
+  '2025-10-16,092221155575,"400000,00","422005,00",SEK',
+  '2025-10-01,Inbetalning av aktiekapital,"25000,00","25000,00",SEK',
 ].join('\n')
 
 const UNKNOWN_CSV = [
@@ -355,6 +374,22 @@ describe('detectFileFormat', () => {
     const format = detectFileFormat(LUNAR_CSV, 'lunar.csv')
     expect(format).not.toBeNull()
     expect(format!.id).toBe('lunar')
+  })
+
+  it('detects Northmill CSV from Kontonummer preamble + transaction header', () => {
+    const format = detectFileFormat(NORTHMILL_CSV, 'Northmill-Account-Statement.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('northmill')
+  })
+
+  it('does not detect Northmill on a file that just happens to mention Kontonummer in transactions', () => {
+    const fake = [
+      'Datum,Transaktion,Kategori,Belopp,Saldo',
+      '2024-01-15,Överföring kontonummer 1234,Inkomst,"100,00","1000,00"',
+    ].join('\n')
+    const format = detectFileFormat(fake, 'test.csv')
+    // Should detect as Nordea, not Northmill — Northmill needs Kontonummer at start of first line
+    expect(format!.id).toBe('nordea')
   })
 
   it('returns null for unrecognized CSV content', () => {
@@ -1054,6 +1089,53 @@ describe('parseBankFile — Lunar format', () => {
   })
 })
 
+describe('parseBankFile — Northmill format', () => {
+  it('skips the 5-line metadata preamble and blank lines, parses transaction rows', () => {
+    const result = parseBankFile(NORTHMILL_CSV, 'Northmill.csv')
+
+    expect(result.format).toBe('northmill')
+    expect(result.format_name).toBe('Northmill')
+    expect(result.transactions).toHaveLength(4)
+    expect(result.issues).toHaveLength(0)
+  })
+
+  it('correctly parses negative amounts that use Unicode minus (U+2212)', () => {
+    const result = parseBankFile(NORTHMILL_CSV, 'Northmill.csv')
+
+    // First transaction is "−139,00" with U+2212 — must become -139, not NaN
+    expect(result.transactions[0].amount).toBe(-139)
+    expect(result.transactions[0].description).toBe('Månadsavgift företagspaket april')
+    expect(result.transactions[0].date).toBe('2026-04-01')
+
+    expect(result.transactions[1].amount).toBe(-1000)
+    expect(result.transactions[2].amount).toBe(400000)
+    expect(result.transactions[3].amount).toBe(25000)
+  })
+
+  it('extracts the saldo (running balance) column', () => {
+    const result = parseBankFile(NORTHMILL_CSV, 'Northmill.csv')
+
+    expect(result.transactions[0].balance).toBe(251495.41)
+    expect(result.transactions[3].balance).toBe(25000)
+  })
+
+  it('calculates income vs expenses correctly with Unicode minus amounts', () => {
+    const result = parseBankFile(NORTHMILL_CSV, 'Northmill.csv')
+
+    expect(result.stats.total_income).toBe(425000)
+    expect(result.stats.total_expenses).toBe(-1139)
+    expect(result.stats.parsed_rows).toBe(4)
+    expect(result.stats.skipped_rows).toBe(0)
+  })
+
+  it('extracts the correct date range from the transactions, not the Period metadata row', () => {
+    const result = parseBankFile(NORTHMILL_CSV, 'Northmill.csv')
+
+    expect(result.date_from).toBe('2025-10-01')
+    expect(result.date_to).toBe('2026-04-01')
+  })
+})
+
 describe('parseBankFile — camt.053 XML format', () => {
   it('parses XML with credit and debit entries', () => {
     const result = parseBankFile(CAMT053_XML, 'statement.xml')
@@ -1715,6 +1797,80 @@ describe('parseGenericCSV — column bounds checking', () => {
     expect(result.transactions).toHaveLength(2)
     expect(result.stats.skipped_rows).toBe(0)
     expect(result.issues).toHaveLength(0)
+  })
+
+  it('parses amounts that use Unicode minus (U+2212) — was NaN before normalization', () => {
+    const content = [
+      'Date,Description,Amount',
+      '2024-01-15,SPOTIFY,"\u221299,00"',
+      '2024-01-16,REFUND,"\u201350,00"',
+      '2024-01-17,SALARY,"25000,00"',
+    ].join('\n')
+
+    const result = parseGenericCSV(content, {
+      date: 0,
+      description: 1,
+      amount: 2,
+      delimiter: ',',
+      decimal_separator: ',',
+      skip_rows: 1,
+      date_format: 'YYYY-MM-DD',
+    })
+
+    expect(result.transactions).toHaveLength(3)
+    expect(result.transactions[0].amount).toBe(-99)
+    expect(result.transactions[1].amount).toBe(-50)
+    expect(result.transactions[2].amount).toBe(25000)
+  })
+
+  it('skips metadata rows when skip_rows is set higher than 1 (multi-row preamble)', () => {
+    // Mimics a file with 5 metadata rows + header + 2 transactions.
+    const content = [
+      'Account,12345',
+      'Owner,Acme AB',
+      'Period,2024-01,2024-12',
+      'Currency,SEK',
+      'Type,Statement',
+      'Date,Description,Amount',
+      '2024-01-15,SPOTIFY,-99.00',
+      '2024-01-16,SALARY,25000.00',
+    ].join('\n')
+
+    const result = parseGenericCSV(content, {
+      date: 0,
+      description: 1,
+      amount: 2,
+      delimiter: ',',
+      decimal_separator: '.',
+      skip_rows: 6,
+      date_format: 'YYYY-MM-DD',
+    })
+
+    expect(result.transactions).toHaveLength(2)
+    expect(result.transactions[0].amount).toBe(-99)
+    expect(result.transactions[1].amount).toBe(25000)
+    expect(result.issues).toHaveLength(0)
+  })
+})
+
+describe('normalizeMinusSign', () => {
+  it('replaces U+2212 (minus sign) with ASCII hyphen', () => {
+    expect(normalizeMinusSign('\u2212139,00')).toBe('-139,00')
+  })
+
+  it('replaces U+2013 (en dash) and U+2014 (em dash) with ASCII hyphen', () => {
+    expect(normalizeMinusSign('\u2013100')).toBe('-100')
+    expect(normalizeMinusSign('\u2014250')).toBe('-250')
+  })
+
+  it('leaves ASCII hyphen and digits untouched', () => {
+    expect(normalizeMinusSign('-139.00')).toBe('-139.00')
+    expect(normalizeMinusSign('139.00')).toBe('139.00')
+  })
+
+  it('makes parseFloat work on Unicode-minus strings (regression for Northmill)', () => {
+    expect(parseFloat('\u2212139.00')).toBeNaN()
+    expect(parseFloat(normalizeMinusSign('\u2212139.00'))).toBe(-139)
   })
 })
 

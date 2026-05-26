@@ -1,0 +1,51 @@
+# Optional TLS overlay. Adds a Caddy reverse proxy that auto-provisions
+# Let's Encrypt certificates for ${DOMAIN}.
+#
+# Usage:
+#   1. Set DOMAIN=app.example.com in .env (must resolve to this host's public IP)
+#   2. Open ports 80 and 443 to the public internet (LE HTTP-01 challenge needs 80)
+#   3. docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Caddy reaches the app over the internal Docker network; the app no longer
+# binds a host port at all.
+services:
+  app:
+    # Remove the loopback binding from the base file — traffic comes via Caddy.
+    ports: !reset null
+
+  caddy:
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:?set DOMAIN in .env to enable TLS}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Caddy needs NET_BIND_SERVICE to bind privileged ports 80/443.
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    pids_limit: 50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  caddy_data:
+  caddy_config:

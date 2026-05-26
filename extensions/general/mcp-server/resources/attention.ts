@@ -203,7 +203,7 @@ export const attentionResource: McpResource = {
       })
     }
 
-    // ── Pending operations awaiting human approval ──────────────────
+    // ── Pending operations awaiting approval ────────────────────────
     const pendingOpsCount = pendingOpsHead.count ?? 0
     if (pendingOpsCount > 0) {
       const ops = pendingOpsSamples.data ?? []
@@ -215,7 +215,9 @@ export const attentionResource: McpResource = {
         count: pendingOpsCount,
         samples: ops,
         next: {
-          description: 'Be användaren granska kön i /pending innan agenten fortsätter.',
+          description:
+            'Visa kön för användaren. När användaren godkänner en specifik operation_id i chatten, anropa gnubok_approve_pending_operation direkt — /pending är ett alternativ, inte ett krav.',
+          tool: 'gnubok_list_pending_operations',
         },
       })
     }

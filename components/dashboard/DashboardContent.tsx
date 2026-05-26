@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn, formatCurrency } from '@/lib/utils'
 import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
@@ -47,6 +48,7 @@ interface DashboardContentProps {
 
 export default function DashboardContent({ companyId, summary, onboardingProgress }: DashboardContentProps) {
   const [showAllAlerts, setShowAllAlerts] = useState(false)
+  const t = useTranslations('dashboard')
 
   const needsSetup = onboardingProgress && !onboardingProgress.hasBankConnected && !onboardingProgress.hasSIEImport
   const [setupGateActive, setSetupGateActive] = useState(!!needsSetup)
@@ -98,9 +100,9 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <div className="flex items-center gap-3">
               <Receipt className="h-4 w-4 text-destructive flex-shrink-0" />
               <div>
-                <p className="font-medium text-sm">Förfallna fakturor</p>
+                <p className="font-medium text-sm">{t('overdue_invoices')}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {summary.overdueInvoicesCount} st
+                  {t('overdue_invoices_count', { count: summary.overdueInvoicesCount })}
                 </p>
               </div>
             </div>
@@ -118,9 +120,12 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <div className="flex items-center gap-3">
               <Receipt className="h-4 w-4 text-warning-foreground flex-shrink-0" />
               <div>
-                <p className="font-medium text-sm">Obetalda fakturor</p>
+                <p className="font-medium text-sm">{t('unpaid_invoices')}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {summary.unpaidInvoicesCount - summary.overdueInvoicesCount} st · {formatCurrency(summary.unpaidInvoicesTotal)}
+                  {t('unpaid_invoices_detail', {
+                    count: summary.unpaidInvoicesCount - summary.overdueInvoicesCount,
+                    amount: formatCurrency(summary.unpaidInvoicesTotal),
+                  })}
                 </p>
               </div>
             </div>
@@ -138,9 +143,9 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <div className="flex items-center gap-3">
               <ArrowLeftRight className="h-4 w-4 text-warning-foreground flex-shrink-0" />
               <div>
-                <p className="font-medium text-sm">Transaktioner</p>
+                <p className="font-medium text-sm">{t('transactions')}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {summary.uncategorizedCount} obokförda
+                  {t('uncategorized_count', { count: summary.uncategorizedCount })}
                 </p>
               </div>
             </div>
@@ -158,9 +163,9 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <div className="flex items-center gap-3">
               <FileWarning className="h-4 w-4 text-warning-foreground flex-shrink-0" />
               <div>
-                <p className="font-medium text-sm">Saknade underlag</p>
+                <p className="font-medium text-sm">{t('missing_underlag')}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {summary.missingUnderlagCount} verifikationer utan underlag
+                  {t('missing_underlag_detail', { count: summary.missingUnderlagCount })}
                 </p>
               </div>
             </div>
@@ -178,9 +183,9 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <div className="flex items-center gap-3">
               <Clock className="h-4 w-4 text-destructive flex-shrink-0" />
               <div>
-                <p className="font-medium text-sm">Gamla transaktioner</p>
+                <p className="font-medium text-sm">{t('stale_transactions')}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {summary.staleUncategorizedCount} transaktioner äldre än 14 dagar saknar bokföring
+                  {t('stale_transactions_detail', { count: summary.staleUncategorizedCount })}
                 </p>
               </div>
             </div>
@@ -199,9 +204,11 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <div className="flex items-center gap-3">
               <Landmark className="h-4 w-4 text-warning-foreground flex-shrink-0" />
               <div>
-                <p className="font-medium text-sm">Banksamtycke löper ut</p>
+                <p className="font-medium text-sm">{t('bank_consent_expiring')}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {conn.bank_name} — {conn.days_left} {conn.days_left === 1 ? 'dag' : 'dagar'} kvar
+                  {conn.days_left === 1
+                    ? t('bank_consent_detail_one', { bank: conn.bank_name, days: conn.days_left })
+                    : t('bank_consent_detail_other', { bank: conn.bank_name, days: conn.days_left })}
                 </p>
               </div>
             </div>
@@ -320,7 +327,7 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card>
             <CardContent className="p-4">
-              <p className="text-xs text-muted-foreground mb-2">Resultat</p>
+              <p className="text-xs text-muted-foreground mb-2">{t('result')}</p>
               <p className={cn(
                 'font-display text-xl font-medium tabular-nums leading-tight',
                 summary.mtd.net >= 0 ? 'text-success' : 'text-destructive'
@@ -329,7 +336,7 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
                 <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                {formatCurrency(summary.ytd.net)} i år
+                {formatCurrency(summary.ytd.net)} {t('this_year_short')}
               </p>
             </CardContent>
           </Card>
@@ -338,12 +345,12 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
             <Card className="h-full hover:border-primary/50 transition-colors cursor-pointer">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between">
-                  <p className="text-xs text-muted-foreground mb-2">Att få betalt</p>
+                  <p className="text-xs text-muted-foreground mb-2">{t('to_be_paid')}</p>
                   <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
                 </div>
                 <p className="font-display text-xl font-medium tabular-nums leading-tight">
                   {summary.unpaidInvoicesCount}
-                  <span className="text-sm ml-0.5 text-muted-foreground font-normal">st</span>
+                  {t('units') && <span className="text-sm ml-0.5 text-muted-foreground font-normal">{t('units')}</span>}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {formatCurrency(summary.unpaidInvoicesTotal)}
@@ -355,7 +362,7 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
           {summary.bankBalance !== null ? (
             <Card>
               <CardContent className="p-4">
-                <p className="text-xs text-muted-foreground mb-2">Banksaldo</p>
+                <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
                 <p className="font-display text-xl font-medium tabular-nums leading-tight">
                   {formatLargeNumber(summary.bankBalance)}
                   <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
@@ -367,10 +374,10 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
               <Card className="h-full hover:border-primary/50 transition-colors cursor-pointer">
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between">
-                    <p className="text-xs text-muted-foreground mb-2">Banksaldo</p>
+                    <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
                   </div>
-                  <p className="text-sm font-medium text-primary">Koppla bank</p>
+                  <p className="text-sm font-medium text-primary">{t('connect_bank')}</p>
                 </CardContent>
               </Card>
             </Link>
@@ -378,17 +385,17 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
 
           <Card>
             <CardContent className="p-4">
-              <p className="text-xs text-muted-foreground mb-2">Att göra</p>
+              <p className="text-xs text-muted-foreground mb-2">{t('todo')}</p>
               <div role="status" aria-live="polite">
                 {todoCount > 0 ? (
                   <p className="font-display text-xl font-medium tabular-nums leading-tight text-warning-foreground">
                     {todoCount}
-                    <span className="text-sm ml-0.5 text-muted-foreground font-normal">st</span>
+                    {t('units') && <span className="text-sm ml-0.5 text-muted-foreground font-normal">{t('units')}</span>}
                   </p>
                 ) : (
                   <div className="flex items-center gap-1.5">
                     <CheckCircle2 className="h-4 w-4 text-success" />
-                    <p className="text-sm font-medium text-success">Allt klart!</p>
+                    <p className="text-sm font-medium text-success">{t('all_done')}</p>
                   </div>
                 )}
               </div>
@@ -397,19 +404,19 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
         </div>
       </section>
 
-      {/* Resultat — intäkter / kostnader (always visible) */}
+      {/* Result — revenue / expenses (always visible) */}
       <section>
         <div className="grid md:grid-cols-2 gap-4">
           <Card>
             <CardContent className="p-6">
-              <p className="text-sm text-muted-foreground mb-3">Intäkter</p>
+              <p className="text-sm text-muted-foreground mb-3">{t('revenue')}</p>
               <p className="font-display text-2xl font-medium tabular-nums leading-tight">
                 {formatLargeNumber(summary.mtd.income)}
                 <span className="text-base ml-1 text-muted-foreground font-normal">kr</span>
               </p>
-              <p className="text-xs text-muted-foreground mt-0.5">denna månad</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{t('this_month')}</p>
               <div className="mt-4 pt-3 border-t border-border/30 flex items-baseline justify-between">
-                <p className="text-xs text-muted-foreground">I år</p>
+                <p className="text-xs text-muted-foreground">{t('this_year_block')}</p>
                 <p className="text-sm font-medium tabular-nums">{formatCurrency(summary.ytd.income)}</p>
               </div>
             </CardContent>
@@ -417,14 +424,14 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
 
           <Card>
             <CardContent className="p-6">
-              <p className="text-sm text-muted-foreground mb-3">Kostnader</p>
+              <p className="text-sm text-muted-foreground mb-3">{t('expenses')}</p>
               <p className="font-display text-2xl font-medium tabular-nums leading-tight">
                 {formatLargeNumber(summary.mtd.expenses)}
                 <span className="text-base ml-1 text-muted-foreground font-normal">kr</span>
               </p>
-              <p className="text-xs text-muted-foreground mt-0.5">denna månad</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{t('this_month')}</p>
               <div className="mt-4 pt-3 border-t border-border/30 flex items-baseline justify-between">
-                <p className="text-xs text-muted-foreground">I år</p>
+                <p className="text-xs text-muted-foreground">{t('this_year_block')}</p>
                 <p className="text-sm font-medium tabular-nums">{formatCurrency(summary.ytd.expenses)}</p>
               </div>
             </CardContent>
@@ -435,7 +442,7 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
       {/* Att hantera — hidden in slim mode; the hero card already surfaces the top action */}
       {!slim && alertItems.length > 0 && (
         <section id="alerts-section">
-          <h2 className="font-display text-lg font-medium mb-4">Att hantera</h2>
+          <h2 className="font-display text-lg font-medium mb-4">{t('alerts_title')}</h2>
           <div id="alerts-list" className="grid gap-4 md:grid-cols-2">
             {visibleAlerts}
           </div>
@@ -446,7 +453,7 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
               aria-controls="alerts-list"
               className="mt-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
             >
-              {showAllAlerts ? 'Visa färre' : `Visa alla (${alertItems.length})`}
+              {showAllAlerts ? t('show_less') : t('show_all', { count: alertItems.length })}
               <ChevronDown className={cn('h-3 w-3 transition-transform', showAllAlerts && 'rotate-180')} />
             </button>
           )}

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,6 +14,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 const BankingPanel = getSettingsPanel('enable-banking')
 
 export default function BankingSettingsPage() {
+  const t = useTranslations('settings_banking')
   const searchParams = useSearchParams()
   const router = useRouter()
   const { toast } = useToast()
@@ -42,8 +44,8 @@ export default function BankingSettingsPage() {
 
       if (connectionId) {
         toast({
-          title: 'Synkroniserar transaktioner...',
-          description: 'Hämtar transaktioner från din bank i bakgrunden.',
+          title: t('sync_start_title'),
+          description: t('sync_start_description'),
         })
         const controller = new AbortController()
         abortControllerRef.current = controller
@@ -62,8 +64,8 @@ export default function BankingSettingsPage() {
             if (res.ok) {
               if (!unmountedRef.current) {
                 toast({
-                  title: 'Bank ansluten!',
-                  description: `${data.imported ?? 0} transaktioner importerade`,
+                  title: t('sync_success_title'),
+                  description: t('sync_success_description', { count: data.imported ?? 0 }),
                 })
               }
             } else {
@@ -74,13 +76,13 @@ export default function BankingSettingsPage() {
             if (unmountedRef.current) return
             if (controller.signal.aborted) {
               toast({
-                title: 'Synkronisering tog för lång tid',
-                description: 'Transaktionerna hämtas i bakgrunden. Ladda om sidan om en stund.',
+                title: t('sync_timeout_title'),
+                description: t('sync_timeout_description'),
               })
             } else {
               toast({
-                title: 'Synkronisering misslyckades',
-                description: err instanceof Error ? err.message : 'Kunde inte hämta transaktioner',
+                title: t('sync_failed_title'),
+                description: err instanceof Error ? err.message : t('sync_failed_default'),
                 variant: 'destructive',
               })
             }
@@ -88,8 +90,8 @@ export default function BankingSettingsPage() {
         })()
       } else {
         toast({
-          title: 'Bank ansluten!',
-          description: 'Din bank är nu kopplad.',
+          title: t('sync_success_title'),
+          description: t('sync_success_no_id_description'),
         })
       }
     }
@@ -100,7 +102,7 @@ export default function BankingSettingsPage() {
       const bankName = searchParams.get('bank_name')
       const errorCode = searchParams.get('bank_error_code')
       toast({
-        title: 'Anslutning misslyckades',
+        title: t('connect_failed_title'),
         description: errorMsg,
         variant: 'destructive',
       })
@@ -109,7 +111,7 @@ export default function BankingSettingsPage() {
       if (errorCode === 'access_denied') setIsAccessDenied(true)
       router.replace('/settings/banking')
     }
-  }, [searchParams, router, toast])
+  }, [searchParams, router, toast, t])
 
   return (
     <div className="space-y-8">
@@ -120,11 +122,11 @@ export default function BankingSettingsPage() {
             <p className="text-sm font-medium text-destructive">{bankConnectionError}</p>
             {isAccessDenied && failedBankName && (
               <p className="mt-1 text-sm text-muted-foreground">
-                {failedBankName} nekade åtkomst. Om du använder ett privatkonto kan du prova att ansluta med kontotypen &quot;Privatkonto&quot; i bankväljaren nedan.
+                {t('access_denied_hint', { bankName: failedBankName })}
               </p>
             )}
             <p className="mt-1 text-sm text-muted-foreground">
-              Du kan också <Link href="/import?mode=bank" className="underline hover:text-foreground">importera transaktioner via bankfil</Link> istället.
+              {t('import_fallback_text')}<Link href="/import?mode=bank" className="underline hover:text-foreground">{t('import_fallback_link')}</Link>{t('import_fallback_suffix')}
             </p>
           </div>
           <button
@@ -134,7 +136,7 @@ export default function BankingSettingsPage() {
               setIsAccessDenied(false)
             }}
             className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground"
-            aria-label="Stäng"
+            aria-label={t('dismiss_aria')}
           >
             <span className="text-lg leading-none">&times;</span>
           </button>
@@ -147,14 +149,14 @@ export default function BankingSettingsPage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <CreditCard className="h-10 w-10 text-muted-foreground/40 mb-4" />
-            <p className="font-medium mb-1">Bankintegration (PSD2) är inte aktiverad</p>
+            <p className="font-medium mb-1">{t('not_enabled_title')}</p>
             <p className="text-sm text-muted-foreground mb-4 max-w-md">
-              Aktivera tillägget Enable Banking för att koppla ditt bankkonto och automatiskt hämta transaktioner.
+              {t('not_enabled_description')}
             </p>
             <Button variant="outline" asChild>
               <Link href="/extensions">
                 <ExternalLink className="mr-2 h-4 w-4" />
-                Gå till Tillägg
+                {t('go_to_extensions')}
               </Link>
             </Button>
           </CardContent>

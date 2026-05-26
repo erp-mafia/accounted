@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,16 +32,17 @@ interface CompanyInvitation {
   created_at: string
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  owner: 'Ägare',
-  admin: 'Admin',
-  member: 'Medlem',
-  viewer: 'Läsbehörighet',
-}
-
 export function CompanyMembersSection() {
+  const t = useTranslations('settings_company')
   const { toast } = useToast()
   const { company } = useCompany()
+
+  const roleLabels: Record<string, string> = {
+    owner: t('members_role_owner'),
+    admin: t('members_role_admin'),
+    member: t('members_role_member'),
+    viewer: t('members_role_viewer'),
+  }
   const [isLoading, setIsLoading] = useState(true)
   const [members, setMembers] = useState<CompanyMemberItem[]>([])
   const [invitations, setInvitations] = useState<CompanyInvitation[]>([])
@@ -94,16 +96,16 @@ export function CompanyMembersSection() {
         console.log('[DEV] Company invite URL:', data.data.inviteUrl)
       }
       toast({
-        title: 'Inbjudan skickad',
+        title: t('members_invite_sent_title'),
         description: data.data.inviteUrl
-          ? 'Länk loggad i konsolen (F12)'
-          : `E-post skickad till ${email}.`,
+          ? t('members_invite_sent_dev_url')
+          : t('members_invite_sent_description', { email }),
       })
       setInviteEmail('')
       setInviteRole('viewer')
       fetchMembers()
     } catch {
-      toast({ title: 'Kunde inte skicka inbjudan.', variant: 'destructive' })
+      toast({ title: t('members_invite_failed'), variant: 'destructive' })
     } finally {
       setIsSending(false)
     }
@@ -120,10 +122,10 @@ export function CompanyMembersSection() {
         return
       }
 
-      toast({ title: 'Medlem borttagen' })
+      toast({ title: t('members_removed') })
       fetchMembers()
     } catch {
-      toast({ title: 'Kunde inte ta bort medlem.', variant: 'destructive' })
+      toast({ title: t('members_remove_failed'), variant: 'destructive' })
     } finally {
       setRemovingId(null)
     }
@@ -140,10 +142,10 @@ export function CompanyMembersSection() {
         return
       }
 
-      toast({ title: 'Inbjudan återkallad' })
+      toast({ title: t('members_invite_revoked') })
       fetchMembers()
     } catch {
-      toast({ title: 'Kunde inte återkalla inbjudan.', variant: 'destructive' })
+      toast({ title: t('members_invite_revoke_failed'), variant: 'destructive' })
     } finally {
       setRevokingId(null)
     }
@@ -163,19 +165,19 @@ export function CompanyMembersSection() {
       {canInvite && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Bjud in till {company?.name}</CardTitle>
+            <CardTitle className="text-base">{t('members_invite_title', { companyName: company?.name ?? '' })}</CardTitle>
             <CardDescription>
-              Personen får tillgång till enbart detta företag.
+              {t('members_invite_description')}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleInvite} className="flex gap-3">
               <div className="flex-1">
-                <Label htmlFor="company-invite-email" className="sr-only">E-postadress</Label>
+                <Label htmlFor="company-invite-email" className="sr-only">{t('members_invite_email_label')}</Label>
                 <Input
                   id="company-invite-email"
                   type="email"
-                  placeholder="namn@example.com"
+                  placeholder={t('members_invite_email_placeholder')}
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
                   disabled={isSending}
@@ -187,9 +189,9 @@ export function CompanyMembersSection() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="viewer">Läsbehörighet</SelectItem>
-                  <SelectItem value="member">Medlem</SelectItem>
-                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="viewer">{t('members_role_viewer')}</SelectItem>
+                  <SelectItem value="member">{t('members_role_member')}</SelectItem>
+                  <SelectItem value="admin">{t('members_role_admin')}</SelectItem>
                 </SelectContent>
               </Select>
               <Button type="submit" disabled={isSending || !inviteEmail.trim()}>
@@ -198,7 +200,7 @@ export function CompanyMembersSection() {
                 ) : (
                   <>
                     <Plus className="h-4 w-4 mr-1.5" />
-                    Bjud in
+                    {t('members_invite_button')}
                   </>
                 )}
               </Button>
@@ -212,10 +214,10 @@ export function CompanyMembersSection() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Users className="h-4 w-4" />
-            Medlemmar
+            {t('members_title')}
           </CardTitle>
           <CardDescription>
-            {members.length} {members.length === 1 ? 'medlem' : 'medlemmar'} i {company?.name}
+            {t('members_count', { count: members.length, companyName: company?.name ?? '' })}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -232,16 +234,16 @@ export function CompanyMembersSection() {
                     <p className="text-sm font-medium truncate">
                       {member.email}
                       {member.is_current_user && (
-                        <span className="text-muted-foreground font-normal ml-1">(du)</span>
+                        <span className="text-muted-foreground font-normal ml-1">{t('members_you')}</span>
                       )}
                     </p>
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-muted-foreground">
-                        {ROLE_LABELS[member.role] || member.role}
+                        {roleLabels[member.role] || member.role}
                       </span>
                       {member.source === 'team' && (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                          Team
+                          {t('members_team_badge')}
                         </Badge>
                       )}
                     </div>
@@ -272,7 +274,7 @@ export function CompanyMembersSection() {
       {invitations.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Väntande inbjudningar</CardTitle>
+            <CardTitle className="text-base">{t('invitations_pending_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="divide-y divide-border/40">
@@ -287,14 +289,14 @@ export function CompanyMembersSection() {
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Clock className="h-3 w-3" />
                         <span>
-                          Går ut {formatDateLong(inv.expires_at)}
+                          {t('invitations_expires', { date: formatDateLong(inv.expires_at) })}
                         </span>
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary" className="text-xs">
-                      {ROLE_LABELS[inv.role] || inv.role}
+                      {roleLabels[inv.role] || inv.role}
                     </Badge>
                     {canInvite && (
                       <Button

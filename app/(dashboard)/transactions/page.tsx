@@ -3,15 +3,24 @@
 import { useState, useEffect, useRef } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Landmark, X } from 'lucide-react'
+import { DataList, DataListHeader, DataListEmpty } from '@/components/ui/data-list'
+import { Input } from '@/components/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from '@/components/ui/dropdown-menu'
+import { ChevronDown, Search, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
@@ -22,11 +31,11 @@ import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard
 import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatchDialog'
 import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
 import InvoicePicker from '@/components/transactions/InvoicePicker'
+import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
 import TransactionBookingDialog from '@/components/transactions/TransactionBookingDialog'
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
-import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '@/components/transactions/transaction-types'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
@@ -39,9 +48,9 @@ import type {
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry } from '@/types'
-import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
@@ -75,15 +84,15 @@ interface QuickReviewState {
 
 export default function TransactionsPage() {
   const { company } = useCompany()
+  const t = useTranslations('transactions')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [mode, setMode] = useState<ViewMode>('inbox')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
-  const [categorySuggestions, setCategorySuggestions] = useState<Record<string, SuggestedCategory[]>>({})
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
   const [processingId, setProcessingId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
 
   // Batch mode
   const [isBatchMode, setIsBatchMode] = useState(false)
@@ -107,6 +116,9 @@ export default function TransactionsPage() {
   // Invoice picker dialog (manual match)
   const [invoicePickerOpen, setInvoicePickerOpen] = useState(false)
   const [invoicePickerTransaction, setInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [supplierInvoicePickerOpen, setSupplierInvoicePickerOpen] = useState(false)
+  const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
 
   // Quick review dialog (suggestion review before booking)
@@ -209,9 +221,18 @@ export default function TransactionsPage() {
 
   const inboxItems: InboxItem[] = (() => {
     const items: InboxItem[] = []
+    const query = searchTerm.trim().toLowerCase()
     if (sourceFilter !== 'skatteverket') {
-      for (const t of uncategorizedTransactions) {
-        items.push({ source: 'bank', date: t.date, data: t })
+      for (const tx of uncategorizedTransactions) {
+        if (
+          query &&
+          !tx.description?.toLowerCase().includes(query) &&
+          !tx.date.includes(query) &&
+          !String(tx.amount).includes(query)
+        ) {
+          continue
+        }
+        items.push({ source: 'bank', date: tx.date, data: tx })
       }
     }
     if (sourceFilter !== 'bank') {
@@ -219,6 +240,14 @@ export default function TransactionsPage() {
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
         if (exitingIds.has(r.id)) continue
+        if (
+          query &&
+          !r.transaktionstext?.toLowerCase().includes(query) &&
+          !r.transaktionsdatum.includes(query) &&
+          !String(r.belopp_skatteverket).includes(query)
+        ) {
+          continue
+        }
         items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
       }
     }
@@ -255,7 +284,7 @@ export default function TransactionsPage() {
     ])
 
     if (txError) {
-      toast({ title: 'Kunde inte ladda transaktioner', description: 'Kontrollera din anslutning och försök igen.', variant: 'destructive' })
+      toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
       setIsLoading(false)
       return
     }
@@ -369,7 +398,6 @@ export default function TransactionsPage() {
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
-    setIsLoadingSuggestions(true)
     try {
       const response = await fetch('/api/transactions/suggest-categories', {
         method: 'POST',
@@ -378,16 +406,12 @@ export default function TransactionsPage() {
       })
       if (!response.ok) throw new Error('Failed to fetch suggestions')
       const data = await response.json()
-      if (data.suggestions) {
-        setCategorySuggestions(data.suggestions)
-      }
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
     } catch {
       // Non-critical
     }
-    setIsLoadingSuggestions(false)
   }
 
   // Fetch transactions and entity type in parallel on mount, then suggestions
@@ -516,6 +540,66 @@ export default function TransactionsPage() {
           setProcessingId(null)
           return null
         }
+        if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
+          // The mapped template/category references one or more accounts
+          // that aren't active in this company's kontoplan. Without an
+          // inline action the user has to navigate to settings, activate
+          // each account, and come back — surface a one-click "Aktivera
+          // och bokför" instead.
+          const accountNumbers: string[] =
+            (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
+            (Array.isArray(result.error.details?.account_numbers) && result.error.details.account_numbers) ||
+            []
+          // Synchronous in-flight flag per toast closure: a double-click
+          // would otherwise fire two activate+categorize pairs, where the
+          // second categorize races the first's verifikation insert.
+          let activateInFlight = false
+          toast({
+            title: 'Kontot finns inte i din kontoplan',
+            description: `Bokföringsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
+            variant: 'destructive',
+            action: accountNumbers.length > 0 ? (
+              <ToastAction altText="Aktivera och bokför" onClick={async () => {
+                if (activateInFlight) return
+                activateInFlight = true
+                try {
+                  const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_numbers: accountNumbers }),
+                  })
+                  if (!activateRes.ok) {
+                    const errBody = await activateRes.json().catch(() => null)
+                    toast({
+                      title: 'Kunde inte aktivera konton',
+                      description: getErrorMessage(errBody, { statusCode: activateRes.status }),
+                      variant: 'destructive',
+                    })
+                    return
+                  }
+                  const activateBody = await activateRes.json()
+                  // unknown[] = numbers not in BAS reference at all. Those
+                  // can't be auto-created; tell the user to add them manually.
+                  if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
+                    toast({
+                      title: 'Kunde inte hitta alla konton',
+                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`,
+                      variant: 'destructive',
+                    })
+                    return
+                  }
+                  await runCategorize(args)
+                } finally {
+                  activateInFlight = false
+                }
+              }}>
+                Aktivera och bokför
+              </ToastAction>
+            ) : undefined,
+          })
+          setProcessingId(null)
+          return null
+        }
         toast({
           title: 'Kategorisering misslyckades',
           description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
@@ -545,7 +629,7 @@ export default function TransactionsPage() {
                     )
                   )
                   setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
-                  toast({ title: 'Ångrad', description: 'Kategorisering har ångrats' })
+                  toast({ title: t('undone_title'), description: t('undone_description') })
                 } else {
                   const errData = await undoRes.json()
                   toast({
@@ -555,7 +639,7 @@ export default function TransactionsPage() {
                   })
                 }
               } catch {
-                toast({ title: 'Kunde inte ångra', description: 'Kategoriseringen kunde inte ångras. Försök igen.', variant: 'destructive' })
+                toast({ title: t('undo_failed_title'), description: t('undo_failed_description'), variant: 'destructive' })
               }
             }}>
               Ångra
@@ -565,7 +649,7 @@ export default function TransactionsPage() {
       } else if (result.journal_entry_error) {
         toast({ title: 'Delvis bokförd', description: `Verifikation kunde inte skapas: ${result.journal_entry_error}`, variant: 'destructive' })
       } else {
-        toast({ title: 'Delvis bokförd', description: 'Transaktion uppdaterad men verifikation kunde inte skapas' })
+        toast({ title: t('partially_booked_title'), description: t('partially_booked_description') })
       }
 
       // Update transaction in state after a brief delay for animation
@@ -588,14 +672,10 @@ export default function TransactionsPage() {
 
       return result.journal_entry_id || null
     } catch {
-      toast({ title: 'Bokföring misslyckades', description: 'Transaktionen kunde inte bokföras. Försök igen.', variant: 'destructive' })
+      toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
       setProcessingId(null)
       return null
     }
-  }
-
-  async function handleMarkPrivate(id: string) {
-    await handleCategorize(id, false, 'private')
   }
 
   async function handleMatchSuggestedInvoice(transactionId: string, invoiceId: string) {
@@ -617,7 +697,7 @@ export default function TransactionsPage() {
         return
       }
 
-      toast({ title: 'Kundfaktura matchad', description: 'Fakturan markerades som betald' })
+      toast({ title: t('customer_invoice_matched_title'), description: t('customer_invoice_matched_description') })
       setCiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
       setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
@@ -641,7 +721,7 @@ export default function TransactionsPage() {
         })
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_description_retry'), variant: 'destructive' })
     } finally {
       setCiMatchProcessing(false)
     }
@@ -666,7 +746,7 @@ export default function TransactionsPage() {
         return
       }
 
-      toast({ title: 'Leverantörsfaktura matchad', description: 'Fakturan markerades som betald' })
+      toast({ title: t('supplier_invoice_matched_title'), description: t('supplier_invoice_matched_description') })
       setSiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
       setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
@@ -690,13 +770,13 @@ export default function TransactionsPage() {
         })
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_description_retry'), variant: 'destructive' })
     } finally {
       setSiMatchProcessing(false)
     }
   }
 
-  async function handleConfirmInvoiceMatch() {
+  async function handleConfirmInvoiceMatch(opts?: { force?: boolean; expected_journal_entry_id?: string }) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
     const isCustomer = !!selectedTransaction.potential_invoice
@@ -708,9 +788,19 @@ export default function TransactionsPage() {
       const url = isSupplier
         ? `/api/transactions/${selectedTransaction.id}/match-supplier-invoice`
         : `/api/transactions/${selectedTransaction.id}/match-invoice`
-      const body = isSupplier
+      const body: Record<string, unknown> = isSupplier
         ? { supplier_invoice_id: selectedTransaction.potential_supplier_invoice!.id }
         : { invoice_id: selectedTransaction.potential_invoice!.id }
+      if (!isSupplier && opts?.force) {
+        body.force = true
+        // Bind the override to the candidate the user saw in the dialog.
+        // The server re-detects the candidate and rejects the bypass if
+        // the id doesn't match, so an empty value here surfaces as a
+        // clean validation error instead of silently widening the guard.
+        if (opts.expected_journal_entry_id) {
+          body.expected_journal_entry_id = opts.expected_journal_entry_id
+        }
+      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -769,7 +859,78 @@ export default function TransactionsPage() {
         setIsConfirmingMatch(false)
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Transaktionen kunde inte matchas. Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_transaction'), variant: 'destructive' })
+      setIsConfirmingMatch(false)
+    }
+  }
+
+  async function handleLinkToExistingVoucher(journalEntryId: string) {
+    if (!selectedTransaction) return
+    const invoiceId = selectedTransaction.potential_invoice?.id ?? null
+    setIsConfirmingMatch(true)
+    try {
+      const response = await fetch(
+        `/api/transactions/${selectedTransaction.id}/link-journal-entry`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            journal_entry_id: journalEntryId,
+            ...(invoiceId ? { invoice_id: invoiceId } : {}),
+          }),
+        },
+      )
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Kunde inte koppla till befintlig verifikation',
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        setIsConfirmingMatch(false)
+        return
+      }
+
+      const voucherLabel = (result as { voucher_label?: string }).voucher_label ?? ''
+      toast({
+        title: 'Bankhändelsen kopplad',
+        description: voucherLabel
+          ? `Kopplad till verifikation ${voucherLabel}. Ingen ny bokföring skapad.`
+          : 'Ingen ny bokföring skapad.',
+      })
+      setMatchDialogOpen(false)
+
+      // Animate out + update local state, same pattern as handleConfirmInvoiceMatch.
+      setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) =>
+            t.id === selectedTransaction.id
+              ? {
+                  ...t,
+                  invoice_id: invoiceId,
+                  potential_invoice_id: null,
+                  potential_invoice: undefined,
+                  is_business: true,
+                  journal_entry_id: journalEntryId,
+                }
+              : t,
+          ),
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(selectedTransaction.id)
+          return next
+        })
+        setSelectedTransaction(null)
+        setIsConfirmingMatch(false)
+      }, 350)
+    } catch {
+      toast({
+        title: 'Koppling misslyckades',
+        description: t('voucher_link_failed_description'),
+        variant: 'destructive',
+      })
       setIsConfirmingMatch(false)
     }
   }
@@ -809,7 +970,7 @@ export default function TransactionsPage() {
       toast({ title: 'Faktura matchad', description: `Faktura ${invoiceNumber} markerad som betald` })
       return true
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Transaktionen kunde inte matchas med fakturan. Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_with_invoice'), variant: 'destructive' })
       return false
     }
   }
@@ -870,10 +1031,80 @@ export default function TransactionsPage() {
     } catch {
       toast({
         title: 'Matchning misslyckades',
-        description: 'Transaktionen kunde inte matchas med fakturan. Försök igen.',
+        description: t('match_failed_with_invoice'),
         variant: 'destructive',
       })
       setIsMatchingFromPicker(false)
+    }
+  }
+
+  async function handleSelectSupplierInvoiceFromPicker(invoice: SupplierInvoice & { supplier?: Supplier }) {
+    if (!supplierInvoicePickerTransaction) return
+    const tx = supplierInvoicePickerTransaction
+    setIsMatchingSupplierFromPicker(true)
+    try {
+      const response = await fetch(`/api/transactions/${tx.id}/match-supplier-invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier_invoice_id: invoice.id }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Matchning misslyckades',
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        setIsMatchingSupplierFromPicker(false)
+        return
+      }
+
+      toast({
+        title: 'Leverantörsfaktura matchad',
+        description: `Faktura ${invoice.supplier_invoice_number ?? ''} markerad som betald`,
+      })
+
+      setSupplierInvoicePickerOpen(false)
+      setSupplierInvoicePickerTransaction(null)
+      setExitingIds((prev) => new Set(prev).add(tx.id))
+      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) =>
+            t.id === tx.id
+              ? {
+                  ...t,
+                  supplier_invoice_id: invoice.id,
+                  is_business: true,
+                  journal_entry_id: result.journal_entry_id ?? t.journal_entry_id,
+                }
+              : t
+          )
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(tx.id)
+          return next
+        })
+        setIsMatchingSupplierFromPicker(false)
+      }, 350)
+    } catch {
+      toast({
+        title: 'Matchning misslyckades',
+        description: 'Transaktionen kunde inte matchas med leverantörsfakturan. Försök igen.',
+        variant: 'destructive',
+      })
+      setIsMatchingSupplierFromPicker(false)
+    }
+  }
+
+  function openInvoiceMatchPicker(transaction: TransactionWithInvoice) {
+    if (transaction.amount >= 0) {
+      setInvoicePickerTransaction(transaction)
+      setInvoicePickerOpen(true)
+    } else {
+      setSupplierInvoicePickerTransaction(transaction)
+      setSupplierInvoicePickerOpen(true)
     }
   }
 
@@ -881,7 +1112,7 @@ export default function TransactionsPage() {
     setIsCreating(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
-      toast({ title: 'Inloggning krävs', description: 'Du måste vara inloggad för att lägga till transaktioner.', variant: 'destructive' })
+      toast({ title: t('login_required_title'), description: t('login_required_description'), variant: 'destructive' })
       setIsCreating(false)
       return
     }
@@ -936,11 +1167,11 @@ export default function TransactionsPage() {
         return
       }
       setTransactions((prev) => prev.filter((t) => t.id !== id))
-      toast({ title: 'Borttagen', description: 'Transaktionen har tagits bort' })
+      toast({ title: t('deleted_title'), description: t('deleted_description') })
     } catch {
       toast({
         title: 'Kunde inte ta bort',
-        description: 'Transaktionen kunde inte tas bort. Försök igen.',
+        description: t('delete_failed_description'),
         variant: 'destructive',
       })
     }
@@ -959,7 +1190,7 @@ export default function TransactionsPage() {
       }
       toast({
         title: 'Utkast skapat',
-        description: 'Granska och bokför verifikatet i Bokföring.',
+        description: t('review_in_bookkeeping_description'),
       })
       window.location.href = `/bookkeeping/${json.data.entry.id}`
     } catch (err) {
@@ -1026,15 +1257,46 @@ export default function TransactionsPage() {
     setSelectedIds(new Set())
   }
 
-  async function handleBatchMarkPrivate() {
+  async function handleBatchDelete() {
     const ids = Array.from(selectedIds)
+    const ok = await confirmDelete({
+      title: `Ta bort ${ids.length} transaktioner?`,
+      description: 'Åtgärden kan inte ångras.',
+      confirmLabel: 'Ta bort',
+      variant: 'destructive',
+    })
+    if (!ok) return
+
     setBatchProgress({ done: 0, total: ids.length })
+    let successes = 0
+    const failures: string[] = []
     for (let i = 0; i < ids.length; i++) {
-      await handleCategorize(ids[i], false, 'private')
+      try {
+        const response = await fetch(`/api/transactions/${ids[i]}`, { method: 'DELETE' })
+        if (response.ok) {
+          successes++
+        } else {
+          const tx = transactions.find((t) => t.id === ids[i])
+          failures.push(tx?.description || ids[i])
+        }
+      } catch {
+        failures.push(ids[i])
+      }
       setBatchProgress({ done: i + 1, total: ids.length })
     }
+    if (successes > 0) {
+      setTransactions((prev) => prev.filter((t) => !selectedIds.has(t.id) || failures.includes(t.description)))
+    }
     setBatchProgress(null)
-    toast({ title: 'Klart', description: `${ids.length} transaktioner markerade som privat` })
+    if (failures.length === 0) {
+      toast({ title: 'Klart', description: `${successes} transaktioner borttagna` })
+    } else {
+      toast({
+        title: 'Delvis klart',
+        description: `${successes} borttagna, ${failures.length} misslyckades`,
+        variant: 'destructive',
+      })
+    }
     exitBatchMode()
   }
 
@@ -1075,13 +1337,6 @@ export default function TransactionsPage() {
   function openCategoryDialog(transaction: TransactionWithInvoice) {
     setTemplatePickerTransaction(transaction)
     setTemplatePickerOpen(true)
-  }
-
-  function handleOpenQuickReview(transaction: TransactionWithInvoice, suggestion: SuggestedCategory) {
-    const allCategories = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES]
-    const label = allCategories.find((c) => c.value === suggestion.category)?.label || suggestion.label
-    setQuickReview({ transaction, category: suggestion.category, label, template: null, templateId: undefined, linePattern: null })
-    setQuickReviewOpen(true)
   }
 
   function handleTemplateSelected(template: BookingTemplate) {
@@ -1150,130 +1405,224 @@ export default function TransactionsPage() {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
       const cpTemplateId = extractCounterpartyId(quickReview.template.id)
-      const response = await fetch(`/api/transactions/${id}/categorize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          is_business: true,
-          counterparty_template_id: cpTemplateId,
-        }),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction' }), variant: 'destructive' })
+      const cpCategorize = async (): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[] } }; journal_entry_id?: string | null }; status: number }> => {
+        const r = await fetch(`/api/transactions/${id}/categorize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_business: true, counterparty_template_id: cpTemplateId }),
+        })
+        const b = await r.json()
+        return { ok: r.ok, status: r.status, result: b, journalEntryId: b?.journal_entry_id || null }
+      }
+      const { ok: cpOk, status: cpStatus, result, journalEntryId: cpJeId } = await cpCategorize()
+      if (!cpOk) {
+        if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
+          const accountNumbers: string[] =
+            (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
+            (Array.isArray(result.error.details?.account_numbers) && result.error.details?.account_numbers) ||
+            []
+          // Synchronous in-flight flag per toast closure — see same pattern
+          // in runCategorize. Double-click on the counterparty-template
+          // retry would race the second cpCategorize against the first's
+          // verifikation insert.
+          let activateInFlight = false
+          toast({
+            title: 'Kontot finns inte i din kontoplan',
+            description: `Motpartsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
+            variant: 'destructive',
+            action: accountNumbers.length > 0 ? (
+              <ToastAction altText="Aktivera och bokför" onClick={async () => {
+                if (activateInFlight) return
+                activateInFlight = true
+                try {
+                  const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_numbers: accountNumbers }),
+                  })
+                  if (!activateRes.ok) {
+                    const errBody = await activateRes.json().catch(() => null)
+                    toast({ title: 'Kunde inte aktivera konton', description: getErrorMessage(errBody, { statusCode: activateRes.status }), variant: 'destructive' })
+                    return
+                  }
+                  const activateBody = await activateRes.json()
+                  if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
+                    toast({ title: 'Kunde inte hitta alla konton', description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`, variant: 'destructive' })
+                    return
+                  }
+                  const retry = await cpCategorize()
+                  // Gate on retry.ok alone: a 200 with null journal_entry_id
+                  // is allowed by the declared type (e.g. already-categorized
+                  // flag flip), and showing "Kategorisering misslyckades"
+                  // after the server returned success is misleading. The state
+                  // update conditionally writes the journal_entry_id when it's
+                  // actually present.
+                  if (retry.ok) {
+                    setExitingIds((prev) => new Set(prev).add(id))
+                    setTransactions((prev) =>
+                      prev.map((t) =>
+                        t.id === id
+                          ? { ...t, is_business: true, ...(retry.journalEntryId ? { journal_entry_id: retry.journalEntryId } : {}) }
+                          : t
+                      )
+                    )
+                    toast({ title: 'Bokförd' })
+                  } else {
+                    toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+                  }
+                } finally {
+                  activateInFlight = false
+                }
+              }}>
+                Aktivera och bokför
+              </ToastAction>
+            ) : undefined,
+          })
+        } else {
+          toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
+        }
+        // Close the review dialog on hard errors — the toast (with action if
+        // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
+        setQuickReviewOpen(false)
+        setQuickReview(null)
         return null
       }
       setExitingIds((prev) => new Set(prev).add(id))
-      journalEntryId = result.journal_entry_id || null
+      journalEntryId = cpJeId
     } else {
       journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId)
     }
-    if (journalEntryId) {
-      setQuickReviewOpen(false)
-      setQuickReview(null)
-    }
+    // Always close — whether the server created a verifikation, returned a
+    // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
+    // partial-success path. The toast from runCategorize already communicates
+    // the outcome; keeping the dialog open serves no purpose.
+    setQuickReviewOpen(false)
+    setQuickReview(null)
     return journalEntryId
   }
 
   return (
     <div className="space-y-6">
-      {/* Status bar with mode toggle */}
+      {/* Status bar */}
       <TransactionStatusBar
         uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
         invoiceMatchCount={transactionsWithMatches.length}
         mode={mode}
-        onModeChange={setMode}
         onOpenCreateDialog={() => setIsDialogOpen(true)}
         isBatchMode={isBatchMode}
         onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
       />
 
+      {/* Search + view dropdown */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Sök transaktioner…"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="h-9 pl-10"
+          />
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-sm">
+              {mode === 'inbox'
+                ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
+                : 'Alla transaktioner'}
+              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[14rem]">
+            <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+              <DropdownMenuRadioItem value="inbox">
+                {`Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`}
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="history">Alla transaktioner</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
       {/* Content based on mode */}
       {isLoading ? (
-        <div className="space-y-3">
+        <DataList>
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardContent className="py-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-2">
-                    <div className="h-5 bg-muted rounded w-48" />
-                    <div className="h-4 bg-muted rounded w-24" />
-                  </div>
-                  <div className="h-6 bg-muted rounded w-20" />
-                </div>
-              </CardContent>
-            </Card>
+            <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
+              <div className="h-5 w-5 rounded bg-muted" />
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-48 rounded bg-muted" />
+                <div className="h-3 w-24 rounded bg-muted" />
+              </div>
+              <div className="h-5 w-20 rounded bg-muted" />
+            </div>
           ))}
-        </div>
+        </DataList>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 ? (
+        inboxItems.length === 0 && !searchTerm ? (
           <InboxZeroState
             hasTransactions={transactions.length > 0 || skvRows.length > 0}
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
-          <div className="space-y-3">
-            {/* Source filter — only render when both sources have content
-                to filter between, otherwise it'd be a no-op chip row. */}
+          <DataList>
             {skvUnmatched.length > 0 && uncategorizedTransactions.length > 0 && (
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Källa:</span>
-                <button
-                  onClick={() => setSourceFilter('all')}
-                  className={cn(
-                    'rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'all'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  Alla ({uncategorizedTransactions.length + skvUnmatched.length})
-                </button>
-                <button
-                  onClick={() => setSourceFilter('bank')}
-                  className={cn(
-                    'rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'bank'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  Bank ({uncategorizedTransactions.length})
-                </button>
-                <button
-                  onClick={() => setSourceFilter('skatteverket')}
-                  className={cn(
-                    'flex items-center gap-1 rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'skatteverket'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Landmark className="h-3 w-3" />
-                  Skatteverket ({skvUnmatched.length})
-                </button>
-              </div>
+              <DataListHeader>
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                  {t('source_label')}
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                      {sourceFilter === 'all'
+                        ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
+                        : sourceFilter === 'bank'
+                          ? t('source_bank', { count: uncategorizedTransactions.length })
+                          : t('source_skatteverket', { count: skvUnmatched.length })}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="min-w-[12rem]">
+                    <DropdownMenuRadioGroup
+                      value={sourceFilter}
+                      onValueChange={(v) => setSourceFilter(v as typeof sourceFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">
+                        {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="bank">
+                        {t('source_bank', { count: uncategorizedTransactions.length })}
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="skatteverket">
+                        {t('source_skatteverket', { count: skvUnmatched.length })}
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </DataListHeader>
             )}
+            {inboxItems.length === 0 && searchTerm ? (
+              <DataListEmpty
+                title="Inga träffar"
+                description={t('no_search_results')}
+              />
+            ) : null}
             <AnimatePresence mode="popLayout">
               {inboxItems.map(item =>
                 item.source === 'bank' ? (
                   <TransactionInboxCard
                     key={`bank-${item.data.id}`}
                     transaction={item.data}
-                    suggestions={categorySuggestions[item.data.id]}
-                    templateSuggestions={templateSuggestions[item.data.id]}
                     skvCounterpartDate={bankToSkvHints.get(item.data.id)}
                     processingId={processingId}
                     isBatchMode={isBatchMode}
                     isSelected={selectedIds.has(item.data.id)}
                     entityType={entityType}
                     onCategorize={handleCategorize}
-                    onMarkPrivate={handleMarkPrivate}
                     onOpenMatchDialog={openMatchDialog}
+                    onOpenMatchInvoicePicker={openInvoiceMatchPicker}
                     onOpenCategoryDialog={openCategoryDialog}
                     onDelete={handleDeleteTransaction}
-                    onOpenQuickReview={handleOpenQuickReview}
-                    onOpenTemplateReview={handleOpenTemplateReview}
                     onToggleSelect={toggleBatchSelect}
                   />
                 ) : (
@@ -1288,12 +1637,13 @@ export default function TransactionsPage() {
                 ),
               )}
             </AnimatePresence>
-          </div>
+          </DataList>
         )
       ) : (
         <TransactionHistoryList
           transactions={transactions}
           skvRows={skvRows}
+          searchTerm={searchTerm}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
           onDelete={handleDeleteTransaction}
@@ -1324,8 +1674,14 @@ export default function TransactionsPage() {
                 <X className="mr-1 h-3 w-3" />
                 Avmarkera
               </Button>
-              <Button variant="outline" size="sm" onClick={handleBatchMarkPrivate}>
-                Markera som privat
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBatchDelete}
+                className="text-destructive hover:text-destructive"
+              >
+                <Trash2 className="mr-1 h-3 w-3" />
+                Ta bort
               </Button>
               <Button size="sm" onClick={() => setShowBatchSelector(true)}>
                 Bokför
@@ -1350,6 +1706,7 @@ export default function TransactionsPage() {
         transaction={selectedTransaction}
         isConfirming={isConfirmingMatch}
         onConfirm={handleConfirmInvoiceMatch}
+        onLinkToExisting={handleLinkToExistingVoucher}
       />
 
       <TransactionBookingDialog
@@ -1362,7 +1719,7 @@ export default function TransactionsPage() {
       <Dialog open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Välj mall</DialogTitle>
+            <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
             <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
@@ -1372,6 +1729,31 @@ export default function TransactionsPage() {
               </span>
             </div>
           )}
+          <div className="space-y-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={handleManualBooking}
+            >
+              Bokför manuellt…
+            </Button>
+            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setInvoicePickerTransaction(tx)
+                  setInvoicePickerOpen(true)
+                }}
+              >
+                Matcha med faktura…
+              </Button>
+            )}
+          </div>
           <TemplatePicker
             direction={templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income'}
             entityType={entityType as EntityType}
@@ -1383,26 +1765,6 @@ export default function TransactionsPage() {
               handleOpenTemplateReview(templatePickerTransaction, templateId)
             }}
           />
-          <div className="pt-2 border-t space-y-1">
-            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full text-muted-foreground"
-                onClick={() => {
-                  const tx = templatePickerTransaction
-                  setTemplatePickerOpen(false)
-                  setInvoicePickerTransaction(tx)
-                  setInvoicePickerOpen(true)
-                }}
-              >
-                Matcha med faktura...
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={handleManualBooking}>
-              Ange konton manuellt...
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
 
@@ -1416,7 +1778,7 @@ export default function TransactionsPage() {
       >
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Matcha med faktura</DialogTitle>
+            <DialogTitle>{t('dialog_match_invoice')}</DialogTitle>
           </DialogHeader>
           {invoicePickerTransaction && (
             <>
@@ -1430,6 +1792,36 @@ export default function TransactionsPage() {
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
                 isProcessing={isMatchingFromPicker}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={supplierInvoicePickerOpen}
+        onOpenChange={(open) => {
+          if (isMatchingSupplierFromPicker) return
+          setSupplierInvoicePickerOpen(open)
+          if (!open) setSupplierInvoicePickerTransaction(null)
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Matcha med leverantörsfaktura</DialogTitle>
+          </DialogHeader>
+          {supplierInvoicePickerTransaction && (
+            <>
+              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+                <span className="truncate text-muted-foreground">{supplierInvoicePickerTransaction.description}</span>
+                <span className="font-medium tabular-nums flex-shrink-0 ml-3">
+                  {formatCurrency(supplierInvoicePickerTransaction.amount, supplierInvoicePickerTransaction.currency)}
+                </span>
+              </div>
+              <SupplierInvoicePicker
+                transaction={supplierInvoicePickerTransaction}
+                onSelect={handleSelectSupplierInvoiceFromPicker}
+                isProcessing={isMatchingSupplierFromPicker}
               />
             </>
           )}
@@ -1467,7 +1859,7 @@ export default function TransactionsPage() {
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Lägg till transaktion</DialogTitle>
+            <DialogTitle>{t('dialog_add_transaction')}</DialogTitle>
           </DialogHeader>
           <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} />
         </DialogContent>
@@ -1491,7 +1883,7 @@ export default function TransactionsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Matcha mot leverantörsfaktura?</DialogTitle>
+            <DialogTitle>{t('dialog_match_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
@@ -1549,7 +1941,7 @@ export default function TransactionsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Matcha mot kundfaktura?</DialogTitle>
+            <DialogTitle>{t('dialog_match_customer_invoice')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
@@ -1566,7 +1958,7 @@ export default function TransactionsPage() {
                         {c.customer_name || 'Kund'} · {c.invoice_number ?? '—'}
                       </span>
                       {c.match_reason === 'ocr_exact' && (
-                        <Badge variant="success">Exakt OCR-träff</Badge>
+                        <Badge variant="success">{t('badge_exact_ocr')}</Badge>
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground tabular-nums">

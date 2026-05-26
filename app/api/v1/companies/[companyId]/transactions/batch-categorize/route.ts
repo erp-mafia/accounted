@@ -26,7 +26,8 @@ import {
 } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { collectMappingResultAccounts, findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
@@ -197,6 +198,31 @@ async function categorizeOne(
     }
   }
 
+  // Pre-validate every account in the mapping against the company's
+  // chart_of_accounts. Templates and category defaults can reference accounts
+  // that aren't activated in this company's kontoplan; without this check the
+  // engine throws AccountsNotInChartError mid-flight and the legacy
+  // partial-success branch silently marks the row bokförd with no
+  // verifikation. Validate in both dry-run and live paths so previews
+  // surface the same actionable error.
+  const missingAccounts = await findMissingActiveAccounts(
+    supabase,
+    companyId,
+    collectMappingResultAccounts(mappingResult),
+  )
+  if (missingAccounts.length > 0) {
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'ACCOUNTS_NOT_IN_CHART',
+        message: `Följande konton behöver aktiveras: ${missingAccounts.join(', ')}`,
+        details: { account_numbers: missingAccounts },
+      },
+    }
+  }
+
   if (dryRun) {
     return {
       ok: true,
@@ -279,6 +305,23 @@ async function categorizeOne(
       request_index: index,
       transactionId,
     })
+    // AccountsNotInChartError means an account was deactivated between our
+    // pre-validation and the engine call (rare race). Return the per-item
+    // failure WITHOUT the transaction update below so the row stays in
+    // "Att bokföra" — partial-success on a missing-account error would
+    // mark it bokförd with no verifikation.
+    if (err instanceof AccountsNotInChartError) {
+      return {
+        ok: false,
+        request_index: index,
+        transaction_id: transactionId,
+        error: {
+          code: 'ACCOUNTS_NOT_IN_CHART',
+          message: `Följande konton behöver aktiveras: ${err.accountNumbers.join(', ')}`,
+          details: { account_numbers: err.accountNumbers },
+        },
+      }
+    }
     if (isBookkeepingError(err)) {
       journalEntryError = getErrorMessage(err, { context: 'transaction' })
     } else {

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -59,14 +60,16 @@ export function FiscalYearSelector({
   value,
   onChange,
   includeAllOption = true,
-  label = 'Räkenskapsår',
+  label,
   hideFuturePeriods = false,
   onReady,
   className,
 }: Props) {
   const { company } = useCompany()
+  const t = useTranslations('fiscal_year')
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [loaded, setLoaded] = useState(false)
+  const effectiveLabel = label === null ? null : (label ?? t('label'))
 
   useEffect(() => {
     if (!company?.id) {
@@ -149,24 +152,24 @@ export function FiscalYearSelector({
 
   return (
     <div className={className}>
-      {label && <Label>{label}</Label>}
-      <div className={`flex items-center gap-2 ${label ? 'mt-1' : ''}`}>
+      {effectiveLabel && <Label>{effectiveLabel}</Label>}
+      <div className={`flex items-center gap-2 ${effectiveLabel ? 'mt-1' : ''}`}>
         <Select
           value={selectValue}
           onValueChange={handleChange}
           disabled={!loaded || periods.length === 0}
         >
           <SelectTrigger className="w-full sm:w-[280px]">
-            <SelectValue placeholder={loaded ? 'Välj räkenskapsår' : 'Laddar…'} />
+            <SelectValue placeholder={loaded ? t('placeholder') : t('loading')} />
           </SelectTrigger>
           <SelectContent>
             {includeAllOption && (
-              <SelectItem value={ALL_YEARS_VALUE}>Alla räkenskapsår</SelectItem>
+              <SelectItem value={ALL_YEARS_VALUE}>{t('all_years')}</SelectItem>
             )}
             {periods.map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {p.name} ({p.period_start} — {p.period_end})
-                {p.locked_at ? ' — låst' : p.is_closed ? ' — stängt' : ''}
+                {p.locked_at ? t('suffix_locked') : p.is_closed ? t('suffix_closed') : ''}
               </SelectItem>
             ))}
           </SelectContent>
@@ -175,14 +178,10 @@ export function FiscalYearSelector({
           <Badge
             variant="outline"
             className="gap-1 text-xs font-normal shrink-0"
-            title={
-              lockState === 'locked'
-                ? 'Räkenskapsåret är låst — ingen bokföring kan ändras eller läggas till'
-                : 'Räkenskapsåret är stängt (årsbokslut upprättat) — kan återöppnas av admin'
-            }
+            title={lockState === 'locked' ? t('tooltip_locked') : t('tooltip_closed')}
           >
             <Lock className="h-3 w-3" />
-            {lockState === 'locked' ? 'Låst' : 'Stängt'}
+            {lockState === 'locked' ? t('badge_locked') : t('badge_closed')}
           </Badge>
         )}
       </div>

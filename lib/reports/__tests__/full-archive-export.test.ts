@@ -135,6 +135,11 @@ describe('generateFullArchive', () => {
               file_name: 'receipt.pdf',
               storage_path: 'documents/user-1/receipt.pdf',
               journal_entry_id: 'entry-1',
+              journal_entries: {
+                voucher_number: 17,
+                voucher_series: 'A',
+                entry_date: '2024-03-15',
+              },
             },
           ],
         },
@@ -162,6 +167,10 @@ describe('generateFullArchive', () => {
       expect(manifest[0].status).toBe('error')
       expect(manifest[0].error).toBe('File not found')
       expect(manifest[0].fiscal_period_id).toBe(PERIOD_2024.id)
+      // New manifest fields populated even on error (path is computed before download)
+      expect(manifest[0].voucher_number).toBe('A17')
+      expect(manifest[0].entry_date).toBe('2024-03-15')
+      expect(manifest[0].zip_path).toBe('dokument/2024/A17_receipt.pdf')
     })
 
     it('skips documents when include_documents is false', async () => {
@@ -264,8 +273,20 @@ describe('generateFullArchive', () => {
         { data: [PERIOD_2023, PERIOD_2024] },
         {
           data: [
-            { id: 'doc-2023', file_name: 'r23.pdf', storage_path: 'p/r23.pdf', journal_entry_id: 'e-2023' },
-            { id: 'doc-2024', file_name: 'r24.pdf', storage_path: 'p/r24.pdf', journal_entry_id: 'e-2024' },
+            {
+              id: 'doc-2023',
+              file_name: 'r23.pdf',
+              storage_path: 'p/r23.pdf',
+              journal_entry_id: 'e-2023',
+              journal_entries: { voucher_number: 7, voucher_series: 'A', entry_date: '2023-06-01' },
+            },
+            {
+              id: 'doc-2024',
+              file_name: 'r24.pdf',
+              storage_path: 'p/r24.pdf',
+              journal_entry_id: 'e-2024',
+              journal_entries: { voucher_number: 12, voucher_series: 'B', entry_date: '2024-08-20' },
+            },
           ],
         },
         {
@@ -287,13 +308,94 @@ describe('generateFullArchive', () => {
       const manifest = JSON.parse(await manifestFile!.async('text'))
       expect(manifest).toHaveLength(2)
       const byId = Object.fromEntries(
-        (manifest as Array<{ document_id: string; fiscal_period_id: string | null }>).map((m) => [
-          m.document_id,
-          m.fiscal_period_id,
-        ])
+        (
+          manifest as Array<{
+            document_id: string
+            fiscal_period_id: string | null
+            voucher_number: string | null
+            zip_path: string | null
+          }>
+        ).map((m) => [m.document_id, m])
       )
-      expect(byId['doc-2023']).toBe(PERIOD_2023.id)
-      expect(byId['doc-2024']).toBe(PERIOD_2024.id)
+      expect(byId['doc-2023'].fiscal_period_id).toBe(PERIOD_2023.id)
+      expect(byId['doc-2024'].fiscal_period_id).toBe(PERIOD_2024.id)
+      expect(byId['doc-2023'].voucher_number).toBe('A7')
+      expect(byId['doc-2024'].voucher_number).toBe('B12')
+      expect(byId['doc-2023'].zip_path).toBe('dokument/2023/A7_r23.pdf')
+      expect(byId['doc-2024'].zip_path).toBe('dokument/2024/B12_r24.pdf')
+
+      // Files actually written under the new path
+      expect(zip.file('dokument/2023/A7_r23.pdf')).not.toBeNull()
+      expect(zip.file('dokument/2024/B12_r24.pdf')).not.toBeNull()
+    })
+
+    it('routes draft entries and orphans to dokument/_okopplade and disambiguates collisions', async () => {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        {
+          data: [
+            // Draft entry — journal_entry_id present but voucher_number is null
+            {
+              id: 'doc-draft',
+              file_name: 'invoice.pdf',
+              storage_path: 'p/invoice.pdf',
+              journal_entry_id: 'e-draft',
+              journal_entries: { voucher_number: null, voucher_series: 'A', entry_date: null },
+            },
+            // Two posted docs that collide on the same voucher+filename
+            {
+              id: 'doc-collide-1234abcd-ee',
+              file_name: 'kvitto.pdf',
+              storage_path: 'p/kvitto-1.pdf',
+              journal_entry_id: 'e-posted',
+              journal_entries: { voucher_number: 5, voucher_series: 'A', entry_date: '2024-05-01' },
+            },
+            {
+              id: 'doc-collide-5678efgh-ff',
+              file_name: 'kvitto.pdf',
+              storage_path: 'p/kvitto-2.pdf',
+              journal_entry_id: 'e-posted',
+              journal_entries: { voucher_number: 5, voucher_series: 'A', entry_date: '2024-05-01' },
+            },
+          ],
+        },
+        // entryIdToPeriodId map — draft and posted both resolve to PERIOD_2024
+        {
+          data: [
+            { id: 'e-draft', fiscal_period_id: PERIOD_2024.id },
+            { id: 'e-posted', fiscal_period_id: PERIOD_2024.id },
+          ],
+        },
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'all',
+      })
+
+      const zip = await JSZip.loadAsync(buffer)
+      const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text')) as Array<{
+        document_id: string
+        voucher_number: string | null
+        zip_path: string | null
+      }>
+      const byId = Object.fromEntries(manifest.map((m) => [m.document_id, m]))
+
+      // Draft -> _okopplade, no voucher prefix
+      expect(byId['doc-draft'].voucher_number).toBeNull()
+      expect(byId['doc-draft'].zip_path).toBe('dokument/_okopplade/invoice.pdf')
+
+      // First posted doc gets the canonical path
+      expect(byId['doc-collide-1234abcd-ee'].zip_path).toBe('dokument/2024/A5_kvitto.pdf')
+      // Second posted doc gets the id-suffix disambiguation before the extension
+      expect(byId['doc-collide-5678efgh-ff'].zip_path).toBe(
+        'dokument/2024/A5_kvitto_doc-coll.pdf'
+      )
+
+      // Both files exist in the ZIP
+      expect(zip.file('dokument/_okopplade/invoice.pdf')).not.toBeNull()
+      expect(zip.file('dokument/2024/A5_kvitto.pdf')).not.toBeNull()
+      expect(zip.file('dokument/2024/A5_kvitto_doc-coll.pdf')).not.toBeNull()
     })
 
     it('throws when no fiscal periods exist', async () => {

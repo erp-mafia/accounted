@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 
 // ============================================================
 // Shared primitives
@@ -177,6 +178,56 @@ export const CreateCreditNoteSchema = z.object({
   reason: z.string().optional(),
 })
 
+// ============================================================
+// Recurring invoice schedule schemas
+// ============================================================
+
+// Swedish VAT rates per ML 17 kap 24§ p.9 — null means "use customer default
+// from getAvailableVatRates". Any other value would produce a non-compliant
+// invoice (buyer cannot deduct ingående moms). Cron-time validation against
+// the customer's allowed set still runs in executeRecurringSchedule.
+export const RecurringScheduleItemSchema = z.object({
+  description: z.string().min(1, 'Item description is required'),
+  quantity: z.number().positive('Quantity must be positive'),
+  unit: z.string().min(1, 'Unit is required').default('st'),
+  unit_price: z.number(),
+  vat_rate: z
+    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+    .nullable()
+    .optional(),
+})
+
+export const CreateRecurringScheduleSchema = z.object({
+  customer_id: uuid,
+  name: z.string().min(1, 'Schedule name is required').max(200),
+  day_of_month: z.number().int().min(1).max(31),
+  payment_terms_days: z.number().int().min(0).max(90).default(30),
+  currency: CurrencySchema.default('SEK'),
+  your_reference: z.string().optional(),
+  our_reference: z.string().optional(),
+  notes: z.string().optional(),
+  auto_send: z.boolean().default(false),
+  // Optional: when to first run. Defaults to next occurrence of day_of_month
+  // (today if day_of_month === today, otherwise next month).
+  start_date: isoDate.optional(),
+  items: z.array(RecurringScheduleItemSchema).min(1, 'At least one item is required'),
+})
+
+export const UpdateRecurringScheduleSchema = z.object({
+  customer_id: uuid.optional(),
+  name: z.string().min(1).max(200).optional(),
+  day_of_month: z.number().int().min(1).max(31).optional(),
+  payment_terms_days: z.number().int().min(0).max(90).optional(),
+  currency: CurrencySchema.optional(),
+  your_reference: z.string().nullable().optional(),
+  our_reference: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  auto_send: z.boolean().optional(),
+  status: z.enum(['active', 'paused']).optional(),
+  // Replace all items if provided. Omit to keep existing items unchanged.
+  items: z.array(RecurringScheduleItemSchema).min(1).optional(),
+})
+
 export const MarkInvoicePaidSchema = z.object({
   payment_date: isoDate.optional(),
   exchange_rate_difference: z.number().optional(),
@@ -210,6 +261,12 @@ export const CreateCustomerSchema = z.object({
   country: z.string().optional(),
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
+  personal_number: z
+    .string()
+    .regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number')
+    .optional()
+    .nullable(),
+  language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
 })
@@ -360,8 +417,35 @@ export const BookInboxItemDirectlySchema = z.object({
   transaction_id: uuid.optional(),
 })
 
-export const MatchInvoiceSchema = z.object({
-  invoice_id: uuid,
+export const MatchInvoiceSchema = z
+  .object({
+    invoice_id: uuid,
+    // Bypass the soft-duplicate guard (MATCH_INVOICE_POSSIBLE_DUPLICATE).
+    // Set after the user reviews the candidate verifikation and confirms it
+    // is not this payment. v1 callers must use a fresh Idempotency-Key on
+    // the retry — the original is body-hash bound.
+    force: z.boolean().optional(),
+    // Required whenever force=true. Echoes the journal_entry_id of the
+    // candidate the user reviewed in the duplicate-payment-check pre-flight.
+    // The server re-detects the candidate and refuses force=true unless the
+    // re-detected id matches this value. That binds the override to a
+    // specific, user-seen duplicate so an automation can't sweep through
+    // force=true to bypass the guard without ever consulting the candidate.
+    expected_journal_entry_id: uuid.optional(),
+  })
+  .refine((v) => !v.force || !!v.expected_journal_entry_id, {
+    message: 'expected_journal_entry_id is required when force=true',
+    path: ['expected_journal_entry_id'],
+  })
+
+export const LinkTransactionJournalEntrySchema = z.object({
+  journal_entry_id: uuid,
+  // Optional invoice to settle alongside the link. When provided, the
+  // server inserts an invoice_payments row pointing at the existing JE
+  // and flips the invoice status with the same optimistic-lock pattern
+  // as the match-invoice route. Omit to only link the bank transaction
+  // (e.g. when the JE doesn't relate to a customer invoice).
+  invoice_id: uuid.optional(),
 })
 
 export const CreateTransactionFromDocumentSchema = z.object({
@@ -404,6 +488,16 @@ export const UpdateSettingsSchema = z.object({
   account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),
   bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer (7-8 siffror)').nullable().optional().or(z.literal('')),
   plusgiro: z.string().regex(/^\d{1,7}-\d{1}$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
+  swish: z.string()
+    .transform(normaliseSwish)
+    .pipe(
+      z.string().refine(
+        isValidSwish,
+        'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)',
+      ),
+    )
+    .nullable()
+    .optional(),
   iban: z.string().optional(),
   bic: z.string().optional(),
   accounting_method: AccountingMethodSchema.optional(),
@@ -426,11 +520,14 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_ocr: z.boolean().optional(),
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
+  invoice_show_swish: z.boolean().optional(),
   invoice_show_logo: z.boolean().optional(),
   invoice_show_company_name: z.boolean().optional(),
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
+  // Automation
+  send_invoice_reminders: z.boolean().optional(),
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
   // Salary payment file
@@ -553,6 +650,12 @@ export const BankUnlinkSchema = z.object({
 export const RunReconciliationSchema = z.object({
   date_from: isoDate.optional(),
   date_to: isoDate.optional(),
+  // BAS settlement account to reconcile against (e.g. '1930', '1932'). Defaults
+  // to '1930' server-side so existing clients stay correct.
+  account_number: z
+    .string()
+    .regex(/^[0-9]{4}$/, 'Kontonummer måste vara 4 siffror')
+    .optional(),
   dry_run: z.boolean().optional(),
 })
 
@@ -570,6 +673,22 @@ export const ReportPeriodQuerySchema = z.object({
   fiscal_period_id: uuid.optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
   month: z.coerce.number().int().min(1).max(12).optional(),
+})
+
+export const AccountBalancesQuerySchema = z.object({
+  accounts: z
+    .string()
+    .transform((s) => s.split(',').map((a) => a.trim()).filter(Boolean))
+    .pipe(z.array(accountNumber).min(1).max(50)),
+  // Reject future dates — a saldo "as of tomorrow" would include unposted
+  // future entries (if any) and mislead the bookkeeper about the true
+  // pre-entry state of the ledger. Compared in Europe/Stockholm so a Swedish
+  // bookkeeper working in the 00:00–02:00 CET window (after midnight UTC has
+  // not yet passed) isn't rejected for entering their local today's date.
+  as_of: isoDate.refine(
+    (d) => d <= new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm' }),
+    { message: 'as_of cannot be in the future' },
+  ),
 })
 
 // ============================================================

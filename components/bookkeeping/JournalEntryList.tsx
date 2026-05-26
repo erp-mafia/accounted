@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
+import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -39,6 +41,7 @@ export default function JournalEntryList({ periodId }: Props) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const t = useTranslations('journal_list')
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [committingId, setCommittingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -48,6 +51,7 @@ export default function JournalEntryList({ periodId }: Props) {
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
   const [showMissingOnly, setShowMissingOnly] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
+  const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'voucher_asc' | 'voucher_desc'>('date_desc')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -156,15 +160,15 @@ export default function JournalEntryList({ periodId }: Props) {
       if (res.ok) {
         const posted = result.data
         toast({
-          title: 'Verifikat bokfört',
-          description: `Verifikat ${posted?.voucher_series ?? ''}${posted?.voucher_number ?? ''} har bokförts.`,
+          title: t('toast_posted_title'),
+          description: t('toast_posted_description', { voucher: `${posted?.voucher_series ?? ''}${posted?.voucher_number ?? ''}` }),
         })
         await fetchEntries()
       } else {
-        toast({ title: 'Kunde inte bokföra', description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+        toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
     } catch {
-      toast({ title: 'Kunde inte bokföra verifikat', variant: 'destructive' })
+      toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
       setCommittingId(null)
     }
@@ -175,7 +179,7 @@ export default function JournalEntryList({ periodId }: Props) {
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-          <p className="text-sm text-muted-foreground">Laddar verifikationer...</p>
+          <p className="text-sm text-muted-foreground">{t('loading')}</p>
         </CardContent>
       </Card>
     )
@@ -188,9 +192,9 @@ export default function JournalEntryList({ periodId }: Props) {
           <div className="p-4 rounded-full bg-muted mb-4">
             <BookOpen className="h-6 w-6 text-muted-foreground" />
           </div>
-          <h3 className="text-lg font-medium mb-1">Inga verifikationer</h3>
+          <h3 className="text-lg font-medium mb-1">{t('empty_title')}</h3>
           <p className="text-sm text-muted-foreground text-center max-w-sm">
-            Verifikationer skapas automatiskt vid fakturering och transaktionsbokföring, eller manuellt via fliken &quot;Ny verifikation&quot;.
+            {t('empty_description')}
           </p>
         </CardContent>
       </Card>
@@ -218,7 +222,7 @@ export default function JournalEntryList({ periodId }: Props) {
               onCheckedChange={setShowMissingOnly}
             />
             <Label htmlFor="missing-attachments" className="text-sm cursor-pointer">
-              Visa saknade underlag
+              {t('show_missing')}
             </Label>
             {showMissingOnly && (
               <Badge variant="secondary" className="text-xs">
@@ -232,16 +236,16 @@ export default function JournalEntryList({ periodId }: Props) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="date_desc">Datum, nyast först</SelectItem>
-            <SelectItem value="date_asc">Datum, äldst först</SelectItem>
-            <SelectItem value="voucher_asc">Verifikat, A1 först</SelectItem>
-            <SelectItem value="voucher_desc">Verifikat, senaste först</SelectItem>
+            <SelectItem value="date_desc">{t('sort_date_desc')}</SelectItem>
+            <SelectItem value="date_asc">{t('sort_date_asc')}</SelectItem>
+            <SelectItem value="voucher_asc">{t('sort_voucher_asc')}</SelectItem>
+            <SelectItem value="voucher_desc">{t('sort_voucher_desc')}</SelectItem>
           </SelectContent>
         </Select>
         <div className="flex items-center gap-1.5">
           <Input
             type="text"
-            placeholder="Från YYYY-MM-DD"
+            placeholder={t('date_from_placeholder')}
             value={dateFromInput}
             onChange={(e) => setDateFromInput(e.target.value)}
             onBlur={() => {
@@ -260,7 +264,7 @@ export default function JournalEntryList({ periodId }: Props) {
           />
           <Input
             type="text"
-            placeholder="Till YYYY-MM-DD"
+            placeholder={t('date_to_placeholder')}
             value={dateToInput}
             onChange={(e) => setDateToInput(e.target.value)}
             onBlur={() => {
@@ -283,14 +287,14 @@ export default function JournalEntryList({ periodId }: Props) {
             className="h-8 text-xs shrink-0"
             onClick={applyDateFilter}
           >
-            Filtrera
+            {t('filter')}
           </Button>
           {(dateFrom || dateTo) && (
             <button
               type="button"
               onClick={() => { setDateFrom(''); setDateTo(''); setDateFromInput(''); setDateToInput(''); setPage(0) }}
               className="p-1 rounded-sm hover:bg-muted text-muted-foreground shrink-0"
-              title="Rensa datumfilter"
+              title={t('clear_date_filter')}
             >
               <X className="h-4 w-4" />
             </button>
@@ -331,9 +335,9 @@ export default function JournalEntryList({ periodId }: Props) {
                     <Badge
                       variant="outline"
                       className="text-xs font-normal shrink-0"
-                      title="Bokförd i ett senare räkenskapsår, men avser det valda året (t.ex. betalning av en faktura utställd i det valda året)."
+                      title={t('out_of_period_tooltip')}
                     >
-                      Efterföljande
+                      {t('out_of_period_label')}
                     </Badge>
                   )}
                   {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
@@ -341,13 +345,39 @@ export default function JournalEntryList({ periodId }: Props) {
                   )}
                   <span className="flex-1 truncate">{entry.description}</span>
                   {attachmentCounts[entry.id] ? (
-                    <span className="flex items-center gap-0.5 text-muted-foreground mr-1" title={`${attachmentCounts[entry.id]} underlag`}>
-                      <Paperclip className="h-3.5 w-3.5" />
-                      <span className="text-xs">{attachmentCounts[entry.id]}</span>
-                    </span>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 mr-1 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
+                    >
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={t('view_attachments')}
+                        title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setPreviewEntryId(entry.id)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setPreviewEntryId(entry.id)
+                          }
+                        }}
+                      >
+                        <span className="flex items-center gap-0.5">
+                          <Paperclip className="h-3.5 w-3.5" />
+                          <span className="text-xs">{attachmentCounts[entry.id]}</span>
+                        </span>
+                      </span>
+                    </Button>
                   ) : (
                     NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                      <span className="mr-1" title="Underlag saknas">
+                      <span className="mr-1" title={t('missing_attachment_tooltip')}>
                         <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
                       </span>
                     )
@@ -375,9 +405,9 @@ export default function JournalEntryList({ periodId }: Props) {
                       <Badge
                         variant="outline"
                         className="text-xs font-normal shrink-0"
-                        title="Bokförd i ett senare räkenskapsår, men avser det valda året."
+                        title={t('out_of_period_tooltip_mobile')}
                       >
-                        Efterföljande
+                        {t('out_of_period_label')}
                       </Badge>
                     )}
                     {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
@@ -385,13 +415,39 @@ export default function JournalEntryList({ periodId }: Props) {
                     )}
                     <span className="ml-auto flex items-center gap-1">
                       {attachmentCounts[entry.id] ? (
-                        <span className="flex items-center gap-0.5 text-muted-foreground" title={`${attachmentCounts[entry.id]} underlag`}>
-                          <Paperclip className="h-3.5 w-3.5" />
-                          <span className="text-xs">{attachmentCounts[entry.id]}</span>
-                        </span>
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
+                        >
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            aria-label={t('view_attachments')}
+                            title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              setPreviewEntryId(entry.id)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                setPreviewEntryId(entry.id)
+                              }
+                            }}
+                          >
+                            <span className="flex items-center gap-0.5">
+                              <Paperclip className="h-3.5 w-3.5" />
+                              <span className="text-xs">{attachmentCounts[entry.id]}</span>
+                            </span>
+                          </span>
+                        </Button>
                       ) : (
                         NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                          <span title="Underlag saknas">
+                          <span title={t('missing_attachment_tooltip')}>
                             <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
                           </span>
                         )
@@ -405,7 +461,7 @@ export default function JournalEntryList({ periodId }: Props) {
               {isExpanded && (
                 <CardContent className="pt-0 pb-4">
                   {lines.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-2">Inga kontorader hittades för denna verifikation.</p>
+                    <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
                   ) : (
                   <>
                     <div className="space-y-3">
@@ -427,7 +483,7 @@ export default function JournalEntryList({ periodId }: Props) {
                             )}
                             <div className="flex justify-between items-center pt-1 border-t text-sm">
                               <span className="text-muted-foreground">
-                                {Number(line.debit_amount) > 0 ? 'Debet' : 'Kredit'}
+                                {Number(line.debit_amount) > 0 ? t('debit') : t('credit')}
                               </span>
                               <div className="text-right">
                                 <span className="font-mono tabular-nums font-medium">
@@ -447,11 +503,11 @@ export default function JournalEntryList({ periodId }: Props) {
                         })}
                       <div className="rounded-lg bg-muted/50 p-3 text-sm font-semibold space-y-1">
                         <div className="flex justify-between">
-                          <span>Summa debet</span>
+                          <span>{t('sum_debit')}</span>
                           <span className="font-mono tabular-nums">{lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span>Summa kredit</span>
+                          <span>{t('sum_credit')}</span>
                           <span className="font-mono tabular-nums">{lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
                         </div>
                       </div>
@@ -477,14 +533,14 @@ export default function JournalEntryList({ periodId }: Props) {
                         className="w-full sm:w-auto"
                         onClick={() => handleCommit(entry.id)}
                         disabled={!canWrite || committingId === entry.id}
-                        title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                        title={!canWrite ? t('read_only_tooltip') : undefined}
                       >
                         {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : committingId === entry.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        Bokför
+                        {t('post')}
                       </Button>
                     )}
                     <Button variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                      <Link href={`/bookkeeping/${entry.id}`}>Visa detaljer</Link>
+                      <Link href={`/bookkeeping/${entry.id}`}>{t('show_details')}</Link>
                     </Button>
                     {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
                       <Button
@@ -493,7 +549,7 @@ export default function JournalEntryList({ periodId }: Props) {
                         className="w-full sm:w-auto"
                         onClick={() => setCorrectionEntry(entry)}
                       >
-                        Skapa ändringsverifikation
+                        {t('create_correction')}
                       </Button>
                     )}
                     <Button
@@ -503,7 +559,7 @@ export default function JournalEntryList({ periodId }: Props) {
                       onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
                     >
                       <Copy className="mr-2 h-4 w-4" />
-                      Kopiera
+                      {t('copy')}
                     </Button>
                   </div>
                 </CardContent>
@@ -523,6 +579,13 @@ export default function JournalEntryList({ periodId }: Props) {
         />
       )}
 
+      {/* Attachment preview sheet */}
+      <AttachmentPreviewSheet
+        entryId={previewEntryId}
+        open={previewEntryId !== null}
+        onOpenChange={(open) => { if (!open) setPreviewEntryId(null) }}
+      />
+
       {/* Pagination */}
       {count > pageSize && (
         <div className="flex justify-center gap-2">
@@ -532,10 +595,10 @@ export default function JournalEntryList({ periodId }: Props) {
             disabled={page === 0}
             onClick={() => setPage(page - 1)}
           >
-            Föregående
+            {t('previous')}
           </Button>
           <span className="text-sm text-muted-foreground self-center">
-            Sida {page + 1} av {Math.ceil(count / pageSize)}
+            {t('page_of', { page: page + 1, total: Math.ceil(count / pageSize) })}
           </span>
           <Button
             variant="outline"
@@ -543,7 +606,7 @@ export default function JournalEntryList({ periodId }: Props) {
             disabled={(page + 1) * pageSize >= count}
             onClick={() => setPage(page + 1)}
           >
-            Nästa
+            {t('next')}
           </Button>
         </div>
       )}

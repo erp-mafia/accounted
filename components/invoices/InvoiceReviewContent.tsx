@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { formatCurrency } from '@/lib/utils'
@@ -48,12 +49,13 @@ export function InvoiceReviewContent({
   numberPreview,
   oreRounding,
 }: InvoiceReviewContentProps) {
+  const t = useTranslations('invoice_review')
   const rounding = getDisplayTotal({ total, currency }, { ore_rounding: oreRounding ?? true })
   const customerTypeLabel: Record<string, string> = {
-    individual: 'Privatperson',
-    swedish_business: 'Svenskt företag eller organisation',
-    eu_business: 'EU-företag',
-    non_eu_business: 'Utanför EU',
+    individual: t('customer_type_individual'),
+    swedish_business: t('customer_type_swedish_business'),
+    eu_business: t('customer_type_eu_business'),
+    non_eu_business: t('customer_type_non_eu_business'),
   }
 
   // Calculate per-rate VAT breakdown
@@ -71,7 +73,7 @@ export function InvoiceReviewContent({
     <div className="space-y-4">
       {numberPreview && (
         <div className="text-sm text-muted-foreground">
-          Tilldelas fakturanummer{' '}
+          {t('assigned_number_prefix')}{' '}
           <span className="font-medium tabular-nums text-foreground">{numberPreview}</span>
         </div>
       )}
@@ -89,11 +91,11 @@ export function InvoiceReviewContent({
       {/* Dates */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div>
-          <span className="text-muted-foreground">Fakturadatum</span>
+          <span className="text-muted-foreground">{t('invoice_date')}</span>
           <p className="font-medium">{invoiceDate}</p>
         </div>
         <div>
-          <span className="text-muted-foreground">Förfallodatum</span>
+          <span className="text-muted-foreground">{t('due_date')}</span>
           <p className="font-medium">{dueDate}</p>
         </div>
       </div>
@@ -103,12 +105,12 @@ export function InvoiceReviewContent({
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b text-left">
-              <th className="py-2">Beskrivning</th>
-              <th className="py-2 w-16 text-right">Antal</th>
-              <th className="py-2 w-16 text-center">Enhet</th>
-              <th className="py-2 w-24 text-right">À-pris</th>
-              {showVatColumn && <th className="py-2 w-16 text-right">Moms</th>}
-              <th className="py-2 w-28 text-right">Belopp</th>
+              <th className="py-2">{t('th_description')}</th>
+              <th className="py-2 w-16 text-right">{t('th_quantity')}</th>
+              <th className="py-2 w-16 text-center">{t('th_unit')}</th>
+              <th className="py-2 w-24 text-right">{t('th_unit_price')}</th>
+              {showVatColumn && <th className="py-2 w-16 text-right">{t('th_vat')}</th>}
+              <th className="py-2 w-28 text-right">{t('th_amount')}</th>
             </tr>
           </thead>
           <tbody>
@@ -135,7 +137,7 @@ export function InvoiceReviewContent({
             <p className="font-medium">{item.description}</p>
             <div className="flex items-center justify-between text-muted-foreground">
               <span>{item.quantity} {item.unit} × {formatCurrency(item.unit_price, currency)}</span>
-              {showVatColumn && <span className="text-xs">({item.vat_rate ?? 0}% moms)</span>}
+              {showVatColumn && <span className="text-xs">{t('mobile_vat_suffix', { rate: item.vat_rate ?? 0 })}</span>}
             </div>
             <p className="text-right font-medium">
               {formatCurrency(item.quantity * item.unit_price, currency)}
@@ -147,7 +149,7 @@ export function InvoiceReviewContent({
       {/* Totals */}
       <div className="space-y-2 text-sm">
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Delsumma</span>
+          <span className="text-muted-foreground">{t('subtotal')}</span>
           <span>{formatCurrency(subtotal, currency)}</span>
         </div>
         {Array.from(vatByRate.entries())
@@ -155,25 +157,25 @@ export function InvoiceReviewContent({
           .sort(([a], [b]) => b - a)
           .map(([rate, vat]) => (
             <div key={rate} className="flex justify-between">
-              <span className="text-muted-foreground">Moms {rate}%</span>
+              <span className="text-muted-foreground">{t('vat_at_rate', { rate })}</span>
               <span>{formatCurrency(vat, currency)}</span>
             </div>
           ))}
         {Array.from(vatByRate.values()).every((vat) => vat === 0) && (
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Moms</span>
+            <span className="text-muted-foreground">{t('vat_label')}</span>
             <span>{formatCurrency(0, currency)}</span>
           </div>
         )}
         {rounding.applies && (
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Öresavrundning</span>
+            <span className="text-muted-foreground">{t('ore_rounding')}</span>
             <span>{formatCurrency(rounding.roundingDelta, currency)}</span>
           </div>
         )}
         <Separator />
         <div className="flex justify-between font-bold text-xl sm:text-2xl">
-          <span>Totalt</span>
+          <span>{t('total')}</span>
           <span>{formatCurrency(rounding.displayed, currency)}</span>
         </div>
       </div>
@@ -183,7 +185,7 @@ export function InvoiceReviewContent({
         <div className="border-t pt-3 space-y-2 text-sm text-muted-foreground">
           {yourReference && (
             <div>
-              <span>Er referens:</span>
+              <span>{t('your_reference')}</span>
               <div className="flex flex-wrap gap-1 mt-1">
                 {yourReference.split(',').map((ref, i) => (
                   <Badge key={i} variant="secondary" className="text-xs font-normal">
@@ -195,7 +197,7 @@ export function InvoiceReviewContent({
           )}
           {ourReference && (
             <div>
-              <span>Vår referens:</span>
+              <span>{t('our_reference')}</span>
               <div className="flex flex-wrap gap-1 mt-1">
                 {ourReference.split(',').map((ref, i) => (
                   <Badge key={i} variant="secondary" className="text-xs font-normal">
@@ -205,7 +207,7 @@ export function InvoiceReviewContent({
               </div>
             </div>
           )}
-          {notes && <p>Anteckning: {notes}</p>}
+          {notes && <p>{t('notes_prefix', { notes })}</p>}
         </div>
       )}
     </div>

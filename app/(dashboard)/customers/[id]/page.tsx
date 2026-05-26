@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { use } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -30,11 +31,11 @@ import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 
-const customerTypeLabels: Record<CustomerType, string> = {
-  individual: 'Privatperson',
-  swedish_business: 'Svenskt företag eller organisation',
-  eu_business: 'EU-företag',
-  non_eu_business: 'Utanför EU',
+const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
+  individual: 'type_individual',
+  swedish_business: 'type_swedish_business',
+  eu_business: 'type_eu_business',
+  non_eu_business: 'type_non_eu_business',
 }
 
 const customerTypeIcons: Record<CustomerType, React.ElementType> = {
@@ -68,6 +69,7 @@ export default function CustomerDetailPage({
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const t = useTranslations('customer_detail')
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
@@ -89,8 +91,8 @@ export default function CustomerDetailPage({
       setCustomer(data)
     } catch {
       toast({
-        title: 'Kunde inte ladda kund',
-        description: 'Kunden hittades inte.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
       router.push('/customers')
@@ -113,15 +115,15 @@ export default function CustomerDetailPage({
       }
 
       toast({
-        title: 'Kund uppdaterad',
+        title: t('updated_title'),
         description: data.name,
       })
       setIsEditOpen(false)
       fetchCustomer()
     } catch {
       toast({
-        title: 'Kunde inte uppdatera kund',
-        description: 'Försök igen.',
+        title: t('update_failed_title'),
+        description: t('retry'),
         variant: 'destructive',
       })
     } finally {
@@ -132,9 +134,9 @@ export default function CustomerDetailPage({
   async function handleDelete() {
     if (!customer) return
     const ok = await confirmAction({
-      title: `Ta bort ${customer.name}`,
-      description: 'Kunden och tillhörande data tas bort permanent. Denna åtgärd kan inte ångras.',
-      confirmLabel: 'Ta bort',
+      title: t('delete_confirm_title', { name: customer.name }),
+      description: t('delete_confirm_description'),
+      confirmLabel: t('delete_confirm_label'),
       variant: 'destructive',
     })
     if (!ok) return
@@ -149,14 +151,14 @@ export default function CustomerDetailPage({
       }
 
       toast({
-        title: 'Kund borttagen',
+        title: t('deleted_title'),
         description: customer.name,
       })
       router.push('/customers')
     } catch {
       toast({
-        title: 'Kunde inte ta bort kund',
-        description: 'Försök igen.',
+        title: t('delete_failed_title'),
+        description: t('retry'),
         variant: 'destructive',
       })
     }
@@ -194,7 +196,7 @@ export default function CustomerDetailPage({
             className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2"
           >
             <ArrowLeft className="h-4 w-4" />
-            Tillbaka till kunder
+            {t('back')}
           </Link>
           <div className="flex items-center gap-3">
             <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -202,7 +204,7 @@ export default function CustomerDetailPage({
             </div>
             <div>
               <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{customer.name}</h1>
-              <Badge variant="secondary">{customerTypeLabels[customer.customer_type]}</Badge>
+              <Badge variant="secondary">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</Badge>
             </div>
           </div>
         </div>
@@ -213,10 +215,10 @@ export default function CustomerDetailPage({
             size="sm"
             onClick={() => setIsEditOpen(true)}
             disabled={!canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
             {canWrite ? <Edit2 className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1" />}
-            Redigera
+            {t('edit')}
           </Button>
           <Button
             variant="outline"
@@ -224,10 +226,10 @@ export default function CustomerDetailPage({
             onClick={handleDelete}
             className="text-destructive hover:text-destructive"
             disabled={!canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
             {canWrite ? <Trash2 className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1" />}
-            Ta bort
+            {t('delete')}
           </Button>
         </div>
       </div>
@@ -237,7 +239,7 @@ export default function CustomerDetailPage({
         {/* Contact */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Kontaktuppgifter</CardTitle>
+            <CardTitle className="text-base">{t('section_contact')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {customer.email && (
@@ -268,7 +270,7 @@ export default function CustomerDetailPage({
               </div>
             )}
             {!customer.email && !customer.phone && !customer.address_line1 && !customer.city && (
-              <p className="text-sm text-muted-foreground">Inga kontaktuppgifter</p>
+              <p className="text-sm text-muted-foreground">{t('no_contact_info')}</p>
             )}
           </CardContent>
         </Card>
@@ -276,30 +278,30 @@ export default function CustomerDetailPage({
         {/* Business details */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Företagsuppgifter</CardTitle>
+            <CardTitle className="text-base">{t('section_business')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {customer.org_number && (
               <div className="text-sm">
-                <span className="text-muted-foreground">Org.nr: </span>
+                <span className="text-muted-foreground">{t('label_org_number')} </span>
                 {customer.org_number}
               </div>
             )}
             {customer.vat_number && (
               <div className="text-sm flex items-center gap-2">
-                <span className="text-muted-foreground">VAT: </span>
+                <span className="text-muted-foreground">{t('label_vat')} </span>
                 {customer.vat_number}
                 {customer.vat_number_validated && (
-                  <Badge variant="success" className="text-xs">Verifierad</Badge>
+                  <Badge variant="success" className="text-xs">{t('verified')}</Badge>
                 )}
               </div>
             )}
             <div className="text-sm">
-              <span className="text-muted-foreground">Betalningsvillkor: </span>
-              {customer.default_payment_terms || 30} dagar
+              <span className="text-muted-foreground">{t('label_payment_terms')} </span>
+              {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
             </div>
             {!customer.org_number && !customer.vat_number && (
-              <p className="text-sm text-muted-foreground">Inga företagsuppgifter</p>
+              <p className="text-sm text-muted-foreground">{t('no_business_info')}</p>
             )}
           </CardContent>
         </Card>
@@ -307,12 +309,12 @@ export default function CustomerDetailPage({
         {/* Summary */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Översikt</CardTitle>
+            <CardTitle className="text-base">{t('section_summary')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
               <Receipt className="h-4 w-4 text-muted-foreground" />
-              <span>{customer.invoices?.length || 0} fakturor</span>
+              <span>{t('invoice_count', { count: customer.invoices?.length || 0 })}</span>
             </div>
           </CardContent>
         </Card>
@@ -322,7 +324,7 @@ export default function CustomerDetailPage({
       {customer.notes && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Anteckningar</CardTitle>
+            <CardTitle className="text-base">{t('section_notes')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground whitespace-pre-wrap">{customer.notes}</p>
@@ -335,7 +337,7 @@ export default function CustomerDetailPage({
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Receipt className="h-4 w-4" />
-            Fakturor
+            {t('section_invoices')}
             {customer.invoices?.length > 0 && (
               <Badge variant="secondary">{customer.invoices.length}</Badge>
             )}
@@ -359,7 +361,11 @@ export default function CustomerDetailPage({
                       {formatCurrency(invoice.total, invoice.currency)}
                     </span>
                     <Badge variant={invoice.payment_status === 'paid' ? 'success' : 'secondary'}>
-                      {invoice.payment_status === 'paid' ? 'Betald' : invoice.payment_status === 'overdue' ? 'Förfallen' : 'Obetald'}
+                      {invoice.payment_status === 'paid'
+                        ? t('invoice_status_paid')
+                        : invoice.payment_status === 'overdue'
+                          ? t('invoice_status_overdue')
+                          : t('invoice_status_unpaid')}
                     </Badge>
                   </div>
                 </Link>
@@ -367,7 +373,7 @@ export default function CustomerDetailPage({
             </div>
           ) : (
             <p className="text-sm text-muted-foreground text-center py-4">
-              Inga fakturor kopplade till denna kund
+              {t('no_invoices')}
             </p>
           )}
         </CardContent>
@@ -379,7 +385,7 @@ export default function CustomerDetailPage({
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
         <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Redigera kund</DialogTitle>
+            <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
           </DialogHeader>
           <CustomerForm
             onSubmit={handleUpdate}

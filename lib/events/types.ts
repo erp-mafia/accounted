@@ -32,6 +32,17 @@ export type CoreEvent =
   | { type: 'invoice.sent'; payload: { invoice: Invoice; userId: string; companyId: string } }
   | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }
+  // Recurring invoices — emitted by the daily cron after a schedule spawns
+  // an invoice. `autoSent` tells observers whether the email also went out
+  // (false means it was created as draft for manual review).
+  | { type: 'recurring_invoice.executed'; payload: {
+      scheduleId: string
+      invoice: Invoice
+      autoSent: boolean
+      warning: string | null
+      userId: string
+      companyId: string
+    } }
   // Banking
   | { type: 'transaction.synced'; payload: { transactions: Transaction[]; userId: string; companyId: string } }
   | { type: 'transaction.categorized'; payload: { transaction: Transaction; account: string; taxCode: string; userId: string; companyId: string } }
@@ -41,6 +52,20 @@ export type CoreEvent =
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
   | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
+  // Emitted when the PSD2 callback fails to mirror a returned account into
+  // cash_accounts. ASVS V16 / ISO 27001 A.8.15 — security-relevant failures
+  // must land in a structured audit log (event_log, 30-day TTL) rather than
+  // being lost to console.error.
+  | { type: 'bank_connection.cash_account_mirror_failed'; payload: {
+      connectionId: string
+      bankName: string | null
+      accountUid: string
+      ledgerAccount: string
+      currency: string
+      reason: string
+      userId: string
+      companyId: string
+    } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
@@ -96,6 +121,18 @@ export type CoreEvent =
   | { type: 'skattekonto.balance.changed'; payload: { previousBalance: number; currentBalance: number; userId: string; companyId: string } }
   | { type: 'skattekonto.transaction.upcoming'; payload: { transaktionsdatum: string; forfallodatum: string; transaktionstext: string; beloppSkatteverket: number; userId: string; companyId: string } }
   | { type: 'skattekonto.connection.expired'; payload: { reason: 'REFRESH_EXHAUSTED' | 'SESSION_EXPIRED' | 'TOKEN_CORRUPTED'; userId: string; companyId: string } }
+  // Fired when the SKV saldo and GL 1630 sum diverge beyond the configured
+  // tolerance. The drift handler emails the company contact; UI surfaces a
+  // dashboard tile via /api/extensions/skatteverket/skattekonto/drift.
+  | { type: 'skattekonto.drift_detected'; payload: {
+      drift: number                       // SKV saldo - GL 1630 sum (signed)
+      saldoSkatteverket: number
+      glSum1630: number
+      fetchedAt: number                   // ms epoch from the snapshot
+      unbookedCount: number               // skattekonto rows without journal_entry_id ≤ fetchedAt
+      userId: string
+      companyId: string
+    } }
   // Company & account lifecycle
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }

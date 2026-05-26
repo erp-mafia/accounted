@@ -2,6 +2,7 @@
 
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { Check } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { Select, SelectContent, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
@@ -18,6 +19,7 @@ export default function VatTreatmentSelect({
   onValueChange,
   disabled,
 }: VatTreatmentSelectProps) {
+  const t = useTranslations('tx_categories')
   return (
     <Select
       value={value}
@@ -42,10 +44,10 @@ export default function VatTreatmentSelect({
               </SelectPrimitive.ItemIndicator>
             </span>
             <div>
-              <SelectPrimitive.ItemText>{opt.label}</SelectPrimitive.ItemText>
-              {opt.description && (
+              <SelectPrimitive.ItemText>{t(opt.labelKey)}</SelectPrimitive.ItemText>
+              {opt.descriptionKey && (
                 <p className="text-xs text-muted-foreground mt-0.5 font-normal">
-                  {opt.description}
+                  {t(opt.descriptionKey)}
                 </p>
               )}
             </div>

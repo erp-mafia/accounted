@@ -3,6 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -33,6 +34,7 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
 import {
   Dialog,
   DialogContent,
@@ -43,26 +45,24 @@ import {
 } from '@/components/ui/dialog'
 import type { Invoice, InvoiceItem, Customer, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
 
-const statusConfig: Record<InvoiceStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
-  draft: { label: 'Utkast', variant: 'secondary' },
-  sent: { label: 'Skickad', variant: 'default' },
-  paid: { label: 'Betald', variant: 'success' },
-  partially_paid: { label: 'Delbetalad', variant: 'warning' },
-  overdue: { label: 'Förfallen', variant: 'destructive' },
-  cancelled: { label: 'Makulerad', variant: 'secondary' },
-  credited: { label: 'Krediterad', variant: 'secondary' },
-}
-
-const reminderLevelLabels: Record<1 | 2 | 3, string> = {
-  1: 'Vänlig påminnelse',
-  2: 'Andra påminnelsen',
-  3: 'Slutlig påminnelse'
+const statusVariantMap: Record<InvoiceStatus, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
+  draft: 'secondary',
+  sent: 'default',
+  paid: 'success',
+  partially_paid: 'warning',
+  overdue: 'destructive',
+  cancelled: 'secondary',
+  credited: 'secondary',
 }
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
   items: InvoiceItem[]
   sent_at?: string
+  // Optional reference to the issuance verifikation. Populated by the
+  // backend when the invoice flow auto-books an entry on send; absent on
+  // older invoices and on companies where issuance is not auto-booked.
+  journal_entry_id?: string | null
 }
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -71,6 +71,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const router = useRouter()
   const { toast } = useToast()
   const supabase = createClient()
+  const t = useTranslations('invoice_detail')
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<InvoiceReminder[]>([])
@@ -87,6 +88,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
+
+  const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
+  const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
 
   useEffect(() => {
     fetchInvoice()
@@ -107,8 +111,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
     if (error || !data) {
       toast({
-        title: 'Kunde inte ladda faktura',
-        description: 'Fakturan hittades inte.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
       router.push('/invoices')
@@ -198,7 +202,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         })
         if (!response.ok) {
           const data = await response.json()
-          throw new Error(data.error || 'Kunde inte markera som skickad')
+          throw new Error(data.error || t('mark_sent_failed_fallback'))
         }
       } else if (status === 'cancelled') {
         // Only drafts and proformas can be cancelled directly — sent/overdue/paid
@@ -206,7 +210,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         if (invoice.status !== 'draft') {
           const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
           if (docType !== 'proforma') {
-            throw new Error('Bokförda fakturor kan inte makuleras. Skapa en kreditfaktura istället.')
+            throw new Error(t('cancel_posted_error'))
           }
         }
         const { error } = await supabase
@@ -223,14 +227,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       }
 
       toast({
-        title: 'Uppdaterad',
-        description: `Fakturan är nu markerad som ${statusConfig[status].label.toLowerCase()}`,
+        title: t('status_update_toast_title'),
+        description: t('status_update_toast_description', { status: statusLabel(status).toLowerCase() }),
       })
       fetchInvoice()
     } catch (error) {
       toast({
-        title: 'Statusuppdatering misslyckades',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('status_update_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -255,19 +259,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Kunde inte konvertera proformafakturan')
+        throw new Error(data.error || t('convert_failed_fallback'))
       }
 
       toast({
-        title: 'Konverterad till faktura',
-        description: `Faktura ${data.data.invoice_number} har skapats`,
+        title: t('converted_toast_title'),
+        description: t('converted_toast_description', { number: data.data.invoice_number }),
       })
 
       router.push(`/invoices/${data.data.id}`)
     } catch (error) {
       toast({
-        title: 'Konvertering misslyckades',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('convert_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -284,7 +288,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const response = await fetch(`/api/invoices/${invoice.id}/pdf`)
 
       if (!response.ok) {
-        throw new Error('Kunde inte generera PDF')
+        throw new Error(t('pdf_generate_failed'))
       }
 
       const blob = await response.blob()
@@ -298,15 +302,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       document.body.removeChild(a)
 
       toast({
-        title: 'PDF nedladdad',
+        title: t('pdf_downloaded_title'),
         description: invoice.invoice_number
-          ? `Faktura ${invoice.invoice_number} har laddats ner`
-          : 'Utkastet har laddats ner',
+          ? t('pdf_downloaded_with_number', { number: invoice.invoice_number })
+          : t('pdf_downloaded_draft'),
       })
     } catch (error) {
       toast({
-        title: 'Kunde inte ladda ner PDF',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('pdf_download_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -326,21 +330,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       if (!response.ok) {
         const data = await response.json()
-        throw new Error(data.error || 'Kunde inte makulera fakturan')
+        throw new Error(data.error || t('cancel_failed_fallback'))
       }
 
       toast({
-        title: 'Faktura makulerad',
+        title: t('cancelled_toast_title'),
         description: invoice.invoice_number
-          ? `Faktura ${invoice.invoice_number} har makulerats. Numret behålls i serien.`
-          : 'Utkastet har makulerats.',
+          ? t('cancelled_with_number', { number: invoice.invoice_number })
+          : t('cancelled_draft'),
       })
 
       router.push('/invoices')
     } catch (error) {
       toast({
-        title: 'Kunde inte makulera fakturan',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('cancel_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -361,7 +365,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return null
   }
 
-  const status = statusConfig[invoice.status]
+  const statusVariant = statusVariantMap[invoice.status]
   const customer = invoice.customer
   const customerHasEmail = !!customer.email
   const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
@@ -373,25 +377,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label="Tillbaka">
+          <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</h1>
               {isProforma && (
-                <Badge variant="secondary" className="bg-primary/10 text-primary">Proforma</Badge>
+                <Badge variant="secondary" className="bg-primary/10 text-primary">{t('badge_proforma')}</Badge>
               )}
               {isDeliveryNote && (
-                <Badge variant="secondary" className="bg-success/10 text-success">Följesedel</Badge>
+                <Badge variant="secondary" className="bg-success/10 text-success">{t('badge_delivery_note')}</Badge>
               )}
-              <Badge variant={status.variant as 'default' | 'secondary' | 'destructive'}>
-                {status.label}
+              <Badge variant={statusVariant as 'default' | 'secondary' | 'destructive'}>
+                {statusLabel(invoice.status)}
               </Badge>
             </div>
             <p className="text-muted-foreground">
-              Skapad {formatDate(invoice.created_at)}
-              {invoice.sent_at && ` • Skickad ${formatDate(invoice.sent_at)}`}
+              {t('created_at', { date: formatDate(invoice.created_at) })}
+              {invoice.sent_at && t('sent_at_suffix', { date: formatDate(invoice.sent_at) })}
             </p>
           </div>
         </div>
@@ -402,7 +406,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button
               onClick={convertToInvoice}
               disabled={isConverting || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {isConverting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -411,7 +415,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               ) : (
                 <FileText className="mr-2 h-4 w-4" />
               )}
-              Konvertera till faktura
+              {t('convert_to_invoice')}
             </Button>
           )}
           {invoice.status === 'draft' && !isDeliveryNote && (
@@ -419,20 +423,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <Button
                 onClick={() => openSendDialog('email')}
                 disabled={!canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                Skicka via e-post
+                {t('send_via_email')}
               </Button>
             ) : (
               <Button
                 variant="secondary"
                 onClick={() => openSendDialog('manual')}
                 disabled={!canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                Skickad manuellt
+                {t('mark_sent_manually')}
               </Button>
             )
           )}
@@ -441,20 +445,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               variant="secondary"
               onClick={() => updateStatus('sent')}
               disabled={isUpdating || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              Markera som skickad
+              {t('mark_as_sent')}
             </Button>
           )}
           {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && (
             <Button
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              Markera som betald
+              {t('mark_as_paid')}
             </Button>
           )}
           <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
@@ -463,7 +467,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             ) : (
               <Download className="mr-2 h-4 w-4" />
             )}
-            Ladda ner PDF
+            {t('download_pdf')}
           </Button>
         </div>
       </div>
@@ -472,16 +476,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         {/* Customer info */}
         <Card className="lg:col-span-2 lg:row-start-1">
           <CardHeader>
-            <CardTitle>Kund</CardTitle>
+            <CardTitle>{t('customer_card_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
               <p className="font-medium text-lg">{customer.name}</p>
               {customer.org_number && (
-                <p className="text-muted-foreground">Org.nr: {customer.org_number}</p>
+                <p className="text-muted-foreground">{t('org_number_label', { value: customer.org_number })}</p>
               )}
               {customer.vat_number && (
-                <p className="text-muted-foreground">VAT: {customer.vat_number}</p>
+                <p className="text-muted-foreground">{t('vat_number_label', { value: customer.vat_number })}</p>
               )}
               <div className="flex flex-wrap gap-4 pt-2 text-sm text-muted-foreground">
                 {customer.email && (
@@ -508,17 +512,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         {/* Invoice items */}
         <Card className="lg:col-span-2 lg:row-start-2">
           <CardHeader>
-            <CardTitle>Fakturarader</CardTitle>
+            <CardTitle>{t('items_card_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               {/* Header — desktop */}
               <div className="hidden sm:grid grid-cols-12 gap-4 text-sm font-medium text-muted-foreground border-b pb-2">
-                <div className="col-span-5">Beskrivning</div>
-                <div className="col-span-2 text-right">Antal</div>
-                <div className="col-span-1 text-center">Enhet</div>
-                <div className="col-span-2 text-right">à-pris</div>
-                <div className="col-span-2 text-right">Summa</div>
+                <div className="col-span-5">{t('th_description')}</div>
+                <div className="col-span-2 text-right">{t('th_quantity')}</div>
+                <div className="col-span-1 text-center">{t('th_unit')}</div>
+                <div className="col-span-2 text-right">{t('th_unit_price')}</div>
+                <div className="col-span-2 text-right">{t('th_amount')}</div>
               </div>
 
               {/* Items — desktop */}
@@ -558,7 +562,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {/* Totals */}
               <div className="space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Delsumma</span>
+                  <span className="text-muted-foreground">{t('subtotal')}</span>
                   <span>{formatCurrency(invoice.subtotal, invoice.currency)}</span>
                 </div>
                 {(() => {
@@ -575,7 +579,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   if (entries.length === 0) {
                     return (
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Moms</span>
+                        <span className="text-muted-foreground">{t('vat_label')}</span>
                         <span>{formatCurrency(0, invoice.currency)}</span>
                       </div>
                     )
@@ -583,7 +587,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
                   return entries.map(([rate, vat]) => (
                     <div key={rate} className="flex justify-between">
-                      <span className="text-muted-foreground">Moms {rate}%</span>
+                      <span className="text-muted-foreground">{t('vat_at_rate', { rate })}</span>
                       <span>{formatCurrency(vat, invoice.currency)}</span>
                     </div>
                   ))
@@ -595,12 +599,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     <>
                       {rounding.applies && (
                         <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Öresavrundning</span>
+                          <span>{t('ore_rounding')}</span>
                           <span>{formatCurrency(rounding.roundingDelta, 'SEK')}</span>
                         </div>
                       )}
                       <div className="flex justify-between font-bold text-lg">
-                        <span>Totalt</span>
+                        <span>{t('total')}</span>
                         <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
                       </div>
                     </>
@@ -608,7 +612,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 })()}
                 {invoice.currency !== 'SEK' && invoice.total_sek && (
                   <div className="flex justify-between text-sm text-muted-foreground">
-                    <span>I SEK (kurs {invoice.exchange_rate})</span>
+                    <span>{t('in_sek', { rate: invoice.exchange_rate ?? 1 })}</span>
                     <span>{formatCurrency(invoice.total_sek)}</span>
                   </div>
                 )}
@@ -621,12 +625,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         {(invoice.notes || invoice.reverse_charge_text) && (
             <Card className="lg:col-span-2 lg:row-start-3">
             <CardHeader>
-              <CardTitle>Anteckningar</CardTitle>
+              <CardTitle>{t('notes_card_title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {invoice.reverse_charge_text && (
                 <div className="p-3 bg-muted rounded-lg">
-                  <p className="text-sm font-medium">Omvänd skattskyldighet</p>
+                  <p className="text-sm font-medium">{t('reverse_charge_label')}</p>
                   <p className="text-sm text-muted-foreground">{invoice.reverse_charge_text}</p>
                 </div>
               )}
@@ -640,35 +644,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* Invoice details */}
           <Card>
             <CardHeader>
-              <CardTitle>Detaljer</CardTitle>
+              <CardTitle>{t('details_card_title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Fakturanummer</span>
+                <span className="text-muted-foreground">{t('invoice_number_label')}</span>
                 <span className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Fakturadatum</span>
+                <span className="text-muted-foreground">{t('invoice_date_label')}</span>
                 <span>{formatDate(invoice.invoice_date)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Förfallodatum</span>
+                <span className="text-muted-foreground">{t('due_date_label')}</span>
                 <span>{formatDate(invoice.due_date)}</span>
               </div>
               <Separator />
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Valuta</span>
+                <span className="text-muted-foreground">{t('currency_label')}</span>
                 <span>{invoice.currency}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Momsbehandling</span>
+                <span className="text-muted-foreground">{t('vat_treatment_label')}</span>
                 <span className="text-right text-sm">
                   {getVatTreatmentLabel(invoice.vat_treatment)}
                 </span>
               </div>
               {invoice.your_reference && (
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">Er referens</span>
+                  <span className="text-muted-foreground">{t('your_reference_label')}</span>
                   <div className="flex flex-wrap gap-1">
                     {invoice.your_reference.split(',').map((ref, i) => (
                       <Badge key={i} variant="secondary" className="text-xs font-normal">
@@ -680,7 +684,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               )}
               {invoice.our_reference && (
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">Vår referens</span>
+                  <span className="text-muted-foreground">{t('our_reference_label')}</span>
                   <div className="flex flex-wrap gap-1">
                     {invoice.our_reference.split(',').map((ref, i) => (
                       <Badge key={i} variant="secondary" className="text-xs font-normal">
@@ -689,6 +693,39 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     ))}
                   </div>
                 </div>
+              )}
+              {invoice.journal_entry_id && (
+                <>
+                  <Separator />
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground text-sm">{t('bookkeeping_label')}</span>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <Link
+                        href={`/bookkeeping/${invoice.journal_entry_id}`}
+                        className="text-sm hover:underline tabular-nums"
+                      >
+                        {t('view_voucher')}
+                      </Link>
+                      {canWrite && (
+                        <CorrectionAffordance
+                          journalEntryId={invoice.journal_entry_id}
+                          onCorrected={fetchInvoice}
+                        >
+                          {({ open, isLoading }) => (
+                            <button
+                              type="button"
+                              onClick={open}
+                              disabled={isLoading}
+                              className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+                            >
+                              {isLoading ? t('correction_loading') : t('correction_prompt')}
+                            </button>
+                          )}
+                        </CorrectionAffordance>
+                      )}
+                    </div>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -699,12 +736,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-success">
                   <CheckCircle className="h-5 w-5" />
-                  Betald
+                  {t('paid_card_title')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground">
-                  Betalning mottagen {formatDate(invoice.paid_at)}
+                  {t('paid_received_at', { date: formatDate(invoice.paid_at) })}
                 </p>
                 {invoice.paid_amount && (
                   <p className="text-lg font-bold mt-2">
@@ -721,11 +758,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Bell className="h-5 w-5" />
-                  Påminnelser
+                  {t('reminders_card_title')}
                 </CardTitle>
                 {reminders.length === 0 && (
                   <CardDescription>
-                    Automatiska påminnelser skickas vid 15, 30 och 45 dagars förfallen betalning
+                    {t('reminders_description')}
                   </CardDescription>
                 )}
               </CardHeader>
@@ -743,26 +780,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                               variant={reminder.reminder_level === 3 ? 'destructive' : reminder.reminder_level === 2 ? 'default' : 'secondary'}
                               className="text-xs"
                             >
-                              Nivå {reminder.reminder_level}
+                              {t('reminder_level_label', { level: reminder.reminder_level })}
                             </Badge>
                             <span className="text-sm font-medium">
-                              {reminderLevelLabels[reminder.reminder_level as 1 | 2 | 3]}
+                              {reminderLevelLabel(reminder.reminder_level as 1 | 2 | 3)}
                             </span>
                           </div>
                           <p className="text-xs text-muted-foreground">
-                            Skickad {formatDate(reminder.sent_at)} till {reminder.email_to}
+                            {t('reminder_sent_to', { date: formatDate(reminder.sent_at), email: reminder.email_to })}
                           </p>
                           {reminder.response_type && (
                             <div className="flex items-center gap-1 mt-1">
                               {reminder.response_type === 'marked_paid' ? (
                                 <>
                                   <CheckCircle className="h-3 w-3 text-success" />
-                                  <span className="text-xs text-success">Kunden markerat som betald</span>
+                                  <span className="text-xs text-success">{t('reminder_marked_paid')}</span>
                                 </>
                               ) : (
                                 <>
                                   <MessageSquare className="h-3 w-3 text-orange-600" />
-                                  <span className="text-xs text-orange-600">Kunden har invändningar</span>
+                                  <span className="text-xs text-orange-600">{t('reminder_objection')}</span>
                                 </>
                               )}
                             </div>
@@ -773,7 +810,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Inga påminnelser har skickats ännu.
+                    {t('reminders_empty')}
                   </p>
                 )}
               </CardContent>
@@ -786,17 +823,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-warning">
                   <ReceiptText className="h-5 w-5" />
-                  Krediterad
+                  {t('credited_card_title')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground mb-2">
-                  Denna faktura har krediterats
+                  {t('credited_description')}
                 </p>
                 <Link href={`/invoices/${creditNote.id}`}>
                   <Button variant="outline" size="sm" className="w-full">
                     <ExternalLink className="mr-2 h-4 w-4" />
-                    Se kreditfaktura {creditNote.invoice_number}
+                    {t('see_credit_note', { number: creditNote.invoice_number ?? '' })}
                   </Button>
                 </Link>
               </CardContent>
@@ -809,17 +846,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <ReceiptText className="h-5 w-5" />
-                  Kreditfaktura
+                  {t('credit_note_card_title')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground mb-2">
-                  Denna kreditfaktura krediterar
+                  {t('credit_note_description')}
                 </p>
                 <Link href={`/invoices/${originalInvoice.id}`}>
                   <Button variant="outline" size="sm" className="w-full">
                     <ExternalLink className="mr-2 h-4 w-4" />
-                    Se faktura {originalInvoice.invoice_number}
+                    {t('see_original_invoice', { number: originalInvoice.invoice_number ?? '' })}
                   </Button>
                 </Link>
               </CardContent>
@@ -832,17 +869,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-blue-600">
                   <FileText className="h-5 w-5" />
-                  Konverterad
+                  {t('converted_card_title')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground mb-2">
-                  Konverterad från proformafaktura
+                  {t('converted_description')}
                 </p>
                 <Link href={`/invoices/${convertedFromInvoice.id}`}>
                   <Button variant="outline" size="sm" className="w-full">
                     <ExternalLink className="mr-2 h-4 w-4" />
-                    Se proforma {convertedFromInvoice.invoice_number}
+                    {t('see_proforma', { number: convertedFromInvoice.invoice_number ?? '' })}
                   </Button>
                 </Link>
               </CardContent>
@@ -853,7 +890,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {invoice.status !== 'cancelled' && invoice.status !== 'credited' && !invoice.credited_invoice_id && (
             <Card>
               <CardHeader>
-                <CardTitle>Åtgärder</CardTitle>
+                <CardTitle>{t('actions_card_title')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
                 {isProforma && (
@@ -868,7 +905,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       ) : (
                         <FileText className="mr-2 h-4 w-4" />
                       )}
-                      Konvertera till faktura
+                      {t('convert_to_invoice')}
                     </Button>
                     <Button
                       variant="outline"
@@ -877,7 +914,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       disabled={isUpdating}
                     >
                       <XCircle className="mr-2 h-4 w-4" />
-                      Makulera
+                      {t('cancel_action')}
                     </Button>
                   </>
                 )}
@@ -890,7 +927,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onClick={() => openSendDialog('email')}
                         >
                           <Mail className="mr-2 h-4 w-4" />
-                          Skicka via e-post
+                          {t('send_via_email')}
                         </Button>
                         <Button
                           variant="ghost"
@@ -898,10 +935,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onClick={() => openSendDialog('manual')}
                         >
                           <Send className="mr-2 h-4 w-4" />
-                          Skickad manuellt
+                          {t('mark_sent_manually')}
                         </Button>
                         <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
-                          Använd om du redan skickat fakturan på annat sätt (post, annat system)
+                          {t('send_manual_hint_with_email')}
                         </p>
                       </>
                     ) : (
@@ -910,7 +947,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-2 dark:bg-yellow-950/30 dark:border-yellow-800">
                             <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
                             <p className="text-xs text-yellow-700 dark:text-yellow-400">
-                              Kunden saknar e-postadress. Lägg till e-post för att kunna skicka fakturan digitalt.
+                              {t('no_customer_email_warning')}
                             </p>
                           </div>
                         )}
@@ -919,10 +956,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onClick={() => openSendDialog('manual')}
                         >
                           <Send className="mr-2 h-4 w-4" />
-                          Skickad manuellt
+                          {t('mark_sent_manually')}
                         </Button>
                         <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
-                          Markerar fakturan som skickad och skapar bokföringsverifikation
+                          {t('send_manual_hint_no_email')}
                         </p>
                       </>
                     )}
@@ -933,7 +970,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       disabled={isDeleting}
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
-                      Makulera utkast
+                      {t('delete_draft')}
                     </Button>
                   </>
                 )}
@@ -945,12 +982,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       disabled={isUpdating}
                     >
                       <CheckCircle className="mr-2 h-4 w-4" />
-                      Markera som betald
+                      {t('mark_as_paid')}
                     </Button>
                     <Link href={`/invoices/${invoice.id}/credit`} className="block">
                       <Button variant="outline" className="w-full">
                         <ReceiptText className="mr-2 h-4 w-4" />
-                        Skapa kreditfaktura
+                        {t('create_credit_note')}
                       </Button>
                     </Link>
                   </>
@@ -959,7 +996,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <Link href={`/invoices/${invoice.id}/credit`} className="block">
                     <Button variant="outline" className="w-full">
                       <ReceiptText className="mr-2 h-4 w-4" />
-                      Skapa kreditfaktura
+                      {t('create_credit_note')}
                     </Button>
                   </Link>
                 )}
@@ -974,29 +1011,31 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Makulera fakturautkast</DialogTitle>
+            <DialogTitle>{t('delete_dialog_title')}</DialogTitle>
             <DialogDescription>
               {invoice.invoice_number ? (
                 <>
-                  Fakturan markeras som makulerad och sparas i fakturalistan med status <strong>Makulerad</strong>.
+                  {t('delete_dialog_desc_with_number_1')}
+                  <strong>{t('delete_dialog_status_makulerad')}</strong>
+                  {t('delete_dialog_desc_with_number_2')}
                   <span className="mt-2 block text-muted-foreground">
-                    Fakturanumret {invoice.invoice_number} behålls för att hålla nummerserien obruten enligt ML 17 kap 24§.
+                    {t('delete_dialog_number_kept', { number: invoice.invoice_number })}
                   </span>
                 </>
               ) : (
                 <>
-                  Utkastet markeras som makulerat. Detta kan inte ångras.
+                  {t('delete_dialog_desc_no_number')}
                 </>
               )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
-              Avbryt
+              {t('delete_dialog_cancel')}
             </Button>
             <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
               {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Makulera
+              {t('delete_dialog_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1009,8 +1048,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         onSuccess={() => {
           fetchInvoice()
           toast({
-            title: 'Betald',
-            description: `Faktura ${invoice.invoice_number} har markerats som betald och bokförts`,
+            title: t('paid_toast_title'),
+            description: t('paid_toast_description', { number: invoice.invoice_number ?? '' }),
           })
         }}
       />

@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useRouter } from 'next/navigation'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -17,6 +18,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const { company } = useCompany()
+  const t = useTranslations('settings_nav')
 
   const hasCompany = !!company
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -24,19 +26,19 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
   const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
   const items: NavItem[] = [
-    { href: '/settings/company', label: 'Företag', show: hasCompany },
-    { href: '/settings/invoicing', label: 'Fakturering', show: hasCompany },
-    { href: '/settings/bookkeeping', label: 'Bokföring', show: hasCompany },
-    { href: '/settings/tax', label: 'Skatt', show: hasCompany },
-    { href: '/settings/team', label: 'Lag', show: false },
-    { href: '/settings/banking', label: 'Bank (PSD2)', show: hasCompany && !isSandbox && hasBankingExtension },
-    { href: '/settings/skatteverket', label: 'Skatteverket', show: hasCompany && !isSandbox && hasSkatteverketExtension },
-    { href: '/settings/salary', label: 'Löner', show: hasCompany && company?.entity_type === 'aktiebolag' },
-    { href: '/settings/templates', label: 'Mallar', show: hasCompany },
-    { href: '/settings/agent-memory', label: 'Assistentens minne', show: hasCompany },
-    { href: '/settings/backup', label: 'Säkerhetsbackup', show: hasCompany },
-    { href: '/settings/account', label: 'Konto', show: true },
-    { href: '/settings/api', label: 'API', show: hasCompany && hasMcpExtension },
+    { href: '/settings/company', label: t('company'), show: hasCompany },
+    { href: '/settings/invoicing', label: t('invoicing'), show: hasCompany },
+    { href: '/settings/bookkeeping', label: t('bookkeeping'), show: hasCompany },
+    { href: '/settings/tax', label: t('tax'), show: hasCompany },
+    { href: '/settings/team', label: t('team'), show: false },
+    { href: '/settings/banking', label: t('banking'), show: hasCompany && !isSandbox && hasBankingExtension },
+    { href: '/settings/skatteverket', label: t('skatteverket'), show: hasCompany && !isSandbox && hasSkatteverketExtension },
+    { href: '/settings/salary', label: t('salary'), show: hasCompany && company?.entity_type === 'aktiebolag' },
+    { href: '/settings/templates', label: t('templates'), show: hasCompany },
+    { href: '/settings/agent-memory', label: t('agent_memory'), show: hasCompany },
+    { href: '/settings/backup', label: t('backup'), show: hasCompany },
+    { href: '/settings/account', label: t('account'), show: true },
+    { href: '/settings/api', label: t('api'), show: hasCompany && hasMcpExtension },
   ].filter(item => item.show)
 
   const activeHref = items.find(item => pathname.startsWith(item.href))?.href || items[0]?.href
@@ -62,7 +64,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
       {/* Desktop: horizontal tabs with bottom border */}
       <nav
         className="hidden sm:block overflow-x-auto scrollbar-none border-b border-border"
-        aria-label="Inställningar"
+        aria-label={t('aria_label')}
       >
         <ul className="flex gap-0 -mb-px">
           {items.map(item => {

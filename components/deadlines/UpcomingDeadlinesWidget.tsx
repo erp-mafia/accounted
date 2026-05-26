@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -21,6 +22,7 @@ interface UpcomingDeadlinesWidgetProps {
 
 export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChange }: UpcomingDeadlinesWidgetProps) {
   const { toast } = useToast()
+  const t = useTranslations('upcoming_deadlines')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
 
   // Get upcoming deadlines (next 7 days) + any needing attention
@@ -51,10 +53,10 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
     tomorrow.setDate(tomorrow.getDate() + 1)
 
     if (date.toDateString() === today.toDateString()) {
-      return 'Idag'
+      return t('today')
     }
     if (date.toDateString() === tomorrow.toDateString()) {
-      return 'Imorgon'
+      return t('tomorrow')
     }
     return date.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })
   }
@@ -75,15 +77,15 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
       }
 
       toast({
-        title: 'Status uppdaterad',
-        description: `Deadline markerad som ${STATUS_LABELS[newStatus].toLowerCase()}`,
+        title: t('toast_status_updated'),
+        description: t('toast_status_updated_description', { status: STATUS_LABELS[newStatus].toLowerCase() }),
       })
 
       // Notify parent component
       onStatusChange?.(deadlineId, newStatus)
     } catch (error) {
       toast({
-        title: error instanceof Error ? error.message : 'Kunde inte uppdatera status',
+        title: error instanceof Error ? error.message : t('toast_status_update_failed'),
         variant: 'destructive',
       })
     } finally {
@@ -107,14 +109,14 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
             <Calendar className="h-5 w-5" />
-            Kommande deadlines
+            {t('title')}
           </CardTitle>
           <div className="flex gap-2">
             {overdueCount > 0 && (
-              <Badge variant="destructive">{overdueCount} försenad</Badge>
+              <Badge variant="destructive">{t('overdue_badge', { count: overdueCount })}</Badge>
             )}
             {actionNeededCount > 0 && (
-              <Badge variant="warning">{actionNeededCount} åtgärd</Badge>
+              <Badge variant="warning">{t('action_needed_badge', { count: actionNeededCount })}</Badge>
             )}
           </div>
         </div>
@@ -147,11 +149,11 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-muted-foreground">
                       {formatDate(deadline.due_date)}
-                      {deadline.due_time && ` kl. ${deadline.due_time.slice(0, 5)}`}
+                      {deadline.due_time && ` ${t('time_prefix')} ${deadline.due_time.slice(0, 5)}`}
                     </p>
                     {deadline.tax_deadline_type && (
                       <Badge variant="outline" className="text-xs px-1 py-0">
-                        Skatt
+                        {t('tax_badge')}
                       </Badge>
                     )}
                   </div>
@@ -172,7 +174,7 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
                     className="h-9 px-2.5"
                     disabled={isUpdating}
                     onClick={() => handleStatusChange(deadline.id, 'submitted')}
-                    title="Markera som inskickad"
+                    title={t('mark_as_submitted')}
                   >
                     {isUpdating ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -189,7 +191,7 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
                     className="h-9 px-2.5"
                     disabled={isUpdating}
                     onClick={() => handleStatusChange(deadline.id, 'confirmed')}
-                    title="Markera som bekräftad"
+                    title={t('mark_as_confirmed')}
                   >
                     {isUpdating ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -205,7 +207,7 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
 
         <Link href="/deadlines" className="block">
           <Button variant="ghost" className="w-full justify-between mt-2">
-            Visa alla deadlines
+            {t('view_all')}
             <ChevronRight className="h-4 w-4" />
           </Button>
         </Link>

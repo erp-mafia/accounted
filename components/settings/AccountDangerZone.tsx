@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -25,6 +26,7 @@ interface Blocker {
 }
 
 export function AccountDangerZone() {
+  const t = useTranslations('settings_account_danger')
   const router = useRouter()
   const [email, setEmail] = useState<string | null>(null)
   const [blockers, setBlockers] = useState<Blocker[]>([])
@@ -77,7 +79,7 @@ export function AccountDangerZone() {
         const body = await response.json()
         // Precondition tripped mid-flow — refresh the list and show inline.
         setBlockers(body.blockers ?? [])
-        setError(body.error || 'Du måste radera eller överlåta dina företag först.')
+        setError(body.error || t('delete_failed_blockers'))
         setIsDeleting(false)
         setShowDialog(false)
         return
@@ -85,12 +87,12 @@ export function AccountDangerZone() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte radera kontot')
+        throw new Error(body.error || t('delete_failed_default'))
       }
 
       router.push('/login')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte radera kontot')
+      setError(err instanceof Error ? err.message : t('delete_failed_default'))
       setIsDeleting(false)
     }
   }
@@ -102,14 +104,14 @@ export function AccountDangerZone() {
     <>
       <section className="space-y-4 border-t border-border/8 pt-8">
         <h2 className="text-sm font-medium uppercase tracking-wider text-destructive/80">
-          Radera konto
+          {t('heading')}
         </h2>
 
         {hasBlockers && (
           <div className="rounded-lg border border-border/60 bg-muted/30 p-4 space-y-3">
-            <p className="text-sm font-medium">Företag du äger</p>
+            <p className="text-sm font-medium">{t('blockers_title')}</p>
             <p className="text-sm text-muted-foreground">
-              Radera eller överlåt alla företag innan du raderar kontot.
+              {t('blockers_description')}
             </p>
             <ul className="space-y-2">
               {blockers.map((b) => (
@@ -119,7 +121,7 @@ export function AccountDangerZone() {
                 >
                   <span className="text-sm font-medium">{b.name}</span>
                   <Button variant="ghost" size="sm" asChild>
-                    <Link href="/settings/company">Hantera</Link>
+                    <Link href="/settings/company">{t('blockers_manage')}</Link>
                   </Button>
                 </li>
               ))}
@@ -130,8 +132,8 @@ export function AccountDangerZone() {
         <RetentionNotice variant="account" />
 
         <p className="text-sm text-muted-foreground">
-          Har du frågor?{' '}
-          <SupportLink variant="inline" subject="Fråga om kontoradering" />
+          {t('support_question')}{' '}
+          <SupportLink variant="inline" subject={t('support_subject')} />
         </p>
 
         {error && !showDialog && (
@@ -142,7 +144,7 @@ export function AccountDangerZone() {
           <Button variant="outline" className="w-full sm:w-auto" asChild>
             <Link href="/reports?type=sie">
               <ExternalLink className="mr-2 h-4 w-4" />
-              Exportera bokföringsdata (SIE)
+              {t('export_sie')}
             </Link>
           </Button>
           <Button
@@ -151,7 +153,7 @@ export function AccountDangerZone() {
             onClick={() => setShowDialog(true)}
             disabled={!canDelete}
           >
-            Radera mitt konto
+            {t('delete_button')}
           </Button>
         </div>
       </section>
@@ -169,16 +171,17 @@ export function AccountDangerZone() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Radera konto permanent</DialogTitle>
+            <DialogTitle>{t('dialog_title')}</DialogTitle>
             <DialogDescription>
-              Ditt konto avidentifieras och du loggas ut från alla enheter.
-              Du kan inte skapa ett nytt konto med samma e-postadress — kontakta support
-              om du vill återaktivera kontot i framtiden.
+              {t('dialog_description')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="delete-confirm">
-              Skriv din e-postadress (<strong>{email}</strong>) för att bekräfta
+              {t.rich('confirm_label', {
+                email: email ?? '',
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </Label>
             <Input
               id="delete-confirm"
@@ -200,7 +203,7 @@ export function AccountDangerZone() {
               }}
               disabled={isDeleting}
             >
-              Avbryt
+              {t('cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -214,10 +217,10 @@ export function AccountDangerZone() {
               {isDeleting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Raderar...
+                  {t('deleting')}
                 </>
               ) : (
-                'Radera konto'
+                t('delete_confirm_button')
               )}
             </Button>
           </DialogFooter>

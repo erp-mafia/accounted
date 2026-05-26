@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Hedvig_Letters_Serif } from "next/font/google";
 import Script from "next/script";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale, getMessages } from "next-intl/server";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
 import { RecaptHideWidget } from "@/components/RecaptHideWidget";
@@ -54,16 +56,17 @@ export function generateViewport(): Viewport {
   };
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   const branding = getBranding();
+  const locale = await getLocale();
+  const messages = await getMessages();
   return (
-    <html lang="sv" translate="no" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable}`}>
+    <html lang={locale} suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable}`}>
       <head>
-        <meta name="google" content="notranslate" />
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
         <script
           src="https://cdn.recapt.app/browser/glimt.js"
@@ -76,16 +79,18 @@ export default function RootLayout({
       <body
         className="antialiased"
       >
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="light"
-          enableSystem
-          disableTransitionOnChange
-        >
-          {children}
-          <Toaster />
-          <RecaptHideWidget />
-        </ThemeProvider>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="light"
+            enableSystem
+            disableTransitionOnChange
+          >
+            {children}
+            <Toaster />
+            <RecaptHideWidget />
+          </ThemeProvider>
+        </NextIntlClientProvider>
         <Script src="/sw-register.js" strategy="afterInteractive" />
       </body>
     </html>

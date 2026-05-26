@@ -87,16 +87,18 @@ export async function POST(
   // as matched so the inbox UI can show it as "Kopplad" + link back to the
   // transaction. Best-effort: a failure here must not roll back the
   // (compliant) document attach.
-  try {
-    await supabase
-      .from('invoice_inbox_items')
-      .update({ matched_transaction_id: transactionId })
-      .eq('document_id', document_id)
-      .eq('company_id', companyId)
-      .is('matched_transaction_id', null)
-      .is('created_supplier_invoice_id', null)
-  } catch (linkErr) {
-    console.error('[attach-document] Failed to link inbox item:', linkErr)
+  //
+  // The Supabase client resolves with { error } rather than rejecting on
+  // RLS/DB errors, so we destructure rather than try/catch.
+  const { error: inboxLinkErr } = await supabase
+    .from('invoice_inbox_items')
+    .update({ matched_transaction_id: transactionId })
+    .eq('document_id', document_id)
+    .eq('company_id', companyId)
+    .is('matched_transaction_id', null)
+    .is('created_supplier_invoice_id', null)
+  if (inboxLinkErr) {
+    console.error('[attach-document] Failed to link inbox item:', inboxLinkErr)
   }
 
   // Rättelse audit trail (BFL 5 kap 5 §): record swaps where a non-null doc

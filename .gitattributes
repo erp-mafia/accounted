@@ -1,0 +1,8 @@
+# Force LF on shell scripts and Docker-related files so Windows checkouts
+# don't ship CRLF into Linux containers (the container would fail to exec
+# a `#!/bin/sh\r` shebang).
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-entrypoint.sh text eol=lf
+docker/Caddyfile text eol=lf
+docker/crontab.* text eol=lf

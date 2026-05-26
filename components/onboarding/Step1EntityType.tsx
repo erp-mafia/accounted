@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -14,29 +15,32 @@ interface Step1Props {
   isSaving: boolean
 }
 
-const entityOptions: {
-  value: EntityType | string
-  label: string
-  description: string
-  icon: typeof Building2
-  disabled?: boolean
-}[] = [
-  {
-    value: 'enskild_firma',
-    label: 'Enskild firma',
-    description: 'Du driver verksamhet i eget namn med F-skattsedel',
-    icon: User,
-  },
-  {
-    value: 'aktiebolag',
-    label: 'Aktiebolag',
-    description: 'Du har ett registrerat AB med organisationsnummer',
-    icon: Building2,
-  },
-]
-
 export default function Step1EntityType({ initialData, onNext, isSaving }: Step1Props) {
+  const t = useTranslations('onboarding')
   const [selected, setSelected] = useState<EntityType | undefined>(initialData.entity_type)
+
+  // "Enskild firma" and "Aktiebolag" are statutory legal entity types — kept
+  // in Swedish in both locales.
+  const entityOptions: {
+    value: EntityType | string
+    label: string
+    description: string
+    icon: typeof Building2
+    disabled?: boolean
+  }[] = [
+    {
+      value: 'enskild_firma',
+      label: 'Enskild firma',
+      description: t('step1_ef_description'),
+      icon: User,
+    },
+    {
+      value: 'aktiebolag',
+      label: 'Aktiebolag',
+      description: t('step1_ab_description'),
+      icon: Building2,
+    },
+  ]
 
   const handleNext = () => {
     if (!selected) {
@@ -85,7 +89,7 @@ export default function Step1EntityType({ initialData, onNext, isSaving }: Step1
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{option.label}</span>
                       {option.disabled && (
-                        <Badge variant="secondary" className="text-xs">Kommer snart</Badge>
+                        <Badge variant="secondary" className="text-xs">{t('coming_soon')}</Badge>
                       )}
                     </div>
                     <p className="text-sm text-muted-foreground mt-0.5">
@@ -114,11 +118,11 @@ export default function Step1EntityType({ initialData, onNext, isSaving }: Step1
           {isSaving ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Sparar...
+              {t('saving')}
             </>
           ) : (
             <>
-              Fortsätt
+              {t('continue')}
               <ArrowRight className="ml-2 h-4 w-4" />
             </>
           )}

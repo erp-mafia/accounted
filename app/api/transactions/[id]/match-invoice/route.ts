@@ -11,6 +11,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { EntityType, Invoice, Transaction } from '@/types'
@@ -40,7 +41,7 @@ export const POST = withRouteContext(
       operation: 'transaction.match_invoice',
     })
     if (!validation.success) return validation.response
-    const { invoice_id } = validation.data
+    const { invoice_id, force, expected_journal_entry_id } = validation.data
 
     const txLog = log.child({ transactionId, invoiceId: invoice_id })
 
@@ -97,6 +98,96 @@ export const POST = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_NOT_OPEN', txLog, {
         requestId,
         details: { currentStatus: invoice.status },
+      })
+    }
+
+    // Hard-duplicate guard: if the invoice is 'sent'/'overdue' but already
+    // has a payment voucher attached (status leak), refuse — booking again
+    // would double-credit 1510 / double-debit 1930. Partially-paid invoices
+    // pass through; additional payments are legitimate.
+    if (invoice.status === 'sent' || invoice.status === 'overdue') {
+      const { data: existingPayments } = await supabase
+        .from('invoice_payments')
+        .select('journal_entry_id')
+        .eq('company_id', companyId)
+        .eq('invoice_id', invoice_id)
+        .not('journal_entry_id', 'is', null)
+        .limit(1)
+      if (existingPayments && existingPayments.length > 0) {
+        return errorResponseFromCode('MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER', txLog, {
+          requestId,
+          details: {
+            existing_journal_entry_id: (existingPayments[0] as { journal_entry_id: string }).journal_entry_id,
+          },
+        })
+      }
+    }
+
+    // Soft-duplicate guard: scan for a manual verifikation that already
+    // books this bank receipt outside the invoice flow. The customer's
+    // exact case: they posted Dr 1930 / Cr 3100 by hand; the matcher
+    // would otherwise create a second voucher and double-book. Bypassed
+    // with force=true after the user reviews the candidate in the UI.
+    //
+    // force=true is bound to a specific candidate via expected_journal_entry_id
+    // (validated by the schema). We re-detect the candidate server-side and
+    // refuse the bypass if it no longer matches: a stale or fabricated
+    // expected id cannot wave the guard away. The pre-flight runs even when
+    // a candidate is detected so the audit log records the verifikation the
+    // user opted to dismiss.
+    let dismissedCandidateId: string | null = null
+    try {
+      const candidate = await detectDuplicatePaymentVoucher(supabase, {
+        companyId: companyId!,
+        transactionId,
+        transactionDate: transaction.date,
+        transactionAmount: transaction.amount,
+      })
+      if (!force) {
+        if (candidate) {
+          return errorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+            requestId,
+            details: { candidate },
+          })
+        }
+      } else {
+        if (!candidate || candidate.journal_entry_id !== expected_journal_entry_id) {
+          // Either no current duplicate (force is moot — caller should retry
+          // without force) or the candidate the caller claims to have seen
+          // doesn't match what we detect now. Reject so an automation can't
+          // smuggle force=true past the guard with a guessed id.
+          return errorResponseFromCode('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH', txLog, {
+            requestId,
+            details: {
+              expected_journal_entry_id,
+              detected_journal_entry_id: candidate?.journal_entry_id ?? null,
+            },
+          })
+        }
+        dismissedCandidateId = candidate.journal_entry_id
+      }
+    } catch (err) {
+      // Detection failure must not block the non-force match — log and
+      // continue. force=true requires a successful detection, so re-throw
+      // its branch as a clean 500 via the wrapper.
+      if (force) {
+        txLog.error('duplicate-payment-voucher detection failed under force=true', err as Error)
+        return errorResponse(err, txLog, { requestId })
+      }
+      txLog.warn('duplicate-payment-voucher detection failed (continuing)', err as Error)
+    }
+
+    if (force && dismissedCandidateId) {
+      txLog.warn('soft-duplicate guard bypassed', {
+        reason: 'force=true',
+        requestId,
+        transactionId,
+        invoiceId: invoice_id,
+        userId: user.id,
+        // The verifikation the user reviewed and dismissed. Recorded so the
+        // override can be traced back to the specific duplicate that was
+        // surfaced in the pre-flight UI.
+        dismissedJournalEntryId: dismissedCandidateId,
       })
     }
 

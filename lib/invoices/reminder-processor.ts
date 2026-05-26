@@ -136,13 +136,17 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - minOverdueDays)
 
+  // Positive allowlist — inherently excludes 'paid', 'partially_paid', 'cancelled', 'credited'.
+  // Including 'overdue' ensures level-2 / level-3 reminders re-fire after the first reminder
+  // flips status to 'overdue' (see status update below).
   const { data: overdueInvoices, error: invoiceError } = await supabase
     .from('invoices')
     .select(`
       *,
       customer:customers(*)
     `)
-    .eq('status', 'sent')
+    .in('status', ['sent', 'overdue'])
+    .is('credited_invoice_id', null)
     .lte('due_date', cutoffDate.toISOString().split('T')[0])
     .order('due_date', { ascending: true })
 
@@ -171,8 +175,20 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // Get existing reminders for this invoice
     const { data: existingReminders } = await supabase
       .from('invoice_reminders')
-      .select('reminder_level')
+      .select('reminder_level, response_type')
       .eq('invoice_id', invoice.id)
+
+    // Skip if customer already responded (marked paid OR disputed) — they've
+    // told us they don't want another reminder. The business owner still needs
+    // to record the actual payment (mark-paid / match-invoice) to flip status
+    // and post the journal entry; we don't do that here because the customer
+    // action is unauthenticated and posting a JE without a verified payment
+    // would put the books out of sync.
+    const customerResponded = existingReminders?.some(r => r.response_type !== null)
+    if (customerResponded) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: customer already responded via reminder link`)
+      continue
+    }
 
     const existingLevels = existingReminders?.map(r => r.reminder_level) || []
     const daysOverdue = calculateDaysOverdue(invoice.due_date)
@@ -201,6 +217,26 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         success: false,
         error: 'Company settings not found'
       })
+      continue
+    }
+
+    // Per-company kill switch (settings → Fakturering → "Skicka automatiska påminnelser")
+    if (company.send_invoice_reminders === false) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: automatic reminders disabled for company ${invoice.company_id}`)
+      continue
+    }
+
+    // Race-window guard — re-check invoice status immediately before sending.
+    // The cron runs at 08:00; a payment match arriving during the run shouldn't
+    // produce a reminder for an already-paid invoice.
+    const { data: currentInvoice } = await supabase
+      .from('invoices')
+      .select('status')
+      .eq('id', invoice.id)
+      .single()
+
+    if (!currentInvoice || !['sent', 'overdue'].includes(currentInvoice.status as string)) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: status changed to ${currentInvoice?.status ?? 'unknown'} mid-run`)
       continue
     }
 

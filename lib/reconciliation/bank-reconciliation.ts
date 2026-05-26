@@ -62,6 +62,19 @@ export interface ReconciliationOptions {
   dateFrom?: string
   dateTo?: string
   dryRun?: boolean
+  /**
+   * Settlement account number to reconcile against (e.g. '1930' for SEK,
+   * '1932' for EUR). Defaults to '1930' so existing callers stay correct.
+   * The cash_accounts table is the source of truth for which BAS codes are
+   * routable for a given company.
+   */
+  accountNumber?: string
+  /**
+   * Currency to filter transactions on. Defaults to 'SEK' for back-compat;
+   * future multi-currency reconciliation passes the currency of the selected
+   * cash account so EUR transactions reconcile against 1932 etc.
+   */
+  currency?: string
 }
 
 // ============================================================
@@ -72,13 +85,15 @@ export interface ReconciliationOptions {
  * Try to reconcile a single transaction against a pool of unlinked GL lines.
  * Returns the best match or null. Purely in-memory, no DB calls.
  *
- * Only reconciles SEK transactions.
+ * `expectedCurrency` filters which transactions can match — defaults to 'SEK'
+ * so existing callers behave identically.
  */
 export function tryReconcileTransaction(
   transaction: Transaction,
-  glLines: UnlinkedGLLine[]
+  glLines: UnlinkedGLLine[],
+  expectedCurrency: string = 'SEK',
 ): ReconciliationMatch | null {
-  if (transaction.currency !== 'SEK') return null
+  if (transaction.currency !== expectedCurrency) return null
   if (glLines.length === 0) return null
 
   const txAmount = transaction.amount
@@ -148,10 +163,16 @@ export async function runReconciliation(
   userId: string,
   options: ReconciliationOptions = {}
 ): Promise<ReconciliationRunResult> {
-  const { dateFrom, dateTo, dryRun = false } = options
+  const {
+    dateFrom,
+    dateTo,
+    dryRun = false,
+    accountNumber = '1930',
+    currency = 'SEK',
+  } = options
 
   // Fetch unlinked GL lines via RPC
-  const glLines = await fetchUnlinkedGLLines(supabase, companyId, dateFrom, dateTo)
+  const glLines = await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)
 
   // Fetch unmatched transactions
   let query = supabase
@@ -159,7 +180,7 @@ export async function runReconciliation(
     .select('*')
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
-    .eq('currency', 'SEK')
+    .eq('currency', currency)
 
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)
@@ -171,7 +192,7 @@ export async function runReconciliation(
   }
 
   // Run greedy matching, highest confidence first
-  const matches = greedyMatch(transactions as Transaction[], glLines)
+  const matches = greedyMatch(transactions as Transaction[], glLines, currency)
 
   if (dryRun) {
     return { matches, applied: 0, errors: 0 }
@@ -226,20 +247,27 @@ export async function runReconciliation(
 
 /**
  * Compare bank transaction totals vs GL bank account balance.
+ *
+ * `bankAccount` and `currency` must agree (e.g. 1932 + EUR). When the caller
+ * omits currency it defaults to SEK for back-compat with the single-account
+ * call sites that only ever reconciled 1930. Multi-currency callers must pass
+ * both — comparing EUR GL movements against SEK transaction totals would
+ * silently produce nonsense.
  */
 export async function getReconciliationStatus(
   supabase: SupabaseClient,
   companyId: string,
   dateFrom?: string,
   dateTo?: string,
-  bankAccount = '1930'
+  bankAccount = '1930',
+  currency: string = 'SEK',
 ): Promise<ReconciliationStatus> {
   // Get all transactions in range
   let txQuery = supabase
     .from('transactions')
     .select('amount, journal_entry_id, reconciliation_method')
     .eq('company_id', companyId)
-    .eq('currency', 'SEK')
+    .eq('currency', currency)
 
   if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
   if (dateTo) txQuery = txQuery.lte('date', dateTo)
@@ -305,7 +333,7 @@ export async function getReconciliationStatus(
 
   // Unlinked GL lines count (RPC excludes source_type='opening_balance' since
   // 20260514132534_unlinked_1930_lines_exclude_opening_balance.sql)
-  const unlinkedLines = await fetchUnlinkedGLLines(supabase, companyId, dateFrom, dateTo)
+  const unlinkedLines = await fetchUnlinkedGLLines(supabase, companyId, bankAccount, dateFrom, dateTo)
 
   const difference = Math.round((bankTotal - glPeriodMovement) * 100) / 100
 
@@ -484,19 +512,21 @@ export async function unlinkReconciliation(
 // ============================================================
 
 /**
- * Fetch unlinked bank GL lines for account 1930. Multi-account support
- * (Plusgiro 1920, kreditkort 1940, EUR-konto 1931, etc.) requires a different
- * RPC and is not yet implemented — until then this helper is intentionally
- * scoped to 1930 so callers cannot silently lose data on other accounts.
+ * Fetch unlinked GL lines for a settlement account. `accountNumber` defaults to
+ * '1930' for back-compat; multi-account customers (Plusgiro 1920, kreditkort
+ * 1940, EUR-konto 1932, etc.) pass the BAS code of the account they're
+ * reconciling. The CashAccountSelector populates this from cash_accounts.
  */
 export async function fetchUnlinkedGLLines(
   supabase: SupabaseClient,
   companyId: string,
+  accountNumber: string = '1930',
   dateFrom?: string,
   dateTo?: string,
 ): Promise<UnlinkedGLLine[]> {
-  const { data, error } = await supabase.rpc('get_unlinked_1930_lines', {
+  const { data, error } = await supabase.rpc('get_unlinked_gl_lines', {
     p_company_id: companyId,
+    p_account_number: accountNumber,
     p_date_from: dateFrom || null,
     p_date_to: dateTo || null,
   })
@@ -551,7 +581,8 @@ function isDateWithinRange(date1: string, date2: string, dayRange: number): bool
  */
 function greedyMatch(
   transactions: Transaction[],
-  glLines: UnlinkedGLLine[]
+  glLines: UnlinkedGLLine[],
+  expectedCurrency: string = 'SEK',
 ): ReconciliationMatch[] {
   const usedTransactions = new Set<string>()
   const usedGLLines = new Set<string>()
@@ -561,10 +592,10 @@ function greedyMatch(
   const candidates: ReconciliationMatch[] = []
 
   for (const tx of transactions) {
-    if (tx.currency !== 'SEK') continue
+    if (tx.currency !== expectedCurrency) continue
 
     for (const line of glLines) {
-      const match = tryReconcileTransaction(tx, [line])
+      const match = tryReconcileTransaction(tx, [line], expectedCurrency)
       if (match) {
         candidates.push(match)
       }

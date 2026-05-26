@@ -16,6 +16,7 @@ import { lansforsakringarFormat } from './formats/lansforsakringar'
 import { icaBankenFormat } from './formats/ica-banken'
 import { skandiaFormat } from './formats/skandia'
 import { lunarFormat } from './formats/lunar'
+import { northmillFormat } from './formats/northmill'
 import { camt053Format } from './formats/camt053'
 import { genericCSVFormat } from './formats/generic-csv'
 
@@ -36,6 +37,7 @@ const FORMATS: BankFileFormat[] = [
   icaBankenFormat,
   skandiaFormat,
   lunarFormat,
+  northmillFormat,
   genericCSVFormat,
 ]
 

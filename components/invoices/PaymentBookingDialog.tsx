@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -38,12 +39,6 @@ interface DuplicateCandidate {
   match_confidence: number
 }
 
-const MATCH_REASON_LABEL: Record<DuplicateMatchReason, string> = {
-  ocr_exact: 'Exakt OCR-träff',
-  name_amount_fuzzy: 'Sannolik träff',
-  amount_only: 'Möjlig träff',
-}
-
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
   items: InvoiceItem[]
@@ -68,6 +63,13 @@ export default function PaymentBookingDialog({
   const router = useRouter()
   const supabase = createClient()
   const { company } = useCompany()
+  const t = useTranslations('invoice_payment_dialog')
+
+  const MATCH_REASON_LABEL: Record<DuplicateMatchReason, string> = {
+    ocr_exact: t('match_reason_ocr_exact'),
+    name_amount_fuzzy: t('match_reason_name_amount_fuzzy'),
+    amount_only: t('match_reason_amount_only'),
+  }
 
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   const [lines, setLines] = useState<FormLine[]>([])
@@ -90,11 +92,11 @@ export default function PaymentBookingDialog({
       try {
         // Fetch accounts
         const accountsRes = await fetch('/api/bookkeeping/accounts')
-        if (!accountsRes.ok) throw new Error('Kunde inte ladda kontoplanen')
+        if (!accountsRes.ok) throw new Error(t('load_chart_failed'))
         const accountsData = await accountsRes.json()
         const fetchedAccounts: BASAccount[] = accountsData.data || []
 
-        if (!company?.id) throw new Error('Inget aktivt företag')
+        if (!company?.id) throw new Error(t('no_active_company'))
 
         // Fetch company settings
         const { data: settings, error: settingsError } = await supabase
@@ -103,7 +105,7 @@ export default function PaymentBookingDialog({
           .eq('company_id', company.id)
           .maybeSingle()
 
-        if (settingsError) throw new Error('Kunde inte ladda företagsinställningar')
+        if (settingsError) throw new Error(t('load_settings_failed'))
         if (cancelled) return
 
         setAccounts(fetchedAccounts)
@@ -135,8 +137,8 @@ export default function PaymentBookingDialog({
       } catch (err) {
         if (cancelled) return
         toast({
-          title: 'Kunde inte ladda bokföringsdialog',
-          description: err instanceof Error ? err.message : 'Försök igen.',
+          title: t('load_dialog_failed_title'),
+          description: err instanceof Error ? err.message : t('try_again'),
           variant: 'destructive',
         })
         onOpenChange(false)
@@ -220,7 +222,7 @@ export default function PaymentBookingDialog({
           setIsSubmitting(false)
           return
         }
-        const error = new Error('Kunde inte markera som betald') as Error & { body?: unknown; status?: number }
+        const error = new Error(t('mark_paid_failed')) as Error & { body?: unknown; status?: number }
         error.body = data
         error.status = response.status
         throw error
@@ -231,7 +233,7 @@ export default function PaymentBookingDialog({
     } catch (error) {
       const anyErr = error as { body?: unknown; status?: number }
       toast({
-        title: 'Bokföring misslyckades',
+        title: t('booking_failed_title'),
         description: getErrorMessage(anyErr.body ?? error, { context: 'invoice', statusCode: anyErr.status }),
         variant: 'destructive',
       })
@@ -252,11 +254,11 @@ export default function PaymentBookingDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>Bokför betalning{invoice.invoice_number ? ` — ${invoice.invoice_number}` : ''}</DialogTitle>
+          <DialogTitle>{t('title')}{invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}</DialogTitle>
           <DialogDescription>
             {formatCurrency(invoice.total, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
-              <> ({formatCurrency(invoice.total_sek)} SEK)</>
+              <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -264,11 +266,11 @@ export default function PaymentBookingDialog({
         {duplicateCandidates && duplicateCandidates.length > 0 ? (
           <div className="space-y-4">
             <div className="space-y-1">
-              <p className="text-sm font-medium">Möjlig dubblettbetalning</p>
+              <p className="text-sm font-medium">{t('duplicate_title')}</p>
               <p className="text-sm text-muted-foreground">
                 {duplicateCandidates.length === 1
-                  ? 'En inkommande banktransaktion ser ut att vara denna betalning. Länka den istället för att skapa en ny verifikation, eller bokför ändå om du är säker.'
-                  : `${duplicateCandidates.length} inkommande banktransaktioner ser ut att kunna vara denna betalning. Länka rätt transaktion istället för att skapa en ny verifikation, eller bokför ändå om du är säker.`}
+                  ? t('duplicate_one')
+                  : t('duplicate_many', { count: duplicateCandidates.length })}
               </p>
             </div>
             <ul className="space-y-2">
@@ -305,7 +307,7 @@ export default function PaymentBookingDialog({
                       onClick={() => handleLinkExisting(c.id)}
                       className="shrink-0"
                     >
-                      Länka transaktion
+                      {t('link_transaction')}
                     </Button>
                   </li>
                 )
@@ -320,7 +322,7 @@ export default function PaymentBookingDialog({
           <div className="space-y-4">
             {/* Payment date */}
             <div className="space-y-1.5">
-              <Label htmlFor="payment-date">Betalningsdatum</Label>
+              <Label htmlFor="payment-date">{t('payment_date_label')}</Label>
               <Input
                 id="payment-date"
                 type="date"
@@ -356,7 +358,7 @@ export default function PaymentBookingDialog({
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">Debet</Label>
+                      <Label className="text-xs text-muted-foreground">{t('debit_label')}</Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -369,7 +371,7 @@ export default function PaymentBookingDialog({
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">Kredit</Label>
+                      <Label className="text-xs text-muted-foreground">{t('credit_label')}</Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -385,7 +387,7 @@ export default function PaymentBookingDialog({
                 </div>
               ))}
               <Button type="button" variant="outline" size="sm" onClick={addLine} className="w-full">
-                <Plus className="mr-1 h-3.5 w-3.5" /> Lägg till rad
+                <Plus className="mr-1 h-3.5 w-3.5" /> {t('add_row')}
               </Button>
             </div>
 
@@ -393,9 +395,9 @@ export default function PaymentBookingDialog({
             <div className="hidden sm:block space-y-2">
               {/* Header */}
               <div className="grid grid-cols-[1fr_120px_120px_32px] gap-2 text-xs font-medium text-muted-foreground px-1">
-                <span>Konto</span>
-                <span className="text-right">Debet</span>
-                <span className="text-right">Kredit</span>
+                <span>{t('account_label')}</span>
+                <span className="text-right">{t('debit_label')}</span>
+                <span className="text-right">{t('credit_label')}</span>
                 <span />
               </div>
 
@@ -449,7 +451,7 @@ export default function PaymentBookingDialog({
                 className="text-muted-foreground"
               >
                 <Plus className="mr-1 h-3.5 w-3.5" />
-                Lägg till rad
+                {t('add_row')}
               </Button>
             </div>
 
@@ -458,11 +460,11 @@ export default function PaymentBookingDialog({
               <div className="flex items-center gap-2">
                 {isBalanced ? (
                   <Badge variant="secondary" className="bg-success/10 text-success">
-                    Debet = Kredit
+                    {t('balanced_badge')}
                   </Badge>
                 ) : (
                   <Badge variant="destructive">
-                    Obalanserad ({formatCurrency(Math.abs(totalDebit - totalCredit))})
+                    {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
                   </Badge>
                 )}
               </div>
@@ -475,7 +477,7 @@ export default function PaymentBookingDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting} className="w-full sm:w-auto min-h-11">
-            Avbryt
+            {t('cancel')}
           </Button>
           {duplicateCandidates && duplicateCandidates.length > 0 ? (
             <Button
@@ -484,7 +486,7 @@ export default function PaymentBookingDialog({
               className="w-full sm:w-auto min-h-11"
             >
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Bokför ändå
+              {t('book_anyway')}
             </Button>
           ) : (
             <Button
@@ -493,7 +495,7 @@ export default function PaymentBookingDialog({
               className="w-full sm:w-auto min-h-11"
             >
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Bekräfta &amp; bokför
+              {t('confirm_and_book')}
             </Button>
           )}
         </DialogFooter>

@@ -34,7 +34,8 @@ import {
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { collectMappingResultAccounts, findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import type {
@@ -250,6 +251,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         .select('account_number, account_class')
         .eq('company_id', ctx.companyId!)
         .eq('account_number', body.account_override)
+        .eq('is_active', true)
         .single()
       if (!accountExists) {
         return v1ErrorResponseFromCode('TX_CATEGORIZE_INVALID_ACCOUNT', txLog, {
@@ -282,6 +284,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           debitAccount: mappingResult.debit_account,
           creditAccount: mappingResult.credit_account,
         },
+      })
+    }
+
+    // Pre-validate every account in the mapping against the company's
+    // chart_of_accounts. Template / counterparty-template / category paths
+    // all bypass the older account_override check; without this catch they
+    // would reach the engine and throw AccountsNotInChartError mid-flight,
+    // leaving the legacy partial-success branch to silently mark the row as
+    // bokförd with no verifikation. We validate in both live AND dry-run
+    // paths so previews surface the same actionable error.
+    const missingAccounts = await findMissingActiveAccounts(
+      ctx.supabase,
+      ctx.companyId!,
+      collectMappingResultAccounts(mappingResult),
+    )
+    if (missingAccounts.length > 0) {
+      txLog.warn('mapping references inactive/missing accounts', { missingAccounts })
+      return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
+        requestId: ctx.requestId,
       })
     }
 
@@ -341,6 +362,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (journalEntry) journalEntryId = journalEntry.id
     } catch (err) {
       txLog.error('transactions.categorize: journal entry creation failed', err as Error)
+      // AccountsNotInChartError means an account was deactivated between our
+      // pre-validation and the engine call (race). Don't fall through to the
+      // partial-success path that would mark the row bokförd with no
+      // verifikation — return a structured 400 so the row stays in the
+      // categorization queue and the caller can retry after re-activating.
+      if (err instanceof AccountsNotInChartError) {
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
       if (isBookkeepingError(err)) {
         journalEntryError = getErrorMessage(err, { context: 'transaction' })
       } else {

@@ -373,6 +373,60 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Matchningen registrerades men verifikationen kunde inte skapas.',
     message_en: 'Match recorded but the journal entry could not be created.',
   },
+  MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan har redan en betalningsverifikation. Koppla istället bankhändelsen till befintlig verifikation, eller rätta tidigare bokföring först.',
+    message_en:
+      'Invoice already has a payment journal entry. Link the bank transaction to the existing voucher instead, or correct the prior bookkeeping first.',
+  },
+  MATCH_INVOICE_POSSIBLE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns redan en bokförd verifikation på samma belopp och datum. Har du redan bokfört denna betalning? Koppla bankhändelsen till befintlig verifikation, eller skapa ny verifikation ändå om de inte hör ihop.',
+    message_en:
+      'A posted journal entry already books the same amount on a nearby date. The user may have already booked this payment manually — link to the existing voucher or pass force=true to create a new one anyway.',
+  },
+  MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen som dubblettkontrollen visade matchar inte längre. Stäng dialogen och försök igen så att rätt verifikation visas.',
+    message_en:
+      'The candidate journal entry echoed in expected_journal_entry_id does not match the one detected at request time. Re-run the duplicate-payment pre-flight to obtain the current candidate, then retry.',
+  },
+}
+
+const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
+  LINK_TX_JE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikationen kunde inte hittas.',
+    message_en: 'Journal entry not found.',
+  },
+  LINK_TX_JE_NOT_POSTED: {
+    httpStatus: 400,
+    message_sv: 'Endast bokförda verifikationer kan kopplas till en banktransaktion.',
+    message_en: 'Only posted journal entries can be linked to a transaction.',
+  },
+  LINK_TX_TX_ALREADY_LINKED: {
+    httpStatus: 400,
+    message_sv: 'Transaktionen är redan kopplad till en verifikation.',
+    message_en: 'Transaction is already linked to a journal entry.',
+  },
+  LINK_TX_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Fakturan kunde inte hittas.',
+    message_en: 'Invoice not found.',
+  },
+  LINK_TX_INVOICE_NOT_OPEN: {
+    httpStatus: 400,
+    message_sv: 'Fakturan är inte i ett obetalt läge och kan inte kopplas.',
+    message_en: 'Invoice is not in an unpaid state.',
+  },
+  LINK_TX_INVOICE_RACE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan ändrades samtidigt. Försök igen.',
+    message_en: 'Invoice status changed concurrently. Retry the request.',
+  },
 }
 
 const MATCH_SI: Record<string, StructuredErrorEntry> = {
@@ -1543,6 +1597,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOOKKEEPING,
   ...TRANSACTIONS,
   ...MATCH_INVOICE,
+  ...LINK_TX_JE,
   ...MATCH_SI,
   ...INVOICE,
   ...SUPPLIER_INVOICE,

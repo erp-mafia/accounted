@@ -811,9 +811,12 @@ export const ticExtension: Extension = {
 
           const userId = newUser.user.id
 
-          // Mark user as BankID-linked (skips TOTP MFA)
+          // Mark user as BankID-linked (skips TOTP MFA) and record that they
+          // do not have a password yet — the BankID signup gave them a random
+          // server-side password they will never see. This flag gates MFA
+          // enrollment (see lib/auth/has-password.ts).
           await supabase.auth.admin.updateUserById(userId, {
-            app_metadata: { bankid_linked: true },
+            app_metadata: { bankid_linked: true, has_password: false },
           })
 
           // Store BankID identity
@@ -966,9 +969,15 @@ export const ticExtension: Extension = {
             )
           }
 
-          // Mark user as BankID-linked (skips TOTP MFA)
+          // Read-merge-write: updateUserById REPLACES app_metadata wholesale
+          // (see app/api/account/password/route.ts). Passing just
+          // { bankid_linked: true } would wipe has_password for users who
+          // already set one — they'd then be incorrectly shown the
+          // set-password banner on their next session.
+          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const priorMeta = priorUser?.user?.app_metadata ?? {}
           await supabase.auth.admin.updateUserById(ctx.userId, {
-            app_metadata: { bankid_linked: true },
+            app_metadata: { ...priorMeta, bankid_linked: true },
           })
 
           return NextResponse.json({ data: { linked: true } })

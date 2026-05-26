@@ -16,8 +16,35 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const dateFrom = searchParams.get('date_from') || undefined
   const dateTo = searchParams.get('date_to') || undefined
+  const accountNumber = searchParams.get('account_number') || '1930'
 
-  const status = await getReconciliationStatus(supabase, companyId, dateFrom, dateTo)
+  // Look up the cash account so we can pair the bank account with the right
+  // currency. Comparing EUR GL movements against SEK transactions silently
+  // produces nonsense.
+  const { data: cashAccount } = await supabase
+    .from('cash_accounts')
+    .select('currency')
+    .eq('company_id', companyId)
+    .eq('ledger_account', accountNumber)
+    .maybeSingle()
+
+  if (!cashAccount && accountNumber !== '1930') {
+    return NextResponse.json(
+      { error: 'Okänt kassakonto för det här företaget' },
+      { status: 400 },
+    )
+  }
+
+  const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
+
+  const status = await getReconciliationStatus(
+    supabase,
+    companyId,
+    dateFrom,
+    dateTo,
+    accountNumber,
+    currency,
+  )
 
   return NextResponse.json({ data: status })
 }

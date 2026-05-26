@@ -11,6 +11,15 @@ import { parseCSVLine } from './nordea'
 import { normalizeDate } from '../date-utils'
 
 /**
+ * Normalize Unicode minus variants (U+2212 "−", U+2013 "–", U+2014 "—", U+2010 "‐")
+ * to ASCII hyphen-minus so parseFloat can read them. Northmill and some other
+ * banks export negatives with U+2212; parseFloat returns NaN for those.
+ */
+export function normalizeMinusSign(value: string): string {
+  return value.replace(/[\u2212\u2013\u2014\u2010]/g, '-')
+}
+
+/**
  * Parse a generic CSV with user-provided column mapping
  */
 export function parseGenericCSV(
@@ -89,12 +98,15 @@ export function parseGenericCSV(
       continue
     }
 
-    // Parse amount based on configured decimal separator
+    // Parse amount based on configured decimal separator.
+    // Normalize Unicode minus first — some banks (e.g. Northmill) use U+2212
+    // instead of ASCII hyphen, which parseFloat treats as NaN.
+    const normalizedAmount = normalizeMinusSign(amountStr)
     let amount: number
     if (mapping.decimal_separator === ',') {
-      amount = parseFloat(amountStr.replace(/\s/g, '').replace(',', '.'))
+      amount = parseFloat(normalizedAmount.replace(/\s/g, '').replace(',', '.'))
     } else {
-      amount = parseFloat(amountStr.replace(/\s/g, ''))
+      amount = parseFloat(normalizedAmount.replace(/\s/g, ''))
     }
 
     if (isNaN(amount)) {
@@ -113,10 +125,11 @@ export function parseGenericCSV(
 
     let balance: number | null = null
     if (balanceStr) {
+      const normalizedBalance = normalizeMinusSign(balanceStr)
       if (mapping.decimal_separator === ',') {
-        balance = parseFloat(balanceStr.replace(/\s/g, '').replace(',', '.'))
+        balance = parseFloat(normalizedBalance.replace(/\s/g, '').replace(',', '.'))
       } else {
-        balance = parseFloat(balanceStr.replace(/\s/g, ''))
+        balance = parseFloat(normalizedBalance.replace(/\s/g, ''))
       }
       if (isNaN(balance)) balance = null
     }

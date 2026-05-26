@@ -255,12 +255,22 @@ export async function ingestTransactions(
         merchant_name: raw.merchant_name || null,
         reference: raw.reference || null,
         import_source: raw.import_source || null,
+        counterparty_iban: raw.counterparty_iban || null,
+        counterparty_account: raw.counterparty_account || null,
       })
       .select()
       .single()
 
     if (insertError || !newTransaction) {
       result.errors++
+      if (!result.first_error && insertError) {
+        result.first_error = {
+          message: insertError.message,
+          code: insertError.code ?? null,
+          details: insertError.details ?? null,
+          hint: insertError.hint ?? null,
+        }
+      }
       continue
     }
 

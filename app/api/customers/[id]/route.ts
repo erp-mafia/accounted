@@ -67,6 +67,7 @@ export const PATCH = withRouteContext(
     if (body.country !== undefined) updateData.country = body.country
     if (body.org_number !== undefined) updateData.org_number = body.org_number
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
+    if (body.language !== undefined) updateData.language = body.language
     if (body.default_payment_terms !== undefined) updateData.default_payment_terms = body.default_payment_terms
     if (body.notes !== undefined) updateData.notes = body.notes
 

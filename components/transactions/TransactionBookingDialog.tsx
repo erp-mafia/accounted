@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -21,7 +22,7 @@ interface TransactionBookingDialogProps {
   onBooked: (transactionId: string, journalEntryId: string) => void
 }
 
-function buildInitialLines(transaction: TransactionWithInvoice): FormLine[] {
+function buildInitialLines(transaction: TransactionWithInvoice, bankLineDescription: string): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
     transaction.amount_sek,
@@ -44,7 +45,7 @@ function buildInitialLines(transaction: TransactionWithInvoice): FormLine[] {
     account_number: '1930',
     debit_amount: isExpense ? '' : amountStr,
     credit_amount: isExpense ? amountStr : '',
-    line_description: 'Företagskonto',
+    line_description: bankLineDescription,
     ...currencyMeta,
   }
 
@@ -64,6 +65,7 @@ export default function TransactionBookingDialog({
   transaction,
   onBooked,
 }: TransactionBookingDialogProps) {
+  const t = useTranslations('tx_booking_dialog')
   const { toast } = useToast()
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [showUploadZone, setShowUploadZone] = useState(false)
@@ -90,8 +92,8 @@ export default function TransactionBookingDialog({
       }
       if (linkFailCount > 0) {
         toast({
-          title: 'Underlag kunde inte bifogas',
-          description: `${linkFailCount} fil(er) kunde inte länkas till verifikationen. Försök igen via bokföringssidan.`,
+          title: t('doc_link_failed_title'),
+          description: t('doc_link_failed_description', { count: linkFailCount }),
           variant: 'destructive',
         })
       }
@@ -112,9 +114,9 @@ export default function TransactionBookingDialog({
     }}>
       <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Bokför transaktion</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Skapa en verifikation för transaktionen
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -152,10 +154,10 @@ export default function TransactionBookingDialog({
           >
             <div className="flex items-center gap-2">
               <Paperclip className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">Underlag (valfritt)</span>
+              <span className="font-medium">{t('doc_label')}</span>
               {uploadedFiles.filter((f) => f.status === 'uploaded').length > 0 && (
                 <span className="text-xs text-muted-foreground">
-                  {uploadedFiles.filter((f) => f.status === 'uploaded').length} bifogade
+                  {t('doc_attached_count', { count: uploadedFiles.filter((f) => f.status === 'uploaded').length })}
                 </span>
               )}
             </div>
@@ -179,7 +181,7 @@ export default function TransactionBookingDialog({
         <JournalEntryForm
           key={transaction.id}
           embedded
-          initialLines={buildInitialLines(transaction)}
+          initialLines={buildInitialLines(transaction, t('bank_line_description'))}
           initialDate={transaction.date}
           initialDescription={transaction.description}
           submitUrl={`/api/transactions/${transaction.id}/book`}

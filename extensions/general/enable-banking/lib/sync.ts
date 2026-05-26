@@ -99,19 +99,28 @@ export async function syncAccountTransactions(
 
   const bankTransactions = transactions.map(tx => convertTransaction(tx, account.currency))
 
-  // Convert Enable Banking format to generic RawTransaction
-  const rawTransactions: RawTransaction[] = bankTransactions.map((tx) => ({
-    date: tx.booking_date || tx.date,
-    description: tx.description || tx.counterparty_name || 'Unknown',
-    amount: tx.amount,
-    currency: tx.currency || account.currency,
-    external_id: `eb_${account.iban || account.uid}_${tx.id}`,
-    mcc_code: tx.merchant_category_code ? parseInt(tx.merchant_category_code, 10) : null,
-    merchant_name: tx.counterparty_name || null,
-    reference: tx.reference || null,
-    bank_connection_id: connectionId,
-    import_source: 'enable_banking',
-  }))
+  // Convert Enable Banking format to generic RawTransaction. counterparty
+  // identification: prefer IBAN (international, normalized) over BBAN/BG
+  // numbers — the own-account detector matches on IBAN first, falling back
+  // to counterparty_account for Swedish domestic transfers.
+  const rawTransactions: RawTransaction[] = bankTransactions.map((tx) => {
+    const cpAccount = tx.counterparty_account ?? null
+    const looksLikeIban = cpAccount && /^[A-Z]{2}\d/.test(cpAccount.replace(/\s+/g, ''))
+    return {
+      date: tx.booking_date || tx.date,
+      description: tx.description || tx.counterparty_name || 'Unknown',
+      amount: tx.amount,
+      currency: tx.currency || account.currency,
+      external_id: `eb_${account.iban || account.uid}_${tx.id}`,
+      mcc_code: tx.merchant_category_code ? parseInt(tx.merchant_category_code, 10) : null,
+      merchant_name: tx.counterparty_name || null,
+      reference: tx.reference || null,
+      bank_connection_id: connectionId,
+      import_source: 'enable_banking',
+      counterparty_iban: looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null,
+      counterparty_account: !looksLikeIban ? cpAccount : null,
+    }
+  })
 
   const ingestOptions: IngestOptions = {}
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true

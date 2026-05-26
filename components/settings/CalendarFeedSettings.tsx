@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -18,6 +19,7 @@ interface CalendarFeedWithUrls extends CalendarFeed {
 }
 
 export function CalendarFeedSettings() {
+  const t = useTranslations('settings_calendar_feed')
   const { toast } = useToast()
 
   const [isLoading, setIsLoading] = useState(true)
@@ -29,6 +31,7 @@ export function CalendarFeedSettings() {
 
   useEffect(() => {
     fetchFeed()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchFeed = async () => {
@@ -57,12 +60,12 @@ export function CalendarFeedSettings() {
       setFeed(data)
 
       toast({
-        title: 'Kalenderfeed skapad',
-        description: 'Du kan nu koppla kalendern till Apple Calendar eller Google Calendar.',
+        title: t('toast_feed_created_title'),
+        description: t('toast_feed_created_description'),
       })
-    } catch (error) {
+    } catch {
       toast({
-        title: 'Kunde inte skapa kalenderfeed.',
+        title: t('toast_create_failed'),
         variant: 'destructive',
       })
     } finally {
@@ -88,9 +91,9 @@ export function CalendarFeedSettings() {
 
       const { data } = await response.json()
       setFeed(data)
-    } catch (error) {
+    } catch {
       toast({
-        title: 'Kunde inte uppdatera inställning.',
+        title: t('toast_update_failed'),
         variant: 'destructive',
       })
     } finally {
@@ -100,9 +103,9 @@ export function CalendarFeedSettings() {
 
   const regenerateToken = async () => {
     const ok = await confirmAction({
-      title: 'Skapa ny kalender-länk',
-      description: 'Den gamla länken slutar fungera omedelbart. Du behöver uppdatera länken i alla kalenderappar som använder den.',
-      confirmLabel: 'Skapa ny länk',
+      title: t('regen_dialog_title'),
+      description: t('regen_dialog_description'),
+      confirmLabel: t('regen_confirm'),
       variant: 'warning',
     })
     if (!ok) return
@@ -122,12 +125,12 @@ export function CalendarFeedSettings() {
       setFeed(data)
 
       toast({
-        title: 'Ny länk skapad',
-        description: 'Den gamla länken fungerar inte längre.',
+        title: t('toast_new_link_title'),
+        description: t('toast_new_link_description'),
       })
-    } catch (error) {
+    } catch {
       toast({
-        title: 'Kunde inte skapa ny länk.',
+        title: t('toast_regen_failed'),
         variant: 'destructive',
       })
     } finally {
@@ -141,12 +144,12 @@ export function CalendarFeedSettings() {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
       toast({
-        title: 'Kopierad',
-        description: 'Länken har kopierats till urklipp.',
+        title: t('toast_copied_title'),
+        description: t('toast_copied_description'),
       })
-    } catch (error) {
+    } catch {
       toast({
-        title: 'Kunde inte kopiera länken.',
+        title: t('toast_copy_failed'),
         variant: 'destructive',
       })
     }
@@ -172,27 +175,27 @@ export function CalendarFeedSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Calendar className="h-5 w-5" />
-            Kalendersynkronisering
+            {t('title')}
           </CardTitle>
           <CardDescription>
-            Synka dina deadlines med Apple Calendar, Google Calendar eller Outlook
+            {t('description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="text-center space-y-4 py-4">
             <p className="text-muted-foreground">
-              Skapa en kalenderfeed för att se dina deadlines i din vanliga kalenderapp.
+              {t('empty_intro')}
             </p>
             <Button onClick={createFeed} disabled={isSaving}>
               {isSaving ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Skapar...
+                  {t('creating')}
                 </>
               ) : (
                 <>
                   <Calendar className="mr-2 h-4 w-4" />
-                  Aktivera kalendersynk
+                  {t('activate_sync')}
                 </>
               )}
             </Button>
@@ -209,10 +212,10 @@ export function CalendarFeedSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Calendar className="h-5 w-5" />
-            Kalendersynkronisering
+            {t('title')}
           </CardTitle>
           <CardDescription>
-            Prenumerera på din kalender i Apple Calendar, Google Calendar eller Outlook
+            {t('subscribe_description')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -220,7 +223,7 @@ export function CalendarFeedSettings() {
           <div className="flex gap-2">
             <Button onClick={openWebcal} className="flex-1">
               <Calendar className="mr-2 h-4 w-4" />
-              Lägg till i Apple Calendar
+              {t('add_to_apple_calendar')}
             </Button>
             <Button variant="outline" onClick={() => copyToClipboard(feed.httpsUrl)}>
               {copied ? (
@@ -233,7 +236,7 @@ export function CalendarFeedSettings() {
 
           {/* URL display */}
           <div className="space-y-2">
-            <Label>Kalenderlänk (för Google Calendar m.fl.)</Label>
+            <Label>{t('calendar_link_label')}</Label>
             <div className="flex gap-2">
               <Input
                 value={feed.httpsUrl}
@@ -242,14 +245,14 @@ export function CalendarFeedSettings() {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Kopiera denna länk och lägg till som URL-prenumeration i din kalenderapp.
+              {t('calendar_link_help')}
             </p>
           </div>
 
           {/* Stats */}
           {feed.last_accessed_at && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span>Senast hämtad:</span>
+              <span>{t('last_fetched')}</span>
               <span>
                 {new Date(feed.last_accessed_at).toLocaleDateString('sv-SE', {
                   day: 'numeric',
@@ -259,7 +262,7 @@ export function CalendarFeedSettings() {
                 })}
               </span>
               <Badge variant="secondary" className="text-xs">
-                {feed.access_count} gånger
+                {t('times_count', { count: feed.access_count })}
               </Badge>
             </div>
           )}
@@ -275,17 +278,17 @@ export function CalendarFeedSettings() {
               {isRegenerating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Skapar ny länk...
+                  {t('creating_new_link')}
                 </>
               ) : (
                 <>
                   <RefreshCw className="mr-2 h-4 w-4" />
-                  Skapa ny länk
+                  {t('create_new_link')}
                 </>
               )}
             </Button>
             <p className="text-xs text-muted-foreground mt-1">
-              Ogiltigförklarar den gamla länken. Använd om någon obehörig fått tag i länken.
+              {t('regen_help')}
             </p>
           </div>
         </CardContent>
@@ -294,17 +297,17 @@ export function CalendarFeedSettings() {
       {/* Content settings */}
       <Card>
         <CardHeader>
-          <CardTitle>Innehåll i kalendern</CardTitle>
+          <CardTitle>{t('content_title')}</CardTitle>
           <CardDescription>
-            Välj vilka händelser som ska visas i din kalender
+            {t('content_description')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label htmlFor="include-tax">Skattedeadlines</Label>
+              <Label htmlFor="include-tax">{t('tax_deadlines_label')}</Label>
               <p className="text-sm text-muted-foreground">
-                Moms, F-skatt, deklarationer
+                {t('tax_deadlines_help')}
               </p>
             </div>
             <Switch
@@ -319,9 +322,9 @@ export function CalendarFeedSettings() {
 
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label htmlFor="include-invoices">Fakturor</Label>
+              <Label htmlFor="include-invoices">{t('invoices_label')}</Label>
               <p className="text-sm text-muted-foreground">
-                Förfallodatum för fakturor
+                {t('invoices_help')}
               </p>
             </div>
             <Switch

@@ -16,6 +16,12 @@ import type { StoredSkattekontoTransaction } from '../types'
  * The candidate query is intentionally strict (exact amount, exact side,
  * unused entry) — false positives would be silently destructive. False
  * negatives just fall back to "Bokför / Skapa manuellt".
+ *
+ * AGI period disambiguation: when transaktionstext carries an explicit period
+ * token (e.g. "Arbetsgivardeklaration 202605"), the AGI declaration for that
+ * period uniquely identifies the salary_run, and from there the salary entries.
+ * That lets the matcher prefer the right entry even when two months happen to
+ * have identical totals.
  */
 
 const SKATTEKONTO_ACCOUNT = '1630'
@@ -45,18 +51,156 @@ export interface SkattekontoMatchCandidate {
   status: 'draft' | 'posted' | 'reversed'
   matched_amount: number
   matched_side: 'debit' | 'credit'
+  /**
+   * True when this candidate was picked because the SKV transaktionstext carried
+   * an AGI period code matching the originating salary run. Used by the UI to
+   * show a "period-matched" badge.
+   */
+  matched_via_agi_period?: boolean
+}
+
+/**
+ * Parse an AGI period from a Skatteverket transaktionstext.
+ *
+ * Examples that match:
+ *   "Arbetsgivardeklaration 202605"
+ *   "arbetsgivardeklaration 2026-05"
+ *   "AGI 202605"
+ *
+ * Returns null when no period token is present or the value is out of range.
+ *
+ * The fallback (numeric YYYYMM after any AGI keyword) covers older SKV variants
+ * that omit the leading word but still place the period adjacent to "AGI" or
+ * "arbetsgivaravgift" elsewhere in the row.
+ */
+export function parseAgiPeriod(
+  transaktionstext: string,
+): { year: number; month: number } | null {
+  const text = transaktionstext.toLowerCase()
+
+  const primary = /arbetsgivardeklaration\s*(\d{4})[-]?(\d{2})/i.exec(transaktionstext)
+  if (primary) {
+    const year = Number(primary[1])
+    const month = Number(primary[2])
+    if (isValidPeriod(year, month)) return { year, month }
+  }
+
+  const agiKeyword = /(arbetsgivardeklaration|arbetsgivaravgift|personalskatt|a-skatt|\bagi\b)/i
+  if (!agiKeyword.test(text)) return null
+
+  const fallback = /(\d{4})[-]?(\d{2})\b/.exec(transaktionstext)
+  if (fallback) {
+    const year = Number(fallback[1])
+    const month = Number(fallback[2])
+    if (isValidPeriod(year, month)) return { year, month }
+  }
+
+  return null
+}
+
+function isValidPeriod(year: number, month: number): boolean {
+  return Number.isFinite(year) && Number.isFinite(month)
+    && year >= 2000 && year <= 2100
+    && month >= 1 && month <= 12
+}
+
+interface AgiEntryLookup {
+  /** Set of journal_entry_ids that belong to the AGI's salary run for that period. */
+  entryIds: Set<string>
+}
+
+/**
+ * Resolve AGI-linked journal entries for a set of (year, month) periods.
+ *
+ * For each period: look up agi_declarations (UNIQUE per company per period), then
+ * walk salary_runs.salary_entry_id / avgifter_entry_id / vacation_entry_id. Any
+ * of those three entries is a legitimate match target for an SKV row carrying
+ * the period code.
+ */
+async function loadAgiEntryIndex(
+  supabase: SupabaseClient,
+  companyId: string,
+  periods: Array<{ year: number; month: number }>,
+): Promise<Map<string, AgiEntryLookup>> {
+  const index = new Map<string, AgiEntryLookup>()
+  if (periods.length === 0) return index
+
+  const uniqueKeys = new Set(periods.map(p => periodKey(p.year, p.month)))
+  if (uniqueKeys.size === 0) return index
+
+  const years = Array.from(new Set(periods.map(p => p.year)))
+  const months = Array.from(new Set(periods.map(p => p.month)))
+
+  const { data: agiRows } = await supabase
+    .from('agi_declarations')
+    .select('period_year, period_month, salary_run_id')
+    .eq('company_id', companyId)
+    .in('period_year', years)
+    .in('period_month', months)
+
+  const salaryRunIdsByPeriod = new Map<string, string[]>()
+  for (const row of (agiRows ?? []) as Array<{
+    period_year: number
+    period_month: number
+    salary_run_id: string | null
+  }>) {
+    if (!row.salary_run_id) continue
+    const key = periodKey(row.period_year, row.period_month)
+    if (!uniqueKeys.has(key)) continue
+    const existing = salaryRunIdsByPeriod.get(key) ?? []
+    existing.push(row.salary_run_id)
+    salaryRunIdsByPeriod.set(key, existing)
+  }
+
+  const allSalaryRunIds = Array.from(
+    new Set(Array.from(salaryRunIdsByPeriod.values()).flat()),
+  )
+  if (allSalaryRunIds.length === 0) return index
+
+  const { data: salaryRows } = await supabase
+    .from('salary_runs')
+    .select('id, salary_entry_id, avgifter_entry_id, vacation_entry_id')
+    .eq('company_id', companyId)
+    .in('id', allSalaryRunIds)
+
+  const entryIdsByRun = new Map<string, string[]>()
+  for (const row of (salaryRows ?? []) as Array<{
+    id: string
+    salary_entry_id: string | null
+    avgifter_entry_id: string | null
+    vacation_entry_id: string | null
+  }>) {
+    const ids = [row.salary_entry_id, row.avgifter_entry_id, row.vacation_entry_id]
+      .filter((id): id is string => !!id)
+    entryIdsByRun.set(row.id, ids)
+  }
+
+  for (const [key, runIds] of salaryRunIdsByPeriod) {
+    const entryIds = new Set<string>()
+    for (const runId of runIds) {
+      for (const id of entryIdsByRun.get(runId) ?? []) entryIds.add(id)
+    }
+    if (entryIds.size > 0) index.set(key, { entryIds })
+  }
+
+  return index
+}
+
+function periodKey(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}`
 }
 
 /**
  * Bulk-enrich a list of unmatched SKV rows with a `match_suggestion` field
- * pointing to a "high confidence" candidate verifikat. We only attach the
- * suggestion when there is EXACTLY ONE candidate — multiple matches means
- * we can't auto-suggest without risking the wrong link. The user can still
- * open the full Matcha-dialog manually in that case.
+ * pointing to a "high confidence" candidate verifikat.
  *
- * Done in a single SQL pass to keep listing performance reasonable:
- * fetch all 1630-lines for entries in the widest possible date window
- * covering all rows, then match in-memory.
+ * Matching has two layers:
+ *   1. AGI period-code disambiguation. If the transaktionstext carries a period
+ *      token and the AGI declaration for that period maps to journal entries,
+ *      the matcher prefers candidates from that set even when other amount
+ *      matches exist.
+ *   2. Strict amount+side match. We auto-suggest only when there is EXACTLY ONE
+ *      candidate to avoid silently linking the wrong entry.
  */
 export async function findMatchSuggestionsBulk(
   supabase: SupabaseClient,
@@ -64,6 +208,7 @@ export async function findMatchSuggestionsBulk(
   rows: Array<{
     id: string
     transaktionsdatum: string
+    transaktionstext?: string | null
     belopp_skatteverket: number
     journal_entry_id: string | null
   }>,
@@ -131,6 +276,18 @@ export async function findMatchSuggestionsBulk(
       .filter((id): id is string => !!id),
   )
 
+  // AGI period extraction across the batch.
+  const periods: Array<{ year: number; month: number }> = []
+  const periodByRowId = new Map<string, string>()
+  for (const row of unmatched) {
+    if (!row.transaktionstext) continue
+    const period = parseAgiPeriod(row.transaktionstext)
+    if (!period) continue
+    periods.push(period)
+    periodByRowId.set(row.id, periodKey(period.year, period.month))
+  }
+  const agiIndex = await loadAgiEntryIndex(supabase, companyId, periods)
+
   const suggestions = new Map<string, SkattekontoMatchCandidate>()
 
   for (const row of unmatched) {
@@ -138,6 +295,11 @@ export async function findMatchSuggestionsBulk(
     const side = expectedSide(Number(row.belopp_skatteverket))
     const rowFrom = addDays(row.transaktionsdatum, -DATE_WINDOW_DAYS)
     const rowTo = addDays(row.transaktionsdatum, DATE_WINDOW_DAYS)
+
+    const periodEntryIds = (() => {
+      const key = periodByRowId.get(row.id)
+      return key ? agiIndex.get(key)?.entryIds ?? null : null
+    })()
 
     const matches: SkattekontoMatchCandidate[] = []
     const seen = new Set<string>()
@@ -166,12 +328,23 @@ export async function findMatchSuggestionsBulk(
         status: e.status,
         matched_amount: amount,
         matched_side: side,
+        matched_via_agi_period: periodEntryIds?.has(e.id) ?? false,
       })
 
-      if (matches.length > 1) break
+      if (matches.length > 1 && !periodEntryIds) break
     }
 
-    // Auto-suggest only when there's a single unambiguous match.
+    // Period-code disambiguation: prefer the AGI-linked candidate even when
+    // multiple amount-matches exist.
+    if (periodEntryIds) {
+      const periodMatches = matches.filter(m => m.matched_via_agi_period)
+      if (periodMatches.length === 1) {
+        suggestions.set(row.id, periodMatches[0])
+        continue
+      }
+    }
+
+    // Fallback: auto-suggest only when there's a single unambiguous amount match.
     if (matches.length === 1) {
       suggestions.set(row.id, matches[0])
     }
@@ -196,7 +369,8 @@ function expectedSide(beloppSkatteverket: number): 'debit' | 'credit' {
  * Find existing journal entries that look like the bank side of this
  * skattekonto row.
  *
- * Returns up to 25 candidates ordered by date proximity to the SKV row.
+ * Returns up to 25 candidates ordered by AGI-period match, then date proximity
+ * to the SKV row.
  */
 export async function findMatchCandidates(
   supabase: SupabaseClient,
@@ -300,6 +474,15 @@ export async function findMatchCandidates(
       .filter((id): id is string => !!id),
   )
 
+  // Resolve AGI-linked entries for this single row's period (if any).
+  const period = tx.transaktionstext ? parseAgiPeriod(tx.transaktionstext) : null
+  const agiIndex = period
+    ? await loadAgiEntryIndex(supabase, companyId, [period])
+    : new Map<string, AgiEntryLookup>()
+  const periodEntryIds = period
+    ? agiIndex.get(periodKey(period.year, period.month))?.entryIds ?? null
+    : null
+
   const seen = new Set<string>()
   const candidates: SkattekontoMatchCandidate[] = []
   for (const row of typedRows) {
@@ -316,12 +499,16 @@ export async function findMatchCandidates(
       status: e.status,
       matched_amount: amount,
       matched_side: side,
+      matched_via_agi_period: periodEntryIds?.has(e.id) ?? false,
     })
   }
 
-  // Order by date proximity to the SKV row, then by voucher number desc.
+  // Order: AGI-period match first, then date proximity, then voucher number desc.
   const target = new Date(tx.transaktionsdatum + 'T00:00:00Z').getTime()
   candidates.sort((a, b) => {
+    if (a.matched_via_agi_period !== b.matched_via_agi_period) {
+      return a.matched_via_agi_period ? -1 : 1
+    }
     const da = Math.abs(new Date(a.entry_date + 'T00:00:00Z').getTime() - target)
     const db = Math.abs(new Date(b.entry_date + 'T00:00:00Z').getTime() - target)
     if (da !== db) return da - db

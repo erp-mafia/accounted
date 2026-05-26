@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields } from './lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import {
   verifyInboundWebhook,
   fetchReceivingEmail,
@@ -24,10 +24,50 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/api/schemas'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
+import { simpleParser } from 'mailparser'
+import { PDFDocument } from 'pdf-lib'
+import path from 'node:path'
+
+/**
+ * Defensive filename sanitisation for content arriving from .eml inner
+ * attachments and rejected-attachment metadata. The document-service already
+ * sanitises before storage paths are built (lib/core/documents/document-service.ts),
+ * so this is defense-in-depth: strip directory traversal sequences and exotic
+ * characters before they ever flow into DB columns or downstream consumers.
+ */
+function sanitiseFilename(raw: string | null | undefined, fallback: string): string {
+  const base = path.basename(String(raw ?? '').trim())
+  const cleaned = base.replace(/[^\w.-]/g, '_').slice(0, 200)
+  return cleaned || fallback
+}
+
+function sanitiseMime(raw: string | null | undefined): string {
+  const value = String(raw ?? '').trim().slice(0, 120)
+  return /^[\w./+-]+$/.test(value) ? value : 'application/octet-stream'
+}
 import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_EMAIL = 20
+
+// AI extraction is tuned for single-page receipts/invoices. Documents above
+// this page count tend to be sales reports, bank statements, or contracts —
+// Bedrock churns for minutes and still extracts nothing useful (issue #553).
+// Above the limit we skip extraction entirely; the document still lands in
+// the inbox and can be attached to a transaction or converted manually.
+const MAX_PAGES_FOR_AUTO_EXTRACT = 3
+
+// Returns the page count for a PDF buffer, or null if the buffer isn't a
+// parseable PDF. Errors fall through so callers can treat "unknown" the same
+// as "small enough" — preserves today's behavior on malformed inputs.
+async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
+  try {
+    const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
+    return pdf.getPageCount()
+  } catch {
+    return null
+  }
+}
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
 // scalar fields the UI exposes for inline editing — line items and
@@ -113,6 +153,7 @@ async function uploadAndExtract(
   // VerifyAndBookOverlay opened from a transaction row's paperclip or from
   // a transaction-anchored chat). Skipped silently if missing.
   matchedTransactionId?: string | null,
+  opts: { skipExtraction?: boolean } = {},
 ) {
   const correlationId = crypto.randomUUID()
 
@@ -144,11 +185,35 @@ async function uploadAndExtract(
     console.error('[invoice-inbox] Failed to append DocumentIngested:', err)
   }
 
-  const { data: extracted, rawText } = await extractInvoiceFields({
-    buffer: Buffer.from(file.buffer),
-    mimeType: file.type,
-    fileName: file.name,
-  })
+  // Page-count gate (issue #553): PDFs above MAX_PAGES_FOR_AUTO_EXTRACT
+  // skip extraction. Bedrock would otherwise block the upload response for
+  // minutes on a 6-page sales report and return nothing useful. Images and
+  // non-PDFs are never gated (single-page by definition). countPdfPages
+  // returns null on malformed PDFs — we treat null as "not gated" and fall
+  // through to the existing extraction path so today's behavior is preserved.
+  const pageCount =
+    file.type === 'application/pdf' ? await countPdfPages(file.buffer) : null
+  const gatedByPageCount =
+    pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+  const skipExtraction = !!opts.skipExtraction || gatedByPageCount
+  const skipReason: 'too_many_pages' | 'client_opt_out' | null = gatedByPageCount
+    ? 'too_many_pages'
+    : opts.skipExtraction
+      ? 'client_opt_out'
+      : null
+
+  // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
+  // empty extraction skeleton. The caller is expected to PUT the parsed
+  // fields via /items/:id/extracted-data before converting to a supplier
+  // invoice. extracted_data is never null in the DB; an empty skeleton
+  // keeps downstream readers (UI, MCP) happy.
+  const { data: extracted, rawText } = skipExtraction
+    ? { data: emptyResult(), rawText: null }
+    : await extractInvoiceFields({
+        buffer: Buffer.from(file.buffer),
+        mimeType: file.type,
+        fileName: file.name,
+      })
 
   // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
   let matchedSupplierId: string | null = null
@@ -182,6 +247,7 @@ async function uploadAndExtract(
       source,
       document_id: doc.id,
       extracted_data: extracted as unknown as Record<string, unknown>,
+      extraction_skipped: skipExtraction,
       matched_supplier_id: matchedSupplierId,
       email_from: emailMeta?.from || null,
       email_subject: emailMeta?.subject || null,
@@ -214,6 +280,9 @@ async function uploadAndExtract(
         extracted_total: extracted.totals.total,
         has_org_number: extracted.supplier.orgNumber != null,
         has_ocr: extracted.invoice.paymentReference != null,
+        skipped: skipExtraction,
+        skip_reason: skipReason,
+        page_count: pageCount,
       },
       actor: { type: 'system', id: 'invoice-inbox-extract' },
       occurredAt: new Date(),
@@ -229,6 +298,9 @@ async function uploadAndExtract(
     extracted_data: extracted,
     matched_supplier_id: inbox.matched_supplier_id,
     matched_transaction_id: inbox.matched_transaction_id,
+    extraction_skipped: skipExtraction,
+    skip_reason: skipReason,
+    page_count: pageCount,
   }
 }
 
@@ -287,6 +359,12 @@ export const invoiceInboxExtension: Extension = {
           typeof matchedTransactionIdRaw === 'string' && matchedTransactionIdRaw.length > 0
             ? matchedTransactionIdRaw
             : null
+        // Opt-out of the built-in Claude/Bedrock OCR. Agents with their own
+        // extraction pipeline upload the document, get the inbox row, then
+        // PUT /items/:id/extracted-data with their parsed fields.
+        const skipExtraction =
+          formData.get('skip_extraction') === 'true' ||
+          formData.get('skip_extraction') === '1'
 
         if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
         if (file.size > MAX_FILE_SIZE) {
@@ -332,6 +410,7 @@ export const invoiceInboxExtension: Extension = {
             'upload',
             undefined,
             matchedTransactionId,
+            { skipExtraction },
           )
           return NextResponse.json({ data: result })
         } catch (error) {
@@ -362,7 +441,7 @@ export const invoiceInboxExtension: Extension = {
             matched_supplier_id, document_id, email_from, email_subject,
             email_received_at, error_message, created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
-            resend_email_id
+            resend_email_id, extraction_skipped
           `)
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -503,6 +582,141 @@ export const invoiceInboxExtension: Extension = {
       },
     },
 
+    // ── Replace extracted_data wholesale (BYO extraction) ────
+    // Used by agents that ran their own OCR/extraction pipeline. Validates
+    // the full InvoiceExtractionResult shape via the same Zod schema that
+    // gates Bedrock output, so downstream consumers (UI, supplier-invoice
+    // creation) cannot tell apart agent-supplied from AI-extracted data.
+    {
+      method: 'PUT',
+      path: '/items/:id/extracted-data',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        // Rate-limit BYO extraction the same way fresh uploads are limited —
+        // both paths inject extracted_data into invoice_inbox_items, so an
+        // unbounded BYO loop is the same abuse surface as an upload flood
+        // (ISO 27001 A.8.12, data-injection guard).
+        const rl = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
+        if (!rl.ok) {
+          return NextResponse.json(
+            { error: `För många förfrågningar — försök igen om en stund.` },
+            {
+              status: 429,
+              headers: rl.retryAfterSec ? { 'Retry-After': String(rl.retryAfterSec) } : undefined,
+            }
+          )
+        }
+
+        let extracted: InvoiceExtractionResult
+        try {
+          const json = await request.json()
+          // ExtractionSchema doesn't include `confidence` (the AI path tacks
+          // it on after parsing). BYO data gets 0.95 so downstream UI can
+          // distinguish it from a perfect AI parse — financial-data
+          // provenance per ISO 27001 A.8.12.
+          const parsed = ExtractionSchema.parse(json)
+          extracted = { ...parsed, confidence: 0.95 }
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid extracted_data shape' },
+            { status: 400 }
+          )
+        }
+
+        const { data: item } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, company_id, created_supplier_invoice_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        // Explicit tenant boundary assertion alongside the .eq filter
+        // (V4.5.1 defense-in-depth). Surfaces any future change that
+        // accidentally bypasses the where-clause.
+        if (item.company_id !== ctx.companyId) {
+          return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        }
+        if (item.created_supplier_invoice_id) {
+          return NextResponse.json(
+            { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
+            { status: 409 }
+          )
+        }
+
+        // Re-run supplier match so the agent's parsed fields trigger the
+        // same auto-link the AI path uses. Skipped if neither key is present.
+        let matchedSupplierId: string | null = null
+        if (extracted.supplier.orgNumber) {
+          const { data: s } = await ctx.supabase
+            .from('suppliers')
+            .select('id')
+            .eq('company_id', ctx.companyId)
+            .eq('org_number', extracted.supplier.orgNumber)
+            .limit(1)
+            .maybeSingle()
+          if (s) matchedSupplierId = s.id
+        }
+        if (!matchedSupplierId && extracted.supplier.name) {
+          const { data: s } = await ctx.supabase
+            .from('suppliers')
+            .select('id')
+            .eq('company_id', ctx.companyId)
+            .ilike('name', extracted.supplier.name)
+            .limit(1)
+            .maybeSingle()
+          if (s) matchedSupplierId = s.id
+        }
+
+        const { data: updated, error: updateError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({
+            extracted_data: extracted as unknown as Record<string, unknown>,
+            matched_supplier_id: matchedSupplierId,
+          })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .select('id, extracted_data, matched_supplier_id')
+          .single()
+
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        // Audit the BYO override so financial-data provenance is traceable
+        // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure logged but never blocks
+        // the response — the override has already happened.
+        try {
+          await appendProcessingHistory({
+            companyId: ctx.companyId,
+            correlationId: id,
+            aggregateType: 'Document',
+            aggregateId: id,
+            eventType: 'DocumentExtractionOverridden',
+            payload: {
+              inbox_item_id: id,
+              channel: 'rest_api',
+              has_supplier_org_number: extracted.supplier.orgNumber != null,
+              has_invoice_number: extracted.invoice.invoiceNumber != null,
+              extracted_total: extracted.totals.total,
+              matched_supplier_id: matchedSupplierId,
+            },
+            actor: { type: 'user', id: ctx.userId },
+            occurredAt: new Date(),
+          })
+        } catch (auditErr) {
+          console.error('[invoice-inbox] Failed to append DocumentExtractionOverridden:', auditErr)
+        }
+
+        return NextResponse.json({ data: updated })
+      },
+    },
+
     // ── Attach a source document to an existing inbox item ──
     {
       method: 'POST',
@@ -552,17 +766,27 @@ export const invoiceInboxExtension: Extension = {
             upload_source: 'file_upload',
           })
 
-          const { data: extracted } = await extractInvoiceFields({
-            buffer: Buffer.from(buffer),
-            mimeType: file.type,
-            fileName: file.name,
-          })
+          // Same page-count gate as /upload (issue #553) — attaching a 6-page
+          // sales report to an existing inbox row should not block on Bedrock.
+          const pageCount =
+            file.type === 'application/pdf' ? await countPdfPages(buffer) : null
+          const gatedByPageCount =
+            pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+
+          const { data: extracted } = gatedByPageCount
+            ? { data: emptyResult() }
+            : await extractInvoiceFields({
+                buffer: Buffer.from(buffer),
+                mimeType: file.type,
+                fileName: file.name,
+              })
 
           const { error: linkError } = await ctx.supabase
             .from('invoice_inbox_items')
             .update({
               document_id: doc.id,
               extracted_data: extracted as unknown as Record<string, unknown>,
+              extraction_skipped: gatedByPageCount,
             })
             .eq('id', id)
             .eq('company_id', ctx.companyId)
@@ -595,7 +819,14 @@ export const invoiceInboxExtension: Extension = {
           }
 
           return NextResponse.json({
-            data: { document_id: doc.id, inbox_item_id: id, extracted_data: extracted },
+            data: {
+              document_id: doc.id,
+              inbox_item_id: id,
+              extracted_data: extracted,
+              extraction_skipped: gatedByPageCount,
+              skip_reason: gatedByPageCount ? 'too_many_pages' : null,
+              page_count: pageCount,
+            },
           })
         } catch (error) {
           console.error('[invoice-inbox/attach-document] Failed:', error)
@@ -875,6 +1106,9 @@ export const invoiceInboxExtension: Extension = {
               status: 'received',
               error_message: null,
               extracted_data: extracted as unknown as Record<string, unknown>,
+              // Retry is user-initiated and bypasses the page-count gate by
+              // design — the user explicitly opted into the slow path.
+              extraction_skipped: false,
             })
             .eq('id', id)
             .eq('company_id', ctx.companyId)
@@ -1139,6 +1373,45 @@ export const invoiceInboxExtension: Extension = {
         }
 
         const results: Array<{ attachment_id: string; inbox_item_id?: string; error?: string; duplicate?: boolean }> = []
+
+        // Persist a "rejected" inbox row so the user has visibility into the drop.
+        // Without this, attachments that fail MIME validation vanish silently —
+        // a common Gmail "forward as attachment" foot-gun until we added .eml
+        // handling below.
+        const logRejection = async (
+          attachmentId: string,
+          attachmentName: string | null,
+          mime: string,
+          reason: string,
+        ) => {
+          // attachment_name and mime are attacker-controlled (they come from the
+          // forwarded email headers); sanitise before they land in the JSONB
+          // raw_email_payload column so they can't surface as injection or
+          // oversized values when read back into the UI / audit trails.
+          try {
+            await serviceSupabase.from('invoice_inbox_items').insert({
+              company_id: inbox.company_id,
+              user_id: userId,
+              status: 'error',
+              source: 'email',
+              email_from: from,
+              email_subject: subject,
+              email_received_at: created_at,
+              email_body_text: bodyText,
+              resend_email_id: email_id,
+              resend_attachment_id: attachmentId,
+              error_message: reason.slice(0, 500),
+              raw_email_payload: {
+                messageId: message_id,
+                attachment_name: sanitiseFilename(attachmentName, 'unknown'),
+                mime: sanitiseMime(mime),
+              },
+            })
+          } catch (insertErr) {
+            console.error('[invoice-inbox/inbound] Failed to log rejected attachment:', insertErr)
+          }
+        }
+
         for (const att of attachments) {
           try {
             const { data: existing } = await serviceSupabase
@@ -1153,11 +1426,66 @@ export const invoiceInboxExtension: Extension = {
             }
 
             const download = await fetchInboundAttachment(email_id, att.id)
+
+            // Gmail "Forward as attachment" wraps the original email as message/rfc822.
+            // Unwrap it and process the inner attachments as if they had arrived
+            // directly, carrying the inner email's subject/from into our metadata.
+            if (download.contentType === 'message/rfc822') {
+              const parsed = await simpleParser(Buffer.from(download.buffer))
+              const innerAttachments = parsed.attachments || []
+              if (innerAttachments.length === 0) {
+                await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
+                results.push({ attachment_id: att.id, error: 'eml_no_inner_attachments' })
+                continue
+              }
+              const innerFrom = parsed.from?.text || from
+              const innerSubject = parsed.subject || subject
+              for (let i = 0; i < innerAttachments.length; i++) {
+                const inner = innerAttachments[i]
+                const innerType = sanitiseMime(inner.contentType)
+                const innerName = sanitiseFilename(inner.filename, `attachment-${i}`)
+                const innerBuffer = inner.content
+                if (!innerBuffer) continue
+                const innerId = `${att.id}#${i}`
+                if (!UPLOAD_ALLOWED_MIME_TYPES.has(innerType)) {
+                  await logRejection(innerId, innerName, innerType, `Avvisad bilaga från vidarebefordrat mejl: filtypen ${innerType} stöds inte`)
+                  results.push({ attachment_id: innerId, error: `Unsupported type ${innerType}` })
+                  continue
+                }
+                if (innerBuffer.byteLength > MAX_FILE_SIZE) {
+                  await logRejection(innerId, innerName, innerType, 'Bilagan i det vidarebefordrade mejlet är för stor')
+                  results.push({ attachment_id: innerId, error: 'Inner attachment too large' })
+                  continue
+                }
+                const innerArrayBuffer = new Uint8Array(innerBuffer).buffer
+                const innerResult = await uploadAndExtract(
+                  serviceSupabase,
+                  userId,
+                  inbox.company_id,
+                  { name: innerName, buffer: innerArrayBuffer, type: innerType },
+                  'email',
+                  {
+                    from: innerFrom,
+                    subject: innerSubject,
+                    receivedAt: created_at,
+                    messageId: message_id,
+                    bodyText,
+                    resendEmailId: email_id,
+                    resendAttachmentId: innerId,
+                  }
+                )
+                results.push({ attachment_id: innerId, inbox_item_id: innerResult.inbox_item_id })
+              }
+              continue
+            }
+
             if (!UPLOAD_ALLOWED_MIME_TYPES.has(download.contentType)) {
+              await logRejection(att.id, download.filename, download.contentType, `Avvisad: filtypen ${download.contentType} stöds inte`)
               results.push({ attachment_id: att.id, error: `Unsupported type ${download.contentType}` })
               continue
             }
             if (download.buffer.byteLength > MAX_FILE_SIZE) {
+              await logRejection(att.id, download.filename, download.contentType, 'Bilagan är för stor')
               results.push({ attachment_id: att.id, error: 'Attachment too large' })
               continue
             }

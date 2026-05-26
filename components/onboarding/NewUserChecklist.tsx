@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import {
   ArrowRight,
   CheckCircle2,
@@ -39,6 +40,7 @@ export default function NewUserChecklist({
   hasSkatteverketConnected,
   hasAgentBuilt,
 }: NewUserChecklistProps) {
+  const t = useTranslations('new_user_checklist')
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket')
@@ -49,11 +51,10 @@ export default function NewUserChecklist({
         {/* Header */}
         <div className="text-center mb-8 md:mb-12">
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
-            Välkommen till {branding.appName.toLowerCase()}
+            {t('welcome', { appName: branding.appName.toLowerCase() })}
           </h1>
           <p className="text-muted-foreground text-sm md:text-base leading-relaxed max-w-md mx-auto mt-3">
-            Börja med att hämta din bokföring, sedan kopplar du banken.
-            Ingenting ändras i ditt nuvarande system.
+            {t('intro')}
           </p>
         </div>
 
@@ -69,38 +70,33 @@ export default function NewUserChecklist({
               {hasBookkeepingImported ? <CheckCircle2 className="h-4 w-4" /> : '1'}
             </span>
             <h2 className="font-display text-base font-medium tracking-tight">
-              Hämta din bokföring
+              {t('step1_title')}
             </h2>
           </div>
 
           {hasBookkeepingImported ? (
             <div className="ml-0 sm:ml-10 p-4 sm:p-5 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.04]">
-              <p className="text-sm text-emerald-900 dark:text-emerald-200 font-medium">Bokföring importerad</p>
-              <p className="text-xs sm:text-sm text-muted-foreground mt-1">Klart. Du kan importera fler perioder senare från Importera-vyn.</p>
+              <p className="text-sm text-emerald-900 dark:text-emerald-200 font-medium">{t('step1_done_title')}</p>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">{t('step1_done_description')}</p>
             </div>
           ) : (
-          <div className="ml-0 sm:ml-10">
-            {/* Single entry point for the bookkeeping step. The /import hub
-                page renders the full picker (migration vs SIE upload vs
-                csv data etc.) so the welcome surface stays compact. */}
-            <Link
-              href="/import"
-              className="group block p-4 sm:p-5 rounded-xl border border-primary/20 bg-primary/[0.02] hover:bg-primary/[0.05] hover:border-primary/40 transition-all duration-150 active:scale-[0.99]"
-            >
-              <div className="flex items-start gap-3 sm:gap-4">
-                <div className="p-2 sm:p-2.5 rounded-lg bg-primary/[0.08] group-hover:bg-primary/[0.12] transition-colors flex-shrink-0">
-                  <ArrowRightLeft className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
-                    Importera bokföring
-                  </p>
-                  <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed">
-                    {hasMigration
-                      ? 'Hämta automatiskt från ditt nuvarande system, eller ladda upp en SIE4-fil. Inget ändras i ditt befintliga system.'
-                      : 'Ladda upp en SIE4-fil från ditt nuvarande bokföringsprogram.'}
-                  </p>
-                  {hasMigration && (
+          <div className="space-y-3 ml-0 sm:ml-10">
+            {hasMigration && (
+              <Link
+                href="/import?mode=migration"
+                className="group block p-4 sm:p-5 rounded-xl border border-primary/20 bg-primary/[0.02] hover:bg-primary/[0.05] hover:border-primary/40 transition-all duration-150 active:scale-[0.99]"
+              >
+                <div className="flex items-start gap-3 sm:gap-4">
+                  <div className="p-2 sm:p-2.5 rounded-lg bg-primary/[0.08] group-hover:bg-primary/[0.12] transition-colors flex-shrink-0">
+                    <ArrowRightLeft className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
+                      {t('migrate_title')}
+                    </p>
+                    <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed underline decoration-foreground/20 underline-offset-2">
+                      {t('migrate_description')}
+                    </p>
                     <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2.5 sm:mt-3">
                       {([
                         { name: 'Fortnox', logo: '/logos/fortnox.svg' },
@@ -120,7 +116,27 @@ export default function NewUserChecklist({
                         </div>
                       ))}
                     </div>
-                  )}
+                  </div>
+                  <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary/60 mt-1 flex-shrink-0 transition-colors" />
+                </div>
+              </Link>
+            )}
+
+            <Link
+              href="/import?mode=sie"
+              className="group block p-4 sm:p-5 rounded-xl border border-border/60 hover:border-primary/40 hover:bg-primary/[0.02] transition-all duration-150 active:scale-[0.99]"
+            >
+              <div className="flex items-start gap-3 sm:gap-4">
+                <div className="p-2 sm:p-2.5 rounded-lg bg-muted/60 group-hover:bg-primary/[0.08] transition-colors flex-shrink-0">
+                  <FileText className="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
+                    {t('sie_title')}
+                  </p>
+                  <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed">
+                    {t('sie_description')}
+                  </p>
                 </div>
                 <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary/60 mt-1 flex-shrink-0 transition-colors" />
               </div>
@@ -141,7 +157,7 @@ export default function NewUserChecklist({
               {hasBankConnected ? <CheckCircle2 className="h-4 w-4" /> : '2'}
             </span>
             <h2 className="font-display text-base font-medium tracking-tight">
-              Koppla din bank
+              {t('step2_title')}
             </h2>
           </div>
 
@@ -162,12 +178,12 @@ export default function NewUserChecklist({
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
-                    Anslut ditt bankkonto
+                    {t('bank_title')}
                   </p>
                   <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed">
                     {hasBanking
-                      ? 'Koppla via PSD2, transaktioner synkas automatiskt varje dag.'
-                      : 'Importera kontoutdrag från din bank, CSV, OFX och de flesta svenska banker.'}
+                      ? t('bank_description_psd2')
+                      : t('bank_description_file')}
                   </p>
                 </div>
                 <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary/60 mt-1 flex-shrink-0 transition-colors" />
@@ -197,9 +213,9 @@ export default function NewUserChecklist({
                   : '3'}
               </span>
               <h2 className="font-display text-base font-medium tracking-tight">
-                Anslut Skatteverket
+                {t('step3_title')}
               </h2>
-              <span className="text-xs text-muted-foreground">— valfritt</span>
+              <span className="text-xs text-muted-foreground">{t('optional_suffix')}</span>
             </div>
 
             <div className="ml-0 sm:ml-10">
@@ -211,10 +227,10 @@ export default function NewUserChecklist({
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm sm:text-base text-emerald-900 dark:text-emerald-200">
-                        Skatteverket anslutet
+                        {t('skatteverket_connected_title')}
                       </p>
                       <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed">
-                        Du kan nu skicka momsdeklaration och AGI direkt, samt se saldot på skattekontot.
+                        {t('skatteverket_connected_description')}
                       </p>
                     </div>
                   </div>
@@ -234,10 +250,10 @@ export default function NewUserChecklist({
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
-                        Anslut till Skatteverket med BankID
+                        {t('skatteverket_connect_title')}
                       </p>
                       <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed">
-                        Skicka momsdeklaration och arbetsgivardeklaration direkt, och hämta saldot på skattekontot — utan att lämna {branding.appName.toLowerCase()}.
+                        {t('skatteverket_connect_description', { appName: branding.appName.toLowerCase() })}
                       </p>
                     </div>
                     <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary/60 mt-1 flex-shrink-0 transition-colors" />
@@ -312,7 +328,7 @@ export default function NewUserChecklist({
         <div className="space-y-5">
           <div className="flex items-center gap-4">
             <div className="flex-1 h-px bg-border/60" />
-            <span className="text-xs text-muted-foreground">eller</span>
+            <span className="text-xs text-muted-foreground">{t('or_separator')}</span>
             <div className="flex-1 h-px bg-border/60" />
           </div>
 
@@ -321,7 +337,7 @@ export default function NewUserChecklist({
               onClick={onFreshStart}
               className="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1.5 group"
             >
-              Jag startar en ny verksamhet utan tidigare bokföring
+              {t('fresh_start')}
               <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
             </button>
           </div>
@@ -329,7 +345,7 @@ export default function NewUserChecklist({
           <div className="flex items-center justify-center gap-2 pt-2">
             <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground/40" />
             <p className="text-xs text-muted-foreground/50">
-              Din data är krypterad och lagras säkert i Sverige
+              {t('security_note')}
             </p>
           </div>
         </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -56,6 +57,7 @@ export default function Step4VatAccounting({
   onBack,
   isSaving,
 }: Step4Props) {
+  const t = useTranslations('onboarding')
   const { toast } = useToast()
 
   const {
@@ -105,9 +107,9 @@ export default function Step4VatAccounting({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Moms och bokföringsmetod</CardTitle>
+          <CardTitle>{t('step4_card_title')}</CardTitle>
           <CardDescription>
-            Ange din momsregistrering och välj bokföringsmetod.
+            {t('step4_card_description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -116,8 +118,8 @@ export default function Step4VatAccounting({
             console.error('[onboarding] step 4 validation failed:', fields, errs)
             fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'step 4 validation failed', extra: { fields } }) }).catch(() => {})
             const firstError = Object.values(errs)[0]
-            const message = firstError?.message || 'Kontrollera att alla fält är korrekt ifyllda.'
-            toast({ title: 'Saknade uppgifter', description: String(message), variant: 'destructive' })
+            const message = firstError?.message || t('check_all_fields')
+            toast({ title: t('missing_fields'), description: String(message), variant: 'destructive' })
           })} className="space-y-6">
             {/* VAT section */}
             <div className="space-y-4">
@@ -125,14 +127,14 @@ export default function Step4VatAccounting({
                 <InfoTooltip
                   content={
                     <div className="space-y-2">
-                      <p className="font-medium">Behöver jag momsregistrera mig?</p>
-                      <p>Ja, om din omsättning överstiger 120 000 kr per år. Med moms lägger du på 25% extra på dina fakturor, men får också dra av moms på dina inköp.</p>
-                      <p className="text-xs text-muted-foreground">Om din omsättning överstiger 120 000 kr per år behöver du momsregistrera dig.</p>
+                      <p className="font-medium">{t('step4_vat_tip_title')}</p>
+                      <p>{t('step4_vat_tip_body')}</p>
+                      <p className="text-xs text-muted-foreground">{t('step4_vat_tip_note')}</p>
                     </div>
                   }
                   side="right"
                 >
-                  <span>Momsregistrering</span>
+                  <span>{t('step4_vat_heading')}</span>
                 </InfoTooltip>
               </h3>
 
@@ -150,10 +152,10 @@ export default function Step4VatAccounting({
                 />
                 <div className="space-y-1">
                   <Label htmlFor="vat_registered" className="cursor-pointer">
-                    Jag är momsregistrerad
+                    {t('step4_vat_registered_label')}
                   </Label>
                   <p className="text-sm text-muted-foreground">
-                    Obligatoriskt om din omsättning överstiger 120 000 kr per år.
+                    {t('step4_vat_registered_help')}
                   </p>
                 </div>
               </div>
@@ -161,14 +163,14 @@ export default function Step4VatAccounting({
               {vatRegistered && (
                 <div className="space-y-4 pl-0 sm:pl-7">
                   <div className="space-y-2">
-                    <Label htmlFor="vat_number">Momsregistreringsnummer</Label>
+                    <Label htmlFor="vat_number">{t('step4_vat_number_label')}</Label>
                     <Input
                       id="vat_number"
                       placeholder="SE123456789001"
                       {...register('vat_number')}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Format: SE + organisationsnummer + 01
+                      {t('step4_vat_number_format')}
                     </p>
                   </div>
 
@@ -176,18 +178,18 @@ export default function Step4VatAccounting({
                     <InfoTooltip
                       content={
                         <div className="space-y-2">
-                          <p className="font-medium">Hur ofta rapporterar du moms?</p>
-                          <p>Välj den period som anges på Verksamt eller i ditt beslut från Skatteverket.</p>
+                          <p className="font-medium">{t('step4_vat_period_tip_title')}</p>
+                          <p>{t('step4_vat_period_tip_body')}</p>
                           <ul className="text-xs text-muted-foreground space-y-1">
-                            <li>Under 1 miljon/år = Kan välja årsredovisning</li>
-                            <li>1-40 miljoner = Kvartal</li>
-                            <li>Över 40 miljoner = Månad</li>
+                            <li>{t('step4_vat_period_bracket_low')}</li>
+                            <li>{t('step4_vat_period_bracket_mid')}</li>
+                            <li>{t('step4_vat_period_bracket_high')}</li>
                           </ul>
                         </div>
                       }
                       side="right"
                     >
-                      <Label>Momsredovisningsperiod</Label>
+                      <Label>{t('step4_vat_period_label')}</Label>
                     </InfoTooltip>
                     <Controller
                       name="moms_period"
@@ -198,18 +200,18 @@ export default function Step4VatAccounting({
                           onValueChange={(v) => { if (v) field.onChange(v) }}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Välj period" />
+                            <SelectValue placeholder={t('step4_select_period')} />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="monthly">Månad</SelectItem>
-                            <SelectItem value="quarterly">Kvartal</SelectItem>
-                            <SelectItem value="yearly">År</SelectItem>
+                            <SelectItem value="monthly">{t('step4_period_monthly')}</SelectItem>
+                            <SelectItem value="quarterly">{t('step4_period_quarterly')}</SelectItem>
+                            <SelectItem value="yearly">{t('step4_period_yearly')}</SelectItem>
                           </SelectContent>
                         </Select>
                       )}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Välj den period som anges i ditt beslut från Skatteverket. Vanligtvis kvartal eller år.
+                      {t('step4_period_help')}
                     </p>
                   </div>
                 </div>
@@ -220,10 +222,10 @@ export default function Step4VatAccounting({
             <div className="pt-4 border-t space-y-4">
               <div className="space-y-2">
                 <InfoTooltip
-                  content="Faktureringsmetoden bokför intäkter och kostnader när fakturan skickas/mottas. Kontantmetoden bokför vid betalning."
+                  content={t('step4_method_tip')}
                   side="right"
                 >
-                  <Label>Bokföringsmetod</Label>
+                  <Label>{t('step4_method_label')}</Label>
                 </InfoTooltip>
                 <Controller
                   name="accounting_method"
@@ -237,7 +239,7 @@ export default function Step4VatAccounting({
                           onCheckedChange={(checked) => { if (checked) field.onChange('accrual') }}
                         />
                         <Label htmlFor="method_accrual" className="cursor-pointer">
-                          Faktureringsmetoden
+                          {t('step4_method_accrual')}
                         </Label>
                       </div>
                       <div className="flex items-start space-x-3">
@@ -247,7 +249,7 @@ export default function Step4VatAccounting({
                           onCheckedChange={(checked) => { if (checked) field.onChange('cash') }}
                         />
                         <Label htmlFor="method_cash" className="cursor-pointer">
-                          Kontantmetoden
+                          {t('step4_method_cash')}
                         </Label>
                       </div>
                     </div>
@@ -256,16 +258,15 @@ export default function Step4VatAccounting({
                 <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <Info className="h-4 w-4 text-muted-foreground" />
-                    {accountingMethod === 'accrual' ? 'Faktureringsmetoden' : 'Kontantmetoden'}
+                    {accountingMethod === 'accrual' ? t('step4_method_accrual') : t('step4_method_cash')}
                   </div>
                   <p className="text-sm text-muted-foreground">
                     {accountingMethod === 'accrual'
-                      ? 'Intäkter och kostnader bokförs när fakturan skickas eller tas emot, oavsett när betalningen sker. Detta ger en mer rättvisande bild av verksamhetens ekonomi.'
-                      : 'Intäkter och kostnader bokförs först när betalningen faktiskt sker. Enklare att hantera men ger en mindre exakt bild av verksamhetens ekonomi vid varje given tidpunkt.'}
+                      ? t('step4_method_accrual_desc')
+                      : t('step4_method_cash_desc')}
                   </p>
                   <p className="text-xs text-amber-800 dark:text-amber-200 bg-warning/10 rounded px-2 py-1">
-                    Kontantmetoden får användas om årlig nettoomsättning normalt är högst
-                    3 MSEK (BFL 5 kap. 2 §).
+                    {t('step4_cash_limit_note')}
                   </p>
                 </div>
               </div>
@@ -279,17 +280,17 @@ export default function Step4VatAccounting({
                 disabled={isSaving}
               >
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                Tillbaka
+                {t('back')}
               </Button>
               <Button type="submit" disabled={isSaving}>
                 {isSaving ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sparar...
+                    {t('saving')}
                   </>
                 ) : (
                   <>
-                    Fortsätt
+                    {t('continue')}
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </>
                 )}

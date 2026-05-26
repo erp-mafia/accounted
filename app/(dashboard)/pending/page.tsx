@@ -1,12 +1,30 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  DataList,
+  DataListHeader,
+  DataListRow,
+  DataListPrimary,
+  DataListMeta,
+  DataListMetaSeparator,
+  DataListEmpty,
+  DataListLoading,
+} from '@/components/ui/data-list'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuLabel,
+} from '@/components/ui/dropdown-menu'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import {
   Dialog,
@@ -23,13 +41,13 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import {
   ClipboardCheck,
-  Loader2,
   ArrowLeftRight,
   Users,
   Receipt,
-  CheckCircle2,
-  XCircle,
   Bot,
+  BookOpen,
+  ChevronDown,
+  Loader2,
   Lock,
   MessageSquare,
   AlertTriangle,
@@ -39,16 +57,21 @@ import type {
   PendingOperationStatus,
   PendingOperationRejectionCategory,
 } from '@/types'
+import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
+import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 
-const operationLabels: Record<string, { label: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
-  categorize_transaction: { label: 'Kategorisering', icon: ArrowLeftRight, variant: 'default' },
-  create_customer: { label: 'Ny kund', icon: Users, variant: 'secondary' },
-  create_invoice: { label: 'Ny faktura', icon: Receipt, variant: 'outline' },
-  create_transaction: { label: 'Ny transaktion', icon: ArrowLeftRight, variant: 'secondary' },
-  mark_invoice_paid: { label: 'Betald faktura', icon: Receipt, variant: 'default' },
-  send_invoice: { label: 'Skicka faktura', icon: Receipt, variant: 'outline' },
-  mark_invoice_sent: { label: 'Markera skickad', icon: Receipt, variant: 'outline' },
-  match_transaction_invoice: { label: 'Fakturamatchning', icon: ArrowLeftRight, variant: 'secondary' },
+const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
+  categorize_transaction: { labelKey: 'type_categorize_transaction', icon: ArrowLeftRight, variant: 'default' },
+  create_customer: { labelKey: 'type_create_customer', icon: Users, variant: 'secondary' },
+  create_invoice: { labelKey: 'type_create_invoice', icon: Receipt, variant: 'outline' },
+  create_transaction: { labelKey: 'type_create_transaction', icon: ArrowLeftRight, variant: 'secondary' },
+  create_voucher: { labelKey: 'type_create_voucher', icon: BookOpen, variant: 'outline' },
+  correct_entry: { labelKey: 'type_correct_entry', icon: BookOpen, variant: 'outline' },
+  reverse_entry: { labelKey: 'type_reverse_entry', icon: BookOpen, variant: 'outline' },
+  mark_invoice_paid: { labelKey: 'type_mark_invoice_paid', icon: Receipt, variant: 'default' },
+  send_invoice: { labelKey: 'type_send_invoice', icon: Receipt, variant: 'outline' },
+  mark_invoice_sent: { labelKey: 'type_mark_invoice_sent', icon: Receipt, variant: 'outline' },
+  match_transaction_invoice: { labelKey: 'type_match_transaction_invoice', icon: ArrowLeftRight, variant: 'secondary' },
 }
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
@@ -69,10 +92,11 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
     n === 1 ? 'En kategorisering tas bort.' : `${n} kategoriseringar tas bort.`,
 }
 
-function bulkActionLabel(operationType: string, count: number): string {
+function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
-  const fallback = operationLabels[operationType]?.label ?? operationType
+  const entry = OPERATION_LABEL_KEYS[operationType]
+  const fallback = entry ? t(entry.labelKey) : operationType
   return `${count} × ${fallback}`
 }
 
@@ -276,6 +300,136 @@ function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
   )
 }
 
+type VoucherLine = {
+  account_number: string
+  account_name?: string | null
+  debit_amount: number
+  credit_amount: number
+  line_description?: string | null
+}
+
+function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
+  return (
+    <div className="border-t pt-2 space-y-1">
+      {lines.map((line, i) => (
+        <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
+          <span className="font-mono text-muted-foreground">{line.account_number}</span>
+          <span className="truncate">
+            {line.account_name || line.line_description || '—'}
+          </span>
+          <span className="font-mono tabular-nums text-right w-24">
+            {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
+          </span>
+          <span className="font-mono tabular-nums text-right w-24">
+            {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function VoucherPreview({ data }: { data: Record<string, unknown> }) {
+  const lines = (data.lines as VoucherLine[]) || []
+  const totalDebit = data.total_debit as number | undefined
+  const totalCredit = data.total_credit as number | undefined
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">Datum</span>
+        <span className="font-mono">{String(data.entry_date ?? '')}</span>
+        <span className="text-muted-foreground">Beskrivning</span>
+        <span className="truncate">{String(data.description ?? '')}</span>
+        <span className="text-muted-foreground">Serie</span>
+        <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
+      </div>
+      {lines.length > 0 && (
+        <div>
+          <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
+            <span>Konto</span>
+            <span>Text</span>
+            <span className="text-right w-24">Debet</span>
+            <span className="text-right w-24">Kredit</span>
+          </div>
+          <VoucherLinesTable lines={lines} />
+        </div>
+      )}
+      {totalDebit != null && totalCredit != null && (
+        <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
+          <span></span>
+          <span className="text-muted-foreground">Summa</span>
+          <span className="font-mono tabular-nums text-right w-24 font-medium">
+            {formatCurrency(totalDebit)}
+          </span>
+          <span className="font-mono tabular-nums text-right w-24 font-medium">
+            {formatCurrency(totalCredit)}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
+  const original = (data.original as {
+    voucher?: string
+    entry_date?: string
+    description?: string
+    lines?: VoucherLine[]
+  }) || {}
+  const correction = (data.correction as {
+    total_debit?: number
+    total_credit?: number
+    line_count?: number
+    lines?: VoucherLine[]
+  }) || {}
+
+  return (
+    <div className="space-y-4 text-sm">
+      <div>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+          Originalverifikation V{original.voucher ?? ''} — {original.entry_date ?? ''}
+        </p>
+        <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
+        {original.lines && original.lines.length > 0 && (
+          <VoucherLinesTable lines={original.lines} />
+        )}
+      </div>
+      <div>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+          Korrigerad verifikation ({correction.line_count ?? correction.lines?.length ?? 0} rader)
+        </p>
+        {correction.lines && correction.lines.length > 0 && (
+          <VoucherLinesTable lines={correction.lines} />
+        )}
+        {correction.total_debit != null && (
+          <div className="border-t pt-1 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs mt-1">
+            <span></span>
+            <span className="text-muted-foreground">Summa</span>
+            <span className="font-mono tabular-nums text-right w-24 font-medium">
+              {formatCurrency(correction.total_debit)}
+            </span>
+            <span className="font-mono tabular-nums text-right w-24 font-medium">
+              {formatCurrency(correction.total_credit ?? 0)}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Render a primitive (string/number/bool) or a short summary of an array/object.
+// Used by GenericPreview to avoid the "[object Object]" stringification that
+// occurs when an operation_type has no dedicated preview component.
+function renderPrimitive(value: unknown): string {
+  if (value == null) return ''
+  if (Array.isArray(value)) return `${value.length} rader`
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
   // Skip period_status here — it's surfaced in the dedicated banner, not the
   // generic key-value dump (otherwise the approver sees the same fact twice).
@@ -286,7 +440,7 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
         <Fragment key={key}>
           <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
           <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
-            {String(value)}
+            {renderPrimitive(value)}
           </span>
         </Fragment>
       ))}
@@ -304,6 +458,14 @@ function OperationPreview({ op }: { op: PendingOperation }) {
       return <InvoicePreview data={op.preview_data} />
     case 'create_transaction':
       return <CreateTransactionPreview data={op.preview_data} />
+    case 'create_voucher':
+      return <VoucherPreview data={op.preview_data} />
+    case 'correct_entry':
+      return <CorrectEntryPreview data={op.preview_data} />
+    case 'attach_document_to_transaction':
+      return <AttachDocumentPreview data={op.preview_data} params={op.params} />
+    case 'match_transaction_invoice':
+      return <MatchTransactionInvoicePreview data={op.preview_data} />
     default:
       return <GenericPreview data={op.preview_data} />
   }
@@ -364,12 +526,29 @@ function AgentContextStrip({ op }: { op: PendingOperation }) {
 
 type SourceFilter = 'all' | 'agent' | 'high_risk'
 
+const sourceFilterLabels = (
+  t: (key: string) => string,
+): Record<SourceFilter, string> => ({
+  all: t('tab_all'),
+  agent: t('tab_agent'),
+  high_risk: t('tab_high_risk'),
+})
+
+type TabStatus = Extract<PendingOperationStatus, 'pending' | 'committed' | 'rejected'>
+type StatusCounts = Record<TabStatus, number | null>
+
 export default function PendingOperationsPage() {
+  const t = useTranslations('pending')
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [conversationFilter, setConversationFilter] = useState<string | null>(null)
+  const [counts, setCounts] = useState<StatusCounts>({
+    pending: null,
+    committed: null,
+    rejected: null,
+  })
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
@@ -400,21 +579,45 @@ export default function PendingOperationsPage() {
       const res = await fetch(`/api/pending-operations?status=${activeTab}`)
       const json = await res.json()
       setOperations(json.data ?? [])
+      setCounts((prev) => ({ ...prev, [activeTab]: json.count ?? json.data?.length ?? 0 }))
     } catch {
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
     }
     setIsLoading(false)
   }, [activeTab, toast])
 
+  const fetchAllCounts = useCallback(async () => {
+    const statuses: TabStatus[] = ['pending', 'committed', 'rejected']
+    try {
+      const results = await Promise.all(
+        statuses.map((s) =>
+          fetch(`/api/pending-operations?status=${s}&limit=1`).then((r) => r.json())
+        )
+      )
+      setCounts({
+        pending: results[0]?.count ?? 0,
+        committed: results[1]?.count ?? 0,
+        rejected: results[2]?.count ?? 0,
+      })
+    } catch {
+      // Counts are best-effort; the active tab's count will still update via fetchOperations
+    }
+  }, [])
+
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
+
+  useEffect(() => {
+    fetchAllCounts()
+  }, [fetchAllCounts])
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
   // this company. RLS scopes the channel automatically — we don't see other
   // tenants' events. We refetch the whole list (rather than patching state
   // in-place) so server-side filtering, sorting, and computed fields stay in
-  // sync with whatever the API route returned.
+  // sync with whatever the API route returned. The counts endpoint isn't
+  // pushed by the same trigger, so we also refresh counts on every change.
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
@@ -422,13 +625,16 @@ export default function PendingOperationsPage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'pending_operations' },
-        () => { fetchOperations() }
+        () => {
+          fetchOperations()
+          fetchAllCounts()
+        }
       )
       .subscribe()
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [fetchOperations])
+  }, [fetchOperations, fetchAllCounts])
 
   // Clear selection when filters/tab change
   useEffect(() => {
@@ -446,6 +652,7 @@ export default function PendingOperationsPage() {
       setShowCommitDialog(false)
       setSelectedOp(null)
       fetchOperations()
+      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -491,6 +698,7 @@ export default function PendingOperationsPage() {
       setShowBulkDialog(false)
       setSelectedIds(new Set())
       fetchOperations()
+      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -531,6 +739,7 @@ export default function PendingOperationsPage() {
       toast({ title: 'Avvisad', description: rejectOp.title })
       setRejectOp(null)
       fetchOperations()
+      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Kunde inte avvisa',
@@ -626,11 +835,18 @@ export default function PendingOperationsPage() {
     return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
   }, [bulkEligible, selectedIds])
 
+  const tabLabel = (label: string, status: TabStatus) => {
+    const count = counts[status]
+    return count == null ? label : `${label} (${count})`
+  }
+
+  const showFilterDot = sourceFilter !== 'all'
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Granskning"
-        description="Operationer som väntar på godkännande"
+        title={t('title')}
+        description={t('subtitle')}
       />
 
       {conversationFilter && (
@@ -638,7 +854,7 @@ export default function PendingOperationsPage() {
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-muted-foreground" />
             <span>
-              Visar operationer från konversation{' '}
+              {t('conversation_filter_label')}{' '}
               <span className="font-mono">#{conversationFilter.slice(0, 8)}</span>
             </span>
           </div>
@@ -655,260 +871,260 @@ export default function PendingOperationsPage() {
               }
             }}
           >
-            Rensa filter
+            {t('conversation_filter_clear')}
           </Button>
         </div>
       )}
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
-        <TabsList>
-          <TabsTrigger value="pending">Väntande</TabsTrigger>
-          <TabsTrigger value="committed">Godkända</TabsTrigger>
-          <TabsTrigger value="rejected">Avvisade</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
+          <TabsList>
+            <TabsTrigger value="pending">{tabLabel(t('tab_pending'), 'pending')}</TabsTrigger>
+            <TabsTrigger value="committed">{tabLabel(t('tab_committed'), 'committed')}</TabsTrigger>
+            <TabsTrigger value="rejected">{tabLabel(t('tab_rejected'), 'rejected')}</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-      <Tabs value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>
-        <TabsList>
-          <TabsTrigger value="all">Alla</TabsTrigger>
-          <TabsTrigger value="agent">Från agent</TabsTrigger>
-          <TabsTrigger value="high_risk">Hög risk</TabsTrigger>
-        </TabsList>
-      </Tabs>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-9 gap-2">
+              <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                Filter
+              </span>
+              <span>{sourceFilterLabels(t)[sourceFilter]}</span>
+              {showFilterDot && (
+                <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
+              )}
+              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[12rem]">
+            <DropdownMenuLabel>Källa</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={sourceFilter}
+              onValueChange={(v) => setSourceFilter(v as SourceFilter)}
+            >
+              <DropdownMenuRadioItem value="all">{t('tab_all')}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="agent">{t('tab_agent')}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="high_risk">{t('tab_high_risk')}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
-      {showBulkControls && bulkEligible.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-3">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="select-all"
-              checked={allSelected ? true : someSelected ? 'indeterminate' : false}
-              onCheckedChange={() => toggleSelectAll()}
-              aria-label="Markera alla"
-            />
-            <label htmlFor="select-all" className="text-sm cursor-pointer">
-              {selectedCount > 0
-                ? `${selectedCount} valda`
-                : excludedFromBulk > 0
-                  ? `Markera (${bulkEligible.length} av ${pendingTotal} — ${excludedFromBulk} kräver enskild granskning)`
-                  : `Markera alla (${bulkEligible.length})`}
-            </label>
-          </div>
-
-          {typeCounts.length > 0 && selectedCount === 0 && (
-            <div className="flex flex-wrap items-center gap-1">
-              <span className="text-xs text-muted-foreground">Snabbval:</span>
-              {typeCounts.map(([type, count]) => {
-                const config = operationLabels[type] || { label: type }
-                return (
-                  <Button
-                    key={type}
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => selectAllOfType(type)}
-                  >
-                    {config.label} ({count})
-                  </Button>
-                )
-              })}
+      <DataList>
+        {showBulkControls && bulkEligible.length > 0 && (
+          <DataListHeader>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="select-all"
+                checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                onCheckedChange={() => toggleSelectAll()}
+                aria-label={t('select_all_aria')}
+              />
+              <label htmlFor="select-all" className="text-sm cursor-pointer">
+                {selectedCount > 0
+                  ? t('selected_count', { count: selectedCount })
+                  : excludedFromBulk > 0
+                    ? t('select_all_count_partial', {
+                        eligible: bulkEligible.length,
+                        total: pendingTotal,
+                        excluded: excludedFromBulk,
+                      })
+                    : t('select_all_count', { count: bulkEligible.length })}
+              </label>
             </div>
-          )}
 
-          <div className="ml-auto flex items-center gap-2">
-            {selectedCount > 0 && (
+            {typeCounts.length > 0 && selectedCount === 0 && (
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-xs text-muted-foreground">{t('quick_pick')}</span>
+                {typeCounts.map(([type, count]) => {
+                  const entry = OPERATION_LABEL_KEYS[type]
+                  const label = entry ? t(entry.labelKey) : type
+                  return (
+                    <Button
+                      key={type}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => selectAllOfType(type)}
+                    >
+                      {label} ({count})
+                    </Button>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="ml-auto flex items-center gap-2">
+              {selectedCount > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 px-3 text-xs"
+                  onClick={() => setSelectedIds(new Set())}
+                >
+                  {t('deselect')}
+                </Button>
+              )}
               <Button
                 size="sm"
-                variant="ghost"
                 className="h-8 px-3 text-xs"
-                onClick={() => setSelectedIds(new Set())}
+                disabled={selectedCount === 0 || isBulkCommitting}
+                onClick={() => setShowBulkDialog(true)}
               >
-                Avmarkera
+                {t('approve_selected', { count: selectedCount })}
               </Button>
-            )}
-            <Button
-              size="sm"
-              className="h-8 px-3 text-xs"
-              disabled={selectedCount === 0 || isBulkCommitting}
-              onClick={() => setShowBulkDialog(true)}
-            >
-              Godkänn valda ({selectedCount})
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {isLoading ? (
-        <Card>
-          <CardContent className="flex items-center justify-center py-16">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </CardContent>
-        </Card>
-      ) : filteredOperations.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
-              <ClipboardCheck className="h-6 w-6 text-muted-foreground" />
             </div>
-            <p className="font-medium">
-              {activeTab === 'pending'
-                ? 'Inga väntande operationer'
+          </DataListHeader>
+        )}
+
+        {isLoading ? (
+          <DataListLoading />
+        ) : filteredOperations.length === 0 ? (
+          <DataListEmpty
+            icon={<ClipboardCheck className="h-6 w-6" />}
+            title={
+              activeTab === 'pending'
+                ? t('empty_pending_title')
                 : activeTab === 'committed'
-                  ? 'Inga godkända operationer'
-                  : 'Inga avvisade operationer'}
-            </p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {activeTab === 'pending'
-                ? 'När en operation kräver godkännande visas den här för granskning.'
-                : 'Operationer du har godkänt eller avvisat visas här.'}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {filteredOperations.map((op) => {
-            const config = operationLabels[op.operation_type] || { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
+                  ? t('empty_committed_title')
+                  : t('empty_rejected_title')
+            }
+            description={
+              activeTab === 'pending'
+                ? t('empty_pending_description')
+                : t('empty_finished_description')
+            }
+          />
+        ) : (
+          filteredOperations.map((op) => {
+            const entry = OPERATION_LABEL_KEYS[op.operation_type]
+            const config = entry
+              ? { label: t(entry.labelKey), icon: entry.icon, variant: entry.variant }
+              : { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
             const isExpanded = expandedId === op.id
             const period = getPeriodStatus(op)
             const periodLocked = period != null && period.status !== 'open'
             const canBulkSelect =
               showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
             const isSelected = selectedIds.has(op.id)
+            const isAgent = op.actor_type && op.actor_type !== 'user'
             const warningSentence = singleActionWarning(op.operation_type)
-            const showHighRiskWarning = op.risk_level === 'high' && warningSentence && op.status === 'pending'
+            const showHighRiskWarning =
+              op.risk_level === 'high' && warningSentence && op.status === 'pending'
 
             return (
-              <Card
+              <DataListRow
                 key={op.id}
-                className="transition-colors hover:border-primary/30"
-              >
-                <CardContent className="py-4">
-                  <div
-                    className="flex items-start justify-between gap-4 cursor-pointer"
-                    onClick={() => setExpandedId(isExpanded ? null : op.id)}
-                  >
-                    {canBulkSelect && (
-                      <div
-                        className="flex items-center pt-0.5"
-                        onClick={(e) => e.stopPropagation()}
+                selected={isSelected}
+                expanded={isExpanded}
+                onClick={() => setExpandedId(isExpanded ? null : op.id)}
+                leading={
+                  canBulkSelect ? (
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleSelected(op.id)}
+                        aria-label={t('select_operation_aria')}
+                      />
+                    </div>
+                  ) : undefined
+                }
+                trailing={
+                  op.status === 'pending' ? (
+                    <>
+                      <Button
+                        size="sm"
+                        className="h-8 px-3 text-xs"
+                        disabled={periodLocked}
+                        title={periodLocked ? 'Perioden är låst' : undefined}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (periodLocked) return
+                          setSelectedOp(op)
+                          setShowCommitDialog(true)
+                        }}
                       >
-                        <Checkbox
-                          checked={isSelected}
-                          onCheckedChange={() => toggleSelected(op.id)}
-                          aria-label="Välj operation"
-                        />
+                        {t('approve')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 px-3 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openRejectDialog(op)
+                        }}
+                      >
+                        {t('reject')}
+                      </Button>
+                    </>
+                  ) : undefined
+                }
+                expandedContent={
+                  <>
+                    {/* Period-lock banner sits ABOVE the preview so the reviewer
+                        sees the blocker as soon as they expand the row. */}
+                    {periodLocked && period && op.status === 'pending' && (
+                      <div className="mb-3">
+                        <PeriodLockBanner period={period} />
                       </div>
                     )}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge variant={config.variant}>{config.label}</Badge>
-                        {op.risk_level === 'high' && (
-                          <Badge variant="outline" className="border-destructive/40 text-destructive">
-                            HÖG
-                          </Badge>
-                        )}
-                        {op.actor_type && op.actor_type !== 'user' && (
-                          <Badge variant="outline" className="text-xs">
-                            <Bot className="h-3 w-3 mr-1" />
-                            {op.actor_label || op.actor_type}
-                          </Badge>
-                        )}
-                        {op.status === 'committed' && (
-                          <Badge variant="success">
-                            <CheckCircle2 className="h-3 w-3 mr-1" />
-                            Godkänd
-                          </Badge>
-                        )}
-                        {op.status === 'rejected' && (
-                          <Badge variant="destructive">
-                            <XCircle className="h-3 w-3 mr-1" />
-                            Avvisad
-                          </Badge>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {formatRelativeTime(op.created_at)}
-                        </span>
-                      </div>
-                      <p className="text-sm font-medium truncate">{op.title}</p>
-                      {showHighRiskWarning && (
-                        <p className="mt-1 flex items-start gap-1 text-xs text-destructive truncate">
-                          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                          <span className="truncate">{warningSentence}</span>
-                        </p>
-                      )}
-                      {op.agent_metadata && (
-                        <div className="mt-1">
-                          <AgentContextStrip op={op} />
-                        </div>
-                      )}
-                      {op.status === 'rejected' && op.rejection_category && (
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Avvisad: {REJECTION_CATEGORY_LABELS[op.rejection_category]}
-                          {op.rejection_reason ? ` — "${op.rejection_reason}"` : ''}
-                        </p>
-                      )}
-                    </div>
-
-                    {op.status === 'pending' && (
-                      <div className="flex gap-2 flex-shrink-0">
-                        <Button
-                          size="sm"
-                          className="h-8 px-3 text-xs"
-                          disabled={periodLocked}
-                          title={periodLocked ? 'Perioden är låst' : undefined}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (periodLocked) return
-                            setSelectedOp(op)
-                            setShowCommitDialog(true)
-                          }}
-                        >
-                          Godkänn
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 px-3 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openRejectDialog(op)
-                          }}
-                        >
-                          Avvisa
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Period-lock banner sits ABOVE the expandable preview so the
-                      reviewer sees the blocker even when the card is collapsed. */}
-                  {periodLocked && period && op.status === 'pending' && (
-                    <div className="mt-3">
-                      <PeriodLockBanner period={period} />
-                    </div>
+                    <OperationPreview op={op} />
+                  </>
+                }
+              >
+                <DataListPrimary>{op.title}</DataListPrimary>
+                <DataListMeta>
+                  <span className="font-medium text-foreground/70">{config.label}</span>
+                  {isAgent && (
+                    <>
+                      <DataListMetaSeparator />
+                      <span className="inline-flex items-center gap-1">
+                        <Bot className="h-3 w-3" />
+                        {op.actor_label || op.actor_type}
+                      </span>
+                    </>
                   )}
-
-                  {/* Expandable preview */}
-                  <div className={`grid transition-all duration-200 ${isExpanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr]'}`}>
-                    <div className="overflow-hidden">
-                      <div className="border-t pt-3">
-                        <OperationPreview op={op} />
-                      </div>
-                    </div>
+                  <DataListMetaSeparator />
+                  <span>{formatRelativeTime(op.created_at)}</span>
+                  {op.risk_level === 'high' && (
+                    <Badge variant="destructive" className="ml-1 h-4 px-1.5 py-0 text-[10px]">
+                      {t('badge_high_risk')}
+                    </Badge>
+                  )}
+                </DataListMeta>
+                {showHighRiskWarning && (
+                  <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
+                    <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                    <span>{warningSentence}</span>
+                  </p>
+                )}
+                {op.agent_metadata && (
+                  <div className="mt-1">
+                    <AgentContextStrip op={op} />
                   </div>
-                </CardContent>
-              </Card>
+                )}
+                {op.status === 'rejected' && op.rejection_category && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Avvisad: {REJECTION_CATEGORY_LABELS[op.rejection_category]}
+                    {op.rejection_reason ? ` — "${op.rejection_reason}"` : ''}
+                  </p>
+                )}
+              </DataListRow>
             )
-          })}
-        </div>
-      )}
+          })
+        )}
+      </DataList>
 
       {/* Commit confirmation dialog */}
       <ConfirmationDialog
         open={showCommitDialog}
         onOpenChange={setShowCommitDialog}
-        title={selectedOp?.title || 'Godkänn operation'}
+        title={selectedOp?.title || t('approve_operation_title')}
         warningText={selectedOp ? singleActionWarning(selectedOp.operation_type) : ''}
-        confirmLabel="Godkänn"
+        confirmLabel={t('approve')}
         isSubmitting={isCommitting}
         onConfirm={handleCommit}
       >
@@ -919,24 +1135,24 @@ export default function PendingOperationsPage() {
       <ConfirmationDialog
         open={showBulkDialog}
         onOpenChange={setShowBulkDialog}
-        title={`Godkänn ${selectedCount} operationer?`}
+        title={t('approve_bulk_title', { count: selectedCount })}
         warningText=""
-        confirmLabel={`Godkänn ${selectedCount}`}
+        confirmLabel={t('approve_count', { count: selectedCount })}
         isSubmitting={isBulkCommitting}
         onConfirm={() => handleBulkCommit(Array.from(selectedIds))}
       >
         <div className="space-y-3 text-sm">
-          <p>Genom att bekräfta utförs följande:</p>
+          <p>{t('bulk_confirm_intro')}</p>
           <ul className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
             {selectedBreakdown.map(({ type, count }) => (
               <li key={type} className="flex justify-between font-mono tabular-nums">
-                <span className="font-sans">{bulkActionLabel(type, count)}</span>
+                <span className="font-sans">{bulkActionLabel(type, count, t)}</span>
                 <span className="text-muted-foreground">{count}</span>
               </li>
             ))}
           </ul>
           <p className="text-xs text-muted-foreground">
-            Operationerna körs i ordning. Misslyckade hoppas över och rapporteras efteråt.
+            {t('bulk_confirm_footer')}
           </p>
         </div>
       </ConfirmationDialog>

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { useToast } from '@/components/ui/use-toast'
@@ -19,19 +20,23 @@ import Step2CompanyDetails from '@/components/onboarding/Step2CompanyDetails'
 import Step3TaxRegistration from '@/components/onboarding/Step3TaxRegistration'
 import Step4VatAccounting from '@/components/onboarding/Step4VatAccounting'
 
-const STEP_INFO = [
-  { title: 'Företagsform', subtitle: 'Välj din företagsform för att komma igång.' },
-  { title: 'Uppgifter', subtitle: 'Uppgifterna visas på fakturor och dokument.' },
-  { title: 'F-skatt & räkenskapsår', subtitle: 'Ange din skatteregistrering och räkenskapsår.' },
-  { title: 'Moms & bokföring', subtitle: 'Momsregistrering och bokföringsmetod.' },
-]
+type TFn = (key: string, values?: Record<string, string | number>) => string
 
-function translatePeriodError(msg: string): string {
-  if (msg.includes('end must be after')) return 'Slutdatumet måste vara efter startdatumet.'
-  if (msg.includes('start must be the 1st')) return 'Startdatumet måste vara den 1:a i en månad.'
-  if (msg.includes('end must be the last day')) return 'Slutdatumet måste vara sista dagen i en månad.'
-  if (msg.includes('exceeds maximum 18 months')) return 'Räkenskapsåret får inte överstiga 18 månader (BFL 3 kap.).'
-  return 'Ogiltigt räkenskapsår. Kontrollera datumen och försök igen.'
+function buildStepInfo(t: TFn) {
+  return [
+    { title: t('step1_title'), subtitle: t('step1_subtitle') },
+    { title: t('step2_title'), subtitle: t('step2_subtitle') },
+    { title: t('step3_title'), subtitle: t('step3_subtitle') },
+    { title: t('step4_title'), subtitle: t('step4_subtitle') },
+  ]
+}
+
+function translatePeriodError(msg: string, t: TFn): string {
+  if (msg.includes('end must be after')) return t('period_error_end_after_start')
+  if (msg.includes('start must be the 1st')) return t('period_error_start_first')
+  if (msg.includes('end must be the last day')) return t('period_error_end_last_day')
+  if (msg.includes('exceeds maximum 18 months')) return t('period_error_max_18')
+  return t('period_error_invalid')
 }
 
 const LOG = '[welcome-onboarding]'
@@ -63,6 +68,8 @@ export default function WelcomeOnboarding({
 }: WelcomeOnboardingProps) {
   const router = useRouter()
   const { toast } = useToast()
+  const t = useTranslations('onboarding')
+  const STEP_INFO = buildStepInfo(t)
 
   const [started, setStarted] = useState(skipWelcome ?? false)
   const [isSaving, setIsSaving] = useState(false)
@@ -76,7 +83,7 @@ export default function WelcomeOnboarding({
   const totalSteps = 4
 
   const hour = new Date().getHours()
-  const greeting = hour < 5 ? 'God natt' : hour < 10 ? 'Godmorgon' : hour < 14 ? 'Hej' : hour < 18 ? 'God eftermiddag' : 'God kväll'
+  const greeting = hour < 5 ? t('greeting_night') : hour < 10 ? t('greeting_morning') : hour < 14 ? t('greeting_hello') : hour < 18 ? t('greeting_afternoon') : t('greeting_evening')
 
   const handleNext = async (stepData: Partial<CompanySettings>) => {
     // Reset org_number/company_name only on a genuine change (user going back
@@ -99,8 +106,8 @@ export default function WelcomeOnboarding({
       const periodResult = computeFiscalPeriod(mergedSettings)
       if (periodResult.error) {
         toast({
-          title: 'Ogiltigt räkenskapsår',
-          description: translatePeriodError(periodResult.error),
+          title: t('toast_invalid_fiscal_year'),
+          description: translatePeriodError(periodResult.error, t),
           variant: 'destructive',
         })
         return
@@ -120,8 +127,8 @@ export default function WelcomeOnboarding({
     const periodResult = computeFiscalPeriod(mergedSettings)
     if (periodResult.error) {
       toast({
-        title: 'Ogiltigt räkenskapsår',
-        description: translatePeriodError(periodResult.error),
+        title: t('toast_invalid_fiscal_year'),
+        description: translatePeriodError(periodResult.error, t),
         variant: 'destructive',
       })
       return
@@ -142,16 +149,16 @@ export default function WelcomeOnboarding({
 
       if (result.error || !result.companyId) {
         logError('create company action failed', { error: result.error })
-        let title = 'Fel'
-        let description: string = result.error || 'Kunde inte skapa företag. Försök igen.'
+        let title = t('toast_error_title')
+        let description: string = result.error || t('toast_create_failed')
         let backToStep2 = false
         if (result.error === 'org_number_exists') {
-          title = 'Företaget finns redan'
-          description = `Det här företaget finns redan i ${branding.appName.toLowerCase()}. Be en befintlig administratör att bjuda in dig.`
+          title = t('toast_company_exists_title')
+          description = t('toast_company_exists_description', { appName: branding.appName.toLowerCase() })
           backToStep2 = true
         } else if (result.error === 'org_number_invalid') {
-          title = 'Ogiltigt organisationsnummer'
-          description = 'Kontrollera att du angett ett giltigt 10- eller 12-siffrigt organisationsnummer.'
+          title = t('toast_org_invalid_title')
+          description = t('toast_org_invalid_description')
           backToStep2 = true
         }
         toast({
@@ -168,14 +175,14 @@ export default function WelcomeOnboarding({
 
       console.log(LOG, 'onboarding completed', result.companyId)
       toast({
-        title: 'Välkommen!',
-        description: 'Ditt företag är nu redo.',
+        title: t('toast_welcome_title'),
+        description: t('toast_company_ready'),
       })
       router.push('/')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logError('create company action threw', { error: message })
-      toast({ title: 'Ett oväntat fel uppstod. Försök igen.', variant: 'destructive' })
+      toast({ title: t('toast_unexpected_error'), variant: 'destructive' })
     } finally {
       setIsSaving(false)
     }
@@ -195,13 +202,13 @@ export default function WelcomeOnboarding({
       <div className="flex flex-col items-start justify-center min-h-[60vh] animate-fade-in">
         <p className="text-muted-foreground/50 text-sm mb-2">{greeting}</p>
         <h1 className="font-display text-4xl md:text-5xl font-medium tracking-tight leading-[1.05] mb-10">
-          Välkommen till {branding.appName}
+          {t('welcome_title', { appName: branding.appName })}
         </h1>
         <button
           onClick={() => setStarted(true)}
           className="px-5 py-2.5 rounded-lg bg-foreground text-background text-sm font-medium hover:bg-foreground/85 transition-colors duration-150 active:scale-[0.98]"
         >
-          {hasExistingCompanies ? 'Lägg till ett företag' : 'Lägg till ditt första företag'}
+          {hasExistingCompanies ? t('add_a_company') : t('add_first_company')}
         </button>
       </div>
     )
@@ -215,7 +222,7 @@ export default function WelcomeOnboarding({
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
         <p className="text-muted-foreground text-sm mt-1.5">
-          {hasExistingCompanies ? 'Lägg till ett företag.' : 'Lägg till ditt första företag för att komma igång.'}
+          {hasExistingCompanies ? t('add_company_subtitle') : t('add_first_company_subtitle')}
         </p>
       </header>
 
@@ -237,7 +244,7 @@ export default function WelcomeOnboarding({
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Building2 className="h-4 w-4 text-white/60" />
-                  <span className="text-xs text-white/40 tracking-wide uppercase">Nytt företag</span>
+                  <span className="text-xs text-white/40 tracking-wide uppercase">{t('new_company')}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {STEP_INFO.map((_, i) => {

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { switchCompany } from '@/lib/company/actions'
@@ -10,6 +11,7 @@ import { Check, ChevronsUpDown, Plus, Loader2 } from 'lucide-react'
 
 export default function CompanySwitcher() {
   const { company, companies, isSandbox } = useCompany()
+  const t = useTranslations('company_switcher')
   const [open, setOpen] = useState(false)
   const [isPending, setIsPending] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -115,7 +117,7 @@ export default function CompanySwitcher() {
         className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-all duration-150"
       >
         <Plus className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-        <span className="text-[13px] text-muted-foreground truncate">Lägg till företag</span>
+        <span className="text-[13px] text-muted-foreground truncate">{t('add_company')}</span>
       </Link>
     )
   }
@@ -130,9 +132,9 @@ export default function CompanySwitcher() {
         aria-haspopup="listbox"
       >
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-[0.06em] leading-none mb-1">Företag</p>
+          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-[0.06em] leading-none mb-1">{t('company_label')}</p>
           <p className="text-[13px] font-semibold text-foreground truncate tracking-[-0.01em]">
-            {company?.name || 'Min verksamhet'}
+            {company?.name || t('default_company_name')}
           </p>
         </div>
         <ChevronsUpDown className="h-3 w-3 text-muted-foreground flex-shrink-0" />
@@ -149,7 +151,7 @@ export default function CompanySwitcher() {
               {hasMultiple && (
                 <div className="px-2 py-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] px-1.5">
-                    Företag
+                    {t('company_label')}
                   </p>
                 </div>
               )}
@@ -196,7 +198,7 @@ export default function CompanySwitcher() {
                 className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-md transition-colors md:whitespace-nowrap"
               >
                 <Plus className="h-3.5 w-3.5" />
-                Lägg till företag
+                {t('add_company')}
               </Link>
             </div>
           )}

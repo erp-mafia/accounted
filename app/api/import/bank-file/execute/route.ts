@@ -99,6 +99,21 @@ export const POST = withRouteContext(
       if (role === 'viewer') ingestOptions.rawInsertOnly = true
       const ingestResult = await ingestTransactions(supabase, companyId, user.id, rawTransactions, ingestOptions)
 
+      if (ingestResult.errors > 0 && ingestResult.first_error) {
+        opLog.error('bank file ingest reported insert errors', new Error(ingestResult.first_error.message), {
+          errorCount: ingestResult.errors,
+          code: ingestResult.first_error.code,
+          details: ingestResult.first_error.details,
+          hint: ingestResult.first_error.hint,
+        })
+      }
+
+      const errorMessage = ingestResult.errors > 0
+        ? ingestResult.first_error
+          ? `${ingestResult.errors} fel: ${ingestResult.first_error.message}${ingestResult.first_error.details ? ` (${ingestResult.first_error.details})` : ''}`
+          : `${ingestResult.errors} transactions failed to import`
+        : null
+
       await supabase
         .from('bank_file_imports')
         .update({
@@ -106,9 +121,7 @@ export const POST = withRouteContext(
           duplicate_count: ingestResult.duplicates,
           matched_count: ingestResult.auto_matched_invoices,
           status: ingestResult.errors > 0 && ingestResult.imported === 0 ? 'failed' : 'completed',
-          error_message: ingestResult.errors > 0
-            ? `${ingestResult.errors} transactions failed to import`
-            : null,
+          error_message: errorMessage,
         })
         .eq('id', importRecord.id)
 

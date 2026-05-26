@@ -52,6 +52,7 @@ export type BankFileFormatId =
   | 'ica_banken'
   | 'skandia'
   | 'lunar'
+  | 'northmill'
   | 'generic_csv'
   | 'camt053'
 

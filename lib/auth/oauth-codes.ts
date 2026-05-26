@@ -22,6 +22,12 @@ export interface AuthCodePayload {
   userId: string
   codeChallenge: string
   redirectUri: string
+  /**
+   * Scopes the user consented to grant the resulting API key. Undefined on
+   * codes minted before this field was added — the token endpoint falls back
+   * to ALL_SCOPES so existing Claude flows are unaffected.
+   */
+  scopes?: string[]
   exp: number
 }
 

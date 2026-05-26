@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
+import { userHasPassword } from '@/lib/auth/has-password'
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -89,8 +91,37 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // MFA pages — accessible to authenticated users (AAL1+), skip MFA enforcement
+  // /mfa/enroll: gate behind has-password. BankID-only users who reach this
+  // page can lock themselves out — Supabase requires AAL2 to change password
+  // or unenroll MFA, and AAL2 needs a prior password sign-in. Force them to
+  // set a password first. The /account/set-password page does that and routes
+  // back here via ?returnTo. Thread the inner returnTo through so the user
+  // ends up on their original destination after the full chain completes.
+  if (pathname.startsWith('/mfa/enroll')) {
+    if (!userHasPassword(user)) {
+      const innerReturnTo = request.nextUrl.searchParams.get('returnTo')
+      const mfaTarget = `/mfa/enroll${
+        innerReturnTo ? `?returnTo=${encodeURIComponent(innerReturnTo)}` : ''
+      }`
+      return NextResponse.redirect(
+        new URL(
+          `/account/set-password?returnTo=${encodeURIComponent(mfaTarget)}`,
+          request.url,
+        ),
+      )
+    }
+    return supabaseResponse
+  }
+
+  // Other MFA pages — accessible to authenticated users (AAL1+), skip MFA enforcement
   if (pathname.startsWith('/mfa/')) {
+    return supabaseResponse
+  }
+
+  // /account/set-password is the escape hatch from the BankID/MFA lockout
+  // and must be reachable even when the user has no company yet (e.g. mid-
+  // onboarding) and is at AAL1.
+  if (pathname.startsWith('/account/set-password')) {
     return supabaseResponse
   }
 
@@ -105,7 +136,7 @@ export async function updateSession(request: NextRequest) {
 
     // MFA required but user has no factor enrolled yet → force enrollment
     // Skip for users with no companies (still setting up)
-    const companyIdForMfa = await resolveCompanyForMiddleware(supabase, user.id, request)
+    const { companyId: companyIdForMfa } = await resolveCompanyForMiddleware(supabase, user.id, request)
     if (companyIdForMfa) {
       const { data: factors } = await supabase.auth.mfa.listFactors()
       const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
@@ -122,12 +153,26 @@ export async function updateSession(request: NextRequest) {
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const companyId = await resolveCompanyForMiddleware(supabase, user.id, request)
+  const { companyId, locale: dbLocale } = await resolveCompanyForMiddleware(supabase, user.id, request)
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it.
   if (cookieCompanyId && cookieCompanyId !== companyId) {
     supabaseResponse.cookies.set('gnubok-company-id', '', { path: '/', maxAge: 0 })
+  }
+
+  // Sync the locale cookie from user_preferences. This keeps next-intl's
+  // request config (which reads the cookie) consistent with the DB value
+  // without forcing every RSC render to query the database itself.
+  const cookieLocale = request.cookies.get(LOCALE_COOKIE)?.value
+  const effectiveLocale = isLocale(dbLocale) ? dbLocale : DEFAULT_LOCALE
+  if (cookieLocale !== effectiveLocale) {
+    supabaseResponse.cookies.set(LOCALE_COOKIE, effectiveLocale, {
+      path: '/',
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 60 * 60 * 24 * 365,
+    })
   }
 
   // Routes that stay accessible when the user has no active company.
@@ -200,13 +245,15 @@ async function resolveCompanyForMiddleware(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<string | null> {
+): Promise<{ companyId: string | null; locale: string | null }> {
   // 1. user_preferences (authoritative)
   const { data: prefs } = await supabase
     .from('user_preferences')
-    .select('active_company_id')
+    .select('active_company_id, locale')
     .eq('user_id', userId)
     .maybeSingle()
+
+  const locale = (prefs?.locale as string | undefined) ?? null
 
   if (prefs?.active_company_id) {
     const { data: membership } = await supabase
@@ -217,7 +264,7 @@ async function resolveCompanyForMiddleware(
       .is('companies.archived_at', null)
       .maybeSingle()
 
-    if (membership) return membership.company_id
+    if (membership) return { companyId: membership.company_id, locale }
   }
 
   // 2. Fallback: first non-archived membership by created_at
@@ -230,7 +277,7 @@ async function resolveCompanyForMiddleware(
     .limit(1)
     .maybeSingle()
 
-  if (!firstCompany) return null
+  if (!firstCompany) return { companyId: null, locale }
 
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
@@ -241,5 +288,5 @@ async function resolveCompanyForMiddleware(
       { onConflict: 'user_id' }
     )
 
-  return firstCompany.company_id
+  return { companyId: firstCompany.company_id, locale }
 }

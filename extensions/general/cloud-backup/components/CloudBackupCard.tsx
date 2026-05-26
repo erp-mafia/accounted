@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
@@ -141,115 +140,125 @@ export default function CloudBackupCard() {
   }, [loadStatus, toast])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Cloud className="h-4 w-4 text-muted-foreground" />
-          Google Drive
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Laddar…</p>
-        ) : status?.connected ? (
-          <>
-            <div className="text-sm">
-              <p>
-                Ansluten som <span className="font-medium">{status.account_email}</span>
-              </p>
-              {status.connected_at && (
-                <p className="text-xs text-muted-foreground">
-                  Kopplat {formatDate(status.connected_at)}
-                </p>
-              )}
-            </div>
-
-            {status.last_sync ? (
-              <div className="rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
-                <p>
-                  Senaste synk: <span className="font-medium">{status.last_sync.file_name}</span>
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {formatDate(status.last_sync.at)} · {formatMb(status.last_sync.file_size_bytes)}
-                </p>
-                <a
-                  href={`https://drive.google.com/file/d/${status.last_sync.file_id}/view`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  Öppna i Drive
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Ingen synk än — kör &ldquo;Synka nu&rdquo; för att ladda upp första arkivet.
-              </p>
-            )}
-
-            <ScheduleSection
-              schedule={status.schedule}
-              onUpdated={loadStatus}
-            />
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <Button onClick={handleSync} disabled={isSyncing}>
-                {isSyncing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Synkar…
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Synka nu
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleDisconnect}
-                disabled={isDisconnecting}
-              >
-                {isDisconnecting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Kopplar bort…
-                  </>
-                ) : (
-                  <>
-                    <Unplug className="mr-2 h-4 w-4" />
-                    Koppla bort
-                  </>
-                )}
-              </Button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Koppla ditt Google-konto för att ladda upp säkerhetsbackupen till din egen
-              Drive. gnubok får bara tillgång till filer som appen själv skapar (scope
-              <span className="font-mono text-xs"> drive.file</span>).
+    <div className="rounded-lg border border-border bg-card p-6">
+      <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
+        {/* Identity */}
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
+            <Cloud className="h-[18px] w-[18px] text-foreground/60" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-[15px] font-semibold leading-tight">Google Drive</h3>
+            <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+              Säkerhetskopia till din egen Drive.
             </p>
-            <Button onClick={handleConnect} disabled={isConnecting}>
-              {isConnecting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Omdirigerar…
-                </>
-              ) : (
-                <>
-                  <Cloud className="mr-2 h-4 w-4" />
-                  Koppla Google Drive
-                </>
-              )}
-            </Button>
-          </>
-        )}
-      </CardContent>
-    </Card>
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Laddar…</p>
+          ) : status?.connected ? (
+            <>
+              <dl className="space-y-3 text-sm">
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="shrink-0 text-muted-foreground">Konto</dt>
+                  <dd className="min-w-0 truncate font-medium">{status.account_email}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="shrink-0 text-muted-foreground">Senaste synk</dt>
+                  <dd className="min-w-0 text-right">
+                    {status.last_sync ? (
+                      <>
+                        <a
+                          href={`https://drive.google.com/file/d/${status.last_sync.file_id}/view`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-medium underline-offset-4 hover:underline tabular-nums"
+                        >
+                          {formatDate(status.last_sync.at)}
+                          <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                        </a>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                          {formatMb(status.last_sync.file_size_bytes)}
+                        </p>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">Aldrig</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="mt-6 pt-6 border-t border-border">
+                <ScheduleSection
+                  schedule={status.schedule}
+                  onUpdated={loadStatus}
+                />
+              </div>
+
+              <div className="mt-6 pt-6 border-t border-border flex flex-col gap-2 sm:flex-row sm:justify-between">
+                <Button onClick={handleSync} disabled={isSyncing} className="w-full sm:w-auto">
+                  {isSyncing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Synkar…
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Synka nu
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDisconnect}
+                  disabled={isDisconnecting}
+                  className="w-full sm:w-auto"
+                >
+                  {isDisconnecting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Kopplar bort…
+                    </>
+                  ) : (
+                    <>
+                      <Unplug className="mr-2 h-4 w-4" />
+                      Koppla bort
+                    </>
+                  )}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Koppla ditt Google-konto för att ladda upp säkerhetsbackupen till din egen Drive.
+                gnubok får bara tillgång till filer som appen själv skapar (scope{' '}
+                <span className="font-mono text-xs">drive.file</span>).
+              </p>
+              <div className="mt-4">
+                <Button onClick={handleConnect} disabled={isConnecting} className="w-full sm:w-auto">
+                  {isConnecting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Omdirigerar…
+                    </>
+                  ) : (
+                    <>
+                      <Cloud className="mr-2 h-4 w-4" />
+                      Koppla Google Drive
+                    </>
+                  )}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -343,14 +352,14 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
   )
 
   return (
-    <div className="rounded-md border border-border/60 bg-background p-3 space-y-3">
+    <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <Label htmlFor="auto-sync-toggle" className="text-sm font-medium">
             Automatisk synkronisering
           </Label>
-          <p className="text-xs text-muted-foreground">
-            Kör en daglig säkerhetsbackup till din Drive.
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Daglig säkerhetsbackup till din Drive.
           </p>
         </div>
         <Switch
@@ -364,7 +373,7 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
       {enabled && (
         <div className="flex items-center gap-2">
           <Label htmlFor="auto-sync-hour" className="text-xs text-muted-foreground">
-            Tid (din lokala tid)
+            Tid (lokal)
           </Label>
           <select
             id="auto-sync-hour"
@@ -387,7 +396,7 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
         <p className="text-xs text-muted-foreground">
           Senaste automatiska synk: {formatDate(schedule.last_auto_sync_at)}{' '}
           {schedule.last_auto_sync_status === 'success' ? (
-            <span className="text-emerald-600">· lyckades</span>
+            <span className="text-success">· lyckades</span>
           ) : schedule.last_auto_sync_status === 'error' ? (
             <span className="text-destructive">
               · misslyckades

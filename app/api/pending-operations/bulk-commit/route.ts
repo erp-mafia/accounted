@@ -67,6 +67,7 @@ export async function POST(request: Request) {
 
     const result = await commitPendingOperation(supabase, user.id, companyId, op, {
       userEmail: user.email,
+      commitMethod: 'bulk_accept',
     })
     if (result.status === 'committed') {
       results.push({ id, status: 'committed' })

@@ -45,6 +45,13 @@ export interface RouteContext {
    * resolved, so handlers can treat this as guaranteed non-null. Routes that
    * need to opt out of the guarantee (e.g. onboarding) shouldn't use
    * withRouteContext.
+   *
+   * Membership invariant: `getActiveCompanyId` only returns a company the
+   * authenticated user is a current member of (it validates
+   * `company_members` and excludes archived companies). The handler may
+   * therefore treat `companyId` as "a company the caller is authorized to
+   * read", and routes that mutate state additionally enforce a non-viewer
+   * role via `requireWrite: true`. ASVS V8.2.1 / SOC 2 CC6.3.
    */
   companyId: string
 }

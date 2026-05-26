@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -150,6 +151,7 @@ export default function Step3TaxRegistration({
   onBack,
   isSaving,
 }: Step3Props) {
+  const t = useTranslations('onboarding')
   const isEF = entityType === 'enskild_firma'
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -215,7 +217,7 @@ export default function Step3TaxRegistration({
       )
       if (validation.error) {
         toast({
-          title: 'Räkenskapsåret är inte giltigt',
+          title: t('step3_invalid_period'),
           description: validation.error,
           variant: 'destructive',
         })
@@ -242,10 +244,10 @@ export default function Step3TaxRegistration({
         ? `${parseDateParts(firstEnd).day} ${monthNames[parseDateParts(firstEnd).month - 1].toLowerCase()} ${parseDateParts(firstEnd).year}`
         : monthNames[endMonth - 1].toLowerCase()
       const ok = await confirm({
-        title: 'Är du säker på brutet räkenskapsår?',
-        description: `Du har valt ett räkenskapsår som inte följer kalenderåret (slutar ${endLabel}). De flesta svenska företag använder kalenderår (1 januari – 31 december). Du kan ändra detta senare i inställningarna, men endast innan du har bokfört något.`,
-        confirmLabel: 'Ja, fortsätt',
-        cancelLabel: 'Ändra val',
+        title: t('step3_broken_year_title'),
+        description: t('step3_broken_year_description', { endLabel }),
+        confirmLabel: t('step3_broken_year_confirm'),
+        cancelLabel: t('step3_broken_year_cancel'),
         variant: 'warning',
       })
       if (!ok) return
@@ -267,9 +269,9 @@ export default function Step3TaxRegistration({
       <DestructiveConfirmDialog {...dialogProps} />
       <Card>
         <CardHeader>
-          <CardTitle>F-skatt och räkenskapsår</CardTitle>
+          <CardTitle>{t('step3_card_title')}</CardTitle>
           <CardDescription>
-            Dessa uppgifter används för att beräkna din skattesituation.
+            {t('step3_card_description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -279,8 +281,8 @@ export default function Step3TaxRegistration({
             fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'step 3 validation failed', extra: { fields } }) }).catch(() => {})
             // Show first validation error to user
             const firstError = Object.values(errs)[0]
-            const message = firstError?.message || 'Kontrollera att alla fält är korrekt ifyllda.'
-            toast({ title: 'Saknade uppgifter', description: String(message), variant: 'destructive' })
+            const message = firstError?.message || t('check_all_fields')
+            toast({ title: t('missing_fields'), description: String(message), variant: 'destructive' })
           })} className="space-y-6">
             {/* F-skatt */}
             <div className="flex items-start space-x-3">
@@ -299,19 +301,19 @@ export default function Step3TaxRegistration({
                 <InfoTooltip
                   content={
                     <div className="space-y-2">
-                      <p className="font-medium">Vad är F-skatt?</p>
-                      <p>F-skatt betyder att du själv ansvarar för att betala skatt och avgifter till Skatteverket varje månad.</p>
-                      <p className="text-xs text-muted-foreground">De flesta som driver företag har F-skatt. Utan F-skatt måste dina kunder göra skatteavdrag på dina fakturor.</p>
+                      <p className="font-medium">{t('step3_fskatt_tip_title')}</p>
+                      <p>{t('step3_fskatt_tip_body')}</p>
+                      <p className="text-xs text-muted-foreground">{t('step3_fskatt_tip_note')}</p>
                     </div>
                   }
                   side="right"
                 >
                   <Label htmlFor="f_skatt" className="cursor-pointer">
-                    Jag har F-skattsedel
+                    {t('step3_fskatt_label')}
                   </Label>
                 </InfoTooltip>
                 <p className="text-sm text-muted-foreground">
-                  F-skatt innebär att du själv ansvarar för att betala in skatt och avgifter.
+                  {t('step3_fskatt_help')}
                 </p>
               </div>
             </div>
@@ -321,16 +323,16 @@ export default function Step3TaxRegistration({
               <InfoTooltip
                 content={
                   <div className="space-y-2">
-                    <p className="font-medium">Räkenskapsår</p>
-                    <p>Ditt räkenskapsår bestämmer vilken period du bokför för. De flesta har kalenderår (jan-dec).</p>
+                    <p className="font-medium">{t('step3_fy_tip_title')}</p>
+                    <p>{t('step3_fy_tip_body')}</p>
                     {isEF && (
-                      <p className="text-xs text-muted-foreground">Enskild firma måste använda kalenderår enligt BFL 3 kap.</p>
+                      <p className="text-xs text-muted-foreground">{t('step3_fy_tip_ef_note')}</p>
                     )}
                   </div>
                 }
                 side="right"
               >
-                <Label className="text-base font-medium">Vilket räkenskapsår bokför du för?</Label>
+                <Label className="text-base font-medium">{t('step3_fy_question')}</Label>
               </InfoTooltip>
 
               {/* Toggle: First year vs Ongoing */}
@@ -350,8 +352,8 @@ export default function Step3TaxRegistration({
                       )}>
                         <div className="flex items-center justify-between">
                           <div>
-                            <p className="font-medium text-sm">Första räkenskapsåret</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">Nystartat företag</p>
+                            <p className="font-medium text-sm">{t('step3_first_fy_title')}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{t('step3_first_fy_subtitle')}</p>
                           </div>
                           {field.value && (
                             <div className="flex-shrink-0 p-1 rounded-full bg-primary text-primary-foreground">
@@ -372,8 +374,8 @@ export default function Step3TaxRegistration({
                       )}>
                         <div className="flex items-center justify-between">
                           <div>
-                            <p className="font-medium text-sm">Annat räkenskapsår</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">Pågående verksamhet</p>
+                            <p className="font-medium text-sm">{t('step3_other_fy_title')}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{t('step3_other_fy_subtitle')}</p>
                           </div>
                           {!field.value && (
                             <div className="flex-shrink-0 p-1 rounded-full bg-primary text-primary-foreground">
@@ -405,7 +407,7 @@ export default function Step3TaxRegistration({
                               // Reset end when start changes — its valid options depend on start
                               if (endField.value) endField.onChange('')
                             }}
-                            startHelpText="Datumet företaget registrerades. Första räkenskapsåret kan börja valfri dag."
+                            startHelpText={t('step3_start_help')}
                             endDate={endField.value || ''}
                             entityType={entityType}
                             endDateSlot={
@@ -413,7 +415,7 @@ export default function Step3TaxRegistration({
                                 {/* AB: end month selector */}
                                 {!isEF && parsedStart && (
                                   <div className="space-y-2">
-                                    <Label>Räkenskapsåret slutar (månad)</Label>
+                                    <Label>{t('step3_fy_end_month_label')}</Label>
                                     <Select
                                       value={abEndMonth.toString()}
                                       onValueChange={(v) => {
@@ -424,7 +426,7 @@ export default function Step3TaxRegistration({
                                       }}
                                     >
                                       <SelectTrigger>
-                                        <SelectValue placeholder="Välj månad" />
+                                        <SelectValue placeholder={t('step3_select_month')} />
                                       </SelectTrigger>
                                       <SelectContent>
                                         {monthNames.map((name, i) => (
@@ -440,13 +442,13 @@ export default function Step3TaxRegistration({
                                 {/* End date selector (options depend on entity type + start) */}
                                 {parsedStart && firstYearEndOptions.length > 0 && (
                                   <div className="space-y-2">
-                                    <Label>Slutdatum</Label>
+                                    <Label>{t('step3_end_date_label')}</Label>
                                     <Select
                                       value={endField.value || ''}
                                       onValueChange={(v) => { if (v) endField.onChange(v) }}
                                     >
                                       <SelectTrigger>
-                                        <SelectValue placeholder="Välj slutdatum" />
+                                        <SelectValue placeholder={t('step3_select_end_date')} />
                                       </SelectTrigger>
                                       <SelectContent>
                                         {firstYearEndOptions.map((opt) => (
@@ -464,7 +466,7 @@ export default function Step3TaxRegistration({
 
                                 {parsedStart && firstYearEndOptions.length === 0 && (
                                   <p className="text-sm text-destructive">
-                                    Ingen giltig slutperiod hittades. Kontrollera startdatumet.
+                                    {t('step3_no_valid_end')}
                                   </p>
                                 )}
 
@@ -486,14 +488,14 @@ export default function Step3TaxRegistration({
                 <div className="space-y-2">
                   {isEF ? (
                     <div className="rounded-lg bg-muted/50 p-4">
-                      <p className="text-sm font-medium">Kalenderår (januari-december)</p>
+                      <p className="text-sm font-medium">{t('step3_calendar_year')}</p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Enskild firma måste använda kalenderår enligt BFL 3 kap.
+                        {t('step3_ef_calendar_required')}
                       </p>
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <Label>När slutar företagets räkenskapsår?</Label>
+                      <Label>{t('step3_when_fy_ends')}</Label>
                       <Controller
                         name="fiscal_year_end_month"
                         control={control}
@@ -503,7 +505,7 @@ export default function Step3TaxRegistration({
                             onValueChange={(v) => { if (v) field.onChange(parseInt(v)) }}
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder="Välj månad" />
+                              <SelectValue placeholder={t('step3_select_month')} />
                             </SelectTrigger>
                             <SelectContent>
                               {monthNames.map((name, i) => (
@@ -516,21 +518,21 @@ export default function Step3TaxRegistration({
                         )}
                       />
                       <p className="text-sm text-muted-foreground">
-                        De flesta har kalenderår (december). Brutet räkenskapsår slutar annan månad.
+                        {t('step3_calendar_or_broken')}
                       </p>
 
                       {fiscalYearEndMonth && (
                         <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-4 space-y-1">
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <CalendarDays className="h-4 w-4 text-primary" />
-                            Ditt räkenskapsår
+                            {t('step3_your_fy')}
                           </div>
                           <p className="text-sm text-muted-foreground">
                             {fiscalYearEndMonth === 12
                               ? `1 januari \u2013 31 december (kalenderår)`
                               : `1 ${monthNames[fiscalYearEndMonth].toLowerCase()} \u2013 ${lastDayOfMonth(new Date().getFullYear(), fiscalYearEndMonth)} ${monthNames[fiscalYearEndMonth - 1].toLowerCase()}`}
                           </p>
-                          <p className="text-xs text-muted-foreground">12 månader</p>
+                          <p className="text-xs text-muted-foreground">{t('step3_twelve_months')}</p>
                         </div>
                       )}
                     </div>
@@ -547,17 +549,17 @@ export default function Step3TaxRegistration({
                 disabled={isSaving}
               >
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                Tillbaka
+                {t('back')}
               </Button>
               <Button type="submit" disabled={isSaving}>
                 {isSaving ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sparar...
+                    {t('saving')}
                   </>
                 ) : (
                   <>
-                    Fortsätt
+                    {t('continue')}
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </>
                 )}

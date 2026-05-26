@@ -25,11 +25,33 @@ export class AccountsNotInChartError extends Error {
   readonly accountNumbers: string[]
 
   constructor(accountNumbers: string[]) {
-    const sorted = [...new Set(accountNumbers)].sort()
+    // Numeric-first sort so mixed-length BAS codes (rare but possible) order
+    // by value rather than by UTF-16 code units — otherwise ['245', '1930']
+    // would sort to ['1930', '245'] under the default string comparator,
+    // confusing a user about which accounts to activate in Kontoplan.
+    // Non-numeric tokens fall back to a stable string compare so the order
+    // is fully deterministic for any input.
+    const sorted = [...new Set(accountNumbers)].sort(compareAccountNumbers)
     super(`Accounts not enabled in chart of accounts: ${sorted.join(', ')}`)
     this.name = 'AccountsNotInChartError'
     this.accountNumbers = sorted
   }
+}
+
+function compareAccountNumbers(a: string, b: string): number {
+  const na = Number(a)
+  const nb = Number(b)
+  const aIsNum = Number.isFinite(na)
+  const bIsNum = Number.isFinite(nb)
+  if (aIsNum && bIsNum) {
+    if (na !== nb) return na - nb
+    // Same numeric value but different string (e.g. "0245" vs "245") —
+    // break the tie deterministically by string.
+    return a < b ? -1 : a > b ? 1 : 0
+  }
+  if (aIsNum) return -1
+  if (bIsNum) return 1
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 export function isAccountsNotInChartError(err: unknown): err is AccountsNotInChartError {
@@ -203,7 +225,12 @@ export function accountsNotInChartResponse(err: AccountsNotInChartError) {
       error: {
         code: err.code,
         message: `Följande konton behöver aktiveras: ${err.accountNumbers.join(', ')}`,
+        // Dual-emit: top-level for legacy frontend callers, nested under
+        // `details` to match the v1 envelope shape so a single client (MCP
+        // or external) can read `error.details.account_numbers` regardless
+        // of which categorize endpoint it hit.
         account_numbers: err.accountNumbers,
+        details: { account_numbers: err.accountNumbers },
       },
     },
     { status: 400 }

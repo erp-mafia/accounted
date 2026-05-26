@@ -1,13 +1,15 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet } from 'lucide-react'
+import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -69,6 +71,8 @@ import type {
 import type { BASAccount } from '@/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import dynamic from 'next/dynamic'
+import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
@@ -1727,8 +1731,14 @@ type ImportMode = null | 'psd2' | 'bank' | 'sie' | 'csv_data' | 'migration'
 export default function ImportPage() {
   const { company } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
+  const [view, setView] = useState<'import' | 'export'>('import')
   const [userId, setUserId] = useState('')
   const [isSandbox, setIsSandbox] = useState(false)
+  const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
+  const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
+  const t = useTranslations('import')
+  const router = useRouter()
+  const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
 
   // Fetch authenticated user ID and sandbox status
   useEffect(() => {
@@ -1748,7 +1758,7 @@ export default function ImportPage() {
     })
   }, [])
 
-  // Sync mode from URL search params (reacts to client-side navigation changes)
+  // Sync mode + view from URL search params (reacts to client-side navigation changes)
   const searchParams = useSearchParams()
   useEffect(() => {
     if (isSandbox) return
@@ -1760,7 +1770,33 @@ export default function ImportPage() {
         setMode(modeParam as ImportMode)
       }
     }
+    const viewParam = searchParams.get('view')
+    if (viewParam === 'export' || viewParam === 'import') {
+      setView(viewParam)
+    }
   }, [isSandbox, searchParams])
+
+  // Hash-based deep links (#cloud-backup, #sie-export) → switch to export tab and scroll
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const hash = window.location.hash
+    if (hash === '#cloud-backup' || hash === '#sie-export') {
+      setView('export')
+      setTimeout(() => {
+        document.querySelector(hash)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }, 50)
+    }
+  }, [])
+
+  const handleViewChange = (next: string) => {
+    if (next !== 'import' && next !== 'export') return
+    setView(next)
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === 'export') params.set('view', 'export')
+    else params.delete('view')
+    const qs = params.toString()
+    router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
+  }
   // Extensions are active if compiled in — no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
@@ -1769,9 +1805,11 @@ export default function ImportPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Importera</h1>
+        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+          {view === 'export' ? t('export_title') : t('title')}
+        </h1>
         <p className="text-muted-foreground">
-          Importera banktransaktioner eller bokföringsdata till ditt företag
+          {view === 'export' ? t('export_subtitle') : t('subtitle')}
         </p>
       </div>
 
@@ -1781,12 +1819,19 @@ export default function ImportPage() {
             <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
               <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <p className="text-sm text-muted-foreground">
-                Import är inte tillgängligt i sandlådemiljön. Skapa ett konto för att importera data.
+                {t('sandbox_disabled')}
               </p>
             </div>
           )}
 
-          <div className="space-y-2">
+          <Tabs value={view} onValueChange={handleViewChange}>
+            <TabsList className="grid w-full max-w-xs grid-cols-2">
+              <TabsTrigger value="import">{t('tab_import')}</TabsTrigger>
+              <TabsTrigger value="export">{t('tab_export')}</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="import" className="mt-6">
+              <div className="space-y-2">
             {/* 1. Koppla bank */}
             {hasBankingExtension && (
               <div
@@ -1807,13 +1852,13 @@ export default function ImportPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2.5">
-                    <h3 className="text-[15px] font-semibold leading-tight">Koppla bank</h3>
+                    <h3 className="text-[15px] font-semibold leading-tight">{t('psd2_title')}</h3>
                     <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-full leading-none">
-                      Rekommenderat
+                      {t('psd2_recommended')}
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                    Anslut ditt bankkonto direkt och synka transaktioner automatiskt via PSD2.
+                    {t('psd2_description')}
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
@@ -1840,9 +1885,9 @@ export default function ImportPage() {
                     <ArrowRightLeft className="h-[18px] w-[18px] text-foreground/60" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-[15px] font-semibold leading-tight">Hämta från annat system</h3>
+                    <h3 className="text-[15px] font-semibold leading-tight">{t('migration_title')}</h3>
                     <p className="text-sm mt-1.5 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
-                      Inget ändras i ditt befintliga system.
+                      {t('migration_description')}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
@@ -1882,9 +1927,9 @@ export default function ImportPage() {
                 <ArrowLeftRight className="h-[18px] w-[18px] text-foreground/60" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">Banktransaktioner</h3>
+                <h3 className="text-[15px] font-semibold leading-tight">{t('bankfile_title')}</h3>
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                  Importera kontoutdrag från din bank. Stöder de flesta svenska banker.
+                  {t('bankfile_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
                   {['CSV', 'OFX', 'SEB', 'Swedbank', 'Nordea'].map(fmt => (
@@ -1915,14 +1960,20 @@ export default function ImportPage() {
                 <FileSpreadsheet className="h-[18px] w-[18px] text-foreground/60" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">Importera CSV/Excel-data</h3>
+                <h3 className="text-[15px] font-semibold leading-tight">{t('csv_data_title')}</h3>
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                  Importera ingående balanser, kunder eller leverantörer.
+                  {t('csv_data_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
-                  {['XLSX', 'CSV', 'Ingående balanser', 'Kunder', 'Leverantörer'].map(fmt => (
-                    <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
-                      {fmt}
+                  {[
+                    { key: 'XLSX', label: 'XLSX' },
+                    { key: 'CSV', label: 'CSV' },
+                    { key: 'opening_balances', label: t('csv_chip_opening_balances') },
+                    { key: 'customers', label: t('csv_chip_customers') },
+                    { key: 'suppliers', label: t('csv_chip_suppliers') },
+                  ].map(chip => (
+                    <span key={chip.key} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
+                      {chip.label}
                     </span>
                   ))}
                 </div>
@@ -1948,9 +1999,9 @@ export default function ImportPage() {
                 <FileText className="h-[18px] w-[18px] text-foreground/60" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">Bokföringsdata (SIE)</h3>
+                <h3 className="text-[15px] font-semibold leading-tight">{t('sie_title')}</h3>
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                  Importera verifikationer och kontoplan från ett annat bokföringsprogram.
+                  {t('sie_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
                   {['SIE4', '.se', '.si'].map(fmt => (
@@ -1962,14 +2013,79 @@ export default function ImportPage() {
               </div>
               <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
-          </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="export" className="mt-6">
+              <div className="space-y-4">
+                {/* SIE-export */}
+                <div id="sie-export" className="scroll-mt-24 rounded-lg border border-border bg-card p-6">
+                  <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
+                    {/* Identity */}
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
+                        <FileSpreadsheet className="h-[18px] w-[18px] text-foreground/60" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-[15px] font-semibold leading-tight">{t('export_sie_title')}</h3>
+                        <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                          {t('export_sie_description')}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Controls */}
+                    <div className="space-y-4">
+                      <FiscalYearSelector
+                        value={exportPeriodId}
+                        onChange={setExportPeriodId}
+                        includeAllOption={false}
+                        hideFuturePeriods
+                        label={t('export_sie_period_label')}
+                      />
+                      <label className="flex items-start gap-2 text-sm text-muted-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 rounded border-border"
+                          checked={exportExcludeClosing}
+                          onChange={(e) => setExportExcludeClosing(e.target.checked)}
+                        />
+                        <span>{t('export_sie_exclude_closing_label')}</span>
+                      </label>
+                      <Button
+                        onClick={() => {
+                          if (exportPeriodId) {
+                            const params = new URLSearchParams({ period_id: exportPeriodId })
+                            if (exportExcludeClosing) params.set('exclude_closing', 'true')
+                            window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
+                          }
+                        }}
+                        disabled={!exportPeriodId || isSandbox}
+                        className="w-full sm:w-auto"
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        {t('export_sie_button')}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Molnsynkronisering (Google Drive) */}
+                {hasCloudBackup && (
+                  <div id="cloud-backup" className="scroll-mt-24">
+                    <CloudBackupCard />
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
         </>
       )}
 
       {mode !== null && (
         <Button variant="ghost" size="sm" onClick={() => setMode(null)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka till val
+          {t('back_to_choices')}
         </Button>
       )}
 

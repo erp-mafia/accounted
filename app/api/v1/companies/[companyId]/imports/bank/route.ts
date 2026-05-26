@@ -60,7 +60,7 @@ registerEndpoint({
     'SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).',
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
-    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, generic_csv, camt053.',
+    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, generic_csv, camt053.',
     'Duplicate detection is by external_id (composed from date + amount + counterparty); a re-import of the same file with the same flag set typically deduplicates rather than creating doubles.',
     'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested — not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
@@ -134,6 +134,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       'ica_banken',
       'skandia',
       'lunar',
+      'northmill',
       'generic_csv',
       'camt053',
     ])

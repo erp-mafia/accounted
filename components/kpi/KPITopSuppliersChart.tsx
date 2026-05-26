@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import {
   BarChart,
   Bar,
@@ -19,15 +20,16 @@ interface KPITopSuppliersChartProps {
 const BAR_COLOR = 'hsl(var(--chart-1))'
 
 export function KPITopSuppliersChart({ suppliers }: KPITopSuppliersChartProps) {
+  const t = useTranslations('kpi')
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Största leverantörer</CardTitle>
+        <CardTitle className="text-base">{t('top_suppliers_title')}</CardTitle>
       </CardHeader>
       <CardContent>
         {suppliers.length === 0 ? (
           <div className="flex h-[200px] items-center justify-center text-center text-sm text-muted-foreground px-4">
-            Inga registrerade leverantörsfakturor under perioden
+            {t('top_suppliers_empty')}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(160, suppliers.length * 32)}>
@@ -55,7 +57,7 @@ export function KPITopSuppliersChart({ suppliers }: KPITopSuppliersChartProps) {
                 interval={0}
               />
               <Tooltip
-                formatter={(value) => [formatCurrency(Number(value)), 'Spend']}
+                formatter={(value) => [formatCurrency(Number(value)), t('top_suppliers_spend')]}
                 contentStyle={{
                   fontSize: '12px',
                   borderRadius: '8px',

@@ -40,6 +40,22 @@ function isImageType(type: string): boolean {
   return type.startsWith('image/')
 }
 
+/**
+ * Extract a Swedish error message from the structured error envelope
+ * returned by /api/documents. Falls back to message_en or null if the
+ * shape is unexpected.
+ */
+function extractErrorMessage(err: unknown): string | null {
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object') {
+    const e = err as { message?: unknown; message_en?: unknown; code?: unknown }
+    if (typeof e.message === 'string' && e.message.length > 0) return e.message
+    if (typeof e.message_en === 'string' && e.message_en.length > 0) return e.message_en
+    if (typeof e.code === 'string') return e.code
+  }
+  return null
+}
+
 export default function DocumentUploadZone({
   files,
   onFilesChange,
@@ -64,15 +80,39 @@ export default function DocumentUploadZone({
         method: 'POST',
         body: formData,
       })
-      const result = await res.json()
 
-      if (result.error) {
-        return { ...file, status: 'error', error: result.error }
+      // Try to parse JSON, but tolerate non-JSON responses (auth redirect HTML, 502 etc.)
+      let result: { data?: { id?: string }; error?: unknown } = {}
+      try {
+        result = await res.json()
+      } catch {
+        console.warn('[DocumentUploadZone] Non-JSON response', {
+          status: res.status,
+          fileName: file.fileName,
+        })
+        const reason = res.status === 401 || res.status === 403
+          ? 'Din session har gått ut. Ladda om sidan och logga in igen.'
+          : `Servern svarade ${res.status}.`
+        return { ...file, status: 'error', error: reason }
+      }
+
+      if (!res.ok || result.error) {
+        const errMessage = extractErrorMessage(result.error) || `Uppladdning misslyckades (${res.status})`
+        console.warn('[DocumentUploadZone] Upload error', {
+          status: res.status,
+          error: result.error,
+          fileName: file.fileName,
+        })
+        return { ...file, status: 'error', error: errMessage }
       }
 
       return { ...file, status: 'uploaded', id: result.data?.id }
-    } catch {
-      return { ...file, status: 'error', error: 'Uppladdning misslyckades' }
+    } catch (err) {
+      console.error('[DocumentUploadZone] Upload threw', {
+        error: err,
+        fileName: file.fileName,
+      })
+      return { ...file, status: 'error', error: 'Uppladdning misslyckades — nätverksfel' }
     }
   }, [journalEntryId])
 

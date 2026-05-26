@@ -1,6 +1,11 @@
 import crypto from 'crypto'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
+import {
+  AGIKontrolleraHUSchema,
+  AGIKontrolleraIUSchema,
+  AGI_KONTROLLERA_MAX_BYTES,
+} from '@/lib/salary/agi/kontrollera-schemas'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { storeTokens, getTokens, deleteTokens } from './lib/token-store'
@@ -17,9 +22,12 @@ import {
   agiGetKvittenser,
   agiLasPeriod,
   agiLasUppPeriod,
+  agiKontrolleraHU,
+  agiKontrolleraIU,
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
+import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import {
   findMatchCandidates,
   findMatchSuggestionsBulk,
@@ -46,6 +54,14 @@ import type { VatPeriodType } from '@/types'
  *   the test-env key in prod)
  *
  * Optional:
+ * - SKATTEVERKET_ENV                            — 'test' | 'production'.
+ *                                                 Drives security-relevant
+ *                                                 limits (AGI payload size:
+ *                                                 100 MB test vs 300 MB prod).
+ *                                                 Defaults to 'test' (stricter)
+ *                                                 when unset or unrecognised.
+ *                                                 MUST be set explicitly in
+ *                                                 every deployment manifest.
  * - SKATTEVERKET_OAUTH_BASE_URL                 — defaults to test
  * - SKATTEVERKET_API_BASE_URL                   — momsdeklaration; defaults to test
  * - SKATTEVERKET_AGD_INLAMNING_API_BASE_URL     — AGI inlämning; defaults to test
@@ -81,6 +97,91 @@ import type { VatPeriodType } from '@/types'
  * The /status endpoint reports which environment is active so the UI can
  * surface a Testmiljö / Produktion badge.
  */
+
+const AGI_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
+
+/**
+ * Defense-in-depth RBAC check for AGI write/validate endpoints. Ctx
+ * presence alone (set by middleware) only confirms the user is signed in
+ * and has a resolved company; it does NOT prove they are entitled to
+ * submit tax declarations for that company. Viewers must be blocked.
+ *
+ * Returns null on success, a NextResponse on failure.
+ */
+async function requireAgiWriteRole(ctx: ExtensionContext): Promise<NextResponse | null> {
+  const { data, error } = await ctx.supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', ctx.companyId)
+    .eq('user_id', ctx.userId)
+    .maybeSingle()
+
+  if (error) {
+    return NextResponse.json(
+      { error: 'Behörighetskontroll misslyckades.' },
+      { status: 500 },
+    )
+  }
+  if (!data?.role || !AGI_WRITE_ROLES.has(data.role as string)) {
+    return NextResponse.json(
+      { error: 'Otillräcklig behörighet för att lämna in AGI för det här företaget.' },
+      { status: 403 },
+    )
+  }
+  return null
+}
+
+/**
+ * Append an immutable row to skatteverket_api_audit_log. Errors are
+ * swallowed (logged only) so an audit-table outage does not break the
+ * regulator flow — but a successful primary call without an audit row
+ * shows up as a noisy console.error for ops to investigate.
+ */
+async function writeSkatteverketAudit(
+  ctx: ExtensionContext,
+  fields: {
+    endpoint: string
+    agRegistreradId?: string | null
+    redovisningsperiod?: string | null
+    outcome: 'ok' | 'validation_error' | 'skv_error' | 'auth_error' | 'internal_error'
+    responseStatus?: number | null
+    skvStatus?: string | null
+    requestSizeBytes?: number | null
+    correlationId?: string | null
+    errorMessage?: string | null
+  },
+): Promise<void> {
+  try {
+    const { error } = await ctx.supabase
+      .from('skatteverket_api_audit_log')
+      .insert({
+        company_id: ctx.companyId,
+        user_id: ctx.userId,
+        endpoint: fields.endpoint,
+        ag_registered_id: fields.agRegistreradId ?? null,
+        redovisningsperiod: fields.redovisningsperiod ?? null,
+        outcome: fields.outcome,
+        response_status: fields.responseStatus ?? null,
+        skv_status: fields.skvStatus ?? null,
+        request_size_bytes: fields.requestSizeBytes ?? null,
+        correlation_id: fields.correlationId ?? null,
+        error_message: fields.errorMessage ?? null,
+      })
+    if (error) {
+      ctx.log.error('skatteverket_api_audit_log insert failed', {
+        endpoint: fields.endpoint,
+        outcome: fields.outcome,
+        error: error.message,
+      })
+    }
+  } catch (err) {
+    ctx.log.error('skatteverket_api_audit_log insert threw', {
+      endpoint: fields.endpoint,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 export const skatteverketExtension: Extension = {
   id: 'skatteverket',
   name: 'Skatteverket Integration',
@@ -1252,6 +1353,231 @@ export const skatteverketExtension: Extension = {
       },
     },
 
+    // ── AGI: Pre-flight kontrollera HU/IU ───────────────────────────
+    // Validate a single HU or IU as JSON without saving anything in
+    // Skatteverket. Lets the UI catch errors per HU/IU before the user
+    // submits a full XML underlag. Body: the HU or IU as JSON per the
+    // v1.7 spec §7 / §8 (property names like agRegistreradId,
+    // redovisningsPeriod, kontantErsattningUlagAG, …).
+    //
+    // Response shape (kontrollsvar):
+    //   { status: 'OK' | 'INFO' | 'ARENDE' | 'STOPP' | 'AVVISANDE',
+    //     fel: [{ status, felmeddelande }, …] }
+    {
+      method: 'POST',
+      path: '/agi/kontrollera/hu',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const rbac = await requireAgiWriteRole(ctx)
+        if (rbac) return rbac
+
+        // Read body as bytes first so we can enforce a hard size cap before
+        // JSON.parse — protects against ~MB payloads that would otherwise
+        // hit the Zod validator.
+        const rawBytes = Buffer.byteLength(await request.clone().text(), 'utf8')
+        if (rawBytes > AGI_KONTROLLERA_MAX_BYTES) {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.hu',
+            outcome: 'validation_error',
+            responseStatus: 413,
+            requestSizeBytes: rawBytes,
+            errorMessage: 'payload exceeds 64KB cap',
+          })
+          return NextResponse.json(
+            { error: 'Payload överstiger maxstorleken för pre-flight kontroll (64 KB).' },
+            { status: 413 },
+          )
+        }
+
+        let parsedBody: unknown
+        try {
+          parsedBody = await request.json()
+        } catch {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.hu',
+            outcome: 'validation_error',
+            responseStatus: 400,
+            requestSizeBytes: rawBytes,
+            errorMessage: 'invalid JSON',
+          })
+          return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
+        }
+
+        const parsed = AGIKontrolleraHUSchema.safeParse(parsedBody)
+        if (!parsed.success) {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.hu',
+            outcome: 'validation_error',
+            responseStatus: 400,
+            requestSizeBytes: rawBytes,
+            errorMessage: parsed.error.issues
+              .map((iss) => `${iss.path.join('.')}: ${iss.message}`)
+              .join('; ')
+              .slice(0, 1000),
+          })
+          return NextResponse.json(
+            {
+              error: 'HU-payload matchar inte Skatteverkets v1.7 §7-schema.',
+              type: 'validation_error',
+              errors: parsed.error.issues.map((iss) => ({
+                field: iss.path.join('.'),
+                message: iss.message,
+                code: iss.code,
+              })),
+            },
+            { status: 400 },
+          )
+        }
+
+        try {
+          const result = await agiKontrolleraHU(ctx.supabase, ctx.userId, parsed.data)
+          if (!result.ok) {
+            await writeSkatteverketAudit(ctx, {
+              endpoint: 'agi.kontrollera.hu',
+              agRegistreradId: parsed.data.agRegistreradId,
+              redovisningsperiod: parsed.data.redovisningsPeriod,
+              outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
+              responseStatus: result.status,
+              requestSizeBytes: rawBytes,
+              errorMessage: result.error,
+            })
+            return NextResponse.json(
+              { error: result.error, code: result.body?.kod },
+              { status: result.status },
+            )
+          }
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.hu',
+            agRegistreradId: parsed.data.agRegistreradId,
+            redovisningsperiod: parsed.data.redovisningsPeriod,
+            outcome: 'ok',
+            responseStatus: result.status,
+            skvStatus: result.data?.status ?? null,
+            requestSizeBytes: rawBytes,
+          })
+          return NextResponse.json({ data: result.data })
+        } catch (err) {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.hu',
+            agRegistreradId: parsed.data.agRegistreradId,
+            redovisningsperiod: parsed.data.redovisningsPeriod,
+            outcome: 'internal_error',
+            requestSizeBytes: rawBytes,
+            errorMessage: err instanceof Error ? err.message : String(err),
+          })
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    {
+      method: 'POST',
+      path: '/agi/kontrollera/iu',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const rbac = await requireAgiWriteRole(ctx)
+        if (rbac) return rbac
+
+        const rawBytes = Buffer.byteLength(await request.clone().text(), 'utf8')
+        if (rawBytes > AGI_KONTROLLERA_MAX_BYTES) {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.iu',
+            outcome: 'validation_error',
+            responseStatus: 413,
+            requestSizeBytes: rawBytes,
+            errorMessage: 'payload exceeds 64KB cap',
+          })
+          return NextResponse.json(
+            { error: 'Payload överstiger maxstorleken för pre-flight kontroll (64 KB).' },
+            { status: 413 },
+          )
+        }
+
+        let parsedBody: unknown
+        try {
+          parsedBody = await request.json()
+        } catch {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.iu',
+            outcome: 'validation_error',
+            responseStatus: 400,
+            requestSizeBytes: rawBytes,
+            errorMessage: 'invalid JSON',
+          })
+          return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
+        }
+
+        const parsed = AGIKontrolleraIUSchema.safeParse(parsedBody)
+        if (!parsed.success) {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.iu',
+            outcome: 'validation_error',
+            responseStatus: 400,
+            requestSizeBytes: rawBytes,
+            errorMessage: parsed.error.issues
+              .map((iss) => `${iss.path.join('.')}: ${iss.message}`)
+              .join('; ')
+              .slice(0, 1000),
+          })
+          return NextResponse.json(
+            {
+              error: 'IU-payload matchar inte Skatteverkets v1.7 §8-schema.',
+              type: 'validation_error',
+              errors: parsed.error.issues.map((iss) => ({
+                field: iss.path.join('.'),
+                message: iss.message,
+                code: iss.code,
+              })),
+            },
+            { status: 400 },
+          )
+        }
+
+        try {
+          const result = await agiKontrolleraIU(ctx.supabase, ctx.userId, parsed.data)
+          if (!result.ok) {
+            await writeSkatteverketAudit(ctx, {
+              endpoint: 'agi.kontrollera.iu',
+              agRegistreradId: parsed.data.agRegistreradId,
+              redovisningsperiod: parsed.data.redovisningsPeriod,
+              outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
+              responseStatus: result.status,
+              requestSizeBytes: rawBytes,
+              errorMessage: result.error,
+            })
+            return NextResponse.json(
+              { error: result.error, code: result.body?.kod },
+              { status: result.status },
+            )
+          }
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.iu',
+            agRegistreradId: parsed.data.agRegistreradId,
+            redovisningsperiod: parsed.data.redovisningsPeriod,
+            outcome: 'ok',
+            responseStatus: result.status,
+            skvStatus: result.data?.status ?? null,
+            requestSizeBytes: rawBytes,
+          })
+          return NextResponse.json({ data: result.data })
+        } catch (err) {
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'agi.kontrollera.iu',
+            agRegistreradId: parsed.data.agRegistreradId,
+            redovisningsperiod: parsed.data.redovisningsPeriod,
+            outcome: 'internal_error',
+            requestSizeBytes: rawBytes,
+            errorMessage: err instanceof Error ? err.message : String(err),
+          })
+          return handleSkvError(err)
+        }
+      },
+    },
+
     // ── AGI: Lås period ─────────────────────────────────────────────
     // Hantera-API; typically not needed (skapaGranskningsunderlag already
     // accepts lasPeriod=true). Exposed for recovery / manual control.
@@ -1566,6 +1892,13 @@ export const skatteverketExtension: Extension = {
           return handleSkvError(err)
         }
       },
+    },
+  ],
+
+  eventHandlers: [
+    {
+      eventType: 'skattekonto.drift_detected',
+      handler: handleSkattekontoDriftDetected,
     },
   ],
 }

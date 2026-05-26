@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -27,6 +28,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   const router = useRouter()
   const { toast } = useToast()
   const supabase = createClient()
+  const t = useTranslations('invoice_credit')
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -53,8 +55,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
 
     if (error || !data) {
       toast({
-        title: 'Kunde inte ladda faktura',
-        description: 'Fakturan hittades inte.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
       router.push('/invoices')
@@ -64,8 +66,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     // Check if invoice can be credited
     if (!['sent', 'paid', 'overdue'].includes(data.status)) {
       toast({
-        title: 'Kan inte krediteras',
-        description: 'Endast skickade, betalda eller förfallna fakturor kan krediteras',
+        title: t('cannot_credit_title'),
+        description: t('cannot_credit_description'),
         variant: 'destructive',
       })
       router.push(`/invoices/${id}`)
@@ -74,8 +76,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
 
     if (data.status === 'credited') {
       toast({
-        title: 'Redan krediterad',
-        description: 'Denna faktura har redan krediterats',
+        title: t('already_credited_title'),
+        description: t('already_credited_description'),
         variant: 'destructive',
       })
       router.push(`/invoices/${id}`)
@@ -88,7 +90,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     }
 
     setInvoice(data as InvoiceWithRelations)
-    setReason(`Krediterar faktura ${data.invoice_number}`)
+    setReason(t('reason_default', { number: data.invoice_number ?? '' }))
     setIsLoading(false)
   }
 
@@ -109,21 +111,21 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
 
       if (!response.ok) {
         const data = await response.json()
-        throw new Error(data.error || 'Failed to create credit note')
+        throw new Error(data.error || t('create_failed_fallback'))
       }
 
       const { data: creditNote } = await response.json()
 
       toast({
-        title: 'Kreditfaktura skapad',
-        description: `Kreditfaktura ${creditNote.invoice_number} har skapats`,
+        title: t('created_toast_title'),
+        description: t('created_toast_description', { number: creditNote.invoice_number }),
       })
 
       router.push(`/invoices/${creditNote.id}`)
     } catch (error) {
       toast({
-        title: 'Kunde inte skapa kreditfaktura',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('create_failed_title'),
+        description: error instanceof Error ? error.message : t('try_again'),
         variant: 'destructive',
       })
     }
@@ -149,13 +151,13 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     <div className="space-y-6 max-w-3xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label="Tillbaka">
+        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Skapa kreditfaktura</h1>
+          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
           <p className="text-muted-foreground">
-            Krediterar faktura {invoice.invoice_number}
+            {t('subtitle', { number: invoice.invoice_number ?? '' })}
           </p>
         </div>
       </div>
@@ -165,11 +167,9 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         <CardContent className="flex items-start gap-4 pt-6">
           <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
           <div>
-            <p className="font-medium text-destructive">Oåterkallelig åtgärd</p>
+            <p className="font-medium text-destructive">{t('warning_title')}</p>
             <p className="text-sm text-muted-foreground mt-1">
-              En kreditfaktura makulerar den ursprungliga fakturan helt.
-              Alla belopp blir negativa, en bokföringsverifikation skapas, och den ursprungliga fakturan markeras som krediterad.
-              Denna åtgärd kan inte ångras.
+              {t('warning_description')}
             </p>
           </div>
         </CardContent>
@@ -178,27 +178,27 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       {/* Original invoice info */}
       <Card>
         <CardHeader>
-          <CardTitle>Ursprunglig faktura</CardTitle>
+          <CardTitle>{t('original_card_title')}</CardTitle>
           <CardDescription>
-            Kreditfakturan baseras på denna faktura
+            {t('original_card_description')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <span className="text-muted-foreground">Fakturanummer:</span>
+              <span className="text-muted-foreground">{t('invoice_number_label')}</span>
               <span className="ml-2 font-medium">{invoice.invoice_number}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Datum:</span>
+              <span className="text-muted-foreground">{t('date_label')}</span>
               <span className="ml-2">{formatDate(invoice.invoice_date)}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Kund:</span>
+              <span className="text-muted-foreground">{t('customer_label')}</span>
               <span className="ml-2">{customer.name}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Momsbehandling:</span>
+              <span className="text-muted-foreground">{t('vat_treatment_label')}</span>
               <span className="ml-2">{getVatTreatmentLabel(invoice.vat_treatment)}</span>
             </div>
           </div>
@@ -208,20 +208,20 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       {/* Credit note preview */}
       <Card>
         <CardHeader>
-          <CardTitle>Kreditfaktura förhandsgranskning</CardTitle>
+          <CardTitle>{t('preview_card_title')}</CardTitle>
           <CardDescription>
-            Kreditfakturanummer: KR-{invoice.invoice_number}
+            {t('preview_card_description', { number: invoice.invoice_number ?? '' })}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             {/* Header */}
             <div className="grid grid-cols-12 gap-4 text-sm font-medium text-muted-foreground border-b pb-2">
-              <div className="col-span-5">Beskrivning</div>
-              <div className="col-span-2 text-right">Antal</div>
-              <div className="col-span-1 text-center">Enhet</div>
-              <div className="col-span-2 text-right">à-pris</div>
-              <div className="col-span-2 text-right">Summa</div>
+              <div className="col-span-5">{t('th_description')}</div>
+              <div className="col-span-2 text-right">{t('th_quantity')}</div>
+              <div className="col-span-1 text-center">{t('th_unit')}</div>
+              <div className="col-span-2 text-right">{t('th_unit_price')}</div>
+              <div className="col-span-2 text-right">{t('th_amount')}</div>
             </div>
 
             {/* Items (negated) */}
@@ -246,27 +246,27 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
             {/* Totals (negated) */}
             <div className="space-y-2">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Delsumma</span>
+                <span className="text-muted-foreground">{t('subtotal')}</span>
                 <span className="text-destructive">
                   {formatCurrency(-Math.abs(invoice.subtotal), invoice.currency)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Moms ({invoice.vat_rate}%)</span>
+                <span className="text-muted-foreground">{t('vat_at_rate', { rate: invoice.vat_rate })}</span>
                 <span className="text-destructive">
                   {formatCurrency(-Math.abs(invoice.vat_amount), invoice.currency)}
                 </span>
               </div>
               <Separator />
               <div className="flex justify-between font-bold text-lg">
-                <span>Totalt</span>
+                <span>{t('total')}</span>
                 <span className="text-destructive">
                   {formatCurrency(-Math.abs(invoice.total), invoice.currency)}
                 </span>
               </div>
               {invoice.currency !== 'SEK' && invoice.total_sek && (
                 <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>I SEK (kurs {invoice.exchange_rate})</span>
+                  <span>{t('in_sek', { rate: invoice.exchange_rate ?? 1 })}</span>
                   <span className="text-destructive">
                     {formatCurrency(-Math.abs(invoice.total_sek))}
                   </span>
@@ -280,19 +280,19 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       {/* Reason */}
       <Card>
         <CardHeader>
-          <CardTitle>Anledning</CardTitle>
+          <CardTitle>{t('reason_card_title')}</CardTitle>
           <CardDescription>
-            Ange anledning till kreditering (visas på kreditfakturan)
+            {t('reason_card_description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
-            <Label htmlFor="reason">Anledning</Label>
+            <Label htmlFor="reason">{t('reason_label')}</Label>
             <Textarea
               id="reason"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="T.ex. Felaktig fakturering, returnerade varor..."
+              placeholder={t('reason_placeholder')}
               rows={3}
             />
           </div>
@@ -302,9 +302,11 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       {/* Confirmation */}
       <Card>
         <CardHeader>
-          <CardTitle>Bekräfta</CardTitle>
+          <CardTitle>{t('confirm_card_title')}</CardTitle>
           <CardDescription>
-            Skriv fakturanumret <span className="font-mono font-semibold text-foreground">{invoice.invoice_number}</span> för att bekräfta
+            {t('confirm_card_description_1')}
+            <span className="font-mono font-semibold text-foreground">{invoice.invoice_number}</span>
+            {t('confirm_card_description_2')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -323,7 +325,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       {/* Actions */}
       <div className="flex justify-end gap-4">
         <Button variant="outline" onClick={() => router.back()}>
-          Avbryt
+          {t('cancel')}
         </Button>
         <Button
           variant="destructive"
@@ -334,20 +336,20 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
             confirmText !== invoice.invoice_number ||
             !canWrite
           }
-          title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
           {isSubmitting ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Skapar...
+              {t('creating')}
             </>
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-4 w-4" />
-              Skapa kreditfaktura
+              {t('create_credit_note')}
             </>
           ) : (
-            'Skapa kreditfaktura'
+            t('create_credit_note')
           )}
         </Button>
       </div>

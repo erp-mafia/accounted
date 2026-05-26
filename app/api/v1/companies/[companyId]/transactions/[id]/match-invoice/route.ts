@@ -30,6 +30,7 @@ import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import type { EntityType, Invoice, Transaction } from '@/types'
 
@@ -122,7 +123,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     }
-    const { invoice_id } = parsed.data
+    const { invoice_id, force, expected_journal_entry_id } = parsed.data
     const txLog = ctx.log.child({ transactionId: txId, invoiceId: invoice_id })
 
     const { data: transaction, error: fetchTxErr } = await ctx.supabase
@@ -181,6 +182,86 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('MATCH_INVOICE_NOT_OPEN', txLog, {
         requestId: ctx.requestId,
         details: { currentStatus: invoice.status },
+      })
+    }
+
+    // Hard-duplicate guard: status leak — the invoice still says
+    // 'sent'/'overdue' but already has a payment voucher attached. Mirror
+    // of the internal route's defensive check.
+    if (invoice.status === 'sent' || invoice.status === 'overdue') {
+      const { data: existingPayments } = await ctx.supabase
+        .from('invoice_payments')
+        .select('journal_entry_id')
+        .eq('company_id', ctx.companyId!)
+        .eq('invoice_id', invoice_id)
+        .not('journal_entry_id', 'is', null)
+        .limit(1)
+      if (existingPayments && existingPayments.length > 0) {
+        return v1ErrorResponseFromCode('MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER', txLog, {
+          requestId: ctx.requestId,
+          details: {
+            existing_journal_entry_id:
+              (existingPayments[0] as { journal_entry_id: string }).journal_entry_id,
+          },
+        })
+      }
+    }
+
+    // Soft-duplicate guard: a manual verifikation already books this
+    // bank receipt. Bypassed only when the caller echoes the candidate's
+    // journal_entry_id back in expected_journal_entry_id (validated by
+    // the schema). The Idempotency-Key body hash already prevents replay
+    // with a different body, and re-detecting the candidate here means an
+    // automation can't fabricate or stale-roll an id past the guard.
+    let dismissedCandidateId: string | null = null
+    try {
+      const candidate = await detectDuplicatePaymentVoucher(ctx.supabase, {
+        companyId: ctx.companyId!,
+        transactionId: txId,
+        transactionDate: transaction.date,
+        transactionAmount: transaction.amount,
+      })
+      if (!force) {
+        if (candidate) {
+          return v1ErrorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+            requestId: ctx.requestId,
+            details: { candidate },
+          })
+        }
+      } else {
+        if (!candidate || candidate.journal_entry_id !== expected_journal_entry_id) {
+          return v1ErrorResponseFromCode('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH', txLog, {
+            requestId: ctx.requestId,
+            details: {
+              expected_journal_entry_id,
+              detected_journal_entry_id: candidate?.journal_entry_id ?? null,
+            },
+          })
+        }
+        dismissedCandidateId = candidate.journal_entry_id
+      }
+    } catch (err) {
+      if (force) {
+        txLog.error('duplicate-payment-voucher detection failed under force=true', err as Error)
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
+      txLog.warn('duplicate-payment-voucher detection failed (continuing)', err as Error)
+    }
+
+    if (force && dismissedCandidateId) {
+      txLog.warn('soft-duplicate guard bypassed', {
+        reason: 'force=true',
+        requestId: ctx.requestId,
+        transactionId: txId,
+        invoiceId: invoice_id,
+        // Attribute the override to the calling user AND the API key. The
+        // user identifier alone is not enough for v1 — a single user can
+        // hold multiple keys (CI bot, integration, personal), and revocation
+        // / abuse triage needs to know which key was used.
+        userId: ctx.userId,
+        apiKeyId: ctx.apiKeyId,
+        // The verifikation the caller acknowledged and dismissed.
+        dismissedJournalEntryId: dismissedCandidateId,
       })
     }
 

@@ -15,7 +15,8 @@ import {
   escapeLikePattern,
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, accountsNotInChartResponse, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { collectMappingResultAccounts, findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
 import type { CategorizationTemplate } from '@/types'
@@ -238,6 +239,7 @@ export const POST = withRouteContext(
         .select('account_number, account_class')
         .eq('company_id', companyId)
         .eq('account_number', body.account_override)
+        .eq('is_active', true)
         .single()
 
       if (!accountExists) {
@@ -266,6 +268,23 @@ export const POST = withRouteContext(
           creditAccount: mappingResult.credit_account,
         },
       })
+    }
+
+    // Pre-validate every account the engine will resolve. Templates,
+    // counterparty templates, and category defaults can all reference accounts
+    // that aren't activated in this company's kontoplan. Without this check,
+    // the engine throws AccountsNotInChartError mid-flight and the legacy
+    // catch below silently marks the transaction as bokförd with no
+    // verifikation. Catching it here means the row stays in "Att bokföra"
+    // and the user gets a clear actionable message.
+    const missingAccounts = await findMissingActiveAccounts(
+      supabase,
+      companyId,
+      collectMappingResultAccounts(mappingResult),
+    )
+    if (missingAccounts.length > 0) {
+      txLog.warn('mapping references inactive/missing accounts', { missingAccounts })
+      return accountsNotInChartResponse(new AccountsNotInChartError(missingAccounts))
     }
 
     if (body.confirm_no_match && /^244\d$/.test(mappingResult.debit_account)) {
@@ -511,6 +530,15 @@ export const POST = withRouteContext(
       }
     } catch (err) {
       txLog.error('failed to create transaction journal entry', err as Error)
+      // AccountsNotInChartError means an account was deactivated between our
+      // pre-validation and the engine call (rare race). Don't fall through to
+      // the partial-success path — that would mark the transaction bokförd
+      // with no verifikation and leave the user staring at an unclosable
+      // dialog. Return a structured 400 so the row stays in "Att bokföra"
+      // and the user can re-activate the account and retry.
+      if (err instanceof AccountsNotInChartError) {
+        return accountsNotInChartResponse(err)
+      }
       // Bookkeeping errors map to Swedish via the registry. Other errors get
       // their raw message — the categorization is preserved either way so the
       // user can still re-book the verifikation manually.

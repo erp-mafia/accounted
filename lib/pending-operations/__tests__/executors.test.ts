@@ -493,6 +493,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning
+    enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -510,6 +511,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // UPDATE returning post-state
+    enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // doc propagation update
     enqueue({ data: null, error: null }) // dispatcher commit update
 
@@ -520,5 +522,56 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
       makePendingOp(baseOp),
     )
     expect(result.status).toBe('committed')
+  })
+
+  it('still commits when the inbox-link best-effort update errors', async () => {
+    // Inbox sync is best-effort — a failure to mark the inbox row as matched
+    // must not roll back the (compliant) doc→tx attach. Mirrors the REST
+    // route's swallow-and-log behaviour. The Supabase client resolves with
+    // { error } rather than rejecting, so we both confirm the op commits AND
+    // that the error was actually inspected and logged (not silently dropped).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
+    enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link — errors
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(spy).toHaveBeenCalledWith(
+      '[commitAttach] Failed to link inbox item:',
+      expect.objectContaining({ message: 'inbox row missing or RLS-blocked' }),
+    )
+    spy.mockRestore()
+  })
+
+  it('touches the invoice_inbox_items table to sync matched_transaction_id', async () => {
+    // Argument-level check that the executor actually reaches into
+    // invoice_inbox_items to keep the inbox UI in sync with the staged-write
+    // path. Otherwise the inbox row stays in "Behöver åtgärd" forever.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
+    enqueue({ data: null, error: null }) // invoice_inbox_items link
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(baseOp),
+    )
+    const tablesTouched = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])
+    expect(tablesTouched).toContain('invoice_inbox_items')
   })
 })

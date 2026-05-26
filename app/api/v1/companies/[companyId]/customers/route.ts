@@ -396,6 +396,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         vat_number: body.vat_number ?? null,
         vat_number_validated: vatValidated,
         vat_number_validated_at: vatValidatedAt,
+        language: body.language ?? 'sv',
         default_payment_terms: body.default_payment_terms ?? 30,
         notes: body.notes ?? null,
       })

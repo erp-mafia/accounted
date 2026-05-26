@@ -322,7 +322,7 @@ describe('MCP Receipt Matcher', () => {
 
       expect(parsed.staged).toBe(true)
       expect(parsed.operation_id).toBe('op-1')
-      expect(parsed.message).toContain('staged')
+      expect(parsed.message).toMatch(/staged/i)
       expect(parsed.preview).toBeDefined()
       expect(parsed.preview.debit_account).toBeDefined()
     })

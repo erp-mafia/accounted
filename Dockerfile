@@ -1,5 +1,5 @@
 # ── Stage 1: Base ──
-FROM node:22-alpine AS base
+FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS base
 RUN apk add --no-cache libc6-compat
 
 # ── Stage 2: Dependencies ──
@@ -39,10 +39,12 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 4: Runner ──
-FROM node:22-alpine AS runner
+FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS runner
 WORKDIR /app
 
-RUN apk add --no-cache curl
+# su-exec drops privileges in the entrypoint after the placeholder-substitution
+# step. Healthcheck uses BusyBox wget (already present in alpine), so no curl.
+RUN apk add --no-cache su-exec
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -50,15 +52,32 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy standalone output
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# /app at runtime is split across the read-only image layer and tmpfs mounts:
+#   /app/server.js, /app/node_modules/, /app/package.json   — image (read-only)
+#   /app/.next/                                              — tmpfs (writable)
+#   /app/public/                                             — tmpfs (writable)
+# The entrypoint copies templates from /opt/gnubok-template/ into the tmpfs
+# mounts at startup, runs placeholder substitution, then chmods read-only.
+# This lets us run with docker-compose `read_only: true`.
 
-# Copy entrypoint script
+COPY --from=builder /app/.next/standalone/server.js ./server.js
+COPY --from=builder /app/.next/standalone/node_modules ./node_modules
+COPY --from=builder /app/.next/standalone/package.json ./package.json
+
+# Baked-in templates for runtime population of tmpfs mounts.
+COPY --from=builder /app/.next/standalone/.next /opt/gnubok-template/.next
+COPY --from=builder /app/.next/static /opt/gnubok-template/.next/static
+COPY --from=builder /app/public /opt/gnubok-template/public
+
+# Pre-create mount points so tmpfs has somewhere to attach when running with
+# docker-compose's read_only:true. The directories are empty in the image
+# layer — content is copied in by the entrypoint.
+RUN mkdir -p /app/.next /app/.next/cache /app/public
+
 COPY --chmod=755 docker-entrypoint.sh ./docker-entrypoint.sh
 
-USER nextjs
+# No USER directive — entrypoint handles the privilege drop with su-exec
+# after the root-only setup steps complete.
 
 EXPOSE 3000
 ENV PORT=3000

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -43,6 +44,7 @@ export default function SendInvoiceDialog({
   const { toast } = useToast()
   const supabase = createClient()
   const { company } = useCompany()
+  const t = useTranslations('invoice_send_dialog')
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
@@ -60,7 +62,7 @@ export default function SendInvoiceDialog({
 
     async function init() {
       try {
-        if (!company?.id) throw new Error('Inget aktivt företag')
+        if (!company?.id) throw new Error(t('no_active_company'))
 
         // Fetch company settings
         const { data: settings, error } = await supabase
@@ -69,7 +71,7 @@ export default function SendInvoiceDialog({
           .eq('company_id', company.id)
           .maybeSingle()
 
-        if (error) throw new Error('Kunde inte ladda företagsinställningar')
+        if (error) throw new Error(t('company_settings_failed'))
         if (cancelled) return
 
         // Fetch fiscal period for the invoice date
@@ -90,8 +92,8 @@ export default function SendInvoiceDialog({
       } catch (err) {
         if (cancelled) return
         toast({
-          title: 'Kunde inte ladda inställningar',
-          description: err instanceof Error ? err.message : 'Försök igen.',
+          title: t('load_failed_title'),
+          description: err instanceof Error ? err.message : t('try_again'),
           variant: 'destructive',
         })
         onOpenChange(false)
@@ -145,7 +147,7 @@ export default function SendInvoiceDialog({
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Kunde inte skicka fakturan')
+        throw new Error(data.error || t('send_failed_fallback'))
       }
 
       onSuccess()
@@ -153,23 +155,23 @@ export default function SendInvoiceDialog({
       if (mode === 'email') {
         onOpenChange(false)
         toast({
-          title: 'Faktura skickad',
-          description: data.message || `Fakturan har skickats till ${invoice.customer.email}`,
+          title: t('send_success_title'),
+          description: data.message || t('send_success_default', { email: invoice.customer.email ?? '' }),
         })
       } else {
         // For manual send, just close — no email to confirm
         onOpenChange(false)
         toast({
-          title: 'Faktura markerad som skickad',
+          title: t('mark_success_title'),
           description: accountingMethod === 'accrual'
-            ? 'Bokföringsverifikationen har skapats.'
+            ? t('mark_success_voucher_created')
             : undefined,
         })
       }
     } catch (error) {
       toast({
-        title: 'Kunde inte skicka faktura',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('send_failed_title'),
+        description: error instanceof Error ? error.message : t('try_again'),
         variant: 'destructive',
       })
     }
@@ -188,15 +190,15 @@ export default function SendInvoiceDialog({
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>
-            {mode === 'email' ? 'Skicka faktura' : 'Markera som skickad'}{invoice.invoice_number ? ` — ${invoice.invoice_number}` : ''}
+            {mode === 'email' ? t('title_email') : t('title_manual')}{invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}
           </DialogTitle>
           <DialogDescription>
             {formatCurrency(invoice.total, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
-              <> ({formatCurrency(invoice.total_sek)} SEK)</>
+              <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}
             {mode === 'email' && invoice.customer.email && (
-              <> till {invoice.customer.email}</>
+              <>{t('description_to_email', { email: invoice.customer.email })}</>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -210,12 +212,15 @@ export default function SendInvoiceDialog({
             {showJournalPreview ? (
               <>
                 <p className="text-sm text-muted-foreground">
-                  Följande bokföringsverifikation skapas automatiskt:
+                  {t('journal_preview_intro')}
                 </p>
                 <JournalEntryReviewContent
                   periodName={periodName}
                   entryDate={invoice.invoice_date}
-                  description={`Försäljning faktura${invoice.invoice_number ? ` ${invoice.invoice_number}` : ''}${invoice.customer.name ? `, ${invoice.customer.name}` : ''}`}
+                  description={t('voucher_description', {
+                    numberSpace: invoice.invoice_number ? ` ${invoice.invoice_number}` : '',
+                    customerSuffix: invoice.customer.name ? `, ${invoice.customer.name}` : '',
+                  })}
                   lines={proposedLines}
                   totalDebit={totalDebit}
                   totalCredit={totalCredit}
@@ -226,10 +231,10 @@ export default function SendInvoiceDialog({
             ) : (
               <p className="text-sm text-muted-foreground">
                 {accountingMethod === 'cash'
-                  ? 'Kontantmetoden — bokföring sker vid betalning, inte vid fakturering.'
+                  ? t('explain_cash')
                   : mode === 'email'
-                    ? `Fakturan skickas till ${invoice.customer.email}.`
-                    : 'Fakturan markeras som skickad.'}
+                    ? t('explain_email', { email: invoice.customer.email ?? '' })
+                    : t('explain_manual')}
               </p>
             )}
           </div>
@@ -242,7 +247,7 @@ export default function SendInvoiceDialog({
             disabled={isSubmitting}
             className="w-full sm:w-auto min-h-11"
           >
-            Avbryt
+            {t('cancel')}
           </Button>
           <Button
             onClick={handleConfirm}
@@ -256,7 +261,7 @@ export default function SendInvoiceDialog({
             ) : (
               <Send className="mr-2 h-4 w-4" />
             )}
-            {mode === 'email' ? 'Skicka faktura' : 'Markera som skickad'}
+            {mode === 'email' ? t('send_invoice') : t('mark_as_sent')}
           </Button>
         </DialogFooter>
       </DialogContent>

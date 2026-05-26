@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,35 +27,35 @@ const GROUP_ORDER: TemplateGroup[] = [
   'financial', 'private_transfers', 'equipment',
 ]
 
-const GROUP_LABELS: Record<TemplateGroup, string> = {
-  premises: 'Lokalkostnader',
-  vehicle: 'Fordon',
-  it_software: 'IT & Programvara',
-  office_supplies: 'Kontorsmaterial',
-  marketing: 'Marknadsföring',
-  travel: 'Resor & Transport',
-  representation: 'Representation',
-  insurance: 'Försäkringar',
-  professional_services: 'Professionella tjänster',
-  bank_finance: 'Bank & Finans',
-  telecom: 'Telekom & Internet',
-  education: 'Utbildning',
-  personnel: 'Personal',
-  revenue: 'Intäkter',
-  financial: 'Finansiella poster',
-  private_transfers: 'Privata transaktioner',
-  equipment: 'Inventarier & Utrustning',
+const GROUP_LABEL_KEYS: Record<TemplateGroup, string> = {
+  premises: 'group_premises',
+  vehicle: 'group_vehicle',
+  it_software: 'group_it_software',
+  office_supplies: 'group_office_supplies',
+  marketing: 'group_marketing',
+  travel: 'group_travel',
+  representation: 'group_representation',
+  insurance: 'group_insurance',
+  professional_services: 'group_professional_services',
+  bank_finance: 'group_bank_finance',
+  telecom: 'group_telecom',
+  education: 'group_education',
+  personnel: 'group_personnel',
+  revenue: 'group_revenue',
+  financial: 'group_financial',
+  private_transfers: 'group_private_transfers',
+  equipment: 'group_equipment',
 }
 
-function getVatLabel(template: BookingTemplate): string | null {
+function getVatLabelKey(template: BookingTemplate): string | null {
   if (!template.vat_treatment) return null
   switch (template.vat_treatment) {
-    case 'standard_25': return '25% moms'
-    case 'reduced_12': return '12% moms'
-    case 'reduced_6': return '6% moms'
-    case 'reverse_charge': return 'Omvänd moms'
-    case 'export': return 'Momsfri (export)'
-    case 'exempt': return 'Momsfri'
+    case 'standard_25': return 'vat_standard_25'
+    case 'reduced_12': return 'vat_reduced_12'
+    case 'reduced_6': return 'vat_reduced_6'
+    case 'reverse_charge': return 'vat_reverse_charge'
+    case 'export': return 'vat_export'
+    case 'exempt': return 'vat_exempt'
     default: return null
   }
 }
@@ -77,7 +78,8 @@ interface TemplateCardProps {
 }
 
 function TemplateCard({ template, selected, onClick, compact }: TemplateCardProps) {
-  const vatLabel = getVatLabel(template)
+  const t = useTranslations('tx_template_picker')
+  const vatLabelKey = getVatLabelKey(template)
 
   return (
     <button
@@ -98,7 +100,7 @@ function TemplateCard({ template, selected, onClick, compact }: TemplateCardProp
             <span className="text-xs font-mono text-muted-foreground">
               D: {formatAccountWithName(template.debit_account)} &middot; K: {formatAccountWithName(template.credit_account)}
             </span>
-            {vatLabel && (
+            {vatLabelKey && (
               <Badge
                 variant="secondary"
                 className={`text-[10px] px-1.5 py-0 ${
@@ -107,13 +109,13 @@ function TemplateCard({ template, selected, onClick, compact }: TemplateCardProp
                     : ''
                 }`}
               >
-                {vatLabel}
+                {t(vatLabelKey)}
               </Badge>
             )}
             {template.requires_vat_registration_data && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-warning/30 text-warning-foreground gap-0.5">
                 <AlertTriangle className="h-2.5 w-2.5" />
-                Kräver momsreg.nr
+                {t('requires_vat_reg')}
               </Badge>
             )}
           </div>
@@ -149,6 +151,7 @@ export default function TemplatePicker({
   onSelectCounterparty,
   selectedTemplateId,
 }: TemplatePickerProps) {
+  const t = useTranslations('tx_template_picker')
   const [searchQuery, setSearchQuery] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [libraryTemplates, setLibraryTemplates] = useState<BookingTemplate[]>([])
@@ -265,7 +268,7 @@ export default function TemplatePicker({
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Sök mall..."
+          placeholder={t('search_placeholder')}
           className="pl-9 h-9"
         />
       </div>
@@ -276,7 +279,7 @@ export default function TemplatePicker({
         {searchResults !== null ? (
           <div>
             <p className="text-xs font-medium text-muted-foreground mb-2">
-              {searchResults.length === 0 ? 'Inga resultat' : `${searchResults.length} resultat`}
+              {searchResults.length === 0 ? t('no_results') : t('n_results', { count: searchResults.length })}
             </p>
             <div className="space-y-1.5">
               {searchResults.map((t) => (
@@ -296,7 +299,7 @@ export default function TemplatePicker({
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
                   <Building2 className="h-3 w-3" />
-                  Mina mallar
+                  {t('my_templates')}
                 </p>
                 <div className="space-y-1.5">
                   {relevantLibraryTemplates.map((t) => (
@@ -315,7 +318,7 @@ export default function TemplatePicker({
             {/* Counterparty templates — learned from history */}
             {hasCounterparty && (
               <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">Tidigare motparter</p>
+                <p className="text-xs font-medium text-muted-foreground mb-2">{t('previous_counterparties')}</p>
                 <div className="space-y-1.5">
                   {counterpartySuggestions.slice(0, 3).map((s) => (
                     <button
@@ -354,7 +357,7 @@ export default function TemplatePicker({
             {/* Suggested templates */}
             {hasSuggestions && (
               <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">Föreslagna</p>
+                <p className="text-xs font-medium text-muted-foreground mb-2">{t('suggested')}</p>
                 <div className="space-y-1.5">
                   {resolvedSuggestions.slice(0, 5).map((s) => {
                     // Find the full template object
@@ -377,12 +380,12 @@ export default function TemplatePicker({
 
             {/* Common templates grouped */}
             <div>
-              <p className="text-xs font-medium text-muted-foreground mb-2">Vanliga mallar</p>
+              <p className="text-xs font-medium text-muted-foreground mb-2">{t('common_templates')}</p>
               <div className="space-y-3">
                 {GROUP_ORDER.filter((g) => commonGrouped.has(g)).map((group) => (
                   <div key={group}>
                     <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
-                      {GROUP_LABELS[group]}
+                      {t(GROUP_LABEL_KEYS[group])}
                     </p>
                     <div className="space-y-1.5">
                       {commonGrouped.get(group)!.map((t) => (
@@ -409,7 +412,7 @@ export default function TemplatePicker({
                   className="w-full justify-between text-xs text-muted-foreground h-8"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
-                  Fler mallar ({allAdvanced.length})
+                  {t('more_templates', { count: allAdvanced.length })}
                   {showAdvanced ? (
                     <ChevronUp className="h-3.5 w-3.5" />
                   ) : (
@@ -421,7 +424,7 @@ export default function TemplatePicker({
                     {GROUP_ORDER.filter((g) => advancedGrouped.has(g)).map((group) => (
                       <div key={group}>
                         <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
-                          {GROUP_LABELS[group]}
+                          {t(GROUP_LABEL_KEYS[group])}
                         </p>
                         <div className="space-y-1.5">
                           {advancedGrouped.get(group)!.map((t) => (

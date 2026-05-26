@@ -35,7 +35,10 @@ import {
   generateOpeningBalances,
 } from '@/lib/core/bookkeeping/year-end-service'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
-import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import {
+  createSupplierCreditNoteEntry,
+  createSupplierInvoiceRegistrationEntry,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
@@ -52,6 +55,8 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { z } from 'zod'
 import type {
   Transaction,
   TransactionCategory,
@@ -60,6 +65,9 @@ import type {
   Currency,
   Invoice,
   Customer,
+  Supplier,
+  SupplierInvoice,
+  SupplierInvoiceItem,
   PendingOperation,
   CompanySettings,
   InvoiceItem,
@@ -82,6 +90,16 @@ export interface CommitResult {
 export interface CommitOptions {
   /** Email address used as cc on send_invoice (typically the human user's email). */
   userEmail?: string
+  /**
+   * commit_method recorded on any journal_entries created by this operation.
+   * Must match the CHECK constraint on journal_entries.commit_method:
+   * 'user_accept' | 'bulk_accept' | 'timing_ceiling' | 'migration' | 'legacy'.
+   * Single-approval route passes 'user_accept' (default); bulk-approval passes
+   * 'bulk_accept'. Defaults to 'user_accept' since the dispatcher is only
+   * invoked from human-approval paths after agent auto-commit was removed
+   * (migration 20260505190027_drop_agent_auto_commit).
+   */
+  commitMethod?: 'user_accept' | 'bulk_accept'
 }
 
 // ── Helper: ensure fiscal period covers the date ──────────────────
@@ -364,6 +382,63 @@ async function commitCreateCustomer(
   await eventBus.emit({ type: 'customer.created', payload: { customer: data as Customer, userId, companyId } })
 
   return { data: { customer_id: data.id } }
+}
+
+async function commitCreateSupplier(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so a
+  // tampered pending_operations row cannot inject unexpected fields or
+  // malformed payment-routing data into the suppliers table (ASVS V4.5).
+  let validated
+  try {
+    validated = CreateSupplierParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      const path = issue?.path?.join('.') ?? 'params'
+      return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  const { data, error } = await supabase
+    .from('suppliers')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      name: validated.name,
+      supplier_type: validated.supplier_type,
+      email: validated.email ?? null,
+      phone: validated.phone ?? null,
+      org_number: validated.org_number ?? null,
+      vat_number: validated.vat_number ?? null,
+      address_line1: validated.address_line1 ?? null,
+      address_line2: validated.address_line2 ?? null,
+      postal_code: validated.postal_code ?? null,
+      city: validated.city ?? null,
+      country: validated.country ?? 'SE',
+      bankgiro: validated.bankgiro ?? null,
+      plusgiro: validated.plusgiro ?? null,
+      bank_account: validated.bank_account ?? null,
+      iban: validated.iban ?? null,
+      bic: validated.bic ?? null,
+      default_expense_account: validated.default_expense_account ?? null,
+      default_payment_terms: validated.default_payment_terms,
+      default_currency: validated.default_currency ?? 'SEK',
+      notes: validated.notes ?? null,
+    })
+    .select()
+    .single()
+
+  if (error) return { error: error.message, status: 500 }
+
+  await eventBus.emit({ type: 'supplier.created', payload: { supplier: data as Supplier, userId, companyId } })
+
+  return { data: { supplier_id: data.id } }
 }
 
 async function commitCreateTransaction(
@@ -1046,6 +1121,25 @@ async function commitAttachDocumentToTransaction(
   }
   if (!postUpdate) return { error: 'Transaction not found', status: 404 }
 
+  // If the attached doc came from an invoice_inbox_items row, mark that row
+  // as matched so the inbox UI shows "Kopplad till transaktion". Best-effort:
+  // a failure must not roll back the (compliant) attach. Mirrors the REST
+  // route in app/api/transactions/[id]/attach-document/route.ts so MCP-staged
+  // and REST attaches converge on the same inbox state.
+  //
+  // The Supabase client resolves with { error } rather than rejecting on
+  // RLS/DB errors, so we destructure rather than try/catch.
+  const { error: inboxLinkErr } = await supabase
+    .from('invoice_inbox_items')
+    .update({ matched_transaction_id: txId })
+    .eq('document_id', documentId)
+    .eq('company_id', companyId)
+    .is('matched_transaction_id', null)
+    .is('created_supplier_invoice_id', null)
+  if (inboxLinkErr) {
+    console.error('[commitAttach] Failed to link inbox item:', inboxLinkErr)
+  }
+
   const journalEntryId = postUpdate.journal_entry_id as string | null
   if (journalEntryId) {
     const { error: linkErr } = await supabase
@@ -1238,6 +1332,314 @@ async function commitApproveSupplierInvoice(
   } catch { /* non-blocking */ }
 
   return { data: { supplier_invoice_id: id, status: 'approved' } }
+}
+
+async function commitCreateSupplierInvoiceFromInbox(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const inboxItemId = params.inbox_item_id as string
+  const supplierId = params.supplier_id as string
+  const documentId = (params.document_id as string | null) ?? null
+  const supplierInvoiceNumber = params.supplier_invoice_number as string
+  const invoiceDate = params.invoice_date as string
+  const dueDate = (params.due_date as string | null) ?? null
+  const currency = (params.currency as string) || 'SEK'
+  const vatTreatment = (params.vat_treatment as string) || 'standard_25'
+  const notes = (params.notes as string | null) ?? null
+  const rawItems = (params.items as Array<Record<string, unknown>> | undefined) ?? []
+
+  if (!inboxItemId || !supplierId || !supplierInvoiceNumber || !invoiceDate || rawItems.length === 0) {
+    return {
+      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, and items are required',
+      status: 400,
+    }
+  }
+
+  // Reject tampered financial fields: Number(x) || 0 silently turns string
+  // junk and undefined into a zero-value invoice. Require a finite number on
+  // every monetary field, including the optional exchange_rate when present.
+  const finite = (raw: unknown): number | null =>
+    typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+  const subtotal = finite(params.subtotal)
+  const vatAmount = finite(params.vat_amount)
+  const total = finite(params.total)
+  if (subtotal === null || vatAmount === null || total === null) {
+    return {
+      error: 'subtotal, vat_amount, and total must be finite numbers',
+      status: 400,
+    }
+  }
+  const exchangeRate = params.exchange_rate === null || params.exchange_rate === undefined
+    ? null
+    : finite(params.exchange_rate)
+  if (params.exchange_rate !== null && params.exchange_rate !== undefined && exchangeRate === null) {
+    return { error: 'exchange_rate must be a finite number when provided', status: 400 }
+  }
+
+  // Idempotency: a re-fired commit (e.g. retry, double-click on the approval
+  // UI, racy MCP call) must not create a second leverantörsfaktura for the
+  // same inbox row. The DB FK on invoice_inbox_items.created_supplier_invoice_id
+  // is the source of truth.
+  const { data: inbox, error: inboxErr } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, created_supplier_invoice_id, status')
+    .eq('id', inboxItemId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (inboxErr || !inbox) return { error: 'Inbox item not found', status: 404 }
+  if (inbox.created_supplier_invoice_id) {
+    return {
+      data: {
+        supplier_invoice_id: inbox.created_supplier_invoice_id,
+        inbox_item_id: inboxItemId,
+        idempotent: true,
+      },
+    }
+  }
+
+  // Defense in depth: the staging-time supplier lookup may be stale by the
+  // time the human approves. RLS would block a cross-company supplier too,
+  // but a 404 here is a cleaner error than an RLS denial later.
+  const { data: supplier, error: supplierErr } = await supabase
+    .from('suppliers')
+    .select('id, name, supplier_type')
+    .eq('id', supplierId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (supplierErr || !supplier) return { error: 'Supplier not found', status: 404 }
+
+  const { data: arrivalNum, error: arrivalErr } = await supabase
+    .rpc('get_next_arrival_number', { p_company_id: companyId })
+
+  if (arrivalErr) {
+    return { error: `Failed to generate arrival number: ${arrivalErr.message}`, status: 500 }
+  }
+
+  const reverseCharge = vatTreatment === 'reverse_charge'
+  const subtotalRounded = Math.round(subtotal * 100) / 100
+  const vatAmountRounded = Math.round(vatAmount * 100) / 100
+  const totalRounded = Math.round(total * 100) / 100
+  const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
+  const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
+  const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+
+  const { data: invoice, error: invoiceErr } = await supabase
+    .from('supplier_invoices')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      supplier_id: supplierId,
+      arrival_number: arrivalNum,
+      supplier_invoice_number: supplierInvoiceNumber,
+      invoice_date: invoiceDate,
+      due_date: dueDate,
+      status: 'registered',
+      currency,
+      exchange_rate: exchangeRate,
+      vat_treatment: vatTreatment,
+      reverse_charge: reverseCharge,
+      paid_with_private_funds: false,
+      subtotal: subtotalRounded,
+      subtotal_sek: subtotalSek,
+      vat_amount: vatAmountRounded,
+      vat_amount_sek: vatAmountSek,
+      total: totalRounded,
+      total_sek: totalSek,
+      paid_amount: 0,
+      remaining_amount: totalRounded,
+      notes,
+    })
+    .select()
+    .single()
+
+  if (invoiceErr || !invoice) {
+    const pgErr = invoiceErr as { code?: string; message?: string } | null
+    const isDuplicate = pgErr?.code === '23505'
+    if (isDuplicate) {
+      // Generic 409 — supplier_invoice_number alone is already in the staged
+      // params the caller submitted; we just don't echo back the supplier's
+      // name or row id. The UI surface uses the supplier-side ledger, not
+      // this error.
+      log.warn('Duplicate supplier invoice number on inbox conversion', {
+        companyId,
+        supplierId,
+        supplierInvoiceNumber,
+      })
+      return {
+        error: `Leverantörsfaktura ${supplierInvoiceNumber} finns redan registrerad.`,
+        status: 409,
+      }
+    }
+    log.error('Failed to insert supplier invoice from inbox', {
+      companyId,
+      inboxItemId,
+      supplierId,
+      error: pgErr?.message ?? 'unknown',
+    })
+    return { error: 'Failed to create supplier invoice', status: 500 }
+  }
+
+  // RC invariant: a reverse-charge supplier invoice never shows output VAT
+  // from the supplier. Zero any per-line VAT that slipped through staging so
+  // the registration JE's 2614/2645 self-assessed leg lines up with rutor
+  // 20–24 / 48 instead of double-counting input VAT into 2641. Tampered
+  // params can't smuggle non-zero VAT into the items table.
+  const itemInserts = rawItems.map((item, idx) => {
+    const vatRate = reverseCharge ? 0 : (typeof item.vat_rate === 'number' && Number.isFinite(item.vat_rate) ? item.vat_rate : 0)
+    const vatAmt = reverseCharge ? 0 : (typeof item.vat_amount === 'number' && Number.isFinite(item.vat_amount) ? item.vat_amount : 0)
+    return {
+      supplier_invoice_id: invoice.id,
+      sort_order: idx,
+      description: String(item.description ?? `Position ${idx + 1}`),
+      quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : 1,
+      unit: (item.unit as string | undefined) ?? 'st',
+      unit_price: typeof item.unit_price === 'number' && Number.isFinite(item.unit_price) ? item.unit_price : 0,
+      line_total: typeof item.line_total === 'number' && Number.isFinite(item.line_total) ? item.line_total : 0,
+      account_number: String(item.account_number ?? '4000'),
+      vat_code: null,
+      vat_rate: vatRate,
+      vat_amount: vatAmt,
+    }
+  })
+
+  const { error: itemsErr } = await supabase
+    .from('supplier_invoice_items')
+    .insert(itemInserts)
+
+  if (itemsErr) {
+    // Roll back the parent to avoid orphan supplier_invoices rows. Without
+    // line items the registration JE can't be built and the invoice would
+    // be invisible in the supplier ledger anyway.
+    await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+    log.error('Failed to insert supplier invoice items, rolled back parent', {
+      companyId,
+      invoiceId: invoice.id,
+      error: itemsErr.message,
+    })
+    return { error: 'Failed to insert supplier invoice items', status: 500 }
+  }
+
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('accounting_method')
+    .eq('company_id', companyId)
+    .single()
+
+  const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
+  let registrationJournalEntryId: string | null = null
+
+  if (accountingMethod === 'accrual') {
+    try {
+      const journalEntry = await createSupplierInvoiceRegistrationEntry(
+        supabase,
+        companyId,
+        userId,
+        invoice as SupplierInvoice,
+        itemInserts as unknown as SupplierInvoiceItem[],
+        supplier.supplier_type,
+        supplier.name,
+      )
+
+      if (journalEntry) {
+        registrationJournalEntryId = journalEntry.id
+        await supabase
+          .from('supplier_invoices')
+          .update({ registration_journal_entry_id: journalEntry.id })
+          .eq('id', invoice.id)
+
+        // Attach the OCR'd source document to the verifikat so the
+        // registration JE has its underlag per BFL 5 kap 6 §. Linking failure
+        // is non-fatal — the JE is already posted and immutable; we log and
+        // continue so the supplier invoice stays usable.
+        if (documentId) {
+          try {
+            await linkToJournalEntry(supabase, companyId, documentId, journalEntry.id)
+          } catch (linkErr) {
+            log.warn('Failed to link inbox document to registration JE', {
+              documentId,
+              journalEntryId: journalEntry.id,
+              error: linkErr instanceof Error ? linkErr.message : String(linkErr),
+            })
+          }
+        }
+      }
+    } catch (err) {
+      // Roll back: orphan supplier_invoices row without its registration JE
+      // understates leverantörsskuld (2440) + ingående moms (2641) on the
+      // momsdeklaration. Items must be deleted BEFORE the parent — the FK
+      // on supplier_invoice_items.supplier_invoice_id is ON DELETE NO ACTION
+      // (default), so a parent-first delete would be silently blocked and
+      // leave the doomed invoice in the supplier ledger.
+      await supabase
+        .from('supplier_invoice_items')
+        .delete()
+        .eq('supplier_invoice_id', invoice.id)
+      const { error: parentDeleteErr } = await supabase
+        .from('supplier_invoices')
+        .delete()
+        .eq('id', invoice.id)
+        .eq('company_id', companyId)
+      if (parentDeleteErr) {
+        // Hard inconsistency: items gone but parent stuck. Log loudly so an
+        // operator can clean up — this should not happen in practice.
+        log.error('Rollback partial: parent supplier_invoices delete failed after JE failure', {
+          companyId,
+          invoiceId: invoice.id,
+          parentDeleteError: parentDeleteErr.message,
+          originalError: err instanceof Error ? err.message : String(err),
+        })
+      }
+      if (isBookkeepingError(err)) throw err
+      log.error('Failed to create registration journal entry; supplier invoice rolled back', {
+        companyId,
+        inboxItemId,
+        invoiceId: invoice.id,
+        error: err instanceof Error ? err.message : 'unknown',
+      })
+      return {
+        error: 'Failed to create registration journal entry',
+        status: 500,
+      }
+    }
+  }
+
+  // Terminal state for the inbox row: created_supplier_invoice_id is the
+  // dedup key for next time this inbox item is touched. status='confirmed'
+  // removes it from the "needs action" filter in the UI.
+  const { error: linkInboxErr } = await supabase
+    .from('invoice_inbox_items')
+    .update({ created_supplier_invoice_id: invoice.id, status: 'confirmed' })
+    .eq('id', inboxItemId)
+    .eq('company_id', companyId)
+
+  if (linkInboxErr) {
+    log.warn('Failed to link inbox item to new supplier invoice (invoice still created)', {
+      inboxItemId,
+      supplierInvoiceId: invoice.id,
+      error: linkInboxErr.message,
+    })
+  }
+
+  try {
+    await eventBus.emit({
+      type: 'supplier_invoice.registered',
+      payload: { supplierInvoice: invoice as SupplierInvoice, companyId, userId },
+    })
+  } catch { /* non-blocking */ }
+
+  return {
+    data: {
+      supplier_invoice_id: invoice.id,
+      inbox_item_id: inboxItemId,
+      registration_journal_entry_id: registrationJournalEntryId,
+      arrival_number: arrivalNum,
+    },
+  }
 }
 
 async function commitCreditSupplierInvoice(
@@ -1685,7 +2087,8 @@ async function commitCreateVoucher(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  opts: CommitOptions = {}
 ): Promise<ExecutorResult> {
   const entryDate = params.entry_date as string
   const description = params.description as string
@@ -1738,8 +2141,76 @@ async function commitCreateVoucher(
         notes: (params.notes as string) || undefined,
         lines,
       },
-      'mcp_create_voucher'
+      // commit_method records HOW it was committed, not who staged it. MCP-
+      // staged ops still go through human approval, so 'user_accept' (or
+      // 'bulk_accept' from the bulk route) is the correct value. The DB CHECK
+      // constraint rejects anything else (migration 20260420120001).
+      opts.commitMethod ?? 'user_accept'
     )
+
+    // Optional inbox linking — set when gnubok_create_voucher is called with
+    // inbox_item_id (book-direct flow for kvitton). The verifikat is already
+    // posted and immutable; failures here are non-fatal and only affect
+    // discoverability (inbox row stays in "needs action" with the document
+    // unlinked). Logged so the user can repair via the UI if needed.
+    const inboxItemId = params.inbox_item_id as string | undefined
+    const documentId = params.document_id as string | undefined
+    let inboxLinked = false
+    if (inboxItemId) {
+      // Race guard: the UNIQUE constraint on
+      // invoice_inbox_items.created_journal_entry_id (migration 20260515090000)
+      // stops two inbox items from being linked to the same JE, but it does
+      // NOT stop two concurrent commits of different staged ops on the same
+      // inbox item from overwriting each other (the second UPDATE on the same
+      // row trivially satisfies UNIQUE). We add a `.is('created_journal_entry_id', null)`
+      // predicate so only the first commit succeeds; the loser sees a
+      // zero-rows-updated result and surfaces a structured warning. We also
+      // require .eq('created_supplier_invoice_id', null) so a concurrent
+      // create_supplier_invoice_from_inbox doesn't get clobbered either.
+      const { data: updatedRows, error: linkInboxErr } = await supabase
+        .from('invoice_inbox_items')
+        .update({ created_journal_entry_id: entry.id, status: 'confirmed' })
+        .eq('id', inboxItemId)
+        .eq('company_id', companyId)
+        .is('created_journal_entry_id', null)
+        .is('created_supplier_invoice_id', null)
+        .select('id')
+
+      if (linkInboxErr) {
+        log.warn('Failed to link inbox item to new voucher (voucher still posted)', {
+          inboxItemId,
+          journalEntryId: entry.id,
+          error: linkInboxErr.message,
+        })
+      } else if (!updatedRows || updatedRows.length === 0) {
+        // Race: another commit already claimed this inbox item (either as a
+        // journal entry or supplier invoice). The verifikat is already posted
+        // and immutable — we leave it; an operator can rättelse via storno
+        // if it's a true duplicate.
+        log.warn('Voucher posted but inbox item was already claimed by a concurrent commit', {
+          inboxItemId,
+          journalEntryId: entry.id,
+        })
+      } else {
+        inboxLinked = true
+      }
+
+      // Only attach the OCR document when the inbox link succeeded — if a
+      // racing commit already owns the inbox row, the document already lives
+      // on its JE and re-attaching here would either fail noisily (UNIQUE on
+      // document_attachments.journal_entry_id, if any) or silently shift it.
+      if (documentId && inboxLinked) {
+        try {
+          await linkToJournalEntry(supabase, companyId, documentId, entry.id)
+        } catch (linkDocErr) {
+          log.warn('Failed to attach inbox document to new voucher', {
+            documentId,
+            journalEntryId: entry.id,
+            error: linkDocErr instanceof Error ? linkDocErr.message : String(linkDocErr),
+          })
+        }
+      }
+    }
 
     return {
       data: {
@@ -1747,6 +2218,7 @@ async function commitCreateVoucher(
         voucher_number: entry.voucher_number,
         voucher_series: entry.voucher_series,
         fiscal_period_id: fiscalPeriodId,
+        ...(inboxItemId ? { inbox_item_id: inboxItemId, inbox_linked: inboxLinked } : {}),
       },
     }
   } catch (err) {
@@ -1977,6 +2449,9 @@ export async function commitPendingOperation(
       case 'create_customer':
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
         break
+      case 'create_supplier':
+        result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
+        break
       case 'create_invoice':
         result = await commitCreateInvoice(supabase, userId, companyId, pendingOp.params)
         break
@@ -2025,6 +2500,9 @@ export async function commitPendingOperation(
       case 'approve_supplier_invoice':
         result = await commitApproveSupplierInvoice(supabase, userId, companyId, pendingOp.params)
         break
+      case 'create_supplier_invoice_from_inbox':
+        result = await commitCreateSupplierInvoiceFromInbox(supabase, userId, companyId, pendingOp.params)
+        break
       case 'credit_supplier_invoice':
         result = await commitCreditSupplierInvoice(supabase, userId, companyId, pendingOp.params)
         break
@@ -2038,7 +2516,7 @@ export async function commitPendingOperation(
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_voucher':
-        result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params)
+        result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params, opts)
         break
       case 'correct_entry':
         result = await commitCorrectEntry(supabase, userId, companyId, pendingOp.params)

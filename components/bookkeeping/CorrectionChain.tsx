@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Info } from 'lucide-react'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
@@ -12,14 +13,17 @@ interface Props {
   chain: JournalEntry[]
 }
 
-function getRole(entry: JournalEntry): { label: string; color: string } {
-  if (entry.source_type === 'storno') {
-    return { label: 'Storno', color: 'bg-destructive' }
+function useGetRole() {
+  const t = useTranslations('journal_correction')
+  return (entry: JournalEntry): { label: string; color: string } => {
+    if (entry.source_type === 'storno') {
+      return { label: t('role_storno'), color: 'bg-destructive' }
+    }
+    if (entry.source_type === 'correction') {
+      return { label: t('role_correction'), color: 'bg-primary' }
+    }
+    return { label: t('role_original'), color: 'bg-muted-foreground' }
   }
-  if (entry.source_type === 'correction') {
-    return { label: 'Rättelse', color: 'bg-primary' }
-  }
-  return { label: 'Original', color: 'bg-muted-foreground' }
 }
 
 function getTotal(entry: JournalEntry): number {
@@ -28,6 +32,8 @@ function getTotal(entry: JournalEntry): number {
 }
 
 export default function CorrectionChain({ currentEntryId, chain }: Props) {
+  const t = useTranslations('journal_correction')
+  const getRole = useGetRole()
   if (chain.length === 0) return null
 
   // Combine current entry isn't in chain — chain is "other" entries
@@ -38,14 +44,11 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
 
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-medium">Ändringskedja</h3>
+      <h3 className="text-sm font-medium">{t('title')}</h3>
 
       <div className="rounded-lg bg-muted/50 border p-3 flex gap-2 text-sm text-muted-foreground">
         <Info className="h-4 w-4 shrink-0 mt-0.5" />
-        <p>
-          Bokförda verifikationer kan inte ändras direkt. Istället skapas en stornoverifikation
-          som nollställer den ursprungliga, och en ny rättelsepost med de korrekta uppgifterna.
-        </p>
+        <p>{t('info')}</p>
       </div>
 
       <div className="relative space-y-0">
@@ -76,7 +79,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
                   <JournalEntryStatusBadge entry={entry} showStatus={false} />
                   {isCurrent && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                      Aktuell
+                      {t('current')}
                     </Badge>
                   )}
                   <span className="ml-auto text-sm tabular-nums text-muted-foreground">

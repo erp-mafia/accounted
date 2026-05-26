@@ -303,6 +303,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'country',
       'org_number',
       'vat_number',
+      'language',
       'default_payment_terms',
       'notes',
       'archived_at',

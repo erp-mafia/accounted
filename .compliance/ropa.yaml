@@ -1,0 +1,236 @@
+# Record of Processing Activities (GDPR Art. 30)
+#
+# Each entry documents one processing activity. Field shape follows EDPB
+# Guidelines 9/2022 §3 (controller-side RoPA): purposes, lawful basis,
+# data subject + data category, recipients, transfer mechanism, retention,
+# security measures. Add an entry whenever a new flow ships that touches
+# personal data — onboarding, integrations, support, or regulator filings.
+
+processing_activities:
+
+  - id: agi.submit
+    name: AGI inlämning till Skatteverket
+    purpose: >-
+      Lämna in lagstadgad arbetsgivardeklaration på individnivå (AGI) till
+      Skatteverket varje månad (Skatteförfarandelagen 26 kap.). Innefattar
+      huvuduppgift (HU) och individuppgifter (IU) per anställd.
+    lawful_basis: art_6_1_c   # legal obligation
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na   # software supplier; Skatteverket is recipient, not processor
+    data_subjects:
+      - employee
+    data_categories:
+      - user.government_id          # personnummer
+      - user.name
+      - user.financial.employment   # gross salary, tax withheld, benefits
+      - user.financial.tax          # avgifter, sjuklönekostnad
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Sweden-to-Sweden processor-to-public-authority flow. Adequacy decision
+        not applicable; no third-country transfer.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap   # BFL 7 kap. — räkenskapsinformation
+      stored_in:
+        - agi_declarations.xml_content
+        - agi_declarations.individuppgifter
+        - skatteverket_api_audit_log
+    security_measures:
+      - encryption_at_rest_supabase
+      - rls_company_scoped
+      - tls_1_3_to_skatteverket
+      - bankid_signing_required_for_filing
+      - immutable_audit_log
+      - personnummer_at_rest_encryption
+
+  - id: agi.kontrollera.preflight
+    name: AGI pre-flight kontrollera (HU/IU)
+    purpose: >-
+      Skicka enskild HU eller IU som JSON till Skatteverkets kontrollera-
+      ändpunkt (v1.7 §7/§8) för dry-run-validering av felmeddelanden och
+      STOPP-/AVVISANDE-status innan ett fullständigt underlag laddas upp.
+      Skatteverket lagrar inget från denna kontroll; svaret driver vår UI
+      som låter användaren rätta felaktigheter i lönekörningen lokalt.
+    lawful_basis: art_6_1_c   # legal obligation (ancillary to AGI filing)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - employee
+    data_categories:
+      - user.government_id          # personnummer (BetalningsmottagarId)
+      - user.financial.employment   # gross salary, tax withheld, benefits
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      # Skatteverket retains nothing for kontrollera calls. Our outbound
+      # audit row in skatteverket_api_audit_log records who-called-what-when
+      # but NOT the payload body, minimising at-rest footprint.
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - skatteverket_api_audit_log
+    security_measures:
+      - strict_zod_allow_list_input_validation
+      - request_size_cap_64kb
+      - rbac_company_member_role_check
+      - rls_company_scoped
+      - tls_1_3_to_skatteverket
+      - immutable_audit_log
+      - no_payload_body_persisted
+
+  - id: moms.declaration
+    name: Momsdeklaration till Skatteverket
+    purpose: >-
+      Lämna in lagstadgad momsdeklaration (utkast, lås och signering) till
+      Skatteverkets momsdeklaration-API (Mervärdesskattelagen 17 kap. 24 §).
+    lawful_basis: art_6_1_c
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.government_id          # orgnummer (juridiska personer) eller pnr
+      - user.financial.tax          # rutor 05–62
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - extension_data (utkast metadata)
+        - skatteverket_api_audit_log
+    security_measures:
+      - rls_company_scoped
+      - tls_1_3_to_skatteverket
+      - bankid_signing_required_for_filing
+      - immutable_audit_log
+
+  - id: psd2.cash_account_mirror
+    name: PSD2-konton speglas till cash_accounts
+    purpose: >-
+      När en bank-anslutning via Enable Banking returnerar kontolista efter
+      lyckad PSD2-consent kopieras kontometadata (IBAN, valuta, kontonamn,
+      external_uid) till cash_accounts så att avstämning, motkontoresolver
+      och __PRIMARY_SEK__-sentinel kan rutta verifikat utan att läsa JSONB
+      från bank_connections.accounts_data vid varje fråga.
+    lawful_basis: art_6_1_b   # contract (PSD2 consent + bookkeeping service)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.financial.bank_account   # IBAN
+      - user.contact                  # account name (kontotitel)
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor; no third-country transfer.
+    retention:
+      duration: consent_lifetime
+      basis: psd2_consent
+      stored_in:
+        - cash_accounts
+        - bank_connections.accounts_data
+    security_measures:
+      - rls_company_scoped
+      - data_minimization_no_balance_on_callback
+      - failure_emitted_to_event_log
+
+  - id: transactions.counterparty_iban
+    name: Motpartens IBAN på transaktioner
+    purpose: >-
+      Spara motpartens IBAN på transaktionsraden så att own-account-detector
+      kan identifiera överföringar mellan företagets egna konton (1930 → 1932
+      etc.) och bokföra båda benen automatiskt istället för att felbokföra
+      utflödet som extern kostnad. Krävs även för payment-matchning mot
+      leverantörsfakturor.
+    lawful_basis: art_6_1_b   # contract (bookkeeping service)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+      - counterparty
+    data_categories:
+      - user.financial.bank_account   # counterparty IBAN
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - transactions.counterparty_iban
+    security_measures:
+      - rls_company_scoped
+      - immutable_after_post
+
+  - id: skattekonto.drift_alert
+    name: Skattekonto-drift via e-post
+    purpose: >-
+      Underrätta företagets kontaktadress när det cachade Skatteverket-saldot
+      avviker från GL 1630 utöver konfigurerad tolerans (> 1 SEK), så
+      bokföraren kan granska skattekonto-raderna. E-postmeddelandet
+      innehåller ingen finansiell siffra utan en länk till autentiserad
+      dashboard; mottagaren valideras mot company_members innan utskick.
+    lawful_basis: art_6_1_f   # legitimate interest (bookkeeping accuracy)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: resend
+    data_subjects:
+      - business_owner
+      - company_member
+    data_categories:
+      - user.contact.email
+    recipients:
+      - name: Resend
+        country: US
+        role: processor
+    international_transfers:
+      applicable: true
+      mechanism: scc_2021_c2p
+      note: >-
+        Resend (US) — SCC Module 2 (controller-to-processor). Outbound
+        payload limited to ett notifieringsmail utan finansiella belopp;
+        TIA dokumenterad i .compliance/tia/resend.md.
+    retention:
+      duration: 30d
+      basis: event_log_ttl
+      stored_in:
+        - event_log
+    security_measures:
+      - recipient_membership_check_before_send
+      - no_financial_figures_in_body
+      - tls_to_resend
+      - rls_company_scoped

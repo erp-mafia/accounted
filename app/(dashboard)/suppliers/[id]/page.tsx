@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,12 +19,6 @@ import Link from 'next/link'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } from '@/types'
 
-const supplierTypeLabels: Record<SupplierType, string> = {
-  swedish_business: 'Svenskt företag eller organisation',
-  eu_business: 'EU-företag',
-  non_eu_business: 'Utanför EU',
-}
-
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
@@ -33,6 +28,7 @@ export default function SupplierDetailPage() {
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
+  const t = useTranslations('supplier_detail')
   const [supplier, setSupplier] = useState<Supplier & { stats?: { total_outstanding: number; total_paid: number; invoice_count: number } } | null>(null)
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -40,12 +36,18 @@ export default function SupplierDetailPage() {
   const [isSaving, setIsSaving] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
+  const supplierTypeLabels = useMemo<Record<SupplierType, string>>(() => ({
+    swedish_business: t('type_swedish'),
+    eu_business: t('type_eu'),
+    non_eu_business: t('type_non_eu'),
+  }), [t])
+
   async function fetchSupplier() {
     setIsLoading(true)
     const res = await fetch(`/api/suppliers/${params.id}`)
     const { data, error } = await res.json()
     if (error) {
-      toast({ title: 'Kunde inte ladda leverantör', description: error, variant: 'destructive' })
+      toast({ title: t('load_failed_title'), description: error, variant: 'destructive' })
     } else {
       setSupplier(data)
     }
@@ -74,9 +76,9 @@ export default function SupplierDetailPage() {
     })
     const result = await res.json()
     if (!res.ok) {
-      toast({ title: 'Kunde inte uppdatera leverantör', description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
+      toast({ title: t('update_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
-      toast({ title: 'Sparat', description: 'Leverantören har uppdaterats' })
+      toast({ title: t('saved_title'), description: t('saved_description') })
       setSupplier({ ...result.data, stats: supplier?.stats })
       setIsEditOpen(false)
     }
@@ -85,9 +87,9 @@ export default function SupplierDetailPage() {
 
   async function handleDelete() {
     const ok = await confirmAction({
-      title: 'Ta bort leverantör',
-      description: `"${supplier?.name}" och tillhörande data tas bort permanent. Denna åtgärd kan inte ångras.`,
-      confirmLabel: 'Ta bort',
+      title: t('delete_confirm_title'),
+      description: t('delete_confirm_description', { name: supplier?.name ?? '' }),
+      confirmLabel: t('delete_confirm_label'),
       variant: 'destructive',
     })
     if (!ok) return
@@ -95,9 +97,9 @@ export default function SupplierDetailPage() {
     const res = await fetch(`/api/suppliers/${params.id}`, { method: 'DELETE' })
     const result = await res.json()
     if (!res.ok) {
-      toast({ title: 'Kunde inte ta bort leverantör', description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
+      toast({ title: t('delete_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
-      toast({ title: 'Borttagen', description: 'Leverantören har tagits bort' })
+      toast({ title: t('deleted_title'), description: t('deleted_description') })
       router.push('/suppliers')
     }
   }
@@ -116,9 +118,9 @@ export default function SupplierDetailPage() {
   if (!supplier) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Leverantören hittades inte</p>
+        <p className="text-muted-foreground">{t('not_found')}</p>
         <Button variant="outline" className="mt-4" onClick={() => router.push('/suppliers')}>
-          Tillbaka
+          {t('back')}
         </Button>
       </div>
     )
@@ -134,26 +136,26 @@ export default function SupplierDetailPage() {
   }
 
   const statusLabels: Record<string, string> = {
-    registered: 'Registrerad',
-    approved: 'Godkänd',
-    paid: 'Betald',
-    partially_paid: 'Delbetald',
-    overdue: 'Förfallen',
-    credited: 'Krediterad',
+    registered: t('status_registered'),
+    approved: t('status_approved'),
+    paid: t('status_paid'),
+    partially_paid: t('status_partially_paid'),
+    overdue: t('status_overdue'),
+    credited: t('status_credited'),
   }
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/suppliers')} aria-label="Tillbaka till leverantörer">
+          <Button variant="ghost" size="icon" onClick={() => router.push('/suppliers')} aria-label={t('back_aria')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
             <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{supplier.name}</h1>
             <p className="text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
-              {supplier.org_number && ` | Org.nr: ${supplier.org_number}`}
+              {supplier.org_number && t('org_number_inline', { number: supplier.org_number })}
             </p>
           </div>
         </div>
@@ -162,17 +164,18 @@ export default function SupplierDetailPage() {
             variant="outline"
             onClick={() => setIsEditOpen(true)}
             disabled={!canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
             {canWrite ? <Edit className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-            Redigera
+            {t('edit')}
           </Button>
           <Button
             variant="destructive"
             size="icon"
             onClick={handleDelete}
             disabled={!canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            aria-label={t('delete_confirm_label')}
           >
             {canWrite ? <Trash2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
           </Button>
@@ -183,7 +186,7 @@ export default function SupplierDetailPage() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Utestående</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">{t('outstanding')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(supplier.stats?.total_outstanding || 0)} kr</p>
@@ -191,7 +194,7 @@ export default function SupplierDetailPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Totalt betalt</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">{t('total_paid')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(supplier.stats?.total_paid || 0)} kr</p>
@@ -199,7 +202,7 @@ export default function SupplierDetailPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Antal fakturor</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">{t('invoice_count')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="font-display text-2xl font-medium tabular-nums">{supplier.stats?.invoice_count || 0}</p>
@@ -211,28 +214,28 @@ export default function SupplierDetailPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Kontaktuppgifter</CardTitle>
+            <CardTitle className="text-lg">{t('contact_section_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {supplier.email && <p>E-post: {supplier.email}</p>}
-            {supplier.phone && <p>Telefon: {supplier.phone}</p>}
+            {supplier.email && <p>{t('email_inline', { email: supplier.email })}</p>}
+            {supplier.phone && <p>{t('phone_inline', { phone: supplier.phone })}</p>}
             {supplier.address_line1 && <p>{supplier.address_line1}</p>}
             {supplier.postal_code && <p>{supplier.postal_code} {supplier.city}</p>}
-            {supplier.vat_number && <p>VAT: {supplier.vat_number}</p>}
+            {supplier.vat_number && <p>{t('vat_inline', { vat: supplier.vat_number })}</p>}
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Betalningsuppgifter</CardTitle>
+            <CardTitle className="text-lg">{t('payment_section_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {supplier.bankgiro && <p>Bankgiro: {supplier.bankgiro}</p>}
-            {supplier.plusgiro && <p>Plusgiro: {supplier.plusgiro}</p>}
-            {supplier.iban && <p>IBAN: {supplier.iban}</p>}
-            {supplier.bic && <p>BIC: {supplier.bic}</p>}
-            <p>Betalningsvillkor: {supplier.default_payment_terms} dagar</p>
-            <p>Valuta: {supplier.default_currency}</p>
-            {supplier.default_expense_account && <p>Kostnadskonto: {supplier.default_expense_account}</p>}
+            {supplier.bankgiro && <p>{t('bankgiro_inline', { value: supplier.bankgiro })}</p>}
+            {supplier.plusgiro && <p>{t('plusgiro_inline', { value: supplier.plusgiro })}</p>}
+            {supplier.iban && <p>{t('iban_inline', { value: supplier.iban })}</p>}
+            {supplier.bic && <p>{t('bic_inline', { value: supplier.bic })}</p>}
+            <p>{t('payment_terms_inline', { days: supplier.default_payment_terms })}</p>
+            <p>{t('currency_inline', { currency: supplier.default_currency })}</p>
+            {supplier.default_expense_account && <p>{t('expense_account_inline', { account: supplier.default_expense_account })}</p>}
           </CardContent>
         </Card>
       </div>
@@ -240,18 +243,18 @@ export default function SupplierDetailPage() {
       {/* Invoices */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-lg">Fakturor</CardTitle>
+          <CardTitle className="text-lg">{t('invoices_section_title')}</CardTitle>
           <Link href="/supplier-invoices/new">
             <Button size="sm">
               <FileText className="mr-2 h-4 w-4" />
-              Ny faktura
+              {t('new_invoice')}
             </Button>
           </Link>
         </CardHeader>
         <CardContent>
           {invoices.length === 0 ? (
             <p className="text-muted-foreground text-sm text-center py-8">
-              Inga fakturor registrerade för denna leverantör
+              {t('no_invoices')}
             </p>
           ) : (
             <>
@@ -260,13 +263,13 @@ export default function SupplierDetailPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Ankomst</TableHead>
-                    <TableHead>Fakturanr</TableHead>
-                    <TableHead>Datum</TableHead>
-                    <TableHead>Förfaller</TableHead>
-                    <TableHead className="text-right">Belopp</TableHead>
-                    <TableHead className="text-right">Kvar</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>{t('col_arrival')}</TableHead>
+                    <TableHead>{t('col_invoice_number')}</TableHead>
+                    <TableHead>{t('col_date')}</TableHead>
+                    <TableHead>{t('col_due')}</TableHead>
+                    <TableHead className="text-right">{t('col_amount')}</TableHead>
+                    <TableHead className="text-right">{t('col_remaining')}</TableHead>
+                    <TableHead>{t('col_status')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -310,7 +313,7 @@ export default function SupplierDetailPage() {
                   </div>
                   {Number(inv.remaining_amount) > 0 && Number(inv.remaining_amount) !== Number(inv.total) && (
                     <div className="text-xs text-muted-foreground text-right">
-                      Kvar: {formatAmount(inv.remaining_amount)} kr
+                      {t('remaining_inline', { amount: formatAmount(inv.remaining_amount) })}
                     </div>
                   )}
                 </div>
@@ -327,7 +330,7 @@ export default function SupplierDetailPage() {
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
         <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Redigera leverantör</DialogTitle>
+            <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
           </DialogHeader>
           <SupplierForm
             onSubmit={handleUpdate}

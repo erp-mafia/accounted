@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
+import { getOpeningBalances } from './opening-balances'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 function sanitizeProgramName(str: string): string {
@@ -56,13 +57,19 @@ export async function generateSIEExport(
   )
 
   // Fetch all posted journal entries with lines
-  const { data: entries } = await supabase
+  let entriesQuery = supabase
     .from('journal_entries')
     .select('*, lines:journal_entry_lines(*)')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', options.fiscal_period_id)
     .in('status', ['posted', 'reversed'])
     .order('voucher_number')
+
+  if (options.exclude_year_end_closing) {
+    entriesQuery = entriesQuery.neq('source_type', 'year_end')
+  }
+
+  const { data: entries } = await entriesQuery
 
   // Fetch cost centers and projects for dimension records
   const { data: costCenters } = await supabase
@@ -136,27 +143,23 @@ export async function generateSIEExport(
   }
 
   // === Opening balances (IB) ===
-  // Collect IB per account for UB calculation (UB = IB + movements)
+  // Routes through getOpeningBalances() so we get the same fallback as trial
+  // balance / balance sheet: when opening_balance_entry_id is NULL — which is
+  // expected after continuation SIE imports (sie-import.ts skips creating an
+  // IB entry once prior posted activity exists) — the compute_prior_opening_
+  // balances RPC derives IB from earlier journal lines instead of silently
+  // emitting zero #IB records and producing wrong #UB values.
   const openingBalancesByAccount = new Map<string, number>()
+  const { balances: obBalances } = await getOpeningBalances(supabase, companyId, {
+    period_start: period.period_start,
+    opening_balance_entry_id: period.opening_balance_entry_id ?? null,
+  })
 
-  if (period.opening_balance_entry_id) {
-    const { data: obEntry } = await supabase
-      .from('journal_entries')
-      .select('*, lines:journal_entry_lines(*)')
-      .eq('id', period.opening_balance_entry_id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (obEntry?.lines) {
-      for (const line of (obEntry.lines as JournalEntryLine[])) {
-        const amount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
-        lines.push(`#IB 0 ${line.account_number} ${formatAmount(amount)}`)
-        openingBalancesByAccount.set(
-          line.account_number,
-          (openingBalancesByAccount.get(line.account_number) || 0) + amount
-        )
-      }
-    }
+  for (const [accountNumber, { debit, credit }] of obBalances) {
+    const amount = Math.round(((Number(debit) || 0) - (Number(credit) || 0)) * 100) / 100
+    if (amount === 0) continue
+    lines.push(`#IB 0 ${accountNumber} ${formatAmount(amount)}`)
+    openingBalancesByAccount.set(accountNumber, amount)
   }
 
   // === Journal entries (VER + TRANS) ===

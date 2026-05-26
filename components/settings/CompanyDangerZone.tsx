@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,7 @@ const branding = getBranding()
  * capabilities.bankIdLinked boolean fetched from the user profile.
  */
 export function CompanyDangerZone() {
+  const t = useTranslations('settings_company')
   const router = useRouter()
   const { toast } = useToast()
   const { company, role } = useCompany()
@@ -57,10 +59,10 @@ export function CompanyDangerZone() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte radera företaget')
+        throw new Error(body.error || t('danger_delete_failed_default'))
       }
 
-      toast({ title: 'Företaget raderades', description: company.name })
+      toast({ title: t('danger_deleted_title'), description: company.name })
       // Stay inside settings. If the user had another company, the dashboard
       // layout will resolve it and /settings/account still renders as
       // normal. If this was their last company, the layout falls into the
@@ -69,8 +71,8 @@ export function CompanyDangerZone() {
       router.refresh()
     } catch (err) {
       toast({
-        title: 'Kunde inte radera företaget',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        title: t('danger_delete_failed_title'),
+        description: err instanceof Error ? err.message : t('danger_try_again'),
         variant: 'destructive',
       })
       setIsDeleting(false)
@@ -81,7 +83,7 @@ export function CompanyDangerZone() {
     <>
       <section className="space-y-4 border-t border-border/8 pt-8">
         <h2 className="text-sm font-medium uppercase tracking-wider text-destructive/80">
-          Radera företag
+          {t('danger_heading')}
         </h2>
 
         <RetentionNotice variant="company" />
@@ -92,7 +94,7 @@ export function CompanyDangerZone() {
             className="w-full sm:w-auto"
             onClick={() => setShowDialog(true)}
           >
-            Radera företag
+            {t('danger_button')}
           </Button>
         </div>
       </section>
@@ -107,15 +109,17 @@ export function CompanyDangerZone() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Radera {company.name}</DialogTitle>
+            <DialogTitle>{t('danger_dialog_title', { companyName: company.name })}</DialogTitle>
             <DialogDescription>
-              Företaget döljs från {branding.appName.toLowerCase()}. Bokföringen behålls säkert i 7 år enligt BFL.
-              Skriv företagets namn exakt för att bekräfta.
+              {t('danger_dialog_description', { appName: branding.appName.toLowerCase() })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="company-delete-confirm">
-              Skriv <strong>{company.name}</strong> för att bekräfta
+              {t.rich('danger_confirm_label', {
+                companyName: company.name,
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </Label>
             <Input
               id="company-delete-confirm"
@@ -134,7 +138,7 @@ export function CompanyDangerZone() {
               }}
               disabled={isDeleting}
             >
-              Avbryt
+              {t('danger_cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -144,10 +148,10 @@ export function CompanyDangerZone() {
               {isDeleting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Raderar...
+                  {t('danger_deleting')}
                 </>
               ) : (
-                'Radera företag'
+                t('danger_button')
               )}
             </Button>
           </DialogFooter>

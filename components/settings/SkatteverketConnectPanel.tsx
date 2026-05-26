@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,20 +22,21 @@ type Status =
       disabled?: boolean
     }
 
-// docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
-const SCOPE_LABELS: Record<string, string> = {
-  momsdeklaration: 'Momsdeklaration',
-  inkforetag: 'Företagsinformation',
-  skahmst: 'Skattekonto – saldo & transaktioner',
-  skattekonto: 'Skattekonto',
-  agd: 'Arbetsgivardeklaration',
-}
-
 export function SkatteverketConnectPanel() {
+  const t = useTranslations('settings_skatteverket_connect')
   const { toast } = useToast()
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+
+  // docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
+  const SCOPE_LABELS: Record<string, string> = {
+    momsdeklaration: t('scope_momsdeklaration'),
+    inkforetag: t('scope_inkforetag'),
+    skahmst: t('scope_skahmst'),
+    skattekonto: t('scope_skattekonto'),
+    agd: t('scope_agd'),
+  }
 
   async function loadStatus() {
     setLoading(true)
@@ -68,12 +70,12 @@ export function SkatteverketConnectPanel() {
       const res = await fetch('/api/extensions/ext/skatteverket/disconnect', {
         method: 'POST',
       })
-      if (!res.ok) throw new Error('Frånkoppling misslyckades')
-      toast({ title: 'Skatteverket frånkopplad' })
+      if (!res.ok) throw new Error(t('disconnect_failed'))
+      toast({ title: t('toast_disconnected') })
       await loadStatus()
     } catch (err) {
       toast({
-        title: 'Kunde inte koppla från',
+        title: t('toast_disconnect_failed'),
         description: err instanceof Error ? err.message : undefined,
         variant: 'destructive',
       })
@@ -86,7 +88,7 @@ export function SkatteverketConnectPanel() {
     return (
       <Card>
         <CardContent className="py-8 text-sm text-muted-foreground">
-          Hämtar status…
+          {t('loading_status')}
         </CardContent>
       </Card>
     )
@@ -97,7 +99,7 @@ export function SkatteverketConnectPanel() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Skatteverket</CardTitle>
+            <CardTitle>{t('title')}</CardTitle>
             <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
           </div>
         </CardHeader>
@@ -105,23 +107,20 @@ export function SkatteverketConnectPanel() {
           {status?.disabled && (
             <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
               <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-              <p>Skatteverket-integrationen är tillfälligt avstängd. Kontakta support.</p>
+              <p>{t('disabled_message')}</p>
             </div>
           )}
           <p className="text-sm text-muted-foreground">
-            Anslut till Skatteverket med BankID för att skicka momsdeklaration,
-            arbetsgivardeklaration och hämta saldot på skattekontot.
+            {t('connect_intro')}
           </p>
           <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-            På Skatteverkets samtyckessida visas en av behörigheterna som{' '}
-            <span className="font-mono">skahmst (Rubrik saknas)</span> — det är
-            scope-namnet för skattekontots saldo och transaktioner (Skattekonto
-            HuvudMan STatus). Skatteverket har inte publicerat en svensk
-            beskrivning för den ännu. Det är ofarligt att godkänna.
+            {t.rich('skahmst_note', {
+              code: (chunks) => <span className="font-mono">{chunks}</span>,
+            })}
           </div>
           <Button onClick={startConnect} disabled={status?.disabled}>
             <ExternalLink className="mr-2 h-4 w-4" />
-            Anslut med BankID
+            {t('connect_with_bankid')}
           </Button>
         </CardContent>
       </Card>
@@ -139,13 +138,13 @@ export function SkatteverketConnectPanel() {
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            Skatteverket
+            {t('title')}
             {status.expired ? (
-              <Badge variant="destructive">Utgången</Badge>
+              <Badge variant="destructive">{t('expired')}</Badge>
             ) : (
               <Badge variant="secondary">
                 <CheckCircle2 className="mr-1 h-3 w-3" />
-                Ansluten
+                {t('connected')}
               </Badge>
             )}
           </CardTitle>
@@ -155,27 +154,27 @@ export function SkatteverketConnectPanel() {
       <CardContent className="space-y-4">
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div>
-            <dt className="text-muted-foreground">Token utgår</dt>
+            <dt className="text-muted-foreground">{t('token_expires_label')}</dt>
             <dd className="font-medium tabular-nums">
               {expiresAtDate.toLocaleString('sv-SE')}
               {!status.expired && expiresInMinutes > 0 && (
                 <span className="ml-2 text-muted-foreground">
-                  (om {expiresInMinutes} min)
+                  {t('expires_in_minutes', { minutes: expiresInMinutes })}
                 </span>
               )}
             </dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Förnyelse</dt>
+            <dt className="text-muted-foreground">{t('refresh_label')}</dt>
             <dd className="font-medium">
-              {status.canRefresh ? 'Förnyas automatiskt' : 'Förnyelse uttömd — anslut igen'}
+              {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
             </dd>
           </div>
         </dl>
 
         <div>
           <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-            Behörigheter
+            {t('permissions_label')}
           </p>
           <div className="flex flex-wrap gap-2">
             {scopes.map(s => (
@@ -186,15 +185,12 @@ export function SkatteverketConnectPanel() {
           </div>
           {!scopes.includes('skahmst') && !scopes.includes('skattekonto') && (
             <p className="mt-3 text-sm text-foreground">
-              Behörigheten för Skattekonto saknas — koppla från och anslut igen
-              för att aktivera saldo- och transaktionsvyn.
+              {t('missing_skattekonto')}
             </p>
           )}
           {!scopes.includes('agd') && (
             <p className="mt-3 text-sm text-foreground">
-              Behörigheten för Arbetsgivardeklaration (AGI) saknas — koppla
-              från och anslut igen för att kunna skicka AGI direkt från {`gnubok`}.
-              Tokens utfärdade innan AGI-stödet aktiverades saknar denna scope.
+              {t('missing_agd')}
             </p>
           )}
         </div>
@@ -202,7 +198,7 @@ export function SkatteverketConnectPanel() {
         {status.disabled && (
           <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
             <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-            <p>Skatteverket-integrationen är tillfälligt avstängd. Inlämningar är inaktiverade.</p>
+            <p>{t('disabled_filings_message')}</p>
           </div>
         )}
 
@@ -210,7 +206,7 @@ export function SkatteverketConnectPanel() {
           {(status.expired || !status.canRefresh || !scopes.includes('skattekonto') || !scopes.includes('agd')) && (
             <Button onClick={startConnect} disabled={status.disabled}>
               <ExternalLink className="mr-2 h-4 w-4" />
-              Anslut igen
+              {t('reconnect')}
             </Button>
           )}
           <Button
@@ -219,7 +215,7 @@ export function SkatteverketConnectPanel() {
             disabled={disconnecting}
           >
             <ShieldOff className="mr-2 h-4 w-4" />
-            {disconnecting ? 'Kopplar från…' : 'Koppla från'}
+            {disconnecting ? t('disconnecting') : t('disconnect')}
           </Button>
         </div>
       </CardContent>
@@ -228,11 +224,12 @@ export function SkatteverketConnectPanel() {
 }
 
 function EnvironmentBadge({ environment, disabled }: { environment?: Environment; disabled?: boolean }) {
+  const t = useTranslations('settings_skatteverket_connect')
   if (disabled) {
     return (
       <Badge variant="destructive">
         <ShieldAlert className="mr-1 h-3 w-3" />
-        Avstängd
+        {t('env_disabled')}
       </Badge>
     )
   }
@@ -240,14 +237,14 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
     return (
       <Badge variant="outline" className="border-amber-400 text-amber-700 dark:border-amber-600 dark:text-amber-400">
         <FlaskConical className="mr-1 h-3 w-3" />
-        Testmiljö
+        {t('env_test')}
       </Badge>
     )
   }
   if (environment === 'prod') {
     return (
       <Badge variant="outline" className="border-emerald-400 text-emerald-700 dark:border-emerald-600 dark:text-emerald-400">
-        Produktion
+        {t('env_prod')}
       </Badge>
     )
   }

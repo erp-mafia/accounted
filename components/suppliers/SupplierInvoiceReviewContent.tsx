@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -137,16 +138,6 @@ function buildJournalPreview(
   return lines
 }
 
-const ACCOUNT_LABELS: Record<string, string> = {
-  '2440': 'Leverantörsskulder',
-  '2641': 'Ingående moms',
-  '2645': 'Beräknad ing. moms förvärv utlandet',
-  '2647': 'Beräknad ing. moms omvänd i Sverige',
-  '2614': 'Utg. moms omvänd 25%',
-  '2624': 'Utg. moms omvänd 12%',
-  '2634': 'Utg. moms omvänd 6%',
-}
-
 export function SupplierInvoiceReviewContent({
   supplier,
   invoiceNumber,
@@ -162,6 +153,7 @@ export function SupplierInvoiceReviewContent({
   totalVat,
   total,
 }: SupplierInvoiceReviewContentProps) {
+  const t = useTranslations('supplier_invoice_editor')
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
   const fxRate = currency !== 'SEK' && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1
   const journalLines = buildJournalPreview(items, subtotal, totalVat, total, reverseCharge, supplier.supplier_type, fxRate)
@@ -169,24 +161,34 @@ export function SupplierInvoiceReviewContent({
   const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
   const showingSek = fxRate !== 1
 
+  const ACCOUNT_LABELS: Record<string, string> = {
+    '2440': t('account_2440'),
+    '2641': t('account_2641'),
+    '2645': t('account_2645'),
+    '2647': t('account_2647'),
+    '2614': t('account_2614'),
+    '2624': t('account_2624'),
+    '2634': t('account_2634'),
+  }
+
   return (
     <div className="space-y-4">
       {/* Supplier info */}
       <div className="bg-muted rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
         <div className="min-w-0">
           <p className="font-medium text-base truncate">{supplier.name}</p>
-          <p className="text-sm text-muted-foreground">Fakturanr: {invoiceNumber}</p>
+          <p className="text-sm text-muted-foreground">{t('review_invoice_number_label', { number: invoiceNumber })}</p>
         </div>
         <div className="flex flex-wrap gap-1.5 sm:gap-2 shrink-0">
           {reverseCharge && (
             <Badge variant="outline" className="border-orange-300 text-orange-700 dark:text-orange-400">
-              Omvänd skattskyldighet
+              {t('reverse_charge_badge')}
             </Badge>
           )}
           {currency !== 'SEK' && (
             <Badge variant="outline" className="text-sm">
               {currency}
-              {exchangeRate && ` (kurs ${exchangeRate})`}
+              {exchangeRate && t('review_currency_rate_suffix', { rate: exchangeRate })}
             </Badge>
           )}
         </div>
@@ -195,16 +197,16 @@ export function SupplierInvoiceReviewContent({
       {/* Dates */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-sm">
         <div>
-          <span className="text-muted-foreground">Fakturadatum</span>
+          <span className="text-muted-foreground">{t('invoice_date_label')}</span>
           <p className="font-medium">{invoiceDate}</p>
         </div>
         <div>
-          <span className="text-muted-foreground">Förfallodatum</span>
+          <span className="text-muted-foreground">{t('due_date_label')}</span>
           <p className="font-medium">{dueDate}</p>
         </div>
         {deliveryDate && (
           <div>
-            <span className="text-muted-foreground">Leveransdatum</span>
+            <span className="text-muted-foreground">{t('delivery_date_label')}</span>
             <p className="font-medium">{deliveryDate}</p>
           </div>
         )}
@@ -215,11 +217,11 @@ export function SupplierInvoiceReviewContent({
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b text-left">
-              <th className="py-2 w-20">Konto</th>
-              <th className="py-2">Beskrivning</th>
-              <th className="py-2 w-28 text-right">Belopp</th>
-              <th className="py-2 w-16 text-right">Moms%</th>
-              <th className="py-2 w-24 text-right">Moms</th>
+              <th className="py-2 w-20">{t('col_account')}</th>
+              <th className="py-2">{t('col_description')}</th>
+              <th className="py-2 w-28 text-right">{t('col_amount')}</th>
+              <th className="py-2 w-16 text-right">{t('col_vat_rate')}</th>
+              <th className="py-2 w-24 text-right">{t('col_vat')}</th>
             </tr>
           </thead>
           <tbody>
@@ -251,7 +253,7 @@ export function SupplierInvoiceReviewContent({
               </div>
               <div className="flex items-center justify-between text-muted-foreground">
                 <span>{formatAmount(item.amount)} kr</span>
-                <span className="text-xs">{Math.round(item.vat_rate * 100)}% moms ({formatAmount(vatAmount)})</span>
+                <span className="text-xs">{t('review_vat_inline', { rate: Math.round(item.vat_rate * 100), amount: formatAmount(vatAmount) })}</span>
               </div>
             </div>
           )
@@ -261,21 +263,21 @@ export function SupplierInvoiceReviewContent({
       {/* Totals */}
       <div className="space-y-2 text-sm">
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Netto (exkl. moms)</span>
+          <span className="text-muted-foreground">{t('net_excl_vat')}</span>
           <span>{formatCurrency(subtotal, currency)}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Moms</span>
+          <span className="text-muted-foreground">{t('vat_label_short')}</span>
           <span>{formatCurrency(totalVat, currency)}</span>
         </div>
         <Separator />
         <div className="flex justify-between font-bold text-xl sm:text-2xl">
-          <span>Totalt</span>
+          <span>{t('total_label')}</span>
           <span>{formatCurrency(total, currency)}</span>
         </div>
         {currency !== 'SEK' && exchangeRate && (
           <div className="flex justify-between text-muted-foreground">
-            <span>SEK-belopp (vid kurs {exchangeRate})</span>
+            <span>{t('review_sek_amount_at_rate', { rate: exchangeRate })}</span>
             <span>{formatCurrency(total * parseFloat(exchangeRate))}</span>
           </div>
         )}
@@ -284,19 +286,19 @@ export function SupplierInvoiceReviewContent({
       {/* Verifikation preview */}
       <div className="bg-muted/50 border rounded-lg p-3 sm:p-4 space-y-2">
         <p className="text-sm font-semibold text-muted-foreground">
-          Verifikation som bokförs
+          {t('review_voucher_preview_title')}
           {showingSek && (
-            <span className="ml-1.5 font-normal text-xs">(i SEK)</span>
+            <span className="ml-1.5 font-normal text-xs">{t('review_voucher_in_sek_suffix')}</span>
           )}
         </p>
         <div className="hidden sm:block">
           <table className="w-full text-sm font-mono">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="text-left">
-                <th className="pb-1 w-16">Konto</th>
-                <th className="pb-1">Beskrivning</th>
-                <th className="pb-1 w-24 text-right">Debet</th>
-                <th className="pb-1 w-24 text-right">Kredit</th>
+                <th className="pb-1 w-16">{t('col_account')}</th>
+                <th className="pb-1">{t('col_description')}</th>
+                <th className="pb-1 w-24 text-right">{t('col_debit')}</th>
+                <th className="pb-1 w-24 text-right">{t('col_credit')}</th>
               </tr>
             </thead>
             <tbody>
@@ -319,7 +321,7 @@ export function SupplierInvoiceReviewContent({
             </tbody>
             <tfoot>
               <tr className="border-t font-semibold">
-                <td className="pt-1" colSpan={2}>SUMMA</td>
+                <td className="pt-1" colSpan={2}>{t('sum_label')}</td>
                 <td className="pt-1 text-right">{formatAmount(totalDebit)}</td>
                 <td className="pt-1 text-right">{formatAmount(totalCredit)}</td>
               </tr>
@@ -338,13 +340,13 @@ export function SupplierInvoiceReviewContent({
                 </div>
               </div>
               <span className="font-mono text-xs shrink-0 ml-2">
-                {line.debit > 0 ? `D ${formatAmount(line.debit)}` : `K ${formatAmount(line.credit)}`}
+                {line.debit > 0 ? t('debit_short', { amount: formatAmount(line.debit) }) : t('credit_short', { amount: formatAmount(line.credit) })}
               </span>
             </div>
           ))}
           <div className="flex justify-between pt-1 border-t font-semibold text-xs font-mono">
-            <span>SUMMA</span>
-            <span>D {formatAmount(totalDebit)} / K {formatAmount(totalCredit)}</span>
+            <span>{t('sum_label')}</span>
+            <span>{t('debit_credit_short', { debit: formatAmount(totalDebit), credit: formatAmount(totalCredit) })}</span>
           </div>
         </div>
       </div>
@@ -352,7 +354,7 @@ export function SupplierInvoiceReviewContent({
       {/* Payment reference */}
       {paymentReference && (
         <div className="border-t pt-3 text-sm text-muted-foreground">
-          <p>Betalningsreferens: {paymentReference}</p>
+          <p>{t('review_payment_reference_inline', { reference: paymentReference })}</p>
         </div>
       )}
     </div>

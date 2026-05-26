@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -14,47 +15,6 @@ import { useToast } from '@/components/ui/use-toast'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import { validateBankgiroNumber, formatBankgiroNumber } from '@/lib/bankgiro/luhn'
 
-const bankSetupSchema = z.object({
-  bank_name: z.string().max(100).optional().or(z.literal('')),
-  clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4–5 siffror').optional().or(z.literal('')),
-  account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6–12 siffror').optional().or(z.literal('')),
-  bankgiro: z.string().optional().or(z.literal('')),
-  iban: z.string().optional().or(z.literal('')),
-  bic: z.string().optional().or(z.literal('')),
-  invoice_prefix: z.string().optional().or(z.literal('')),
-  next_invoice_number: z.string().optional().or(z.literal('')),
-}).refine(
-  (data) => {
-    const hasAccount = !!data.clearing_number && !!data.account_number
-    const hasBankgiro = !!data.bankgiro
-    return hasAccount || hasBankgiro
-  },
-  { message: 'Ange antingen kontonummer (clearing + konto) eller bankgiro', path: ['clearing_number'] }
-).refine(
-  (data) => {
-    // If one of clearing/account is filled, both must be
-    if (data.clearing_number && !data.account_number) return false
-    if (!data.clearing_number && data.account_number) return false
-    return true
-  },
-  { message: 'Ange både clearingnummer och kontonummer', path: ['account_number'] }
-).refine(
-  (data) => {
-    if (!data.bankgiro) return true
-    return validateBankgiroNumber(data.bankgiro)
-  },
-  { message: 'Ogiltigt bankgironummer (7–8 siffror med kontrollsiffra)', path: ['bankgiro'] }
-).refine(
-  (data) => {
-    if (!data.next_invoice_number) return true
-    const num = parseInt(data.next_invoice_number, 10)
-    return !isNaN(num) && num >= 1
-  },
-  { message: 'Startnummer måste vara ett positivt heltal', path: ['next_invoice_number'] }
-)
-
-type BankSetupData = z.infer<typeof bankSetupSchema>
-
 interface BankDetailsSetupDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -63,9 +23,67 @@ interface BankDetailsSetupDialogProps {
 
 export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankDetailsSetupDialogProps) {
   const { toast } = useToast()
+  const t = useTranslations('invoice_bank_setup')
   const [isSaving, setIsSaving] = useState(false)
   const [showInternational, setShowInternational] = useState(false)
   const [bankName, setBankName] = useState('')
+
+  const bankSetupSchema = useMemo(
+    () =>
+      z
+        .object({
+          bank_name: z.string().max(100).optional().or(z.literal('')),
+          clearing_number: z
+            .string()
+            .regex(/^\d{4,5}$/, t('validation_clearing_format'))
+            .optional()
+            .or(z.literal('')),
+          account_number: z
+            .string()
+            .regex(/^\d{6,12}$/, t('validation_account_format'))
+            .optional()
+            .or(z.literal('')),
+          bankgiro: z.string().optional().or(z.literal('')),
+          iban: z.string().optional().or(z.literal('')),
+          bic: z.string().optional().or(z.literal('')),
+          invoice_prefix: z.string().optional().or(z.literal('')),
+          next_invoice_number: z.string().optional().or(z.literal('')),
+        })
+        .refine(
+          (data) => {
+            const hasAccount = !!data.clearing_number && !!data.account_number
+            const hasBankgiro = !!data.bankgiro
+            return hasAccount || hasBankgiro
+          },
+          { message: t('validation_either_required'), path: ['clearing_number'] },
+        )
+        .refine(
+          (data) => {
+            if (data.clearing_number && !data.account_number) return false
+            if (!data.clearing_number && data.account_number) return false
+            return true
+          },
+          { message: t('validation_both_required'), path: ['account_number'] },
+        )
+        .refine(
+          (data) => {
+            if (!data.bankgiro) return true
+            return validateBankgiroNumber(data.bankgiro)
+          },
+          { message: t('validation_bankgiro_invalid'), path: ['bankgiro'] },
+        )
+        .refine(
+          (data) => {
+            if (!data.next_invoice_number) return true
+            const num = parseInt(data.next_invoice_number, 10)
+            return !isNaN(num) && num >= 1
+          },
+          { message: t('validation_start_number_positive'), path: ['next_invoice_number'] },
+        ),
+    [t],
+  )
+
+  type BankSetupData = z.infer<typeof bankSetupSchema>
 
   const {
     register,
@@ -119,18 +137,18 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
 
       if (!response.ok) {
         const result = await response.json()
-        throw new Error(result.error || 'Kunde inte spara')
+        throw new Error(result.error || t('save_failed_fallback'))
       }
 
       toast({
-        title: 'Betalningsuppgifter sparade',
-        description: 'Du kan ändra dem senare i Inställningar.',
+        title: t('saved_title'),
+        description: t('saved_description'),
       })
       onComplete()
     } catch (error) {
       toast({
-        title: 'Kunde inte spara',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        title: t('save_failed_title'),
+        description: error instanceof Error ? error.message : t('save_failed_fallback'),
         variant: 'destructive',
       })
     } finally {
@@ -150,17 +168,18 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
         onPointerDownOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle className="font-display text-xl tracking-tight">Betalningsuppgifter</DialogTitle>
+          <DialogTitle className="font-display text-xl tracking-tight">{t('title')}</DialogTitle>
           <DialogDescription>
-            Dessa uppgifter visas på dina fakturor. Du kan ändra dem senare i{' '}
-            <a href="/settings" className="underline underline-offset-2 hover:text-foreground">Inställningar</a>.
+            {t('description_prefix')}
+            <a href="/settings" className="underline underline-offset-2 hover:text-foreground">{t('settings_link')}</a>
+            {t('description_suffix')}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 pt-2">
           {/* Bank name */}
           <div className="space-y-2">
-            <Label htmlFor="bank_name">Bank</Label>
+            <Label htmlFor="bank_name">{t('bank_label')}</Label>
             <BankNameCombobox
               value={bankName}
               onChange={setBankName}
@@ -170,10 +189,10 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
           {/* Clearing + Account number */}
           <div className="grid grid-cols-5 gap-3">
             <div className="col-span-2 space-y-2">
-              <Label htmlFor="clearing_number">Clearing</Label>
+              <Label htmlFor="clearing_number">{t('clearing_label')}</Label>
               <Input
                 id="clearing_number"
-                placeholder="8000"
+                placeholder={t('clearing_placeholder')}
                 maxLength={5}
                 inputMode="numeric"
                 {...register('clearing_number')}
@@ -181,10 +200,10 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
               />
             </div>
             <div className="col-span-3 space-y-2">
-              <Label htmlFor="account_number">Kontonummer</Label>
+              <Label htmlFor="account_number">{t('account_label')}</Label>
               <Input
                 id="account_number"
-                placeholder="12345678"
+                placeholder={t('account_placeholder')}
                 maxLength={12}
                 inputMode="numeric"
                 {...register('account_number')}
@@ -201,10 +220,10 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
 
           {/* Bankgiro */}
           <div className="space-y-2">
-            <Label htmlFor="bankgiro">Bankgiro</Label>
+            <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
             <Input
               id="bankgiro"
-              placeholder="123-4567"
+              placeholder={t('bankgiro_placeholder')}
               maxLength={9}
               {...register('bankgiro')}
               onBlur={(e) => {
@@ -232,23 +251,23 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
               ) : (
                 <ChevronRight className="h-3.5 w-3.5" />
               )}
-              Internationella betalningar
+              {t('international_toggle')}
             </button>
             {showInternational && (
               <div className="space-y-3 pt-3 animate-in slide-in-from-top-1 duration-150">
                 <div className="space-y-2">
-                  <Label htmlFor="iban">IBAN</Label>
+                  <Label htmlFor="iban">{t('iban_label')}</Label>
                   <Input
                     id="iban"
-                    placeholder="SE12 3456 7890 1234 5678 9012"
+                    placeholder={t('iban_placeholder')}
                     {...register('iban')}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="bic">BIC/SWIFT</Label>
+                  <Label htmlFor="bic">{t('bic_label')}</Label>
                   <Input
                     id="bic"
-                    placeholder="NDEASESS"
+                    placeholder={t('bic_placeholder')}
                     maxLength={11}
                     {...register('bic')}
                   />
@@ -262,19 +281,19 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
           {/* Invoice prefix + starting number */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="invoice_prefix">Fakturaprefix</Label>
+              <Label htmlFor="invoice_prefix">{t('invoice_prefix_label')}</Label>
               <Input
                 id="invoice_prefix"
-                placeholder="t.ex. F-"
+                placeholder={t('invoice_prefix_placeholder')}
                 maxLength={10}
                 {...register('invoice_prefix')}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="next_invoice_number">Startnummer</Label>
+              <Label htmlFor="next_invoice_number">{t('next_invoice_number_label')}</Label>
               <Input
                 id="next_invoice_number"
-                placeholder="1"
+                placeholder={t('next_invoice_number_placeholder')}
                 inputMode="numeric"
                 maxLength={6}
                 {...register('next_invoice_number')}
@@ -282,7 +301,7 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
             </div>
           </div>
           <p className="text-xs text-muted-foreground -mt-2">
-            Prefix &quot;F-&quot; med startnummer 1 ger F-2026001. Lämna tomt för standard.
+            {t('prefix_hint')}
           </p>
           {errors.next_invoice_number && (
             <p className="text-sm text-destructive -mt-2">{errors.next_invoice_number.message}</p>
@@ -292,7 +311,7 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
           <div className="flex justify-end gap-3 pt-2">
             <Button type="submit" disabled={isSaving}>
               {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Spara & fortsätt
+              {t('save_and_continue')}
             </Button>
           </div>
         </form>

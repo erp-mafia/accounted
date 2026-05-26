@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils'
@@ -22,16 +23,17 @@ const SEGMENT_COLORS = [
 ]
 
 export function KPIExpenseMixChart({ composition }: KPIExpenseMixChartProps) {
+  const t = useTranslations('kpi')
   const { class4, class5, class6, class7 } = composition
   const chartData = useMemo(
     () =>
       [
-        { name: 'Varor (klass 4)', value: class4 },
-        { name: 'Drift & lokaler (klass 5)', value: class5 },
-        { name: 'Övriga externa (klass 6)', value: class6 },
-        { name: 'Personal (klass 7)', value: class7 },
+        { name: t('expense_mix_class4'), value: class4 },
+        { name: t('expense_mix_class5'), value: class5 },
+        { name: t('expense_mix_class6'), value: class6 },
+        { name: t('expense_mix_class7'), value: class7 },
       ].filter((s) => s.value > 0),
-    [class4, class5, class6, class7]
+    [class4, class5, class6, class7, t]
   )
 
   const total = class4 + class5 + class6 + class7
@@ -44,12 +46,12 @@ export function KPIExpenseMixChart({ composition }: KPIExpenseMixChartProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Kostnader per klass</CardTitle>
+        <CardTitle className="text-base">{t('expense_mix_title')}</CardTitle>
       </CardHeader>
       <CardContent>
         {chartData.length === 0 ? (
           <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
-            Inga bokförda kostnader ännu
+            {t('expense_mix_empty')}
           </div>
         ) : (
           <div className="relative flex flex-col items-center">
@@ -81,7 +83,7 @@ export function KPIExpenseMixChart({ composition }: KPIExpenseMixChartProps) {
             </ResponsiveContainer>
             <div className="pointer-events-none absolute left-0 right-0 top-0 h-[180px] flex flex-col items-center justify-center">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Totalt
+                {t('expense_mix_total')}
               </span>
               <span
                 className="font-display text-lg font-medium tabular-nums"

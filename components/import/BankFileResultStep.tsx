@@ -46,6 +46,18 @@ export default function BankFileResultStep({
               : `${result.errors} fel uppstod under importen.`}
           </CardDescription>
         </CardHeader>
+        {!isSuccess && result.first_error && (
+          <CardContent>
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+              <p className="font-medium text-destructive">Databasfel</p>
+              <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
+                {result.first_error.message}
+                {result.first_error.details ? ` — ${result.first_error.details}` : ''}
+                {result.first_error.code ? ` (${result.first_error.code})` : ''}
+              </p>
+            </div>
+          </CardContent>
+        )}
       </Card>
 
       {/* Next steps */}

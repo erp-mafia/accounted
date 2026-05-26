@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -54,6 +55,7 @@ export function SkattekontoMatchDialog({
   onClose: () => void
   onMatched: () => void
 }) {
+  const t = useTranslations('tx_skattekonto_match')
   const { toast } = useToast()
   const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -74,13 +76,13 @@ export function SkattekontoMatchDialog({
         const json = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          throw new Error(json.error || 'Kunde inte söka kandidater')
+          throw new Error(json.error || t('search_failed_default'))
         }
         setCandidates(json.data.candidates as MatchCandidate[])
       } catch (err) {
         if (cancelled) return
         toast({
-          title: 'Kunde inte hämta kandidater',
+          title: t('fetch_candidates_failed_title'),
           description: err instanceof Error ? err.message : undefined,
           variant: 'destructive',
         })
@@ -92,7 +94,7 @@ export function SkattekontoMatchDialog({
     return () => {
       cancelled = true
     }
-  }, [open, row, toast, onClose])
+  }, [open, row, toast, onClose, t])
 
   async function confirmMatch(journalEntryId: string) {
     if (!row) return
@@ -108,14 +110,14 @@ export function SkattekontoMatchDialog({
       )
       const json = await res.json()
       if (!res.ok) {
-        throw new Error(json.error || 'Matchning misslyckades')
+        throw new Error(json.error || t('match_failed_default'))
       }
-      toast({ title: 'Transaktion kopplad till verifikat' })
+      toast({ title: t('match_success_title') })
       onMatched()
       onClose()
     } catch (err) {
       toast({
-        title: 'Kunde inte koppla transaktionen',
+        title: t('match_failed_title'),
         description: err instanceof Error ? err.message : undefined,
         variant: 'destructive',
       })
@@ -128,7 +130,7 @@ export function SkattekontoMatchDialog({
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
             {row && (
               <>
@@ -143,18 +145,17 @@ export function SkattekontoMatchDialog({
 
         {loading && (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            Söker kandidater…
+            {t('searching')}
           </p>
         )}
 
         {!loading && candidates && candidates.length === 0 && (
           <div className="space-y-2 py-4 text-sm">
-            <p>Hittade inga verifikat med en matchande rad på konto 1630.</p>
+            <p>{t('no_candidates_title')}</p>
             <p className="text-muted-foreground">
-              Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar
-              från transaktionsdatumet, och får inte redan vara kopplad till en
-              annan skattekonto-transaktion. Använd <strong>Bokför</strong> för
-              att skapa ett nytt verifikat istället.
+              {t.rich('no_candidates_help', {
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </p>
           </div>
         )}
@@ -164,10 +165,10 @@ export function SkattekontoMatchDialog({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Datum</TableHead>
-                  <TableHead>Verifikat</TableHead>
-                  <TableHead>Beskrivning</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t('th_date')}</TableHead>
+                  <TableHead>{t('th_voucher')}</TableHead>
+                  <TableHead>{t('th_description')}</TableHead>
+                  <TableHead>{t('th_status')}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -185,11 +186,11 @@ export function SkattekontoMatchDialog({
                     </TableCell>
                     <TableCell>
                       {c.status === 'posted' ? (
-                        <Badge variant="secondary">Bokförd</Badge>
+                        <Badge variant="secondary">{t('status_posted')}</Badge>
                       ) : c.status === 'draft' ? (
-                        <Badge variant="outline">Utkast</Badge>
+                        <Badge variant="outline">{t('status_draft')}</Badge>
                       ) : (
-                        <Badge variant="destructive">Makulerad</Badge>
+                        <Badge variant="destructive">{t('status_reversed')}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
@@ -198,7 +199,7 @@ export function SkattekontoMatchDialog({
                         onClick={() => confirmMatch(c.journal_entry_id)}
                         disabled={submittingId === c.journal_entry_id}
                       >
-                        {submittingId === c.journal_entry_id ? 'Kopplar…' : 'Koppla'}
+                        {submittingId === c.journal_entry_id ? t('linking') : t('link')}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -210,7 +211,7 @@ export function SkattekontoMatchDialog({
 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            Avbryt
+            {t('cancel')}
           </Button>
         </DialogFooter>
       </DialogContent>

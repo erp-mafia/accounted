@@ -30,6 +30,10 @@ interface DocumentManifestEntry {
   upload_source: string | null
   mime_type: string | null
   file_size_bytes: number | null
+  // New fields (added to make ZIP entries sortable by verifikatnummer)
+  voucher_number: string | null
+  entry_date: string | null
+  zip_path: string | null
   status: 'downloaded' | 'missing' | 'error'
   error?: string
 }
@@ -58,6 +62,14 @@ interface DocumentRow {
   upload_source: string | null
   mime_type: string | null
   file_size_bytes: number | null
+  // Joined from journal_entries via journal_entry_id. May be null when the
+  // entry is a draft (no voucher_number yet) or when the doc is orphaned.
+  // PostgREST returns a single row as an object, not an array, when the FK
+  // is many-to-one — but we tolerate both shapes defensively.
+  journal_entries?:
+    | { voucher_number: number | null; voucher_series: string | null; entry_date: string | null }
+    | { voucher_number: number | null; voucher_series: string | null; entry_date: string | null }[]
+    | null
 }
 
 interface PeriodReports {
@@ -324,7 +336,7 @@ async function writeDocuments(
       supabase
         .from('document_attachments')
         .select(
-          'id, file_name, storage_path, journal_entry_id, sha256_hash, version, digitization_date, upload_source, mime_type, file_size_bytes'
+          'id, file_name, storage_path, journal_entry_id, sha256_hash, version, digitization_date, upload_source, mime_type, file_size_bytes, journal_entries:journal_entry_id(voucher_number, voucher_series, entry_date)'
         )
         .eq('company_id', companyId)
         .not('journal_entry_id', 'is', null)
@@ -339,12 +351,20 @@ async function writeDocuments(
           ? documents.filter((d) => d.journal_entry_id && entryIdToPeriodId.has(d.journal_entry_id))
           : documents.filter((d) => d.journal_entry_id) // all-mode: keep every linked doc
 
+      // Track used paths so we can disambiguate collisions (two documents with
+      // identical voucher prefix + filename) by appending a short id suffix.
+      const usedPaths = new Set<string>()
+
       for (const doc of inScopeDocuments) {
         const fiscalPeriodId = doc.journal_entry_id
           ? entryIdToPeriodId.get(doc.journal_entry_id) ?? null
           : null
 
-        const baseManifest = {
+        const entryInfo = extractJoinedEntry(doc.journal_entries)
+        const voucherLabel = formatVoucherLabel(entryInfo)
+        const zipPath = buildDocumentZipPath(doc, voucherLabel, entryInfo?.entry_date ?? null, usedPaths)
+
+        const baseManifest: Omit<DocumentManifestEntry, 'status'> = {
           document_id: doc.id,
           file_name: doc.file_name,
           storage_path: doc.storage_path,
@@ -356,6 +376,9 @@ async function writeDocuments(
           upload_source: doc.upload_source,
           mime_type: doc.mime_type,
           file_size_bytes: doc.file_size_bytes,
+          voucher_number: voucherLabel,
+          entry_date: entryInfo?.entry_date ?? null,
+          zip_path: zipPath,
         }
 
         try {
@@ -373,8 +396,10 @@ async function writeDocuments(
           }
 
           const buffer = await fileData.arrayBuffer()
-          const zipFileName = `${doc.id}_${doc.file_name}`
-          dokument.file(zipFileName, buffer)
+          // zipPath is fully qualified (`dokument/<year>/<voucher>_<file>` etc.),
+          // so write at the archive root — calling `dokument.file(zipPath)`
+          // would double-prefix to `dokument/dokument/...`.
+          zip.file(zipPath, buffer)
           manifest.push({ ...baseManifest, status: 'downloaded' })
         } catch (err) {
           manifest.push({
@@ -390,6 +415,75 @@ async function writeDocuments(
   }
 
   dokument.file('manifest.json', JSON.stringify(manifest, null, 2))
+}
+
+/**
+ * PostgREST returns a many-to-one embedded resource as either an object or an
+ * array depending on schema introspection (FK is unique vs not). Normalize.
+ */
+function extractJoinedEntry(
+  raw: DocumentRow['journal_entries']
+): { voucher_number: number | null; voucher_series: string | null; entry_date: string | null } | null {
+  if (!raw) return null
+  if (Array.isArray(raw)) return raw[0] ?? null
+  return raw
+}
+
+/**
+ * Format the voucher label as `<series><number>` (e.g. `A23`, `B12`). Returns
+ * null if the entry is a draft (no voucher_number assigned yet), in which case
+ * the doc is treated as orphaned in the ZIP layout.
+ */
+function formatVoucherLabel(
+  entry: { voucher_number: number | null; voucher_series: string | null } | null
+): string | null {
+  if (!entry || entry.voucher_number == null) return null
+  const series = entry.voucher_series ?? ''
+  return `${series}${entry.voucher_number}`
+}
+
+/**
+ * Build the in-ZIP path for a document.
+ *
+ *   - Linked to a posted entry with a date: `dokument/<year>/<voucher>_<file>`
+ *   - Linked to a posted entry without a date (defensive): `dokument/_okant-ar/<voucher>_<file>`
+ *   - Orphan (no entry) or draft (no voucher_number): `dokument/_okopplade/<file>`
+ *
+ * Collisions are resolved by appending `_<short-id>` before the file extension.
+ */
+function buildDocumentZipPath(
+  doc: { id: string; file_name: string },
+  voucherLabel: string | null,
+  entryDate: string | null,
+  usedPaths: Set<string>
+): string {
+  const safeName = sanitizeFileName(doc.file_name || `${doc.id}.bin`)
+
+  let folder: string
+  let prefix: string
+  if (voucherLabel) {
+    const year = entryDate ? new Date(entryDate).getUTCFullYear() : NaN
+    folder = Number.isFinite(year) ? `dokument/${year}` : 'dokument/_okant-ar'
+    prefix = `${voucherLabel}_`
+  } else {
+    folder = 'dokument/_okopplade'
+    prefix = ''
+  }
+
+  const candidate = `${folder}/${prefix}${safeName}`
+  if (!usedPaths.has(candidate)) {
+    usedPaths.add(candidate)
+    return candidate
+  }
+
+  // Collision — disambiguate with a short id suffix before the extension.
+  const dotIdx = safeName.lastIndexOf('.')
+  const stem = dotIdx > 0 ? safeName.slice(0, dotIdx) : safeName
+  const ext = dotIdx > 0 ? safeName.slice(dotIdx) : ''
+  const suffix = doc.id.slice(0, 8)
+  const disambiguated = `${folder}/${prefix}${stem}_${suffix}${ext}`
+  usedPaths.add(disambiguated)
+  return disambiguated
 }
 
 interface SieImportRow {

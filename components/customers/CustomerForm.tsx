@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,30 +13,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, CheckCircle, XCircle, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { CreateCustomerInput, CustomerType } from '@/types'
-
-const schema = z.object({
-  name: z.string().min(1, 'Namn krävs'),
-  customer_type: z.enum(['individual', 'swedish_business', 'eu_business', 'non_eu_business']),
-  email: z.string().email('Ogiltig e-postadress').optional().or(z.literal('')),
-  phone: z.string().optional(),
-  address_line1: z.string().optional(),
-  address_line2: z.string().optional(),
-  postal_code: z.string().optional(),
-  city: z.string().optional(),
-  country: z.string().optional(),
-  org_number: z.string().optional(),
-  vat_number: z.string().optional(),
-  default_payment_terms: z.number().min(1).optional(),
-  notes: z.string().optional(),
-})
-
-type FormData = z.infer<typeof schema>
+import type { CreateCustomerInput } from '@/types'
 
 interface CustomerFormProps {
   onSubmit: (data: CreateCustomerInput) => Promise<void>
   isLoading: boolean
-  initialData?: Partial<FormData>
+  initialData?: Partial<CreateCustomerInput>
 }
 
 export default function CustomerForm({
@@ -45,18 +28,42 @@ export default function CustomerForm({
 }: CustomerFormProps) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const t = useTranslations('form_customer')
   const [isValidatingVat, setIsValidatingVat] = useState(false)
   const [vatValidationResult, setVatValidationResult] = useState<{
     valid: boolean
     name?: string
   } | null>(null)
 
+  const schema = useMemo(() => z.object({
+    name: z.string().min(1, t('name_required')),
+    customer_type: z.enum(['individual', 'swedish_business', 'eu_business', 'non_eu_business']),
+    email: z.string().email(t('email_invalid')).optional().or(z.literal('')),
+    phone: z.string().optional(),
+    address_line1: z.string().optional(),
+    address_line2: z.string().optional(),
+    postal_code: z.string().optional(),
+    city: z.string().optional(),
+    country: z.string().optional(),
+    org_number: z.string().optional(),
+    vat_number: z.string().optional(),
+    personal_number: z
+      .string()
+      .regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, t('personal_number_invalid'))
+      .optional()
+      .or(z.literal('')),
+    language: z.enum(['sv', 'en']).optional(),
+    default_payment_terms: z.number().min(1).optional(),
+    notes: z.string().optional(),
+  }), [t])
+
+  type FormData = z.infer<typeof schema>
+
   const {
     register,
     handleSubmit,
     watch,
     control,
-    setValue,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -71,6 +78,8 @@ export default function CustomerForm({
       country: initialData?.country || 'Sweden',
       org_number: initialData?.org_number || '',
       vat_number: initialData?.vat_number || '',
+      personal_number: initialData?.personal_number || '',
+      language: initialData?.language || 'sv',
       default_payment_terms: initialData?.default_payment_terms || 30,
       notes: initialData?.notes || '',
     },
@@ -101,19 +110,19 @@ export default function CustomerForm({
 
       if (result.valid && result.name) {
         toast({
-          title: 'VAT-nummer verifierat',
-          description: `Företag: ${result.name}`,
+          title: t('vat_verified_title'),
+          description: t('vat_verified_description', { name: result.name }),
         })
       } else if (!result.valid) {
         toast({
-          title: 'Verifiering misslyckades',
-          description: result.error || 'VAT-numret kunde inte verifieras',
+          title: t('vat_failed_title'),
+          description: result.error || t('vat_failed_default'),
           variant: 'destructive',
         })
       }
     } catch {
       toast({
-        title: 'Kunde inte verifiera VAT-nummer',
+        title: t('vat_error_title'),
         variant: 'destructive',
       })
     } finally {
@@ -125,6 +134,7 @@ export default function CustomerForm({
     onSubmit({
       ...data,
       email: data.email || undefined,
+      personal_number: data.personal_number || undefined,
     })
   }
 
@@ -132,35 +142,35 @@ export default function CustomerForm({
     <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
       {/* Customer Type */}
       <div className="space-y-2">
-        <Label>Kundtyp *</Label>
+        <Label>{t('type_label')}</Label>
         <Controller
           name="customer_type"
           control={control}
           render={({ field }) => (
             <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
               <SelectTrigger>
-                <SelectValue placeholder="Välj kundtyp" />
+                <SelectValue placeholder={t('type_placeholder')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="individual">Privatperson (Sverige)</SelectItem>
-                <SelectItem value="swedish_business">Svenskt företag eller organisation</SelectItem>
-                <SelectItem value="eu_business">EU-företag</SelectItem>
-                <SelectItem value="non_eu_business">Företag utanför EU</SelectItem>
+                <SelectItem value="individual">{t('type_individual')}</SelectItem>
+                <SelectItem value="swedish_business">{t('type_swedish_business')}</SelectItem>
+                <SelectItem value="eu_business">{t('type_eu_business')}</SelectItem>
+                <SelectItem value="non_eu_business">{t('type_non_eu_business')}</SelectItem>
               </SelectContent>
             </Select>
           )}
         />
         <p className="text-xs text-muted-foreground">
-          Kundtypen påverkar hur moms hanteras på fakturor
+          {t('type_hint')}
         </p>
       </div>
 
       {/* Name */}
       <div className="space-y-2">
-        <Label htmlFor="name">Namn *</Label>
+        <Label htmlFor="name">{t('name_label')}</Label>
         <Input
           id="name"
-          placeholder="Företagsnamn eller personnamn"
+          placeholder={t('name_placeholder')}
           {...register('name')}
         />
         {errors.name && (
@@ -171,11 +181,11 @@ export default function CustomerForm({
       {/* Contact */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="email">E-post</Label>
+          <Label htmlFor="email">{t('email_label')}</Label>
           <Input
             id="email"
             type="email"
-            placeholder="namn@foretag.se"
+            placeholder={t('email_placeholder')}
             {...register('email')}
           />
           {errors.email && (
@@ -183,10 +193,10 @@ export default function CustomerForm({
           )}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="phone">Telefon</Label>
+          <Label htmlFor="phone">{t('phone_label')}</Label>
           <Input
             id="phone"
-            placeholder="+46 70 123 45 67"
+            placeholder={t('phone_placeholder')}
             {...register('phone')}
           />
         </div>
@@ -194,64 +204,80 @@ export default function CustomerForm({
 
       {/* Address */}
       <div className="space-y-4">
-        <h3 className="font-medium">Adress</h3>
+        <h3 className="font-medium">{t('address_section')}</h3>
         <div className="space-y-2">
-          <Label htmlFor="address_line1">Gatuadress</Label>
+          <Label htmlFor="address_line1">{t('street_label')}</Label>
           <Input
             id="address_line1"
-            placeholder="Storgatan 1"
+            placeholder={t('street_placeholder')}
             {...register('address_line1')}
           />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="postal_code">Postnummer</Label>
+            <Label htmlFor="postal_code">{t('postal_label')}</Label>
             <Input
               id="postal_code"
-              placeholder="123 45"
+              placeholder={t('postal_placeholder')}
               {...register('postal_code')}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="city">Ort</Label>
+            <Label htmlFor="city">{t('city_label')}</Label>
             <Input
               id="city"
-              placeholder="Stockholm"
+              placeholder={t('city_placeholder')}
               {...register('city')}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="country">Land</Label>
+            <Label htmlFor="country">{t('country_label')}</Label>
             <Input
               id="country"
-              placeholder="Sweden"
+              placeholder={t('country_placeholder')}
               {...register('country')}
             />
           </div>
         </div>
       </div>
 
-      {/* Business info */}
-      {customerType !== 'individual' && (
+      {/* Identification — depends on customer type */}
+      {customerType === 'individual' ? (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="font-medium">Företagsuppgifter</h3>
+          <h3 className="font-medium">{t('individual_section')}</h3>
 
           <div className="space-y-2">
-            <Label htmlFor="org_number">Organisationsnummer</Label>
+            <Label htmlFor="personal_number">{t('personal_number_label')}</Label>
+            <Input
+              id="personal_number"
+              placeholder={t('personal_number_placeholder')}
+              {...register('personal_number')}
+            />
+            {errors.personal_number && (
+              <p className="text-sm text-destructive">{errors.personal_number.message}</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4 pt-4 border-t">
+          <h3 className="font-medium">{t('business_section')}</h3>
+
+          <div className="space-y-2">
+            <Label htmlFor="org_number">{t('org_number_label')}</Label>
             <Input
               id="org_number"
-              placeholder="XXXXXX-XXXX"
+              placeholder={t('org_number_placeholder')}
               {...register('org_number')}
             />
           </div>
 
-          {(customerType === 'eu_business' || customerType === 'swedish_business') && (
+          {(customerType === 'eu_business' || customerType === 'non_eu_business') && (
             <div className="space-y-2">
-              <Label htmlFor="vat_number">VAT-nummer (momsreg.nr)</Label>
+              <Label htmlFor="vat_number">{t('vat_label')}</Label>
               <div className="flex gap-2">
                 <Input
                   id="vat_number"
-                  placeholder={customerType === 'eu_business' ? 'DE123456789' : 'SE123456789001'}
+                  placeholder={customerType === 'eu_business' ? t('vat_placeholder_eu') : t('vat_placeholder_se')}
                   {...register('vat_number')}
                   className="flex-1"
                 />
@@ -269,14 +295,14 @@ export default function CustomerForm({
                     ) : vatValidationResult?.valid === false ? (
                       <XCircle className="h-4 w-4 text-destructive" />
                     ) : (
-                      'Verifiera'
+                      t('vat_verify')
                     )}
                   </Button>
                 )}
               </div>
               {customerType === 'eu_business' && (
                 <p className="text-xs text-muted-foreground">
-                  Verifiera VAT-numret för att kunna fakturera med omvänd skattskyldighet (0% moms)
+                  {t('vat_hint_eu')}
                 </p>
               )}
             </div>
@@ -286,7 +312,7 @@ export default function CustomerForm({
 
       {/* Payment terms */}
       <div className="space-y-2">
-        <Label htmlFor="payment_terms">Betalningsvillkor (dagar)</Label>
+        <Label htmlFor="payment_terms">{t('payment_terms_label')}</Label>
         <Input
           id="payment_terms"
           type="number"
@@ -294,12 +320,33 @@ export default function CustomerForm({
         />
       </div>
 
+      {/* Invoice language */}
+      <div className="space-y-2">
+        <Label>{t('language_label')}</Label>
+        <Controller
+          name="language"
+          control={control}
+          render={({ field }) => (
+            <Select value={field.value ?? 'sv'} onValueChange={(v) => { if (v) field.onChange(v) }}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sv">{t('language_sv')}</SelectItem>
+                <SelectItem value="en">{t('language_en')}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <p className="text-xs text-muted-foreground">{t('language_hint')}</p>
+      </div>
+
       {/* Notes */}
       <div className="space-y-2">
-        <Label htmlFor="notes">Anteckningar</Label>
+        <Label htmlFor="notes">{t('notes_label')}</Label>
         <Textarea
           id="notes"
-          placeholder="Interna anteckningar om kunden..."
+          placeholder={t('notes_placeholder')}
           {...register('notes')}
         />
       </div>
@@ -309,20 +356,20 @@ export default function CustomerForm({
         <Button
           type="submit"
           disabled={isLoading || !canWrite}
-          title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
           {isLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Sparar...
+              {t('submit_saving')}
             </>
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-4 w-4" />
-              Spara kund
+              {t('submit_save')}
             </>
           ) : (
-            'Spara kund'
+            t('submit_save')
           )}
         </Button>
       </div>

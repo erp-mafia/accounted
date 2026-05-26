@@ -8,7 +8,13 @@ import {
   getBestInvoiceMatch,
 } from '../invoice-matching'
 import type { Transaction, Invoice, Customer } from '@/types'
-import { makeTransaction, makeInvoice, makeCustomer, createMockSupabase } from '@/tests/helpers'
+import {
+  makeTransaction,
+  makeInvoice,
+  makeCustomer,
+  createMockSupabase,
+  createQueuedMockSupabase,
+} from '@/tests/helpers'
 
 // ============================================================
 // amountsMatchExact
@@ -351,5 +357,84 @@ describe('getBestInvoiceMatch', () => {
     // Exact amount only → 0.80, meets default threshold
     const result = await getBestInvoiceMatch(supabase as never, 'company-1', tx)
     expect(result).not.toBeNull()
+  })
+})
+
+// ============================================================
+// findMatchingInvoices — paid-voucher status-leak guard
+// ============================================================
+//
+// Defensive filter added because manual verifikationer (booked outside the
+// match-invoice flow) leave the invoice in 'sent' status even though a
+// payment voucher exists via invoice_payments. Matching such an invoice
+// would double-book the bank receipt. Tests verify that:
+//   - sent/overdue invoices with an invoice_payments.journal_entry_id are
+//     excluded from the candidate list
+//   - partially_paid invoices remain candidates regardless (they may take
+//     more payments legitimately)
+//   - invoices without payment rows still pass through unchanged
+
+describe('findMatchingInvoices — status-leak guard', () => {
+  it('excludes a sent invoice that already has a payment voucher', async () => {
+    const { supabase: queuedSupabase, enqueue } = createQueuedMockSupabase()
+    const inv = {
+      ...makeInvoice({
+        id: 'inv-leaked',
+        total: 1000,
+        status: 'sent',
+        remaining_amount: 1000,
+        currency: 'SEK',
+      }),
+      customer: makeCustomer({ name: 'Acme AB' }),
+    }
+    enqueue({ data: [inv], error: null })
+    enqueue({ data: [{ invoice_id: 'inv-leaked' }], error: null })
+
+    const tx = makeTransaction({ amount: 1000, description: 'Acme payment', reference: null })
+    const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
+    expect(result).toEqual([])
+  })
+
+  it('keeps a partially_paid invoice as a candidate even with a prior payment voucher', async () => {
+    const { supabase: queuedSupabase, enqueue } = createQueuedMockSupabase()
+    const inv = {
+      ...makeInvoice({
+        id: 'inv-partial',
+        total: 1000,
+        status: 'partially_paid',
+        remaining_amount: 400,
+        currency: 'SEK',
+      }),
+      customer: makeCustomer({ name: 'Acme AB' }),
+    }
+    enqueue({ data: [inv], error: null })
+    // The status-leak guard only queries when there are sent/overdue rows;
+    // partially_paid invoices skip the second query, so no enqueue needed.
+
+    const tx = makeTransaction({ amount: 400, description: 'Acme partial', reference: null })
+    const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
+    expect(result).toHaveLength(1)
+    expect(result[0].invoice.id).toBe('inv-partial')
+  })
+
+  it('passes sent invoices through when no payment rows exist for them', async () => {
+    const { supabase: queuedSupabase, enqueue } = createQueuedMockSupabase()
+    const inv = {
+      ...makeInvoice({
+        id: 'inv-clean',
+        total: 1000,
+        status: 'sent',
+        remaining_amount: 1000,
+        currency: 'SEK',
+      }),
+      customer: makeCustomer({ name: 'Acme AB' }),
+    }
+    enqueue({ data: [inv], error: null })
+    enqueue({ data: [], error: null })
+
+    const tx = makeTransaction({ amount: 1000, description: 'Acme payment', reference: null })
+    const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
+    expect(result).toHaveLength(1)
+    expect(result[0].invoice.id).toBe('inv-clean')
   })
 })

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -57,6 +58,8 @@ export default function QuickReviewDialog({
   onConfirm,
   onChangeTemplate,
 }: QuickReviewDialogProps) {
+  const t = useTranslations('tx_quick_review')
+  const tCat = useTranslations('tx_categories')
   const { toast } = useToast()
   const [accountOverride, setAccountOverride] = useState(defaultAccount)
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>(defaultVat)
@@ -82,7 +85,7 @@ export default function QuickReviewDialog({
     try {
       const res = await fetch(`/api/documents/${preAttachedDocumentId}`)
       if (!res.ok) {
-        toast({ title: 'Kunde inte öppna underlaget', variant: 'destructive' })
+        toast({ title: t('open_attached_failed'), variant: 'destructive' })
         return
       }
       const { data } = await res.json()
@@ -92,7 +95,7 @@ export default function QuickReviewDialog({
     } finally {
       setIsOpeningDoc(false)
     }
-  }, [preAttachedDocumentId, isOpeningDoc, toast])
+  }, [preAttachedDocumentId, isOpeningDoc, toast, t])
 
   // Handle account changes — clear VAT for liability/equity accounts (class 2)
   const handleAccountChange = useCallback((account: string) => {
@@ -148,7 +151,7 @@ export default function QuickReviewDialog({
         const json = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setRateError(json?.error?.message || 'Kunde inte hämta växelkursen.')
+          setRateError(json?.error?.message || t('exchange_rate_fetch_failed'))
           return
         }
         if (json?.data) {
@@ -158,7 +161,7 @@ export default function QuickReviewDialog({
           } })
         }
       } catch {
-        if (!cancelled) setRateError('Kunde inte hämta växelkursen.')
+        if (!cancelled) setRateError(t('exchange_rate_fetch_failed'))
       } finally {
         if (!cancelled) setRateLoading(false)
       }
@@ -167,7 +170,7 @@ export default function QuickReviewDialog({
     return () => {
       cancelled = true
     }
-  }, [open, transaction])
+  }, [open, transaction, t])
 
   if (!transaction || !category) return null
 
@@ -218,8 +221,8 @@ export default function QuickReviewDialog({
         }
         if (linkFailCount > 0) {
           toast({
-            title: 'Underlag kunde inte bifogas',
-            description: `${linkFailCount} fil(er) kunde inte länkas till verifikationen.`,
+            title: t('doc_link_failed_title'),
+            description: t('doc_link_failed_description', { count: linkFailCount }),
             variant: 'destructive',
           })
         }
@@ -228,7 +231,12 @@ export default function QuickReviewDialog({
       setUploadedFiles([])
       setShowUploadZone(false)
     } catch {
-      setError('Ett fel uppstod vid bokföring.')
+      setError(t('generic_error'))
+    } finally {
+      // Always reset isProcessing — without this, an onConfirm that resolves
+      // with null (e.g. server returned a structured 4xx error like
+      // ACCOUNTS_NOT_IN_CHART) leaves the dialog frozen because the
+      // <Dialog onOpenChange> below disables backdrop/ESC while processing.
       setIsProcessing(false)
     }
   }
@@ -243,9 +251,9 @@ export default function QuickReviewDialog({
     }}>
       <DialogContent className="max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Granska bokföring</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            {isTemplateBooking ? 'Granska verifikationen innan du bokför' : 'Kontrollera konto och moms innan du bokför'}
+            {isTemplateBooking ? t('description_template') : t('description_default')}
           </DialogDescription>
         </DialogHeader>
 
@@ -273,8 +281,8 @@ export default function QuickReviewDialog({
                 </p>
                 <p className="text-xs text-muted-foreground tabular-nums">
                   {rateLoading || sekConversionMissing
-                    ? 'Hämtar växelkurs…'
-                    : `≈ ${isIncome ? '+' : ''}${formatCurrency(sekAmount, 'SEK')}`}
+                    ? t('amount_loading')
+                    : t('amount_approx', { sign: isIncome ? '+' : '', sek: formatCurrency(sekAmount, 'SEK') })}
                 </p>
               </>
             ) : (
@@ -288,7 +296,11 @@ export default function QuickReviewDialog({
 
         {isForeign && tx.exchange_rate != null && tx.exchange_rate_date && !sekConversionMissing && (
           <p className="text-xs text-muted-foreground -mt-1">
-            Bokförs i SEK med Riksbankens kurs {formatCurrency(tx.exchange_rate, 'SEK')} per {tx.currency} ({formatDate(tx.exchange_rate_date)}).
+            {t('rate_footnote', {
+              rate: formatCurrency(tx.exchange_rate, 'SEK'),
+              currency: tx.currency,
+              date: formatDate(tx.exchange_rate_date),
+            })}
           </p>
         )}
 
@@ -301,7 +313,7 @@ export default function QuickReviewDialog({
         {/* Template or Category */}
         <div>
           <label className="text-sm font-medium text-muted-foreground">
-            {isCounterpartyTemplate ? 'Motpartsmall' : template ? 'Mall' : 'Kategori'}
+            {isCounterpartyTemplate ? t('label_counterparty_template') : template ? t('label_template') : t('label_category')}
           </label>
           <div className="mt-1 flex items-center gap-2">
             <Badge variant="outline" className="text-sm py-1 px-3">
@@ -313,7 +325,7 @@ export default function QuickReviewDialog({
                 className="text-xs text-primary hover:underline"
                 onClick={onChangeTemplate}
               >
-                Byt mall
+                {t('change_template')}
               </button>
             )}
           </div>
@@ -348,7 +360,7 @@ export default function QuickReviewDialog({
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
               <p className="text-xs text-warning-foreground leading-snug">
-                Omvänd skattskyldighet kräver leverantörens momsregistreringsnummer och land.
+                {t('reverse_charge_warning')}
               </p>
             </div>
           </div>
@@ -379,7 +391,7 @@ export default function QuickReviewDialog({
         {!isTemplateBooking && (
           <>
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Konto</label>
+              <label className="text-sm font-medium text-muted-foreground">{t('label_account')}</label>
               <div className="mt-1">
                 <AccountCombobox
                   value={accountOverride}
@@ -390,11 +402,11 @@ export default function QuickReviewDialog({
             </div>
 
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Momsbehandling</label>
+              <label className="text-sm font-medium text-muted-foreground">{t('label_vat_treatment')}</label>
               <div className="mt-1">
                 {isLiabilityAccount ? (
                   <p className="text-sm text-muted-foreground">
-                    Ingen moms för skuld-/eget kapital-konton
+                    {t('no_vat_liability_account')}
                   </p>
                 ) : showVatDropdown ? (
                   <VatTreatmentSelect
@@ -403,14 +415,17 @@ export default function QuickReviewDialog({
                   />
                 ) : (
                   <p className="text-sm">
-                    {VAT_TREATMENT_OPTIONS.find(o => o.value === vatTreatment)?.label || 'Ingen moms'}
+                    {(() => {
+                      const opt = VAT_TREATMENT_OPTIONS.find(o => o.value === vatTreatment)
+                      return opt ? tCat(opt.labelKey) : t('no_vat_default')
+                    })()}
                     {' '}
                     <button
                       type="button"
                       className="text-xs text-primary hover:underline"
                       onClick={() => setShowVatDropdown(true)}
                     >
-                      Ändra
+                      {t('change')}
                     </button>
                   </p>
                 )}
@@ -425,9 +440,9 @@ export default function QuickReviewDialog({
           <div className="rounded-lg border flex items-center justify-between px-3 py-2.5 text-sm">
             <div className="flex items-center gap-2 min-w-0">
               <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
-              <span className="font-medium">Underlag bifogat</span>
+              <span className="font-medium">{t('attached_doc_label')}</span>
               <span className="text-xs text-muted-foreground truncate">
-                från dokumentinkorgen
+                {t('attached_doc_source')}
               </span>
             </div>
             <button
@@ -436,7 +451,7 @@ export default function QuickReviewDialog({
               disabled={isOpeningDoc}
               className="text-xs text-primary hover:underline shrink-0"
             >
-              {isOpeningDoc ? 'Öppnar…' : 'Visa'}
+              {isOpeningDoc ? t('opening') : t('view')}
             </button>
           </div>
         ) : (
@@ -448,10 +463,10 @@ export default function QuickReviewDialog({
             >
               <div className="flex items-center gap-2">
                 <Paperclip className="h-4 w-4 text-muted-foreground" />
-                <span className="font-medium">Underlag</span>
+                <span className="font-medium">{t('doc_label')}</span>
                 {uploadedFiles.filter((f) => f.status === 'uploaded').length > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {uploadedFiles.filter((f) => f.status === 'uploaded').length} bifogade
+                    {t('doc_attached_count', { count: uploadedFiles.filter((f) => f.status === 'uploaded').length })}
                   </span>
                 )}
               </div>
@@ -487,7 +502,7 @@ export default function QuickReviewDialog({
             onClick={() => onOpenChange(false)}
             disabled={isProcessing}
           >
-            Avbryt
+            {t('cancel')}
           </Button>
           <Button
             className="flex-1"
@@ -500,7 +515,7 @@ export default function QuickReviewDialog({
             }
           >
             <Check className="mr-2 h-4 w-4" />
-            {isProcessing ? 'Bokför...' : rateLoading ? 'Hämtar växelkurs…' : 'Bokför'}
+            {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : t('book')}
           </Button>
         </div>
       </DialogContent>

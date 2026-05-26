@@ -5,7 +5,9 @@ import {
   generateRefreshToken,
   hashRefreshToken,
   createServiceClientNoCookies,
-  ALL_SCOPES,
+  validateScopes,
+  DEFAULT_OAUTH_SCOPES,
+  type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { requireCompanyId } from '@/lib/company/context'
 
@@ -121,6 +123,27 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()
 
+  // Use the scopes the user consented to during /authorize. Re-validate
+  // every value against API_KEY_SCOPES even though /authorize already did
+  // — the auth code is AEAD-encrypted but we treat the boundary as
+  // hostile by default (V9.2.1, defense-in-depth).
+  let grantedScopes: ApiKeyScope[]
+  if (payload.scopes && Array.isArray(payload.scopes) && payload.scopes.length > 0) {
+    const revalidated = validateScopes(payload.scopes)
+    if (!revalidated) {
+      return NextResponse.json(
+        { error: 'invalid_grant', error_description: 'Authorization code carried no valid scopes' },
+        { status: 400 }
+      )
+    }
+    grantedScopes = revalidated
+  } else {
+    // Code minted with no scope (Claude's existing flow). Fall back to the
+    // read-only OAuth defaults — destructive scopes must be requested
+    // explicitly (GDPR Art. 25(2)).
+    grantedScopes = DEFAULT_OAUTH_SCOPES
+  }
+
   const { error: insertError } = await supabase
     .from('api_keys')
     .insert({
@@ -129,7 +152,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       key_hash: hash,
       key_prefix: prefix,
       name: 'MCP-klient (OAuth)',
-      scopes: ALL_SCOPES,
+      scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
     })
 
@@ -145,7 +168,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
     refresh_token: refresh.token,
-    scope: 'mcp',
+    scope: grantedScopes.join(' '),
   })
 }
 
@@ -162,10 +185,13 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   const presentedHash = hashRefreshToken(refreshToken)
 
   // Look up the api_key row by refresh_token_hash. The hash is unique among
-  // non-null values, so there's at most one match.
+  // non-null values, so there's at most one match. We pull `scopes` so the
+  // rotated token response advertises the same granular grant the key
+  // already carries (otherwise OAuth 2.1 clients would re-authorize on
+  // every refresh).
   const { data: row, error: lookupError } = await supabase
     .from('api_keys')
-    .select('id, revoked_at')
+    .select('id, revoked_at, scopes')
     .eq('refresh_token_hash', presentedHash)
     .maybeSingle()
 
@@ -223,11 +249,16 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
     )
   }
 
+  // Return the granular scopes the key was originally minted with. Falling
+  // back to the read-only OAuth defaults preserves the pre-scope-plumbing
+  // behaviour for legacy keys whose scopes column is null.
+  const persistedScopes = validateScopes(row.scopes) ?? DEFAULT_OAUTH_SCOPES
+
   return NextResponse.json({
     access_token: newKey,
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
     refresh_token: rotated.token,
-    scope: 'mcp',
+    scope: persistedScopes.join(' '),
   })
 }

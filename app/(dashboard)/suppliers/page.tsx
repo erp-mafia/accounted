@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -15,17 +16,17 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
 
-const supplierTypeLabels: Record<SupplierType, string> = {
-  swedish_business: 'Svenskt företag eller organisation',
-  eu_business: 'EU-företag',
-  non_eu_business: 'Utanför EU',
+const SUPPLIER_TYPE_KEYS: Record<SupplierType, string> = {
+  swedish_business: 'type_swedish_business',
+  eu_business: 'type_eu_business',
+  non_eu_business: 'type_non_eu_business',
 }
 
-function getPaymentInfo(supplier: Supplier): { label: string; value: string } | null {
-  if (supplier.bankgiro) return { label: 'BG', value: supplier.bankgiro }
-  if (supplier.plusgiro) return { label: 'PG', value: supplier.plusgiro }
-  if (supplier.iban) return { label: 'IBAN', value: supplier.iban }
-  if (supplier.bank_account) return { label: 'Bankkonto', value: supplier.bank_account }
+function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label: string; value: string } | null {
+  if (supplier.bankgiro) return { label: t('label_bg'), value: supplier.bankgiro }
+  if (supplier.plusgiro) return { label: t('label_pg'), value: supplier.plusgiro }
+  if (supplier.iban) return { label: t('label_iban'), value: supplier.iban }
+  if (supplier.bank_account) return { label: t('label_bank_account'), value: supplier.bank_account }
   return null
 }
 
@@ -38,6 +39,7 @@ function formatLocation(supplier: Supplier): string | null {
 export default function SuppliersPage() {
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
+  const t = useTranslations('suppliers')
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -57,8 +59,8 @@ export default function SuppliersPage() {
 
     if (error) {
       toast({
-        title: 'Kunde inte ladda leverantörer',
-        description: 'Kontrollera din anslutning och försök igen.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
     } else {
@@ -85,14 +87,14 @@ export default function SuppliersPage() {
     if (!response.ok) {
       const fieldErrors = result.errors?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`).join(', ')
       toast({
-        title: 'Kunde inte skapa leverantör',
-        description: fieldErrors || result.error || 'Försök igen.',
+        title: t('create_failed_title'),
+        description: fieldErrors || result.error || t('create_failed_retry'),
         variant: 'destructive',
       })
     } else {
       toast({
-        title: 'Leverantör skapad',
-        description: `${data.name} har lagts till`,
+        title: t('created_title'),
+        description: t('created_description', { name: data.name }),
       })
       setSuppliers([...suppliers, result.data])
       setIsDialogOpen(false)
@@ -111,28 +113,28 @@ export default function SuppliersPage() {
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Leverantörer</h1>
+          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
           <p className="text-muted-foreground">
-            Hantera dina leverantörer och deras betalningsuppgifter
+            {t('subtitle')}
           </p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button
               disabled={!canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {canWrite ? (
                 <Plus className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
               )}
-              Ny leverantör
+              {t('new_supplier')}
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Lägg till leverantör</DialogTitle>
+              <DialogTitle>{t('add_supplier')}</DialogTitle>
             </DialogHeader>
             <SupplierForm
               onSubmit={handleCreateSupplier}
@@ -146,7 +148,7 @@ export default function SuppliersPage() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Sök på namn, e-post eller org.nr..."
+          placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="pl-10"
@@ -174,15 +176,15 @@ export default function SuppliersPage() {
             {searchTerm ? (
               <EmptyState
                 icon={Building2}
-                title="Inga träffar"
-                description={`Inga leverantörer matchar "${searchTerm}".`}
+                title={t('no_search_results_title')}
+                description={t('no_search_results_description', { term: searchTerm })}
               />
             ) : (
               <EmptyState
                 icon={Building2}
-                title="Inga leverantörer"
-                description="Lägg till din första leverantör för att börja registrera inköpsfakturor."
-                actionLabel={canWrite ? 'Ny leverantör' : undefined}
+                title={t('empty_title')}
+                description={t('empty_description')}
+                actionLabel={canWrite ? t('new_supplier') : undefined}
                 onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
               />
             )}
@@ -191,7 +193,7 @@ export default function SuppliersPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {filteredSuppliers.map((supplier) => {
-            const payment = getPaymentInfo(supplier)
+            const payment = getPaymentInfo(supplier, t)
             const location = formatLocation(supplier)
             return (
               <Link key={supplier.id} href={`/suppliers/${supplier.id}`} className="group">
@@ -202,14 +204,14 @@ export default function SuppliersPage() {
                         {supplier.name}
                       </h3>
                       <p className="text-xs text-muted-foreground leading-snug">
-                        {supplierTypeLabels[supplier.supplier_type]}
+                        {t(SUPPLIER_TYPE_KEYS[supplier.supplier_type])}
                       </p>
                     </div>
 
                     <dl className="mt-auto space-y-1.5 text-sm border-t pt-3">
                       {supplier.org_number && (
                         <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">Org.nr</dt>
+                          <dt className="text-xs text-muted-foreground shrink-0">{t('label_org_number')}</dt>
                           <dd className="tabular-nums truncate">{supplier.org_number}</dd>
                         </div>
                       )}
@@ -221,18 +223,18 @@ export default function SuppliersPage() {
                       )}
                       {supplier.email && (
                         <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">E-post</dt>
+                          <dt className="text-xs text-muted-foreground shrink-0">{t('label_email')}</dt>
                           <dd className="truncate">{supplier.email}</dd>
                         </div>
                       )}
                       {location && (
                         <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">Plats</dt>
+                          <dt className="text-xs text-muted-foreground shrink-0">{t('label_location')}</dt>
                           <dd className="truncate">{location}</dd>
                         </div>
                       )}
                       {!supplier.org_number && !payment && !supplier.email && !location && (
-                        <p className="text-xs text-muted-foreground italic">Inga kontaktuppgifter</p>
+                        <p className="text-xs text-muted-foreground italic">{t('no_contact_info')}</p>
                       )}
                     </dl>
                   </CardContent>

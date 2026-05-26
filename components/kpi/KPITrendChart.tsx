@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import {
   Area,
   XAxis,
@@ -19,12 +20,18 @@ interface KPITrendChartProps {
 }
 
 export function KPITrendChart({ months }: KPITrendChartProps) {
+  const t = useTranslations('kpi')
   if (months.length === 0) return null
+
+  const seriesLabel = (key: string) =>
+    key === 'income' ? t('trend_legend_income')
+      : key === 'expenses' ? t('trend_legend_expenses')
+      : t('trend_legend_net')
 
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Intäkter, kostnader & resultat per månad</CardTitle>
+        <CardTitle className="text-base">{t('trend_title')}</CardTitle>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
@@ -43,11 +50,7 @@ export function KPITrendChart({ months }: KPITrendChartProps) {
             <Tooltip
               formatter={(value, name) => [
                 formatCurrency(Number(value)),
-                name === 'income'
-                  ? 'Intäkter'
-                  : name === 'expenses'
-                    ? 'Kostnader'
-                    : 'Resultat',
+                seriesLabel(String(name)),
               ]}
               contentStyle={{
                 fontSize: '12px',
@@ -56,15 +59,7 @@ export function KPITrendChart({ months }: KPITrendChartProps) {
                 backgroundColor: 'hsl(var(--card))',
               }}
             />
-            <Legend
-              formatter={(value: string) =>
-                value === 'income'
-                  ? 'Intäkter'
-                  : value === 'expenses'
-                    ? 'Kostnader'
-                    : 'Resultat'
-              }
-            />
+            <Legend formatter={(value: string) => seriesLabel(value)} />
             <Area
               type="monotone"
               dataKey="income"

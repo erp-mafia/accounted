@@ -28,12 +28,16 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 // Engine stubs — happy-path returns reusable across cases.
-const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE } = vi.hoisted(() => ({
+const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, findMissingAccountsMock } = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
   createInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-invpmt' }),
   createInvCashJE: vi.fn().mockResolvedValue({ id: 'je-invcash' }),
   createSupplierInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-sipmt' }),
+  // Default: no missing accounts. Per-case overrides simulate the
+  // template-references-inactive-account bug or a race where deactivation
+  // happened between our validation and the engine's resolveAccountIds.
+  findMissingAccountsMock: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
@@ -60,6 +64,15 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
   buildMappingResultFromCounterpartyTemplate: vi.fn(),
 }))
+vi.mock('@/lib/bookkeeping/account-validation', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/account-validation')>(
+    '@/lib/bookkeeping/account-validation',
+  )
+  return {
+    ...actual,
+    findMissingActiveAccounts: findMissingAccountsMock,
+  }
+})
 // category mapping is real — provides the debit/credit account guarantees.
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -217,6 +230,90 @@ describe('POST :id/categorize', () => {
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('TX_CATEGORIZE_TX_NOT_FOUND')
+  })
+
+  it('returns 400 ACCOUNTS_NOT_IN_CHART when mapped accounts are not active in the kontoplan', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+    // Simulate the user-reported bug: a category/template that maps to an
+    // account they haven't activated in their kontoplan.
+    findMissingAccountsMock.mockResolvedValueOnce(['5410'])
+
+    const res = await categorizePOST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/categorize`,
+        { is_business: true, category: 'expense_office' },
+      ),
+      txParams(TX_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    // The v1 envelope routes typed bookkeeping errors through
+    // extractBookkeepingDetails, which places account_numbers under details.
+    expect(body.error.details.account_numbers).toEqual(['5410'])
+    // Engine and transaction-update must NOT run — the row stays in the
+    // categorization queue so the user can re-activate and retry.
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 ACCOUNTS_NOT_IN_CHART when the engine throws mid-flight (defense in depth)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }),
+    )
+    // Pre-validation passes — race condition where an account got
+    // deactivated between our chart_of_accounts read and the engine's
+    // resolveAccountIds read. The engine throws and the catch in the route
+    // must short-circuit to a structured 400 rather than falling through
+    // to the partial-success branch that would mark the row bokförd with
+    // no verifikation.
+    findMissingAccountsMock.mockResolvedValueOnce([])
+    const { AccountsNotInChartError } = await import('@/lib/bookkeeping/errors')
+    createTxJE.mockRejectedValueOnce(new AccountsNotInChartError(['5410']))
+
+    const res = await categorizePOST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/categorize`,
+        { is_business: true, category: 'expense_office' },
+      ),
+      txParams(TX_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(body.error.details.account_numbers).toEqual(['5410'])
   })
 })
 
