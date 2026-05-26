@@ -127,6 +127,12 @@ export default function AgentChat({
   // Active turn's controller, kept in a ref (not state) so the stop button
   // can read it without re-renders churning the AbortController identity.
   const activeControllerRef = useRef<AbortController | null>(null)
+  // Set when a tool call runs; consumed by the NEXT text_delta to insert a
+  // single paragraph break so post-tool narration starts on its own line.
+  // A ref (not state) because it must be read/cleared synchronously inside
+  // the streaming loop without triggering re-renders — and because the
+  // break must fire exactly once per resume, not on every delta.
+  const breakBeforeNextTextRef = useRef(false)
   // Fresh-start vs. resume — only kick off the first turn when we have neither
   // a hydrated conversation nor pre-existing messages. React 19 Strict Mode
   // runs effects twice in dev; the first call's cleanup aborts its fetch, the
@@ -292,34 +298,33 @@ export default function AgentChat({
         break
       }
       case 'text_delta':
-        // Streaming text resumes after every tool call. The model often
-        // continues with the next sentence without a leading newline,
-        // which collapses two paragraphs into one ("kategoriseras.Inget
-        // historik" instead of two separate paragraphs). Guard: if the
-        // current text already ends with text content (not whitespace)
-        // and the incoming delta starts with non-whitespace AND a tool
-        // call has run in between (toolCalls.length > 0), insert a
-        // paragraph break.
+        // Insert a paragraph break ONCE when text resumes after a tool
+        // call, so post-tool narration starts on its own line instead of
+        // gluing onto the previous sentence ("kategoriseras.Inget historik").
+        // breakBeforeNextTextRef is set by tool_use/tool_result and consumed
+        // here on the first delta. Critically, the break is applied to the
+        // delta exactly once — NOT re-evaluated per delta, which previously
+        // split mid-word ("minnes\n\nno\n\nterna") because streaming deltas
+        // arrive in sub-word chunks.
         setMessages((prev) =>
           updateLastAssistant(prev, (m) => {
-            const delta = ev.delta as string
-            const needsBreak =
-              m.text.length > 0 &&
-              !/\s$/.test(m.text) &&
-              delta.length > 0 &&
-              !/^\s/.test(delta) &&
-              (m.toolCalls?.length ?? 0) > 0 &&
-              // Only inject the break on the first resume-after-tool —
-              // a sentinel `\n\n` end of buffer means we already did.
-              !m.text.endsWith('\n\n')
-            return {
-              ...m,
-              text: needsBreak ? m.text + '\n\n' + delta : m.text + delta,
+            let delta = ev.delta as string
+            if (breakBeforeNextTextRef.current) {
+              breakBeforeNextTextRef.current = false
+              // Only add the break if the buffer has content and doesn't
+              // already end with whitespace, and the delta isn't itself
+              // starting with a newline.
+              if (m.text.length > 0 && !/\s$/.test(m.text) && !/^\s/.test(delta)) {
+                delta = '\n\n' + delta
+              }
             }
+            return { ...m, text: m.text + delta }
           }),
         )
         break
       case 'tool_use':
+        // Next text_delta should open a fresh paragraph.
+        breakBeforeNextTextRef.current = true
         setMessages((prev) =>
           updateLastAssistant(prev, (m) => ({
             ...m,
