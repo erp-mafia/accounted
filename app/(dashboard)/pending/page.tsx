@@ -503,23 +503,21 @@ function AgentContextStrip({ op }: { op: PendingOperation }) {
   if (!op.agent_metadata) return null
   const meta = op.agent_metadata
   const shortConv = meta.conversation_id ? meta.conversation_id.slice(0, 8) : null
-  const atoms = Array.isArray(meta.atoms_loaded) ? meta.atoms_loaded : []
+  // Model + atoms are intentionally NOT rendered here. They show up in
+  // the expanded preview / debug surfaces; on the row they're noise.
+  // The conversation link is the one bit a reviewer actually needs to
+  // jump into context.
+  if (!shortConv) return null
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
       <MessageSquare className="h-3 w-3" />
-      {shortConv ? (
-        <span>
-          Konversation <a
-            href={`/pending?conversation=${meta.conversation_id}`}
-            className="font-mono hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >#{shortConv}</a>
-        </span>
-      ) : null}
-      {meta.model ? <span className="font-mono">{meta.model}</span> : null}
-      {atoms.length > 0 ? (
-        <span className="truncate">atoms: {atoms.join(', ')}</span>
-      ) : null}
+      <span>
+        Konversation <a
+          href={`/pending?conversation=${meta.conversation_id}`}
+          className="font-mono hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >#{shortConv}</a>
+      </span>
     </div>
   )
 }
