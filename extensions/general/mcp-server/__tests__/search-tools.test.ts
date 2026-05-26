@@ -66,6 +66,19 @@ describe('gnubok_search_tools', () => {
     }
   })
 
+  it('ranks by relevance — the most on-point tool comes first', async () => {
+    // "vat" should surface the canonical report tool ahead of other vat-* tools,
+    // not whichever is defined earliest by accident.
+    const vat = await call({ query: 'vat' })
+    expect(vat.tools[0].name).toBe('gnubok_get_vat_report')
+
+    // Multi-word query: every term must match (name or description), and the
+    // tool whose NAME carries both terms ranks first.
+    const paid = await call({ query: 'invoice paid' })
+    expect(paid.tools.length).toBeGreaterThan(0)
+    expect(paid.tools[0].name).toBe('gnubok_mark_invoice_as_paid')
+  })
+
   it('respects limit (1-50, default 20, clamps over-50)', async () => {
     const overLimit = await call({ limit: 100 })
     expect(overLimit.tools.length).toBeLessThanOrEqual(50)

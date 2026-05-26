@@ -1468,6 +1468,8 @@ export type PendingOperationType =
   | 'correct_entry'
   // Pure makulering (storno) of a posted entry — agent-native API plan item 38
   | 'reverse_entry'
+  // Bokslut: planenlig avskrivning (one journal entry per asset)
+  | 'post_annual_depreciation'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'

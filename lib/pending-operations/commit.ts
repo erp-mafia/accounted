@@ -1272,6 +1272,40 @@ async function commitRunCurrencyRevaluation(
   }
 }
 
+async function commitPostAnnualDepreciation(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const fiscalPeriodId = params.fiscal_period_id as string
+  if (!fiscalPeriodId) return { error: 'fiscal_period_id is required', status: 400 }
+  const assetIds = Array.isArray(params.asset_ids) ? (params.asset_ids as string[]) : undefined
+
+  try {
+    const { commitAnnualPostings } = await import('@/lib/bokslut/assets/depreciation-engine')
+    const { posted, skipped } = await commitAnnualPostings(supabase, companyId, userId, fiscalPeriodId, {
+      assetIds,
+    })
+    return {
+      data: {
+        posted_count: posted.length,
+        skipped_count: skipped.length,
+        posted: posted.map((p) => ({
+          asset_id: p.assetId,
+          journal_entry_id: p.entry.id,
+          voucher_number: p.entry.voucher_number,
+          schedule_id: p.scheduleId,
+        })),
+        skipped,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Depreciation posting failed', status: 400 }
+  }
+}
+
 async function commitExplainVoucherGap(
   supabase: SupabaseClient,
   userId: string,
@@ -2531,6 +2565,9 @@ export async function commitPendingOperation(
         break
       case 'reverse_entry':
         result = await commitReverseEntry(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'post_annual_depreciation':
+        result = await commitPostAnnualDepreciation(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {

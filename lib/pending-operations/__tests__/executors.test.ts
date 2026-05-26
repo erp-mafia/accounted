@@ -28,6 +28,10 @@ vi.mock('@/lib/import/sie-import', () => ({
   executeSIEImport: vi.fn(),
 }))
 
+vi.mock('@/lib/bokslut/assets/depreciation-engine', () => ({
+  commitAnnualPostings: vi.fn(),
+}))
+
 vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
   const actual =
     await vi.importActual<typeof import('@/lib/bookkeeping/invoice-entries')>(
@@ -43,6 +47,7 @@ import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport } from '@/lib/import/sie-import'
+import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -123,6 +128,69 @@ describe('commitPendingOperation: unlock_period', () => {
 
     expect(result.status).toBe('failed')
     expect(result.error).toMatch(/not locked/)
+  })
+})
+
+// ─── post_annual_depreciation ───────────────────────────────────────
+
+describe('commitPendingOperation: post_annual_depreciation', () => {
+  it('happy path: routes to commitAnnualPostings and returns the posted entries', async () => {
+    vi.mocked(commitAnnualPostings).mockResolvedValueOnce({
+      posted: [
+        { assetId: 'asset-1', entry: { id: 'je-1', voucher_number: 7 } as never, scheduleId: 'sch-1' },
+      ],
+      skipped: [],
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher update
+
+    const op = makePendingOp({
+      operation_type: 'post_annual_depreciation',
+      params: { fiscal_period_id: 'fp-1', asset_ids: ['asset-1'] },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      posted_count: 1,
+      skipped_count: 0,
+      posted: [{ asset_id: 'asset-1', journal_entry_id: 'je-1', voucher_number: 7, schedule_id: 'sch-1' }],
+    })
+    expect(commitAnnualPostings).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'user-1', 'fp-1', { assetIds: ['asset-1'] }
+    )
+  })
+
+  it('rejects with 400 when fiscal_period_id is missing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // reject update
+    const op = makePendingOp({ operation_type: 'post_annual_depreciation', params: {} })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(commitAnnualPostings).not.toHaveBeenCalled()
+  })
+
+  it('surfaces engine errors (e.g. locked period) as a failed commit', async () => {
+    vi.mocked(commitAnnualPostings).mockRejectedValueOnce(new Error('Period is locked or closed'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // reject update
+    const op = makePendingOp({
+      operation_type: 'post_annual_depreciation',
+      params: { fiscal_period_id: 'fp-1' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/locked or closed/)
   })
 })
 

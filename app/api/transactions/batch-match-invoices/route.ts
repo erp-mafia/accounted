@@ -46,7 +46,7 @@ export async function POST() {
     try {
       const bestMatch = await getBestInvoiceMatch(
         supabase,
-        user.id,
+        companyId,
         tx as Transaction,
         0.50
       )

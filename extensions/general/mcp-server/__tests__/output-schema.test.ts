@@ -27,3 +27,11 @@ describe('outputSchema coverage', () => {
     expect(verbose.map((t) => t.name)).toEqual([])
   })
 })
+
+describe('annotation correctness', () => {
+  it('gnubok_feedback is not read-only (it writes a telemetry event + mutates the rate-limit map)', () => {
+    const feedback = tools.find((t) => t.name === 'gnubok_feedback')
+    expect(feedback).toBeDefined()
+    expect(feedback?.annotations?.readOnlyHint).toBe(false)
+  })
+})

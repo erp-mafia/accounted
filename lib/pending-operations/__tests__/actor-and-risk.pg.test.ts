@@ -67,7 +67,9 @@ describe('pending_operations: actor model + risk columns', () => {
       'approve_supplier_invoice', 'credit_supplier_invoice',
       'credit_invoice', 'convert_invoice', 'import_sie',
       // Phase 4: arbitrary-line bookkeeping primitives
-      'create_voucher', 'correct_entry',
+      'create_voucher', 'correct_entry', 'reverse_entry',
+      // Phase 5 + bokslut: supplier/inbox + planenlig avskrivning
+      'create_supplier', 'create_supplier_invoice_from_inbox', 'post_annual_depreciation',
     ]
 
     for (const op of expandedTypes) {

@@ -117,6 +117,10 @@ interface McpTool {
   outputSchema?: Record<string, unknown>
   annotations: McpToolAnnotations
   _meta?: { ui: { resourceUri: string } }
+  // Result-level UI hint: when set, a call passing render_ui=true gets a
+  // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
+  // asked. (Contrast _meta above, on the definition, which renders on every call.)
+  uiResourceUri?: string
   execute: (
     args: Record<string, unknown>,
     companyId: string,
@@ -1399,10 +1403,31 @@ export const tools: McpTool[] = [
       })
 
       if (query) {
-        candidates = candidates.filter((t) => {
-          const haystack = `${t.name} ${t.description}`.toLowerCase()
-          return haystack.includes(query)
-        })
+        // Match: every whitespace-separated term must appear in name or description
+        // (for a single-word query this is identical to a literal substring match).
+        // Rank by relevance so the most on-point tool comes first instead of
+        // whichever happens to be defined earliest: exact-ish name match > full
+        // query as a name substring > per-term name hits > description hits. Ties
+        // fall back to definition order (stable).
+        const terms = query.split(/\s+/).filter(Boolean)
+        const ranked = candidates
+          .map((t, idx) => {
+            const name = t.name.toLowerCase()
+            const desc = t.description.toLowerCase()
+            const hay = `${name} ${desc}`
+            if (!terms.every((term) => hay.includes(term))) return null
+            let score = 0
+            if (name === query || name === `gnubok_${query}` || name.endsWith(`_${query}`)) score += 100
+            if (name.includes(query)) score += 40
+            for (const term of terms) {
+              if (name.includes(term)) score += 10
+              if (desc.includes(term)) score += 1
+            }
+            return { t, score, idx }
+          })
+          .filter((x): x is { t: McpTool; score: number; idx: number } => x !== null)
+          .sort((a, b) => b.score - a.score || a.idx - b.idx)
+        candidates = ranked.map((x) => x.t)
       }
 
       const totalMatched = candidates.length
@@ -1812,7 +1837,10 @@ export const tools: McpTool[] = [
       required: ['recorded', 'message'],
     },
     annotations: {
-      readOnlyHint: true,    // writes only to event_log (telemetry), no business state
+      // Not read-only: this writes a telemetry event to the bus and mutates the
+      // in-process rate-limit map. readOnlyHint is about side effects, not whether
+      // business state changes — so it must be false even though no ledger is touched.
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: false,
       openWorldHint: false,
@@ -2828,7 +2856,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_vat_report',
-    description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative).',
+    description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to also open the review widget (claude.ai / Desktop).',
     outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -2841,6 +2869,10 @@ export const tools: McpTool[] = [
         },
         year: { type: 'number', description: 'Year (e.g. 2025)' },
         period: { type: 'number', description: '1–12 for monthly, 1–4 for quarterly, 1 for yearly' },
+        render_ui: {
+          type: 'boolean',
+          description: 'When true, also render the interactive momsdeklaration review widget (claude.ai / Claude Desktop). The structured rutor are returned either way. Default false.',
+        },
       },
       required: ['period_type', 'year', 'period'],
     },
@@ -2850,6 +2882,10 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
+    // Renders the VAT widget only when the caller passes render_ui=true (the
+    // dispatcher emits result-level _meta in that case). This is the merged
+    // report+widget surface; gnubok_vat_review_widget remains as an alias.
+    uiResourceUri: 'ui://vat-review/app.html',
     async execute(args, companyId, _userId, supabase) {
       return computeVatReport(args, companyId, supabase)
     },
@@ -2857,7 +2893,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_review_widget',
-    description: 'Open the interactive VAT review widget for a period. Same data as gnubok_get_vat_report, rendered as a tabular UI for pre-filing review.',
+    description: 'Open the interactive VAT review widget for a period. Equivalent to gnubok_get_vat_report(render_ui=true); kept as an alias for clients pinned to this tool name.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3735,7 +3771,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_general_ledger',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening balance, entries, closing balance. Optional account range filter.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening balance, entries, closing balance. Optional account range filter. For ad-hoc cross-account, amount, or free-text line queries use gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5274,36 +5310,25 @@ export const tools: McpTool[] = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase) {
       const { period_year, period_month, payment_date } = args as { period_year: number; period_month: number; payment_date: string }
-      // Create run
-      const { data: run, error: runError } = await supabase
-        .from('salary_runs')
-        .insert({ company_id: companyId, user_id: userId, period_year, period_month, payment_date })
-        .select()
-        .single()
-      if (runError) throw new Error(runError.code === '23505' ? 'Salary run already exists for this period' : runError.message)
-      // Add all active employees
-      const { data: employees } = await supabase.from('employees').select('*').eq('company_id', companyId).eq('is_active', true)
-      for (const emp of employees || []) {
-        const baseAmount = emp.salary_type === 'monthly'
-          ? Math.round((emp.monthly_salary || 0) * (emp.employment_degree / 100) * 100) / 100
-          : 0
-        const { data: sre } = await supabase.from('salary_run_employees').insert({
-          salary_run_id: run.id, employee_id: emp.id, company_id: companyId,
-          employment_degree: emp.employment_degree, monthly_salary: emp.monthly_salary || 0,
-          salary_type: emp.salary_type, tax_table_number: emp.tax_table_number, tax_column: emp.tax_column,
-        }).select().single()
-        if (sre) {
-          const { getLineItemAccount } = await import('@/lib/salary/account-mapping')
-          const itemType = emp.salary_type === 'monthly' ? 'monthly_salary' : 'hourly_salary'
-          await supabase.from('salary_line_items').insert({
-            salary_run_employee_id: sre.id, company_id: companyId,
-            item_type: itemType, description: emp.salary_type === 'monthly' ? 'Grundlön' : 'Timlön',
-            amount: baseAmount, is_taxable: true, is_avgift_basis: true, is_vacation_basis: true,
-            account_number: getLineItemAccount(itemType as never, emp.employment_type), sort_order: 0,
-          })
-        }
+      // Delegate to the shared helper, which seeds base lines for every active
+      // employee and compensating-deletes the run on any mid-loop failure (no
+      // half-populated runs). Replaces the previous non-transactional inline loop.
+      const { createSalaryRunWithEmployees } = await import('@/lib/salary/create-run')
+      const { run, employeeCount } = await createSalaryRunWithEmployees(supabase, companyId, userId, {
+        periodYear: period_year,
+        periodMonth: period_month,
+        paymentDate: payment_date,
+      })
+      return {
+        ...run,
+        employee_count: employeeCount,
+        message: `Salary run created with ${employeeCount} employees.`,
+        next: {
+          description: 'Calculate tax, arbetsgivaravgifter, vacation accrual and totals.',
+          tool: 'gnubok_calculate_salary_run',
+          args: { salary_run_id: (run as { id?: string }).id },
+        },
       }
-      return { ...run, employee_count: (employees || []).length, message: `Salary run created with ${(employees || []).length} employees. Use the web UI to calculate, review, and book.` }
     },
   },
   {
@@ -5319,20 +5344,36 @@ export const tools: McpTool[] = [
     },
     outputSchema: { type: 'object' },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async execute(args, companyId, userId, supabase) {
-      // Delegate to the calculate API endpoint logic
+    async execute(args, companyId, _userId, supabase) {
       const id = args.salary_run_id as string
-      const { data: run } = await supabase.from('salary_runs').select('*').eq('id', id).eq('company_id', companyId).single()
-      if (!run) throw new Error('Salary run not found')
-      if (run.status !== 'draft') throw new Error('Can only calculate draft runs')
-      // Trigger via internal fetch
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-      const res = await fetch(`${appUrl}/api/salary/runs/${id}/calculate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Cookie': `gnubok-company-id=${companyId}` },
+      if (!id) throw new Error('salary_run_id is required')
+      // Call the extracted calculation lib directly — no self-fetch / forged
+      // cookie, no NEXT_PUBLIC_APP_URL dependency. The lib enforces draft status
+      // and owner-by-company itself.
+      const { runSalaryCalculation } = await import('@/lib/salary/run-calculation')
+      const { createLogger } = await import('@/lib/logger')
+      const { randomUUID } = await import('node:crypto')
+      const result = await runSalaryCalculation({
+        supabase,
+        companyId,
+        salaryRunId: id,
+        log: createLogger('mcp/calculate_salary_run'),
+        requestId: randomUUID(),
       })
-      if (!res.ok) throw new Error('Calculation failed — use the web UI to calculate')
-      return { message: 'Calculation complete. Review results in the web UI.', salary_run_id: id }
+      if (!result.ok) {
+        throw new Error(`Salary calculation failed: ${result.code}`)
+      }
+      return {
+        salary_run_id: id,
+        status: (result.run as { status?: string }).status ?? 'draft',
+        warnings: result.warnings,
+        message: 'Calculation complete. Review and book the run in the web UI.',
+        next: {
+          description: 'Review the calculated run; approval and booking happen in the web UI.',
+          tool: 'gnubok_get_salary_run',
+          args: { salary_run_id: id },
+        },
+      }
     },
   },
   {
@@ -5351,22 +5392,42 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         message: { type: 'string' },
+        agi_declaration_id: { type: 'string' },
         period: { type: 'string' },
         employee_count: { type: 'number' },
+        is_correction: { type: 'boolean' },
         download_url: { type: 'string' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async execute(args, companyId, _userId, supabase) {
+    async execute(args, companyId, userId, supabase) {
       const id = args.salary_run_id as string
-      const { data: run } = await supabase.from('salary_runs').select('period_year, period_month, status').eq('id', id).eq('company_id', companyId).single()
-      if (!run) throw new Error('Salary run not found')
-      if (!['review', 'approved', 'paid', 'booked'].includes(run.status)) throw new Error('Run must be past draft status to generate AGI')
-      const { data: emps } = await supabase.from('salary_run_employees').select('id').eq('salary_run_id', id)
+      if (!id) throw new Error('salary_run_id is required')
+      // Actually generate + persist the AGI declaration (XML is räkenskapsinformation,
+      // 7-year retention). Previously this returned only a URL without generating
+      // anything. The lib validates run status (must be past draft) itself.
+      const { generateAgiDeclaration } = await import('@/lib/salary/agi/generate-declaration')
+      const { createLogger } = await import('@/lib/logger')
+      const { randomUUID } = await import('node:crypto')
+      const result = await generateAgiDeclaration({
+        supabase,
+        companyId,
+        userId,
+        userEmail: null, // helper falls back to company_settings / profile contact
+        salaryRunId: id,
+        log: createLogger('mcp/generate_agi'),
+        requestId: randomUUID(),
+      })
+      if (!result.ok) {
+        throw new Error(`AGI-generering misslyckades: ${result.code}`)
+      }
+      const period = `${result.periodYear}-${String(result.periodMonth).padStart(2, '0')}`
       return {
-        message: `AGI ready for ${run.period_year}-${String(run.period_month).padStart(2, '0')}. Download XML from /api/salary/runs/${id}/agi/xml`,
-        period: `${run.period_year}-${String(run.period_month).padStart(2, '0')}`,
-        employee_count: (emps || []).length,
+        message: `AGI genererad för ${period} (${result.employeeCount} anställda)${result.isCorrection ? ' — rättelse' : ''}.`,
+        agi_declaration_id: result.agiDeclarationId,
+        period,
+        employee_count: result.employeeCount,
+        is_correction: result.isCorrection,
         download_url: `/api/salary/runs/${id}/agi/xml`,
       }
     },
@@ -6370,6 +6431,25 @@ export const tools: McpTool[] = [
         throw new Error('file_content, filename, and mappings are required')
       }
 
+      // Parse + validate at stage time so the approver sees real content (which
+      // entries, what balances) and a broken/unbalanced file is rejected HERE,
+      // not after they approve a blind byte count. commitImportSie re-parses on
+      // commit (defense-in-depth — the staged string could be tampered).
+      const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
+      let parsed
+      try {
+        parsed = parseSIEFile(fileContent)
+      } catch (e) {
+        throw new Error(`SIE-filen kunde inte tolkas: ${e instanceof Error ? e.message : 'okänt fel'}`)
+      }
+      const validation = validateSIEFile(parsed)
+      if (!validation.valid) {
+        throw new Error(`SIE-filen är ogiltig och importeras inte: ${validation.errors.join('; ')}`)
+      }
+
+      const ibCurrent = parsed.openingBalances.filter((b) => b.yearIndex === 0)
+      const ibTotal = Math.round(ibCurrent.reduce((s, b) => s + b.amount, 0) * 100) / 100
+
       return stagePendingOperation(supabase, companyId, userId, 'import_sie',
         `SIE-import: ${filename}`,
         {
@@ -6385,10 +6465,18 @@ export const tools: McpTool[] = [
           filename,
           file_size_bytes: fileContent.length,
           mappings_count: mappings.length,
+          company_name: parsed.header.companyName,
+          org_number: parsed.header.orgNumber,
+          fiscal_year: { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd },
+          account_count: parsed.stats.totalAccounts,
+          voucher_count: parsed.stats.totalVouchers,
+          transaction_line_count: parsed.stats.totalTransactionLines,
+          opening_balance: { total: ibTotal, is_balanced: ibTotal === 0 },
+          warnings: validation.warnings,
           create_fiscal_period: Boolean(args.create_fiscal_period),
           import_opening_balances: Boolean(args.import_opening_balances),
           import_transactions: Boolean(args.import_transactions),
-          will: 'parse SIE on commit, create fiscal period + opening balances + journal entries',
+          will: 'create fiscal period + opening balances + journal entries from the parsed SIE',
         },
         actor,
         {
@@ -7870,15 +7958,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'gnubok — Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
-            '• Call gnubok_search_tools first (e.g. query="vat") to load only the schemas you need. tools/list returns names + 1-line summaries; pull full schemas via gnubok_search_tools(detail="full") when invoking.',
+            '• tools/list returns the full schema for every tool. To narrow a large catalog, call gnubok_search_tools(query="…") — it ranks tools by relevance; pass detail="name"|"summary"|"full" to control payload size.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first — domain workflows are documented as loadable skills with tool references.',
             '',
             'Common workflows:',
-            '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat). Use gnubok_match_transaction_to_invoice to apply income to a specific invoice.',
+            '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat).',
+            '• Applying income to invoices — pick by what you have: a specific bank transaction + a known invoice → gnubok_match_transaction_to_invoice; an invoice you know is paid but no specific bank line → gnubok_mark_invoice_as_paid; a whole period of unmatched income to reconcile → gnubok_auto_match_period (dry_run first). All stage for approval.',
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
-            '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative).',
-            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger — all default to the most recent fiscal period.',
+            '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
+            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger — all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
+            '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget and gnubok_receipt_matcher opens the receipt↔transaction matcher. Both also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → review/approve in web UI → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
@@ -8006,6 +8096,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (result !== null && result !== undefined) {
           response.structuredContent =
             typeof result === 'object' && !Array.isArray(result) ? result : { value: result }
+        }
+        // Result-level UI hint: render the widget only when the caller opted in
+        // via render_ui=true. This keeps the merged report+widget tool data-only
+        // by default and never sends a render directive a plain-data call didn't ask for.
+        if (tool.uiResourceUri && (toolArgs as Record<string, unknown>).render_ui === true) {
+          response._meta = { ui: { resourceUri: tool.uiResourceUri } }
         }
         // Record the response's `next.tool` (when present) so the next call
         // from the same session can be matched against it.
