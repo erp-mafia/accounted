@@ -4512,12 +4512,13 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_inbox_items',
-    description: 'List document inbox items (received supplier-invoice documents). Optional status filter.',
+    description: 'List document inbox items. Each has a `processed` flag covering all terminal links (transaction match, supplier invoice, or journal entry), so a booked receipt counts as done. unprocessed_only=true returns only docs still needing handling.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         status: { type: 'string', enum: ['received', 'error'], description: 'Filter by status' },
+        unprocessed_only: { type: 'boolean', description: 'When true, only return items with no terminal link yet (not matched to a transaction, supplier invoice, or journal entry) — i.e. documents that still need handling. Default false.' },
         limit: { type: 'number', description: 'Max results (default 20, max 50)' },
       },
     },
@@ -4539,20 +4540,23 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
       const status = args.status as string | undefined
+      const unprocessedOnly = args.unprocessed_only === true
 
       let query = supabase
         .from('invoice_inbox_items')
-        .select('id, status, source, created_at, extracted_data, matched_supplier_id, created_supplier_invoice_id, email_from, email_subject, error_message')
+        .select('id, status, source, created_at, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, error_message')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
-        .limit(limit)
+        // Fetch a wider window when filtering client-side so the limit
+        // applies to the post-filter set rather than truncating before it.
+        .limit(unprocessedOnly ? 200 : limit)
 
       if (status) query = query.eq('status', status)
 
       const { data, error } = await query
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const items = (data || []).map((item) => {
+      const mapped = (data || []).map((item) => {
         const extracted = item.extracted_data as Record<string, unknown> | null
         let vendorName: string | null = null
         let amount: number | null = null
@@ -4567,6 +4571,17 @@ export const tools: McpTool[] = [
           invoiceDate = (invoice?.invoiceDate as string) || null
         }
 
+        // An item is "processed" once it has ANY terminal link: matched to a
+        // bank transaction, converted to a supplier invoice, or booked
+        // directly to a journal entry. Surfacing only the supplier fields
+        // (as before) made receipts booked against bank transactions look
+        // loose — and risked the agent flagging them as duplicates.
+        const processed = !!(
+          item.matched_transaction_id ||
+          item.created_supplier_invoice_id ||
+          item.created_journal_entry_id
+        )
+
         return {
           id: item.id,
           status: item.status,
@@ -4575,13 +4590,19 @@ export const tools: McpTool[] = [
           vendor_name: vendorName,
           amount,
           invoice_date: invoiceDate,
+          processed,
           matched_supplier_id: item.matched_supplier_id,
+          matched_transaction_id: item.matched_transaction_id,
           created_supplier_invoice_id: item.created_supplier_invoice_id,
+          created_journal_entry_id: item.created_journal_entry_id,
           email_from: item.email_from,
           email_subject: item.email_subject,
           error_message: item.error_message,
         }
       })
+
+      const filtered = unprocessedOnly ? mapped.filter((i) => !i.processed) : mapped
+      const items = filtered.slice(0, limit)
 
       return { items, count: items.length }
     },
