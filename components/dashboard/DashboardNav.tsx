@@ -45,6 +45,8 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
+import AgentAvatar from '@/components/agent/AgentAvatar'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import type { EntityType } from '@/types'
@@ -120,7 +122,7 @@ const navItems: NavItem[] = [
   // Top section — flat list, always visible, no header
   { href: '/', labelKey: 'home', icon: Home, group: 'top' },
   { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
-  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'top', betaBadge: true },
+  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'top' },
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'top' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'top' },
   // Försäljning dropdown
@@ -172,6 +174,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   const router = useRouter()
   const supabase = createClient()
   const { company } = useCompany()
+  // Agent identity drives the "Assistent" nav icon — when the user has
+  // built their assistant we show its chosen avatar instead of the
+  // generic Sparkles glyph.
+  const { identity: agentIdentity } = useAgentSheet()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -233,6 +239,29 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 
+  // Render a nav item's leading glyph. The "Assistent" entry (/chat) shows
+  // the agent's chosen avatar once built; everything else (and the
+  // pre-onboarding /chat) uses its lucide icon. The passed className carries
+  // size + margin + active color; tailwind-merge lets the explicit h/w win
+  // over AgentAvatar's default box size.
+  const renderNavIcon = (
+    item: { href: string; icon: typeof LayoutDashboard },
+    className: string,
+  ) => {
+    if (item.href === '/chat' && agentIdentity.avatarId) {
+      return (
+        <AgentAvatar
+          avatarId={agentIdentity.avatarId}
+          size="xs"
+          alt={agentIdentity.displayName ?? 'Assistent'}
+          className={className}
+        />
+      )
+    }
+    const Icon = item.icon
+    return <Icon className={className} />
+  }
+
   const filteredItems = navItems.filter(item => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
@@ -244,6 +273,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   })
 
   const topItems = filteredItems.filter((i) => i.group === 'top')
+
+  // The TIC workspace (/e/general/tic, labelled "Företagsprofil") surfaces
+  // the same Bolagsuppgifter now shown under Inställningar → Företagsprofil.
+  // Drop it from the nav so the company profile lives in exactly one place.
+  const visibleExtensionNavItems = extensionNavItems.filter(
+    (i) => i.href !== '/e/general/tic',
+  )
 
   const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = [
     { key: 'försäljning', items: filteredItems.filter((i) => i.group === 'försäljning') },
@@ -290,7 +326,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
               {/* Top section: flat, no header. Hem, Underlag, Transaktioner, Granskning. */}
               <div className="mb-4 space-y-px">
                 {topItems.map((item) => {
-                  const Icon = item.icon
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
                   const badge =
@@ -302,12 +337,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   const decorBadge = renderBadge(item, 'sidebar')
                   const content = (
                     <>
-                      <Icon
-                        className={cn(
+                      {renderNavIcon(
+                        item,
+                        cn(
                           'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
                           active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
-                        )}
-                      />
+                        ),
+                      )}
                       <span className="flex-1">{tNav(item.labelKey)}</span>
                       {decorBadge ? decorBadge : badge !== null && (
                         <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
@@ -419,7 +455,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                               accounting-adjacent. Future categorised extensions
                               can opt into a different group via their manifest. */}
                           {key === 'redovisning' &&
-                            extensionNavItems.map((item) => {
+                            visibleExtensionNavItems.map((item) => {
                               const Icon = resolveIcon(item.icon)
                               const active = isActive(item.href)
                               const enabled = hasCompany
@@ -551,7 +587,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-16 px-2">
           {mobileNavItems.map((item) => {
-            const Icon = item.icon
             const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)
             const badge = item.href === '/transactions' && uncategorizedTransactionCount > 0
@@ -561,10 +596,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
             const content = (
               <>
                 <div className="relative">
-                  <Icon className={cn(
-                    "h-5 w-5 mb-1",
-                    active && "text-primary"
-                  )} />
+                  {renderNavIcon(item, cn('h-5 w-5 mb-1', active && 'text-primary'))}
                   {badge !== null && (
                     <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
                       {badge > 99 ? '99+' : badge}
@@ -659,7 +691,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
               {/* Top items (Hem, Underlag, Transaktioner, Granskning) */}
               <div className="space-y-0.5">
                 {topItems.map((item) => {
-                  const Icon = item.icon
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
                   const badge =
@@ -671,7 +702,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   const decorBadge = renderBadge(item, 'mobile')
                   const content = (
                     <>
-                      <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
+                      {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
                       <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
                       {decorBadge ? decorBadge : badge !== null && (
                         <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
@@ -768,14 +799,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
               ))}
 
               {/* Tillägg (extensions) — only when there's at least one */}
-              {extensionNavItems.length > 0 && (
+              {visibleExtensionNavItems.length > 0 && (
                 <>
                   <div className="flex items-center gap-3 my-1.5 px-3">
                     <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_extensions')}</span>
                     <div className="flex-1 h-px bg-border/30" />
                   </div>
                   <div className="space-y-0.5">
-                    {extensionNavItems.map((item) => {
+                    {visibleExtensionNavItems.map((item) => {
                       const Icon = resolveIcon(item.icon)
                       const active = isActive(item.href)
                       const enabled = hasCompany

@@ -134,7 +134,18 @@ export default function AgentChat({
   // no conversation_id is supplied (it creates a fresh row each time, so a
   // transient duplicate just orphans the first conversation — harmless).
   useEffect(() => {
-    const hasResumeState = !!(initialConversationId && (initialMessages?.length ?? 0) > 0)
+    // Only bootstrap a first turn on a genuine fresh start — i.e. NO
+    // conversation id. A present id means the conversation already exists
+    // (or is mid-creation elsewhere), so we must not fire an invoke.
+    //
+    // Why id-alone, not id+messages: the intake flow fires an invoke with
+    // no conversation_id, then swaps the URL to /chat/[id] the moment the
+    // `conversation` event lands — which can beat the greeting being
+    // persisted. /chat/[id] then hydrates with 0 messages. If we keyed the
+    // guard on messages.length we'd auto-fire a SECOND invoke against the
+    // same conversation and render two greetings. Keying on id presence
+    // alone closes that race.
+    const hasResumeState = !!initialConversationId
     if (hasResumeState) return
 
     // Seed-message path: render the user's pre-baked starter in the timeline
