@@ -48,11 +48,21 @@ interface SnapshotShape {
   }[] | null
 }
 
-const statusVariant: Record<string, 'success' | 'warning' | 'destructive' | 'secondary'> = {
-  green: 'success',
-  yellow: 'warning',
-  red: 'destructive',
-  neutral: 'secondary',
+// Clean Bolagsverket signatory text: the source carries ">" list markers
+// and collapses several rules onto one line. Strip the markers, normalise
+// whitespace, and split run-on "Firman tecknas …" clauses onto their own
+// lines so each rule reads as a sentence.
+function cleanSignatory(raw: string): string[] {
+  const normalised = raw
+    .replace(/>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  // Each firmateckningsregel starts with "Firman tecknas". Split on the
+  // boundary before subsequent occurrences so they stack vertically.
+  return normalised
+    .split(/(?=Firman tecknas)/g)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -208,29 +218,30 @@ export function CompanyProfileView({
           )}
         </Section>
 
-        {Array.isArray(snapshot.statuses) && snapshot.statuses.length > 0 && (
-          <Section title="Status">
-            <ul className="space-y-1.5">
-              {snapshot.statuses.map((s, i) => (
-                <li key={`${s.code}-${i}`} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="flex items-center gap-2">
-                    <Badge
-                      variant={statusVariant[s.color ?? 'neutral'] ?? 'secondary'}
-                      className="font-normal"
-                    >
+        {(() => {
+          // Only show dated status entries — Bolagsverket emits informational
+          // flags like "Har aldrig varit verksam" with no date that read as
+          // noise next to the real ones. Plain text, no colour: per the
+          // design system, semantic colour is data-only and never chrome.
+          const datedStatuses = (snapshot.statuses ?? []).filter((s) => s.statusDate)
+          if (datedStatuses.length === 0) return null
+          return (
+            <Section title="Status">
+              <dl className="space-y-1">
+                {datedStatuses.map((s, i) => (
+                  <div key={`${s.code}-${i}`} className="flex items-center justify-between gap-3 text-sm">
+                    <dt className={s.isCeased ? 'text-destructive' : 'text-foreground'}>
                       {s.description ?? s.code ?? '—'}
-                    </Badge>
-                  </span>
-                  {s.statusDate && (
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {formatDate(s.statusDate)}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
+                    </dt>
+                    <dd className="text-xs text-muted-foreground tabular-nums">
+                      {formatDate(s.statusDate!)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </Section>
+          )
+        })()}
 
         {fyLabel && (
           <Section title="Räkenskapsår">
@@ -238,17 +249,28 @@ export function CompanyProfileView({
           </Section>
         )}
 
-        {Array.isArray(snapshot.signatory) && snapshot.signatory.length > 0 && (
-          <Section title="Firmateckning">
-            <ul className="space-y-1.5">
-              {snapshot.signatory.map((s, i) => (
-                <li key={i} className="text-sm leading-6 text-muted-foreground">
-                  {s.description}
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
+        {(() => {
+          // Flatten every signatory row, clean ">" markers, split run-on
+          // clauses, and dedupe — the source repeats "Firman tecknas av
+          // styrelsen" across rows.
+          const rules = Array.from(
+            new Set(
+              (snapshot.signatory ?? []).flatMap((s) => cleanSignatory(s.description)),
+            ),
+          )
+          if (rules.length === 0) return null
+          return (
+            <Section title="Firmateckning">
+              <ul className="space-y-1.5">
+                {rules.map((rule, i) => (
+                  <li key={i} className="text-sm leading-6 text-muted-foreground">
+                    {rule}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )
+        })()}
 
         {Array.isArray(snapshot.representatives) && snapshot.representatives.length > 0 && (
           <Section title="Företrädare">
