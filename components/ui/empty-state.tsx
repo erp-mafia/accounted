@@ -109,6 +109,9 @@ export function EmptyState({
 function AgentHelpLink({ route, subject }: { route?: string; subject?: string }) {
   const t = useTranslations('empty')
   const { openAgentSheet, identity } = useAgentSheet()
+  // Same gate as AgentTrigger — empty-state CTAs to the agent must wait
+  // until the user has finished the agent build flow.
+  if (!identity.isVerified) return null
   const name = identity.displayName?.trim() || t('agent_default_name')
   return (
     <button

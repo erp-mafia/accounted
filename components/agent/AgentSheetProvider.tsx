@@ -6,6 +6,11 @@ import AgentSheet from './AgentSheet'
 export interface AgentIdentity {
   displayName: string | null
   avatarId: string | null
+  // True only after the user has completed Phase B verification in
+  // /onboarding/agent. Consumers (AgentTrigger, page-level Sparkle
+  // buttons) should hide themselves when this is false so the FAB
+  // doesn't pop up before the agent build flow has run.
+  isVerified: boolean
 }
 
 // Provider exposes a single imperative function: openAgentSheet({...}). Any
@@ -59,7 +64,8 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
     setActiveArgs(null)
   }, [])
 
-  const resolvedIdentity = identity ?? { displayName: null, avatarId: null }
+  const resolvedIdentity: AgentIdentity =
+    identity ?? { displayName: null, avatarId: null, isVerified: false }
 
   const value = useMemo<AgentSheetContextValue>(
     () => ({

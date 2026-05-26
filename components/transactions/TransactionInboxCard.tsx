@@ -313,7 +313,10 @@ export default function TransactionInboxCard({
                     )}
                   </Button>
                 )}
-                {/* Hand-off to the agent for categorization help. */}
+                {/* Hand-off to the agent for categorization help. Hidden
+                    pre-onboarding so the row doesn't sprout an avatar button
+                    that leads to a generic chat. */}
+                {identity.isVerified && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -335,6 +338,7 @@ export default function TransactionInboxCard({
                     alt={identity.displayName ?? 'Assistent'}
                   />
                 </Button>
+                )}
                 {isDeletable && onDelete && (
                   <Button
                     variant="ghost"

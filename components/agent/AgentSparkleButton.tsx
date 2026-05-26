@@ -35,7 +35,10 @@ export default function AgentSparkleButton({
   className,
 }: Props) {
   const { openAgentSheet, identity } = useAgentSheet()
-  const name = identity.displayName?.trim() || 'min revisor'
+  // Same gate as AgentTrigger — hide all "Fråga …" affordances until the
+  // user has finished /onboarding/agent.
+  if (!identity.isVerified) return null
+  const name = identity.displayName?.trim() || 'min assistent'
   const resolvedLabel = label ?? `Fråga ${name}`
 
   return (

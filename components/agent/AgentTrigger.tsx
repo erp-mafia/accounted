@@ -16,7 +16,7 @@ import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 //
 // Reads the agent's display_name + avatar_id from the AgentSheet context so
 // the button reads "Fråga Anna" (with Anna's face) rather than the generic
-// "Fråga min revisor".
+// "Fråga min assistent".
 //
 // Page-specific triggers ("Fråga om denna transaktion" on a transaction row)
 // still call useAgentSheet() directly from their own buttons because they
@@ -29,8 +29,12 @@ export default function AgentTrigger() {
   // The /chat surface IS the chat — a floating "Fråga …" pill on top of it
   // is redundant and overlaps the input. Suppress while the user is here.
   if (pathname?.startsWith('/chat')) return null
+  // Pre-onboarding: no agent_profile.verified_at yet. The FAB would lead
+  // into a generic chat with no specialization. Better to hide it until
+  // the user has finished /onboarding/agent.
+  if (!identity.isVerified) return null
 
-  const name = identity.displayName?.trim() || 'min revisor'
+  const name = identity.displayName?.trim() || 'min assistent'
   const dispatch = routeToIntent(pathname)
   const labelText = dispatch.labelSuffix
     ? `Fråga ${name} ${dispatch.labelSuffix}`

@@ -159,44 +159,97 @@ export async function loadSieSummary(
   }
 }
 
+interface BankingCounterparty {
+  name: string
+  abs_amount: number
+  // 'in'  → money coming in (income / refund / loan disbursement)
+  // 'out' → money going out (cost / supplier payment / repayment)
+  // 'mixed' → both directions present (rare — typically transfers or
+  //           returns). The composer should not assume a category from
+  //           mixed counterparties.
+  direction: 'in' | 'out' | 'mixed'
+  // True when at least one transaction for this counterparty still has
+  // journal_entry_id IS NULL. Composer should only generate verification
+  // questions about counterparties where this is true — the others are
+  // already settled and re-asking wastes the user's time.
+  has_unbooked: boolean
+}
+
 interface BankingSummary {
-  top_counterparties: { name: string; abs_amount: number }[]
+  top_counterparties: BankingCounterparty[]
   monthly_volume: number | null
+  unbooked_count: number
 }
 
 // POC: re-use transactions table for banking counterparties. A first-class
 // Enable Banking summary lives behind the enable-banking extension and is
 // post-POC.
+//
+// Booking-aware: each rolled-up counterparty carries `direction` (sign of
+// the transactions) and `has_unbooked` (any row without journal_entry_id).
+// Both signals exist to keep the composer from asking dumb questions —
+// "is this a cost or an income?" when the sign is clearly negative,
+// "how should this be booked?" when there's no unbooked transaction left.
 export async function loadBankingSummary(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<BankingSummary | null> {
   const { data, error } = await supabase
     .from('transactions')
-    .select('description, amount, date')
+    .select('description, amount, date, journal_entry_id')
     .eq('company_id', companyId)
     .gte('date', oneYearAgo())
     .order('date', { ascending: false })
     .limit(5000)
   if (error || !Array.isArray(data) || data.length === 0) return null
 
-  const cpAgg = new Map<string, number>()
+  interface Bucket {
+    absAmount: number
+    hasInflow: boolean
+    hasOutflow: boolean
+    hasUnbooked: boolean
+  }
+  const cpAgg = new Map<string, Bucket>()
   let totalVolume = 0
-  for (const t of data as { description: string | null; amount: number | string | null }[]) {
-    const amt = Math.abs(Number(t.amount) || 0)
-    totalVolume += amt
+  let unbookedCount = 0
+  for (const t of data as {
+    description: string | null
+    amount: number | string | null
+    journal_entry_id: string | null
+  }[]) {
+    const signedAmt = Number(t.amount) || 0
+    const absAmt = Math.abs(signedAmt)
+    totalVolume += absAmt
+    if (!t.journal_entry_id) unbookedCount++
+
     const name = normalizeCounterparty(t.description)
     if (!name) continue
-    cpAgg.set(name, (cpAgg.get(name) ?? 0) + amt)
+    const prev = cpAgg.get(name) ?? {
+      absAmount: 0,
+      hasInflow: false,
+      hasOutflow: false,
+      hasUnbooked: false,
+    }
+    prev.absAmount += absAmt
+    if (signedAmt > 0) prev.hasInflow = true
+    if (signedAmt < 0) prev.hasOutflow = true
+    if (!t.journal_entry_id) prev.hasUnbooked = true
+    cpAgg.set(name, prev)
   }
-  const top = Array.from(cpAgg.entries())
-    .sort((a, b) => b[1] - a[1])
+  const top: BankingCounterparty[] = Array.from(cpAgg.entries())
+    .sort((a, b) => b[1].absAmount - a[1].absAmount)
     .slice(0, 20)
-    .map(([name, abs_amount]) => ({ name, abs_amount }))
+    .map(([name, b]) => ({
+      name,
+      abs_amount: b.absAmount,
+      direction: b.hasInflow && b.hasOutflow ? 'mixed' : b.hasInflow ? 'in' : 'out',
+      has_unbooked: b.hasUnbooked,
+    }))
 
   return {
     top_counterparties: top,
     monthly_volume: totalVolume > 0 ? Math.round(totalVolume / 12) : null,
+    unbooked_count: unbookedCount,
   }
 }
 

@@ -1,7 +1,7 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
 
-// general.help — always-present "Fråga min revisor" from the top nav.
+// general.help — always-present "Fråga min assistent" from the top nav.
 //
 // Atom mode is progressive: only the agent_atom_registry metadata lands in
 // the system prompt (~200 tokens per atom), and the agent calls
@@ -26,7 +26,7 @@ interface GeneralHelpCaptured {
 
 export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCaptured>({
   id: 'general.help',
-  buttonLabel: 'Fråga min revisor',
+  buttonLabel: 'Fråga min assistent',
   sheetTitle: 'Fråga din assistent',
 
   atoms: {
@@ -105,7 +105,7 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
       lines.push(`Användaren befinner sig på sidan: ${captured.route}`)
       lines.push('')
     }
-    lines.push('Användaren öppnade ditt fönster med "Fråga min revisor". Inget specifikt ärende ännu.')
+    lines.push('Användaren öppnade ditt fönster med "Fråga min assistent". Inget specifikt ärende ännu.')
     lines.push('')
     lines.push('Härifrån kan du (använd verktygen — citera siffrorna):')
     lines.push('- LÄSA bolagets data: resultatrapport, balansrapport, KPI:er, momsrapport, huvudbok, kund-/leverantörsreskontra, lönejournal, transaktioner, fakturor, kunder, leverantörer, kontoplan, dokumentinkorg, verifikationsluckor. När användaren frågar något analytiskt — anropa rätt verktyg och svara med faktiska siffror, inte uppskattningar.')

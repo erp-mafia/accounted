@@ -185,7 +185,7 @@ export default async function DashboardLayout({
     // surfaces. Null when no agent_profile exists yet (banner CTA path).
     supabase
       .from('agent_profiles')
-      .select('display_name, avatar_id')
+      .select('display_name, avatar_id, verified_at')
       .eq('company_id', companyId)
       .maybeSingle(),
   ])
@@ -223,6 +223,7 @@ export default async function DashboardLayout({
         identity={{
           displayName: agentProfileIdentity?.display_name ?? null,
           avatarId: agentProfileIdentity?.avatar_id ?? null,
+          isVerified: Boolean(agentProfileIdentity?.verified_at),
         }}
       >
         <CompanyTabSync />

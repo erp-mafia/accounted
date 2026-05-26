@@ -18,7 +18,7 @@ interface StepConfig {
 }
 
 const STEPS: StepConfig[] = [
-  { id: 'tic', label: 'Hämtar uppgifter', fallbackLabel: 'Inga företagsuppgifter — fortsätter ändå' },
+  { id: 'tic', label: 'Hämtar uppgifter', fallbackLabel: 'Inga företagsuppgifter, fortsätter ändå' },
   { id: 'select', label: 'Identifierar din verksamhet', fallbackLabel: 'Använder standardval' },
   { id: 'narrative', label: 'Sammanfattar', fallbackLabel: 'Standardsammanfattning' },
   { id: 'finalize', label: 'Klar' },
@@ -97,7 +97,6 @@ export default function AgentOnboarding({
     return null
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [skipShown, setSkipShown] = useState(false)
 
   const setStatus = useCallback((id: StepId, status: StepStatus) => {
     setStatuses((prev) => ({ ...prev, [id]: status }))
@@ -111,8 +110,6 @@ export default function AgentOnboarding({
   useEffect(() => {
     if (alreadyVerified) return
 
-    const timer = setTimeout(() => setSkipShown(true), 10_000)
-
     const controller = new AbortController()
     void runStream(companyId, controller.signal, {
       setStatus,
@@ -122,7 +119,6 @@ export default function AgentOnboarding({
     })
 
     return () => {
-      clearTimeout(timer)
       controller.abort()
     }
   }, [companyId, alreadyVerified, setStatus])
@@ -182,18 +178,6 @@ export default function AgentOnboarding({
         </CardContent>
       </Card>
 
-      <div className="mt-6 flex justify-center min-h-[40px]">
-        {skipShown && phase === 'building' && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPhase('review')}
-            className="text-muted-foreground"
-          >
-            Hoppa över — fortsätt med standardval
-          </Button>
-        )}
-      </div>
     </div>
   )
 }
@@ -246,7 +230,7 @@ async function runStream(
   }
 
   if (!response.ok || !response.body) {
-    cbs.onError(`HTTP ${response.status} — kunde inte starta byggsekvensen.`)
+    cbs.onError(`HTTP ${response.status}: kunde inte starta byggsekvensen.`)
     return
   }
 

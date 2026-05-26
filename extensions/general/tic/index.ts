@@ -542,11 +542,23 @@ export const ticExtension: Extension = {
                   .map(toFinancialReportSummary)
               : []
 
-          // Use dedicated purpose endpoint, fall back to search result
-          const purpose =
-            purposeResult.status === 'fulfilled' && purposeResult.value?.[0]?.purpose
-              ? purposeResult.value[0].purpose
-              : doc.mostRecentPurpose ?? null
+          // Use dedicated purpose endpoint, fall back to search result.
+          // /purposes returns every historical verksamhetsföremål filing;
+          // sort by lastUpdatedAtUtc desc so we pick the most recently
+          // registered one. Older filings still describe a "holding /
+          // förvalta egendom" boilerplate purpose for companies that have
+          // since shifted focus — taking [0] without sorting surfaces that
+          // stale text and confuses the agent's review card.
+          const sortedPurposes =
+            purposeResult.status === 'fulfilled' && Array.isArray(purposeResult.value)
+              ? [...purposeResult.value].sort((a, b) =>
+                  (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? ''),
+                )
+              : []
+          const latestPurpose = sortedPurposes.find(
+            (p) => typeof p.purpose === 'string' && p.purpose.trim().length > 0,
+          )?.purpose
+          const purpose = latestPurpose ?? doc.mostRecentPurpose ?? null
 
           // ── New v2 sections ─────────────────────────────────────────
           // Fiscal years: pick most-recently-updated row with both

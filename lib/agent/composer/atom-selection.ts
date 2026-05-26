@@ -15,7 +15,11 @@ Du får:
   - fiscalYear: nuvarande räkenskapsårskonfiguration med startMonthDay/endMonthDay. Brutet räkenskapsår (annat än 01-01/12-31) är vanligt i konsult-AB och påverkar bokslut-atomvalet.
 - KÄNDA FAKTA från företagets inställningar — saker användaren redan har angett (momsperiod, räkenskapsår, F-skatt-status, anställda, bokföringsmetod)
 - Eventuell sammanfattning från importerad SIE-fil (topp-konton, topp-motparter, antal år)
-- Eventuell sammanfattning från bankhistorik (topp-motparter, månadsvolym)
+- Eventuell sammanfattning från bankhistorik. Varje topp-motpart har:
+  - belopp i kr (abs)
+  - riktning: 'in' (intäkt/inbetalning), 'ut' (kostnad/utbetalning), eller 'in+ut'
+  - bokföringsstatus: 'OBOKFÖRD' (minst en transaktion ej bokförd) eller 'bokförd'
+  KRITISKT: ställ INTE en verifieringsfråga om en motpart där riktningen är entydig OCH alla transaktioner är bokförda. T.ex. en motpart märkt "(ut, bokförd)" är redan klassad som kostnad och redan kategoriserad. Att fråga "är detta en intäkt eller kostnad?" är fel. Fokusera frågorna på OBOKFÖRD-motparter där det finns en bokningsbeslutning kvar att fatta.
 - Ett register över tillgängliga atomer (horizontal/vertical/modifier) med beskrivning, SNI-prefix och utlösare
 
 Din uppgift:
@@ -256,10 +260,22 @@ function buildUserPrompt(inputs: ComposerInputs): string {
         `Snittvolym per månad: ${Math.round(inputs.bankingSummary.monthly_volume).toLocaleString('sv-SE')} kr`,
       )
     }
+    lines.push(
+      `Antal obokförda transaktioner: ${inputs.bankingSummary.unbooked_count}`,
+    )
     if (inputs.bankingSummary.top_counterparties.length > 0) {
-      lines.push('Topp-motparter:')
+      lines.push('Topp-motparter (riktning + bokföringsstatus):')
       for (const c of inputs.bankingSummary.top_counterparties.slice(0, 20)) {
-        lines.push(`  ${c.name} — ${Math.round(c.abs_amount).toLocaleString('sv-SE')} kr`)
+        // direction tells Opus whether this counterparty is a source of
+        // income, a cost, or both. has_unbooked says whether there's still
+        // a transaction waiting for the user to book — only those are
+        // legitimate verification-question fodder.
+        const dirLabel =
+          c.direction === 'in' ? 'in' : c.direction === 'out' ? 'ut' : 'in+ut'
+        const bookedLabel = c.has_unbooked ? 'OBOKFÖRD' : 'bokförd'
+        lines.push(
+          `  ${c.name}: ${Math.round(c.abs_amount).toLocaleString('sv-SE')} kr (${dirLabel}, ${bookedLabel})`,
+        )
       }
     }
     lines.push('')

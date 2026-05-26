@@ -217,7 +217,7 @@ export default function ReviewCard({
     step === 1
       ? 'Träffa din assistent'
       : step === 2
-        ? 'Stämma av detaljerna'
+        ? 'Stäm av detaljerna'
         : finalCtaPhase
           ? 'En sista sak'
           : 'En kort intervju'
@@ -226,10 +226,10 @@ export default function ReviewCard({
     step === 1
       ? 'Ge din assistent ett namn och välj en avatar.'
       : step === 2
-        ? 'Bekräfta att uppgifterna stämmer — eller ändra det som blivit fel.'
+        ? 'Bekräfta att uppgifterna stämmer, eller ändra det som blivit fel.'
         : finalCtaPhase
           ? 'Lägg till något du vill att assistenten ska veta direkt.'
-          : `Fråga ${questionIndex + 1} av ${verificationQuestions.length} — bara om du vill, du kan svara mer i chatten sedan.`
+          : `Fråga ${questionIndex + 1} av ${verificationQuestions.length}. Du kan också svara mer i chatten sedan.`
 
   return (
     <div className="w-full">
@@ -275,7 +275,7 @@ export default function ReviewCard({
                     {displayName.trim() || 'Din assistent'}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Visas som <span className="font-medium">Fråga {displayName.trim() || 'min revisor'}</span> i appen.
+                    Visas som <span className="font-medium">Fråga {displayName.trim() || 'min assistent'}</span> i appen.
                   </p>
                 </div>
               </div>
@@ -287,7 +287,7 @@ export default function ReviewCard({
                   id="agent-display-name"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="t.ex. Anna, Lars, Karin — eller hoppa över"
+                  placeholder="t.ex. Anna, Lars, Karin. Eller hoppa över."
                   maxLength={60}
                   autoFocus
                 />
@@ -488,7 +488,7 @@ export default function ReviewCard({
                 Något du vill att jag ska veta från start?
               </label>
               <p className="text-sm text-muted-foreground">
-                Valfritt — t.ex. återkommande kunder, hyresfaktura som kommer den 25:e, kunder mest i Tyskland.
+                Valfritt. T.ex. återkommande kunder, hyresfaktura som kommer den 25:e, eller att kunderna mest finns i Tyskland.
               </p>
               <textarea
                 id="seed-memory"
@@ -572,7 +572,7 @@ export default function ReviewCard({
                     Sparar…
                   </>
                 ) : (
-                  'Det här ser rätt ut — kör'
+                  'Det här ser rätt ut, kör'
                 )}
               </Button>
             )}
