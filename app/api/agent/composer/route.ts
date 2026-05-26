@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { composeAgentProfile } from '@/lib/agent/composer'
 
 const BodySchema = z.object({
@@ -27,6 +28,14 @@ export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const rate = await checkAgentRateLimit(supabase, user.id)
+  if (!rate.ok) {
+    return NextResponse.json(agentRateLimitResponseBody(rate), {
+      status: 429,
+      headers: rate.retryAfterSec ? { 'Retry-After': String(rate.retryAfterSec) } : undefined,
+    })
+  }
 
   let body: z.infer<typeof BodySchema>
   try {

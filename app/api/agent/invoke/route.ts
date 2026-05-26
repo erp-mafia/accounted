@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { getIntent } from '@/lib/agent/intents/registry'
-import { runChatTurn } from '@/lib/agent/chat/run-turn'
+import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
+import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
 
 // Make sure extensions are loaded — the chat loop dispatches against the
 // agent tool registry which is populated by the mcp-server extension at load.
@@ -42,6 +43,16 @@ export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Generous per-user rate limit — bounds runaway Bedrock spend (loop-firing
+  // sessions). Fails open on infra error.
+  const rate = await checkAgentRateLimit(supabase, user.id)
+  if (!rate.ok) {
+    return NextResponse.json(agentRateLimitResponseBody(rate), {
+      status: 429,
+      headers: rate.retryAfterSec ? { 'Retry-After': String(rate.retryAfterSec) } : undefined,
+    })
+  }
 
   let body: z.infer<typeof BodySchema>
   try {
@@ -172,9 +183,12 @@ export async function POST(request: Request) {
           emit: (event) => emit(event),
         })
       } catch (err) {
+        // run-turn already emitted a friendly error before re-throwing; emit a
+        // normalized one here too so this outer catch never overwrites it with a
+        // raw AWS SDK string.
         emit({
           kind: 'error',
-          message: err instanceof Error ? err.message : 'Internal error',
+          message: friendlyModelError(err),
         })
       } finally {
         try {

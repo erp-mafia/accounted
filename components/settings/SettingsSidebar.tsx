@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useRouter } from 'next/navigation'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 interface NavItem {
@@ -18,6 +19,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const { company } = useCompany()
+  const { identity } = useAgentSheet()
   const t = useTranslations('settings_nav')
 
   const hasCompany = !!company
@@ -36,7 +38,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
     { href: '/settings/salary', label: t('salary'), show: hasCompany && company?.entity_type === 'aktiebolag' },
     { href: '/settings/templates', label: t('templates'), show: hasCompany },
     { href: '/settings/company-profile', label: t('agent_profile'), show: hasCompany },
-    { href: '/settings/agent-memory', label: t('agent_memory'), show: hasCompany },
+    { href: '/settings/agent-memory', label: t('agent_memory'), show: hasCompany && identity.isVerified },
     { href: '/settings/backup', label: t('backup'), show: hasCompany },
     { href: '/settings/account', label: t('account'), show: true },
     { href: '/settings/api', label: t('api'), show: hasCompany && hasMcpExtension },

@@ -220,7 +220,18 @@ export default function AgentChat({
     }
 
     if (!response.ok || !response.body) {
-      setErrorMessage(`HTTP ${response.status} — kunde inte nå assistenten.`)
+      // Surface the server's friendly Swedish message (rate-limit sentence,
+      // "ingen aktiv firma", etc.) rather than a raw "HTTP 429".
+      let msg = 'Kunde inte nå assistenten. Försök igen om en stund.'
+      try {
+        const errBody = await response.json()
+        if (errBody && typeof errBody.error === 'string' && errBody.error.trim()) {
+          msg = errBody.error
+        }
+      } catch {
+        // non-JSON / empty body — keep the generic message
+      }
+      setErrorMessage(msg)
       setStreaming(false)
       activeControllerRef.current = null
       return

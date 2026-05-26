@@ -6,6 +6,41 @@ import type { AgentTool, AgentActorContext, StagedOperationResult } from '@/lib/
 import { isStagedOperation } from '@/lib/agent/tools/types'
 import { buildSystemPrompt } from './system-prompt'
 
+/**
+ * Normalize a model/transport error into a short, friendly Swedish message.
+ * Raw AWS Bedrock SDK errors (throttling, timeouts, 5xx) are English and
+ * technical; the chat surface renders this verbatim, so keep it human.
+ */
+export function friendlyModelError(err: unknown): string {
+  const status = (err as { status?: number } | null)?.status
+  const name = (err as { name?: string } | null)?.name ?? ''
+  const raw = err instanceof Error ? err.message : ''
+  const text = `${name} ${raw}`.toLowerCase()
+  if (
+    status === 429 ||
+    text.includes('throttl') ||
+    text.includes('too many') ||
+    text.includes('rate limit') ||
+    text.includes('rate exceeded')
+  ) {
+    return 'Anna är upptagen just nu. Vänta en liten stund och försök igen.'
+  }
+  if (
+    text.includes('timeout') ||
+    text.includes('timed out') ||
+    text.includes('etimedout') ||
+    text.includes('econnreset') ||
+    text.includes('network') ||
+    text.includes('socket')
+  ) {
+    return 'Anslutningen till assistenten bröts. Försök igen.'
+  }
+  if (typeof status === 'number' && status >= 500) {
+    return 'Assistenttjänsten har ett tillfälligt fel. Försök igen om en stund.'
+  }
+  return 'Något gick fel hos assistenten. Försök igen om en stund.'
+}
+
 // One turn of the chat loop:
 //
 //   1. Resolve context (company, profile, ranked memory).
@@ -198,7 +233,8 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     } catch (err) {
       // Surface as a chat error so the UI clears its streaming state. Re-throw
       // to let the route's outer try/catch persist the failure if needed.
-      emit({ kind: 'error', message: err instanceof Error ? err.message : 'Stream avbruten.' })
+      // Normalize Bedrock throttling/timeout/5xx into a friendly Swedish line.
+      emit({ kind: 'error', message: friendlyModelError(err) })
       throw err
     }
 

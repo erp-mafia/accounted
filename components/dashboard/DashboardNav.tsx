@@ -266,6 +266,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
     if (item.modes && !item.modes.includes(entityType)) return false
+    // Hide the Assistent (/chat) tab until the agent is built — mirrors the
+    // floating AgentTrigger and avoids a nav entry that only bounces to the
+    // home checklist (chat/layout redirects unverified users to /).
+    if (item.href === '/chat' && !agentIdentity.isVerified) return false
     // Granskning stays in the top nav at all times now — the badge
     // surfaces the count when there are pending ops, but the link is
     // always present so users can navigate there manually.
@@ -294,11 +298,15 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   const isGroupExpanded = (g: ExpandableGroup, items: NavItem[]) =>
     !manualCollapsed[g] || items.some((it) => isActive(it.href))
 
-  const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
+  const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
     { href: '/', labelKey: 'home', icon: Home },
     { href: '/chat', labelKey: 'assistant', icon: Sparkles },
     { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
   ]
+  // Same gate as the sidebar: no Assistent tab until the agent is built.
+  const mobileNavItems = allMobileNavItems.filter(
+    (item) => item.href !== '/chat' || agentIdentity.isVerified,
+  )
 
   const renderBadge = (item: NavItem | { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }, position: 'sidebar' | 'mobile') => {
     const baseClass =

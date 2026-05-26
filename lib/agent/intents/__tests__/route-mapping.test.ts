@@ -68,9 +68,20 @@ describe('routeToIntent', () => {
     expect(out.labelSuffix).toBe('om denna verifikation')
   })
 
-  it('does NOT route /bookkeeping/year-end (multi-step wizard, not a single entity)', () => {
+  it('routes /bookkeeping/year-end to bokslut.step (matches the page button — no two-agents-on-one-page)', () => {
     const out = routeToIntent('/bookkeeping/year-end')
-    expect(out.intentId).toBe('general.help')
+    expect(out.intentId).toBe('bokslut.step')
+    expect(out.intentArgs).toEqual({ step_id: null })
+    expect(out.contextRef).toBe('bokslut:overview')
+    expect(out.labelSuffix).toBe('om bokslutet')
+  })
+
+  it('routes /kpi to kpi.explain (matches the page button)', () => {
+    const out = routeToIntent('/kpi')
+    expect(out.intentId).toBe('kpi.explain')
+    expect(out.intentArgs).toEqual({ kpi_key: 'översikt' })
+    expect(out.contextRef).toBe('kpi:översikt')
+    expect(out.labelSuffix).toBe('om nyckeltalen')
   })
 
   it('does NOT route bare /bookkeeping list page to verifikation.draft', () => {

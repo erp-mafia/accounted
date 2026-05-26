@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { gatherComposerInputs, inputsToSourceSignals } from '@/lib/agent/composer/inputs'
 import { selectAtoms } from '@/lib/agent/composer/atom-selection'
 import { writeNarrative } from '@/lib/agent/composer/narrative'
@@ -58,6 +59,16 @@ export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Generous per-user rate limit — bounds reload-spam of the onboarding build
+  // (each run fires 2 LLM calls). Fails open on infra error.
+  const rate = await checkAgentRateLimit(supabase, user.id)
+  if (!rate.ok) {
+    return NextResponse.json(agentRateLimitResponseBody(rate), {
+      status: 429,
+      headers: rate.retryAfterSec ? { 'Retry-After': String(rate.retryAfterSec) } : undefined,
+    })
+  }
 
   let body: z.infer<typeof BodySchema>
   try {
@@ -211,10 +222,12 @@ export async function POST(request: Request) {
         if (allIds.length > 0) {
           const { data: rows } = await supabase
             .from('agent_atom_registry')
-            .select('body_path')
+            .select('id, body')
             .in('id', allIds)
-          const paths = (rows ?? []).map((r: { body_path: string }) => r.body_path)
-          void preWarmAtomCache({ atomBodyPaths: paths })
+          const bodies = (rows ?? [])
+            .map((r: { body: string | null }) => r.body ?? '')
+            .filter((b: string) => b.length > 0)
+          void preWarmAtomCache({ atomBodies: bodies })
         }
         send({ step: 'prewarm', status: 'success' })
       } catch (err) {
