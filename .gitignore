@@ -66,3 +66,5 @@ supabase/.temp/
 # The empty defaults in lib/extensions/_generated/ are committed so core compiles
 # out of the box without running the generator.
 supabase/.branches/
+
+scripts\remap-krister-bas96-to-bas2025.ts

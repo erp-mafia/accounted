@@ -451,6 +451,12 @@ async function categorizeTransactionCore(
   vat_lines?: Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>
   message?: string
   transaction?: Transaction
+  underlag?: {
+    document_id: string
+    total: number | null
+    vat_amount: number | null
+    currency: string | null
+  } | null
 }> {
   // Validate category
   if (!VALID_CATEGORIES.includes(category as typeof VALID_CATEGORIES[number])) {
@@ -477,6 +483,46 @@ async function categorizeTransactionCore(
 
   if (fetchError || !transaction) {
     throw new Error('Transaction not found. Check the transaction_id is correct.')
+  }
+
+  // Underlag guard: if the transaction has an attached document with
+  // AI-extracted invoice data, use it to validate the proposed VAT treatment
+  // BEFORE we build the booking. The historical failure mode here was the
+  // agent stamping reverse_charge on any foreign-vendor charge and producing
+  // fictive 2645/2614 VAT lines (25% of the SEK amount) on an invoice where
+  // the seller had already debited real VAT. Block that explicitly.
+  let underlagSummary: {
+    document_id: string
+    total: number | null
+    vat_amount: number | null
+    currency: string | null
+  } | null = null
+  if (transaction.document_id) {
+    const { data: doc } = await supabase
+      .from('document_attachments')
+      .select('id, extracted_data')
+      .eq('id', transaction.document_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const ex = (doc?.extracted_data ?? null) as
+      | { totals?: { total?: number; vatAmount?: number }; invoice?: { currency?: string } }
+      | null
+    if (doc) {
+      underlagSummary = {
+        document_id: doc.id as string,
+        total: ex?.totals?.total ?? null,
+        vat_amount: ex?.totals?.vatAmount ?? null,
+        currency: ex?.invoice?.currency ?? null,
+      }
+      const sellerChargedVat = (ex?.totals?.vatAmount ?? 0) > 0
+      if (vatTreatment === 'reverse_charge' && sellerChargedVat) {
+        throw new Error(
+          `Reverse charge avvisas: underlaget (document_id=${doc.id}) visar att säljaren redan har debiterat moms ` +
+          `(${ex?.totals?.vatAmount} ${ex?.invoice?.currency ?? ''}). Omvänd skattskyldighet gäller bara fakturor utan säljarens moms. ` +
+          `Bokför som vanlig kostnad (utan vat_treatment, eller standard_25 om svensk faktura) — den utländska momsen ingår i kostnaden.`,
+        )
+      }
+    }
   }
 
   if (transaction.journal_entry_id) {
@@ -535,6 +581,7 @@ async function categorizeTransactionCore(
         description: v.description,
       })),
       message: 'Preview only — no changes made. Call again with confirm: true to create the journal entry.',
+      underlag: underlagSummary,
     }
   }
 
@@ -2287,14 +2334,14 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_categorize_transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation when the user authorises — no DB write until approval.',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation when the user authorises. If the row has an attached underlag, the tool reads its extracted_data and rejects vat_treatment="reverse_charge" when the seller already charged VAT.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         transaction_id: { type: 'string', description: 'UUID of the transaction to categorize' },
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
-        vat_treatment: { type: 'string', description: 'VAT treatment override (defaults to standard_25 for business expenses)', enum: [...VALID_VAT_TREATMENTS] },
+        vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
       },
       required: ['transaction_id', 'category'],
@@ -2354,6 +2401,7 @@ export const tools: McpTool[] = [
           currency: result.currency,
           vat_lines: result.vat_lines || [],
           category: result.category,
+          underlag: result.underlag ?? null,
         },
         actor,
         {

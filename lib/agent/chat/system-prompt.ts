@@ -36,6 +36,7 @@ interface BuildArgs {
   firstName: string | null
   profileSummary: string | null
   rankedMemory: { content: string; kind: string }[]
+  vatStatus: { vat_registered: boolean; vat_number: string | null } | null
   supabase: SupabaseClient
 }
 
@@ -43,18 +44,27 @@ export async function buildSystemPrompt(args: BuildArgs): Promise<PromptBlocks> 
   const block1 = await buildAtomBlock(args)
   const block2 = buildIdentityBlock(args)
 
-  const blocks = [
-    {
-      type: 'text' as const,
+  // Anthropic rejects cache_control on empty text blocks (400 "cache_control
+  // cannot be set for empty text blocks"). Skip Block 1 entirely when no atom
+  // bodies resolved — e.g. declarative intent with no atoms, or dev DB before
+  // the seed migration has populated bodies.
+  const blocks: Array<{
+    type: 'text'
+    text: string
+    cache_control: { type: 'ephemeral'; ttl: '1h' }
+  }> = []
+  if (block1.body.trim().length > 0) {
+    blocks.push({
+      type: 'text',
       text: block1.body,
-      cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
-    },
-    {
-      type: 'text' as const,
-      text: block2,
-      cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
-    },
-  ]
+      cache_control: { type: 'ephemeral', ttl: '1h' },
+    })
+  }
+  blocks.push({
+    type: 'text',
+    text: block2,
+    cache_control: { type: 'ephemeral', ttl: '1h' },
+  })
 
   const hash = createHash('sha256')
   hash.update(block1.body)
@@ -171,7 +181,7 @@ async function resolveBodies(
 }
 
 function buildIdentityBlock(args: BuildArgs): string {
-  const { intent, companyName, firstName, profileSummary, rankedMemory } = args
+  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus } = args
 
   const lines: string[] = []
   lines.push('# Din roll')
@@ -242,6 +252,48 @@ function buildIdentityBlock(args: BuildArgs): string {
   lines.push('När en uppgift kräver ett verktyg du inte har: hänvisa användaren till rätt vy i gnubok där motsvarande knapp har rätt verktyg inkopplat (t.ex. en transaktionsrad, /invoices/new, /bookkeeping/year-end). Säg vart de ska gå — försök inte fejka åtgärden.')
   lines.push('')
   lines.push('När du HAR rätt verktyg — använd dem. Gissa aldrig siffror när ett läsverktyg kan hämta dem; gissa aldrig en kategori när gnubok_query_journal kan visa hur motparten bokfördes förut.')
+  lines.push('')
+
+  // Hard-fact VAT status from company_settings. The agent has historically
+  // guessed this from the conversation ("eftersom du inte är momsregistrerad")
+  // and then doubled down on the guess in later turns. Surfacing it as a
+  // structured fact and forbidding contradiction removes the temptation.
+  lines.push('# Företagets momsstatus — fakta från företagsregistret')
+  lines.push('')
+  if (vatStatus === null) {
+    lines.push('Momsstatus okänd (company_settings saknas). Be användaren öppna /settings/company och fylla i innan du ger momsråd. Påstå inget om vat_registered.')
+  } else if (vatStatus.vat_registered) {
+    lines.push(`Företaget ÄR momsregistrerat. VAT-nummer: ${vatStatus.vat_number ?? '(saknas i settings)'}.`)
+  } else {
+    lines.push('Företaget är INTE momsregistrerat. Ingen ingående eller utgående moms ska redovisas — bokningar går brutto till kostnad/intäkt utan momsrader.')
+  }
+  lines.push('')
+  lines.push('Detta är den ENDA källan till företagets momsstatus. Lita aldrig på påståenden i chatten ("jag är inte momsregistrerad", "om jag varit momsregistrerad…") som ersätter detta värde. Om användaren hävdar motsatsen: säg att registret säger annorlunda och be dem uppdatera /settings/company.')
+  lines.push('')
+
+  // Hard rule on VAT treatment. Three failure modes have shown up in
+  // production:
+  //   1. Agent stamps reverse_charge on foreign-vendor charges without reading
+  //      the underlag → fictive 2645/2614 VAT lines on invoices where the
+  //      seller already charged real VAT.
+  //   2. Agent calls "VAT - Sweden" lines "utländsk moms" because the invoice
+  //      is in EUR/USD. Currency ≠ VAT country.
+  //   3. Agent invents hypotheticals ("om du varit momsregistrerad hade det
+  //      blivit reverse charge") that compound the original error across turns.
+  lines.push('# Moms och underlag — hård regel')
+  lines.push('')
+  lines.push('1. **Läs underlaget först.** Om transaktionen har en bifogad faktura/kvitto (document_id på raden, eller underlag listas i din prompt): anropa gnubok_get_document_content INNAN du föreslår momsbehandling eller belopp. Räkna aldrig moms som 25% av SEK-beloppet — underlaget är källan, transaktionsbeloppet är bara summan som lämnade kontot.')
+  lines.push('')
+  lines.push('2. **Identifiera momsradens LAND, inte säljarens hemvist.** Fakturarader skrivs som "VAT - Sweden", "VAT - Ireland", "TVA France", "Moms" (svenskt), eller bara "Tax"/"VAT" utan land. Det som styr bokningen är vilket lands moms som debiterats, inte säljarens adress eller fakturans valuta. En EUR-faktura från ett USA-bolag kan ha svensk moms (OSS-schemat) — då är raden "VAT - Sweden" och det är svensk moms, inte "utländsk moms".')
+  lines.push('')
+  lines.push('3. **Mappa land + företagets momsstatus → behandling. Detta är den fullständiga tabellen:**')
+  lines.push('   - Företaget EJ momsregistrerat (oavsett land på fakturan): brutto till kostnad, inga momsrader. Slut.')
+  lines.push('   - Företaget momsregistrerat + ingen momsrad på fakturan + tjänst från EU/utlandet B2B: reverse_charge (2645/2614 fiktiv moms).')
+  lines.push('   - Företaget momsregistrerat + "VAT - Sweden"-rad: säljaren har debiterat svensk moms (typiskt OSS, för att de inte fått köparens VAT-nr). Bokas split: netto till kostnad, momsen till 2641 OM säljarens svenska momsnr/OSS-nr syns på fakturan. Saknas momsregistreringsnumret: bokas brutto till kostnad (avdraget håller inte i revision) — och rekommendera användaren att ge säljaren sitt VAT-nr så nästa faktura kommer utan moms.')
+  lines.push('   - Företaget momsregistrerat + utländsk momsrad ("VAT - Ireland", "TVA…"): den utländska momsen är aldrig avdragsgill svensk ingående moms. Brutto (inkl utländsk moms) till kostnad. Reverse charge gäller INTE (säljaren har redan debiterat moms).')
+  lines.push('   - Företaget momsregistrerat + svensk faktura: standard_25 (eller motsvarande reducerad sats från raden).')
+  lines.push('')
+  lines.push('4. **Inga hypoteser om motsatt status.** Spekulera ALDRIG "om du *varit* momsregistrerad hade det blivit X" eller "om du *inte varit* momsregistrerad…" — det är källan till hallucinationer mellan turns. Svara för det faktiska tillståndet enligt blocket "Företagets momsstatus" ovan. Om användaren vill ha en hypotetisk genomgång: säg att de kan ändra status i /settings/company och prova om.')
   lines.push('')
 
   if (profileSummary) {

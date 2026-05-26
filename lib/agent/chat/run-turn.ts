@@ -5,6 +5,9 @@ import { agentToolRegistry } from '@/lib/agent/tools/registry'
 import type { AgentTool, AgentActorContext, StagedOperationResult } from '@/lib/agent/tools/types'
 import { isStagedOperation } from '@/lib/agent/tools/types'
 import { buildSystemPrompt } from './system-prompt'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent.chat.run-turn')
 
 /**
  * Normalize a model/transport error into a short, friendly Swedish message.
@@ -130,9 +133,10 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   } = args
 
   // 1 + 2 — load profile + ranked memory + atoms + tools.
-  const [profile, memory] = await Promise.all([
+  const [profile, memory, vatStatus] = await Promise.all([
     loadProfileSummary(supabase, companyId),
     loadRankedMemory(supabase, companyId, 30),
+    loadVatStatus(supabase, companyId),
   ])
 
   const systemPrompt = await buildSystemPrompt({
@@ -142,6 +146,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     firstName,
     profileSummary: profile,
     rankedMemory: memory,
+    vatStatus,
     supabase,
   })
 
@@ -234,6 +239,12 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       // Surface as a chat error so the UI clears its streaming state. Re-throw
       // to let the route's outer try/catch persist the failure if needed.
       // Normalize Bedrock throttling/timeout/5xx into a friendly Swedish line.
+      log.error('Bedrock stream failed', err, {
+        conversationId,
+        companyId,
+        model,
+        iterations,
+      })
       emit({ kind: 'error', message: friendlyModelError(err) })
       throw err
     }
@@ -418,6 +429,31 @@ async function loadProfileSummary(
     .eq('company_id', companyId)
     .maybeSingle()
   return (data?.profile_summary as string | null) ?? null
+}
+
+// Hard-fact VAT status the agent must cite before any moms recommendation.
+// Lives on company_settings.vat_registered + vat_number — the single source of
+// truth. Agent has historically guessed this from the conversation ("eftersom
+// du inte är momsregistrerad…") instead of reading the company profile;
+// surfacing it as a structured fact in the prompt removes the temptation.
+async function loadVatStatus(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<{ vat_registered: boolean; vat_number: string | null } | null> {
+  try {
+    const { data } = await supabase
+      .from('company_settings')
+      .select('vat_registered, vat_number')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (!data) return null
+    return {
+      vat_registered: Boolean(data.vat_registered),
+      vat_number: (data.vat_number as string | null) ?? null,
+    }
+  } catch {
+    return null
+  }
 }
 
 async function loadRankedMemory(
