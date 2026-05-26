@@ -117,7 +117,7 @@ const navItems: NavItem[] = [
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
   // Inköp dropdown
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'inköp' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp', hidden: true },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp' },
   // Redovisning dropdown
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'redovisning' },
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
