@@ -63,6 +63,11 @@ interface DashboardNavProps {
   pendingOperationsCount?: number
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
+  // Signed-in user's full name + email — drives the bottom-left account
+  // popover trigger so the user can see WHO they're logged in as,
+  // distinct from the active COMPANY shown by CompanySwitcher up top.
+  userName?: string | null
+  userEmail?: string | null
 }
 
 type NavLabelKey =
@@ -86,9 +91,12 @@ type NavLabelKey =
   | 'settings'
 
 // New nav layout (May 2026):
-//   top     — flat, no dropdown: Hem (agent), Underlag, Transaktioner, Granskning.
-//   försäljning / inköp / redovisning / personal — collapsible dropdowns.
-//   (account popover, bottom-left) — Inställningar, Hjälp, Logga ut, company switcher.
+//   top-of-sidebar       — CompanySwitcher (active company / org context).
+//   top section          — flat, no dropdown: Hem (agent), Underlag,
+//                          Transaktioner, Granskning.
+//   four dropdowns       — Försäljning, Inköp, Redovisning, Personal.
+//   bottom-left popover  — signed-in user's name + initial, opens upward
+//                          to Inställningar, Hjälp, Support, Logga ut.
 // Help + Settings are NOT in `navItems` anymore; they live in the account
 // popover. KPI moved from main to redovisning. Pending stays visible at all
 // times — the inline badge carries the count.
@@ -144,7 +152,19 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   personal: 'group_personnel',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [] }: DashboardNavProps) {
+// Best single-character initial we can show in the bottom-left account
+// trigger. Prefers the first letter of the user's full name; falls back
+// to the email's first character; falls back to "?" so the avatar never
+// renders empty.
+function accountInitial(name: string | null, email: string | null): string {
+  const trimmedName = name?.trim()
+  if (trimmedName && trimmedName.length > 0) return trimmedName[0]!.toUpperCase()
+  const trimmedEmail = email?.trim()
+  if (trimmedEmail && trimmedEmail.length > 0) return trimmedEmail[0]!.toUpperCase()
+  return '?'
+}
+
+export default function DashboardNav({ companyName: _companyName, entityType, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
@@ -253,6 +273,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
         <div className="flex min-h-0 flex-1 flex-col border-r border-border bg-background">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
+            {/* Company switcher pinned to the top — the active company is
+                the strongest piece of context for everything below it. */}
+            <div className="px-5 mb-8">
+              <CompanySwitcher />
+            </div>
             <nav className="px-3" aria-label={tNav('main_navigation')}>
               {/* Top section: flat, no header. Hem, Underlag, Transaktioner, Granskning. */}
               <div className="mb-4 space-y-px">
@@ -441,9 +466,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
             </nav>
           </div>
 
-          {/* Account popover (bottom-left). Holds company switcher, Hjälp,
-              Inställningar, Logga ut. Replaces the old top company-switcher
-              card + the bottom Support/Logout block. */}
+          {/* Account popover (bottom-left). Triggered by the signed-in
+              user's name + initial. Holds Inställningar, Hjälp, Support,
+              Logga ut. CompanySwitcher lives at the top of the sidebar,
+              not in here — different concept ("which company am I working
+              with" vs "who am I logged in as"). */}
           <div className="flex-shrink-0 px-3 py-3 border-t border-border">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -452,25 +479,34 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
                 >
                   <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
-                    {(company?.name ?? '?').slice(0, 1)}
+                    {accountInitial(userName, userEmail)}
                   </span>
                   <span className="flex-1 truncate font-medium text-foreground">
-                    {company?.name ?? tNav('mitt_konto')}
+                    {userName?.trim() || userEmail || tNav('mitt_konto')}
                   </span>
                   <ChevronsUpDown className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-60">
-                {/* Company switcher inline. Renders its own portal-based
-                    list when opened; closing it doesn't dismiss this menu,
-                    so the user can keep navigating. */}
-                <div className="px-1 py-1">
-                  <CompanySwitcher />
-                </div>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {tNav('mitt_konto')}
-                </DropdownMenuLabel>
+                {(userName || userEmail) && (
+                  <>
+                    <DropdownMenuLabel className="font-normal">
+                      <div className="flex flex-col gap-0.5">
+                        {userName && (
+                          <span className="text-sm font-medium text-foreground truncate">
+                            {userName}
+                          </span>
+                        )}
+                        {userEmail && (
+                          <span className="text-xs text-muted-foreground truncate">
+                            {userEmail}
+                          </span>
+                        )}
+                      </div>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem asChild>
                   <Link href="/settings" className="cursor-pointer">
                     <Settings className="mr-2 h-4 w-4" />

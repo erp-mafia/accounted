@@ -165,6 +165,7 @@ export default async function DashboardLayout({
     { count: uncategorizedCount },
     { count: pendingOpsCount },
     { data: agentProfileIdentity },
+    { data: userProfile },
   ] = await Promise.all([
     supabase
       .from('company_settings')
@@ -188,6 +189,10 @@ export default async function DashboardLayout({
       .select('display_name, avatar_id, verified_at')
       .eq('company_id', companyId)
       .maybeSingle(),
+    // The signed-in user's profile — shown in the bottom-left account
+    // popover (full_name + initial) so it's clear which user is logged
+    // in, distinct from the active company shown at the top.
+    supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
   ])
 
   // If onboarding incomplete, still render the dashboard — the page component
@@ -243,6 +248,8 @@ export default async function DashboardLayout({
             pendingOperationsCount={pendingOpsCount ?? 0}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
+            userName={userProfile?.full_name ?? null}
+            userEmail={user.email ?? null}
           />
           <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>
