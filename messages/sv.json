@@ -204,6 +204,7 @@
     "tab_high_risk": "Hög risk",
     "approve": "Godkänn",
     "approve_selected": "Godkänn valda ({count})",
+    "approve_selected_none": "Godkänn valda",
     "approve_count": "Godkänn {count}",
     "approve_operation_title": "Godkänn operation",
     "approve_bulk_title": "Godkänn {count} operationer?",

@@ -204,6 +204,7 @@
     "tab_high_risk": "High risk",
     "approve": "Approve",
     "approve_selected": "Approve selected ({count})",
+    "approve_selected_none": "Approve selected",
     "approve_count": "Approve {count}",
     "approve_operation_title": "Approve operation",
     "approve_bulk_title": "Approve {count} operations?",

@@ -499,29 +499,6 @@ function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
   )
 }
 
-function AgentContextStrip({ op }: { op: PendingOperation }) {
-  if (!op.agent_metadata) return null
-  const meta = op.agent_metadata
-  const shortConv = meta.conversation_id ? meta.conversation_id.slice(0, 8) : null
-  // Model + atoms are intentionally NOT rendered here. They show up in
-  // the expanded preview / debug surfaces; on the row they're noise.
-  // The conversation link is the one bit a reviewer actually needs to
-  // jump into context.
-  if (!shortConv) return null
-  return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <MessageSquare className="h-3 w-3" />
-      <span>
-        Konversation <a
-          href={`/pending?conversation=${meta.conversation_id}`}
-          className="font-mono hover:underline"
-          onClick={(e) => e.stopPropagation()}
-        >#{shortConv}</a>
-      </span>
-    </div>
-  )
-}
-
 type SourceFilter = 'all' | 'agent' | 'high_risk'
 
 const sourceFilterLabels = (
@@ -933,7 +910,9 @@ export default function PendingOperationsPage() {
               </label>
             </div>
 
-            {typeCounts.length > 0 && selectedCount === 0 && (
+            {/* Only worth showing when there's more than one type to pick from —
+                with a single type it just duplicates "Markera alla". */}
+            {typeCounts.length >= 2 && selectedCount === 0 && (
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">{t('quick_pick')}</span>
                 {typeCounts.map(([type, count]) => {
@@ -971,7 +950,9 @@ export default function PendingOperationsPage() {
                 disabled={selectedCount === 0 || isBulkCommitting}
                 onClick={() => setShowBulkDialog(true)}
               >
-                {t('approve_selected', { count: selectedCount })}
+                {selectedCount > 0
+                  ? t('approve_selected', { count: selectedCount })
+                  : t('approve_selected_none')}
               </Button>
             </div>
           </DataListHeader>
@@ -1008,6 +989,7 @@ export default function PendingOperationsPage() {
               showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
             const isSelected = selectedIds.has(op.id)
             const isAgent = op.actor_type && op.actor_type !== 'user'
+            const conversationId = op.agent_metadata?.conversation_id ?? null
             const warningSentence = singleActionWarning(op.operation_type)
             const showHighRiskWarning =
               op.risk_level === 'high' && warningSentence && op.status === 'pending'
@@ -1081,7 +1063,19 @@ export default function PendingOperationsPage() {
                       <DataListMetaSeparator />
                       <span className="inline-flex items-center gap-1">
                         <Bot className="h-3 w-3" />
-                        {op.actor_label || op.actor_type}
+                        {/* The actor label doubles as the deep-link into the
+                            originating conversation — no separate strip needed. */}
+                        {conversationId ? (
+                          <a
+                            href={`/pending?conversation=${conversationId}`}
+                            className="hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {op.actor_label || op.actor_type}
+                          </a>
+                        ) : (
+                          op.actor_label || op.actor_type
+                        )}
                       </span>
                     </>
                   )}
@@ -1098,11 +1092,6 @@ export default function PendingOperationsPage() {
                     <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
                     <span>{warningSentence}</span>
                   </p>
-                )}
-                {op.agent_metadata && (
-                  <div className="mt-1">
-                    <AgentContextStrip op={op} />
-                  </div>
                 )}
                 {op.status === 'rejected' && op.rejection_category && (
                   <p className="mt-1 text-xs text-muted-foreground">
