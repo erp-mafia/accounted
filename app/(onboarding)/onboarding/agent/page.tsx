@@ -157,6 +157,13 @@ function buildInitialFields(
     const reg = tic.registration as { fTax?: boolean } | undefined
     if (reg) fSkatt = reg.fTax ? 'Aktivt' : 'Saknas'
     if (tic.employeeRange) employees = tic.employeeRange as string
+    // v2 caches `fiscalYear` (current fiscal-year configuration) on the
+    // snapshot. Prefer it over the user-entered value below so onboarding
+    // can show the registered fiscal period from Bolagsverket without
+    // making the user re-enter it.
+    const ticFiscal = tic.fiscalYear as { startMonthDay?: string | null } | null
+    const startMonth = parseTicStartMonth(ticFiscal?.startMonthDay)
+    if (startMonth != null) fiscalPeriod = fiscalYearLabel(startMonth)
   }
 
   if (settings) {
@@ -167,7 +174,10 @@ function buildInitialFields(
     if (settings.moms_period) {
       vatPeriod = momsPeriodLabel(settings.moms_period)
     }
-    if (settings.fiscal_year_start_month != null) {
+    // settings.fiscal_year_start_month is the user-confirmed value — only
+    // overwrite the TIC-derived label if the user has explicitly set it
+    // (i.e. when there was no TIC fiscalYear AND they entered it manually).
+    if (!fiscalPeriod && settings.fiscal_year_start_month != null) {
       fiscalPeriod = fiscalYearLabel(settings.fiscal_year_start_month)
     }
     if (!employees && settings.employee_count != null) {
@@ -187,6 +197,18 @@ function buildInitialFields(
     f_skatt: fSkatt,
     employees,
   }
+}
+
+// Parse TIC v2's `startMonthDay` ("MM-DD") into a month number 1-12. Returns
+// null when the field is missing or malformed so the caller falls back to
+// company_settings.fiscal_year_start_month.
+function parseTicStartMonth(value: string | null | undefined): number | null {
+  if (!value) return null
+  const match = /^(\d{1,2})-\d{1,2}$/.exec(value)
+  if (!match) return null
+  const month = Number(match[1])
+  if (!Number.isInteger(month) || month < 1 || month > 12) return null
+  return month
 }
 
 function momsPeriodLabel(period: string): string {

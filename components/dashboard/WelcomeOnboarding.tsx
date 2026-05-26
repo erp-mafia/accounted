@@ -50,6 +50,18 @@ function logError(message: string, extra?: Record<string, unknown>) {
   }).catch(() => {})
 }
 
+// Parse TIC v2's `startMonthDay` ("MM-DD" — e.g. "07-01") into a month
+// number 1–12. Returns null on missing / malformed input so the caller
+// can fall through to the manual picker default.
+function parseStartMonthDay(value: string | null | undefined): number | null {
+  if (!value) return null
+  const match = /^(\d{1,2})-\d{1,2}$/.exec(value)
+  if (!match) return null
+  const month = Number(match[1])
+  if (!Number.isInteger(month) || month < 1 || month > 12) return null
+  return month
+}
+
 interface WelcomeOnboardingProps {
   firstName?: string | null
   teamId: string
@@ -310,7 +322,15 @@ export default function WelcomeOnboarding({
                 <Step3TaxRegistration
                   initialData={{
                     f_skatt: settings.f_skatt ?? (ticLookup ? ticLookup.registration.fTax : undefined),
-                    fiscal_year_start_month: settings.fiscal_year_start_month ?? undefined,
+                    // Prefer the user's previously-saved value, then fall back
+                    // to TIC's v2 `fiscalYear.startMonthDay` (e.g. "07-01" →
+                    // start month 7). Parsing the MM-DD lets us skip the
+                    // manual end-month picker for the ~95% of companies that
+                    // have a registered fiscal year in Bolagsverket.
+                    fiscal_year_start_month:
+                      settings.fiscal_year_start_month
+                      ?? parseStartMonthDay(ticLookup?.fiscalYear?.startMonthDay)
+                      ?? undefined,
                   }}
                   entityType={settings.entity_type as EntityType}
                   onNext={(data) => handleNext(data)}

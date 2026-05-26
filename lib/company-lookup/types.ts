@@ -20,6 +20,11 @@ export interface EnrichmentCompanyRole {
  * Generic company lookup result — provider-agnostic.
  * Defined in core so onboarding components can import it without
  * violating the CI constraint (no core → @/extensions/ imports).
+ *
+ * `fiscalYear` carries the current fiscal-year configuration when the
+ * provider reports one — used by onboarding to skip manual MM-DD entry.
+ * Always optional: providers that don't return it (or that fail
+ * partially) must still produce a valid result.
  */
 export interface CompanyLookupResult {
   companyName: string
@@ -30,4 +35,5 @@ export interface CompanyLookupResult {
   email: string | null
   phone: string | null
   sniCodes: { code: string; name: string }[]
+  fiscalYear?: { startMonthDay: string | null; endMonthDay: string | null } | null
 }

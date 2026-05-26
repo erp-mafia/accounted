@@ -23,7 +23,13 @@ import {
   Mail,
   Phone,
   Settings,
+  AlertTriangle,
+  CalendarRange,
+  ShieldCheck,
+  Users,
+  Receipt,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { TICCompanyProfile } from '@/extensions/general/tic/lib/tic-types'
@@ -36,6 +42,31 @@ function formatKSEK(value: number | null): string {
 function formatPercent(value: number | null): string {
   if (value === null) return '—'
   return `${value.toFixed(1)} %`
+}
+
+function formatSek(value: number | null): string {
+  if (value === null || value === undefined) return '—'
+  return `${value.toLocaleString('sv-SE')} kr`
+}
+
+function formatIsoDate(iso: string | null): string {
+  if (!iso) return '—'
+  return iso.slice(0, 10)
+}
+
+function statusColorToVariant(
+  color: 'red' | 'yellow' | 'green' | 'neutral' | null
+): 'destructive' | 'warning' | 'success' | 'secondary' {
+  switch (color) {
+    case 'red':
+      return 'destructive'
+    case 'yellow':
+      return 'warning'
+    case 'green':
+      return 'success'
+    default:
+      return 'secondary'
+  }
 }
 
 function toMs(epoch: number): number {
@@ -387,6 +418,214 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Status entries — most recent first; usually 1-3 rows */}
+      {profile.statuses.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="h-4 w-4" />
+              {t('status_section')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2">
+              {profile.statuses.slice(0, 6).map((status, i) => (
+                <li key={i} className="flex items-center justify-between gap-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={statusColorToVariant(status.color)}>
+                      {status.description ?? status.code ?? '—'}
+                    </Badge>
+                    {status.isCeased && (
+                      <span className="text-xs text-muted-foreground">
+                        {t('deregistered')}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {formatIsoDate(status.statusDate)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Fiscal year + signatory side-by-side */}
+      {(profile.fiscalYear || profile.signatory.length > 0) && (
+        <div className="grid gap-6 md:grid-cols-2">
+          {profile.fiscalYear && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <CalendarRange className="h-4 w-4" />
+                  {t('fiscal_year_section')}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <p className="font-mono tabular-nums">
+                  {t('fiscal_year_current', {
+                    start: profile.fiscalYear.startMonthDay ?? '—',
+                    end: profile.fiscalYear.endMonthDay ?? '—',
+                  })}
+                </p>
+                {profile.fiscalYearHistory.length > 1 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('fiscal_year_changed', { n: profile.fiscalYearHistory.length - 1 })}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+          {profile.signatory.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('signatory_section')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {profile.signatory.map((s, i) => (
+                  <p key={i} className="text-muted-foreground whitespace-pre-line">
+                    {s.description}
+                  </p>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Board summary + representatives */}
+      {(profile.board || profile.representatives.length > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Users className="h-4 w-4" />
+              {t('board_section')}
+            </CardTitle>
+            {profile.board && (
+              <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {profile.board.numberOfBoardMembers !== null && (
+                  <span>
+                    {t('board_summary_members', { n: profile.board.numberOfBoardMembers })}
+                  </span>
+                )}
+                {profile.board.numberOfDeputyBoardMembers !== null && profile.board.numberOfDeputyBoardMembers > 0 && (
+                  <span>
+                    {t('board_summary_deputies', { n: profile.board.numberOfDeputyBoardMembers })}
+                  </span>
+                )}
+                {profile.board.hasVacancy && (
+                  <Badge variant="warning" className="gap-1">
+                    <AlertTriangle className="h-3 w-3" />
+                    {t('board_vacancy')}
+                  </Badge>
+                )}
+                {profile.board.missingCEODate && (
+                  <span className="text-warning">
+                    {t('board_missing_ceo', { date: formatIsoDate(profile.board.missingCEODate) })}
+                  </span>
+                )}
+                {profile.board.missingAuditor && (
+                  <span className="text-warning">
+                    {t('board_missing_auditor', { date: formatIsoDate(profile.board.missingAuditor) })}
+                  </span>
+                )}
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent>
+            {profile.representatives.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('col_name')}</TableHead>
+                    <TableHead>{t('col_position')}</TableHead>
+                    <TableHead>{t('col_since')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {profile.representatives.slice(0, 12).map((p, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="text-sm">{p.name ?? '—'}</TableCell>
+                      <TableCell className="text-sm">
+                        {p.positionDescription ?? p.positionType ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-xs tabular-nums text-muted-foreground">
+                        {formatIsoDate(p.positionStart)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('board_no_representatives')}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Payroll history — payroll2 array, newest first */}
+      {profile.payrolls.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Receipt className="h-4 w-4" />
+              {t('payroll_section')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('col_payroll_period')}</TableHead>
+                  <TableHead className="text-right">{t('col_payroll_employees')}</TableHead>
+                  <TableHead className="text-right">{t('col_payroll_tax')}</TableHead>
+                  <TableHead className="text-right">{t('col_payroll_personnel_costs')}</TableHead>
+                  <TableHead className="text-right">{t('col_payroll_deviation')}</TableHead>
+                  <TableHead className="text-right">{t('col_payroll_late_fees')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {profile.payrolls.slice(0, 10).map((p, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-mono tabular-nums text-xs">
+                      {p.periodStart && p.periodEnd
+                        ? `${formatIsoDate(p.periodStart)} – ${formatIsoDate(p.periodEnd)}`
+                        : '—'}
+                    </TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">
+                      {p.numberOfEmployees !== null ? p.numberOfEmployees.toFixed(0) : '—'}
+                    </TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">
+                      {formatSek(p.sumPayrollTax)}
+                    </TableCell>
+                    <TableCell className="text-right text-sm tabular-nums">
+                      {formatSek(p.calculatedPersonnelCosts)}
+                    </TableCell>
+                    <TableCell
+                      className={`text-right text-sm tabular-nums ${
+                        p.deviation !== null && Math.abs(p.deviation) > 0.1
+                          ? 'text-warning'
+                          : 'text-muted-foreground'
+                      }`}
+                    >
+                      {p.deviation !== null ? `${(p.deviation * 100).toFixed(1)} %` : '—'}
+                    </TableCell>
+                    <TableCell
+                      className={`text-right text-sm tabular-nums ${
+                        (p.numberOfLateFeesForPeriod ?? 0) > 0 ? 'text-destructive' : 'text-muted-foreground'
+                      }`}
+                    >
+                      {p.numberOfLateFeesForPeriod ?? 0}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Financial reports table */}
       {profile.financialReports.length > 0 && (
