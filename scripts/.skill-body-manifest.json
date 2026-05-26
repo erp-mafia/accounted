@@ -1,0 +1,82 @@
+{
+  "horizontal/swedish-accounting-compliance": {
+    "hash": "ca17354c0ee2f57343c15ab52356105884846735e87b49d3528f2e46771f183f",
+    "version": 1
+  },
+  "horizontal/swedish-asset-accounting": {
+    "hash": "5d7aaf5bc20e3e890f060567ba3f1eb76c281c86ceec0e64928ed6ba6998a4fc",
+    "version": 1
+  },
+  "horizontal/swedish-e-invoicing": {
+    "hash": "cffd598fa72d2cb5e3ad81fe2353e4b894d9bded74c49176ee2f8bcecd24f69e",
+    "version": 1
+  },
+  "horizontal/swedish-financial-reporting": {
+    "hash": "896a75b4307bdec8aa9050dbc28dbe8d4da3ca344fb79f3362f1105c3f6ad17e",
+    "version": 1
+  },
+  "horizontal/swedish-invoice-compliance": {
+    "hash": "cfc8b17a5b835257bf9924e97e0eb1d0d055a1330a40f772ece5cdf65502cf4a",
+    "version": 1
+  },
+  "horizontal/swedish-payroll": {
+    "hash": "91a8d8dba54a8101139757b9b37e9ce6cfd02801d2172cfc5ae052fb0c3c9237",
+    "version": 1
+  },
+  "horizontal/swedish-project-accounting": {
+    "hash": "68d6b98c65fd3f045c75f714ec164334b0aca623bbcc9df44c85af738b3790d0",
+    "version": 1
+  },
+  "horizontal/swedish-sie-import-export": {
+    "hash": "b5d4052cf5393d8a0816188a3d8a0f2ae67e32932b8cd62be9529667936cecd5",
+    "version": 1
+  },
+  "horizontal/swedish-sru-filing": {
+    "hash": "316a1e76897f12b6084713927727d4f4de9b13f1f11ed5581073ed89e9cef452",
+    "version": 1
+  },
+  "horizontal/swedish-tax-planning": {
+    "hash": "ca369f56011423077f98abed00e5744fc88ea9564fc90e63dc61834105b28d5d",
+    "version": 1
+  },
+  "horizontal/swedish-vat": {
+    "hash": "ec258529b56ae565d76c39c881f40b0f02210712744c58f6da8032812103f417",
+    "version": 1
+  },
+  "horizontal/swedish-year-end-closing": {
+    "hash": "5e5a653bff519acd3418f0307ed1da00007cde2cd49d46274b0b57c7292b1a1b",
+    "version": 1
+  },
+  "modifier/holding-ab": {
+    "hash": "5a96b50b7ab3ad3eb6ee16179f640691baf05feb0ed4ad98d5ce43d7c5846699",
+    "version": 1
+  },
+  "modifier/mixed-verksamhet": {
+    "hash": "0d76b7246be7532ba37b7f3207fc322fc9a8ec6cfa174c4be57cb31060338ca8",
+    "version": 1
+  },
+  "modifier/single-shareholder-ab-fmb": {
+    "hash": "6a8888230079627a508bf533a38590c498f9270db037d2828dab6a98ac7655f3",
+    "version": 1
+  },
+  "vertical/bygg-hantverk": {
+    "hash": "f4843a162bb52ba4532da05f13eab749203d4a4a8cb2c9a1e56e6276397e0606",
+    "version": 1
+  },
+  "vertical/e-handel": {
+    "hash": "10afeadec97d8d9bb98179faec3b51bf5385cf251d1e6853384c7e1207d30291",
+    "version": 1
+  },
+  "vertical/konsult-it": {
+    "hash": "cf0473670bc5969b46fbe9539588f92b6ec0876284f8e038ecc214f08970bc0e",
+    "version": 1
+  },
+  "vertical/reklambyra-marknadsforing": {
+    "hash": "6d67fd8ab8c1032168d072025241a0157d68f13f87b92be5e3a84e554265afee",
+    "version": 1
+  },
+  "vertical/software-saas-ai": {
+    "hash": "63fd0c3f1ddfde9978cd072ee5c76f89900acc5807d5085fa626e611b28a81cd",
+    "version": 1
+  }
+}

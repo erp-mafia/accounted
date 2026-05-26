@@ -57,11 +57,14 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
           }
         }
         return {
-          select: vi.fn(() => ({
-            eq: vi.fn(() => ({
+          select: vi.fn(() => {
+            // Chainable .eq() — loadAtomsAsSkills now filters is_active AND mcp_exposed.
+            const chain: { eq: ReturnType<typeof vi.fn>; order: ReturnType<typeof vi.fn> } = {
+              eq: vi.fn(() => chain),
               order: vi.fn().mockResolvedValue({ data: [], error: null }),
-            })),
-          })),
+            }
+            return chain
+          }),
         }
       }),
     })),

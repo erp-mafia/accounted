@@ -11,6 +11,11 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      - name: Verify skill bodies are in sync with the seed migration
+        # Fails if a .claude/skills/**/SKILL.md changed without regenerating the
+        # seed migration (npm run skills:generate). Keeps prod skill content from
+        # silently drifting out of sync. No DB needed — reads files + manifest.
+        run: npm run skills:check
       - name: Reset extensions config
         run: echo '{"extensions":[]}' > extensions.config.json
       - run: npm run setup:extensions

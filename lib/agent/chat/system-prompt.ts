@@ -86,7 +86,7 @@ async function buildAtomBlock(
     lines.push('# Din kunskapsbas — översikt')
     lines.push('')
     lines.push(
-      'Du har följande färdighetsatomer tillgängliga. Innehållet i varje atom är INTE laddat — anropa gnubok_load_skill(skill_id) när du behöver djup i ett ämne.',
+      'Du har följande färdighetsatomer tillgängliga. Innehållet i varje atom är INTE laddat — anropa gnubok_load_skill(skill_id) när du behöver djupdyka i ett ämne.',
     )
     lines.push('')
     for (const row of (rows ?? []) as { id: string; title: string; description: string }[]) {
@@ -95,20 +95,16 @@ async function buildAtomBlock(
     return { body: lines.join('\n'), atomsLoaded: (rows ?? []).map((r: { id: string }) => r.id) }
   }
 
-  // Declarative mode — load full atom bodies from disk.
+  // Declarative mode — load full atom bodies from the DB (seeded by
+  // scripts/generate-skill-bodies.ts), preserving the requested order. No disk
+  // read in production, so Block 1 is no longer empty on Vercel/Docker.
   const ids = await resolveDeclarativeAtomIds(supabase, intent, companyId)
+  const bodies = await resolveBodies(supabase, ids)
 
-  const repoRoot = process.cwd()
   const sections: string[] = []
   for (const id of ids) {
-    const path = await resolveBodyPath(supabase, id)
-    if (!path) continue
-    try {
-      const body = await readFile(join(repoRoot, path), 'utf8')
-      sections.push(body)
-    } catch {
-      // Missing body file — skip silently.
-    }
+    const body = bodies.get(id)
+    if (body) sections.push(body)
   }
 
   return { body: sections.join('\n\n---\n\n'), atomsLoaded: ids }
@@ -140,14 +136,38 @@ async function resolveDeclarativeAtomIds(
   return [...new Set(ids)]
 }
 
-async function resolveBodyPath(supabase: SupabaseClient, id: string): Promise<string | null> {
+async function resolveBodies(
+  supabase: SupabaseClient,
+  ids: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (ids.length === 0) return out
+
   const { data } = await supabase
     .from('agent_atom_registry')
-    .select('body_path, is_active')
-    .eq('id', id)
-    .maybeSingle()
-  if (!data || data.is_active === false) return null
-  return (data.body_path as string) ?? null
+    .select('id, body, body_path, is_active')
+    .in('id', ids)
+
+  const repoRoot = process.cwd()
+  for (const row of (data ?? []) as {
+    id: string
+    body: string | null
+    body_path: string
+    is_active: boolean
+  }[]) {
+    if (row.is_active === false) continue
+    let body = row.body ?? ''
+    if (!body && process.env.NODE_ENV !== 'production') {
+      // Dev fallback before the seed migration has populated bodies.
+      try {
+        body = await readFile(join(repoRoot, row.body_path), 'utf8')
+      } catch {
+        // skip — leave this atom out
+      }
+    }
+    if (body) out.set(row.id, body)
+  }
+  return out
 }
 
 function buildIdentityBlock(args: BuildArgs): string {

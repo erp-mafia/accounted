@@ -51,13 +51,16 @@ function makeSupabaseWithEmptyAtomRegistry(
           })),
         }
       }
-      // Default: agent_atom_registry shape returning empty list.
+      // Default: agent_atom_registry shape. Supports chained .eq().eq()...order()
+      // (loadAtomsAsSkills filters on both is_active AND mcp_exposed).
       return {
-        select: vi.fn(() => ({
-          eq: vi.fn(() => ({
+        select: vi.fn(() => {
+          const chain: { eq: ReturnType<typeof vi.fn>; order: ReturnType<typeof vi.fn> } = {
+            eq: vi.fn(() => chain),
             order: vi.fn().mockResolvedValue({ data: rows, error: null }),
-          })),
-        })),
+          }
+          return chain
+        }),
       }
     }),
   }
@@ -321,7 +324,7 @@ describe('gnubok_load_skill tool', () => {
     ).rejects.toThrow(/slug is required/)
   })
 
-  it('resolves an atom slug from the registry and returns its body', async () => {
+  it('resolves an atom slug from the registry and returns its DB body', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
     const supabase = makeSupabaseWithEmptyAtomRegistry([
       {
@@ -330,6 +333,9 @@ describe('gnubok_load_skill tool', () => {
         title: 'Konsult-IT',
         description: 'desc',
         sni_prefixes: ['62.01'],
+        // Body now comes from the DB column, not disk. The frontmatter must be
+        // preserved verbatim (the composer/system-prompt rely on the `id:` line).
+        body: '---\nid: vertical/konsult-it\ntier: vertical\n---\n\n# Konsult-IT (loaded from DB)',
         body_path: '.claude/skills/industry/konsult-it/SKILL.md',
       },
     ])
@@ -340,8 +346,35 @@ describe('gnubok_load_skill tool', () => {
     }
     expect(result.slug).toBe('vertical/konsult-it')
     expect(result.tier).toBe('vertical')
-    // Body comes from disk — must contain the rewritten frontmatter id.
+    // Frontmatter preserved, and the body is the DB value (not the on-disk file).
     expect(result.body).toContain('id: vertical/konsult-it')
+    expect(result.body).toContain('loaded from DB')
+  })
+
+  it('skips an atom whose body is null in the DB (no on-disk fallback in prod)', async () => {
+    const prev = process.env.NODE_ENV
+    // Force the prod path so the dev disk-fallback is disabled.
+    process.env.NODE_ENV = 'production'
+    try {
+      const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+      const supabase = makeSupabaseWithEmptyAtomRegistry([
+        {
+          id: 'vertical/konsult-it',
+          tier: 'vertical',
+          title: 'Konsult-IT',
+          description: 'desc',
+          sni_prefixes: ['62.01'],
+          body: null,
+          body_path: '.claude/skills/industry/konsult-it/SKILL.md',
+        },
+      ])
+      // The atom is skipped (empty body), so the slug is not found.
+      await expect(
+        tool.execute({ slug: 'vertical/konsult-it' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      ).rejects.toThrow()
+    } finally {
+      process.env.NODE_ENV = prev
+    }
   })
 })
 

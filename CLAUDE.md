@@ -21,6 +21,8 @@ npm run lint             # ESLint
 npm test                 # Run all Vitest tests
 npx vitest run <dir>     # Run tests in a specific directory
 npm run setup:extensions # Regenerate extension registry from extensions.config.json
+npm run skills:generate  # Regenerate agent_atom_registry seed migration from .claude/skills/**/SKILL.md (after editing a SKILL.md)
+npm run skills:check     # CI guard: fail if a SKILL.md changed without regenerating the seed migration
 ```
 
 ---
@@ -306,6 +308,8 @@ export async function POST(request: Request) {
 6. Never modify enforcement triggers (migration 017) — legally required
 7. Apply via Supabase MCP `apply_migration`
 8. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure
+
+**Agent skill bodies (`agent_atom_registry`)**: skill content is authored in `.claude/skills/**/SKILL.md` and inlined into the DB `body` column at runtime (not read from disk — that doesn't bundle on Vercel/Docker). After editing any SKILL.md, run `npm run skills:generate` to emit a new `*_seed_agent_atom_bodies.sql` migration and commit it; `npm run skills:check` (wired into CI) fails the build if you forget. The MCP server exposes only atoms with `mcp_exposed = true` (swarm-* audit skills are never atoms).
 
 ---
 

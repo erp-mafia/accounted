@@ -25,6 +25,7 @@ interface AtomRegistryRow {
   title: string | null
   description: string
   sni_prefixes: string[] | null
+  body: string | null
   body_path: string
 }
 
@@ -33,10 +34,16 @@ let cache: Skill[] | null = null
 export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill[]> {
   if (cache) return cache
 
+  // `body` is read from the DB (seeded by scripts/generate-skill-bodies.ts) — not
+  // from disk — so skills load identically on Vercel, Docker, and self-hosted.
+  // `mcp_exposed` is the curation kill-switch: only atoms flagged for the MCP
+  // surface reach Claude (swarm-* audit skills never become atoms in the first
+  // place; this guards against any future row that shouldn't be end-user-loadable).
   const { data, error } = await supabase
     .from('agent_atom_registry')
-    .select('id, tier, title, description, sni_prefixes, body_path')
+    .select('id, tier, title, description, sni_prefixes, body, body_path')
     .eq('is_active', true)
+    .eq('mcp_exposed', true)
     .order('id')
 
   if (error) {
@@ -51,16 +58,22 @@ export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill
   const out: Skill[] = []
 
   for (const row of rows) {
-    let body: string
-    try {
-      body = await readFile(join(process.cwd(), row.body_path), 'utf8')
-    } catch (err) {
-      // Atom registered but body file missing — skip rather than crash the
-      // whole list response. Composer queries the same registry but reads
-      // body_path identically, so a missing file is a deployment/sync issue
-      // worth surfacing in logs but not worth taking the tool down for.
-      console.warn(`[mcp-skills] atom ${row.id}: failed to read ${row.body_path}: ${(err as Error).message}`)
-      continue
+    let body = row.body ?? ''
+    if (!body) {
+      // Dev convenience: before `npm run skills:generate` has populated the DB,
+      // fall back to reading the SKILL.md from disk. In production the body is
+      // always seeded by the generated migration, so this path is never taken.
+      if (process.env.NODE_ENV !== 'production') {
+        try {
+          body = await readFile(join(process.cwd(), row.body_path), 'utf8')
+        } catch {
+          // fall through to the skip below
+        }
+      }
+      if (!body) {
+        console.warn(`[mcp-skills] atom ${row.id}: no body in DB and no on-disk fallback — skipping`)
+        continue
+      }
     }
 
     const sniRoot = row.sni_prefixes?.[0]?.split('.')[0]

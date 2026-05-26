@@ -62,11 +62,13 @@ export async function composeAgentProfile(
     if (allIds.length > 0) {
       const { data: rows } = await supabase
         .from('agent_atom_registry')
-        .select('id, body_path')
+        .select('id, body')
         .in('id', allIds)
-      const paths = (rows ?? []).map((r: { body_path: string }) => r.body_path)
+      const bodies = (rows ?? [])
+        .map((r: { body: string | null }) => r.body ?? '')
+        .filter((b: string) => b.length > 0)
       // Intentionally not awaited — pre-warm must not block the response.
-      void preWarmAtomCache({ atomBodyPaths: paths })
+      void preWarmAtomCache({ atomBodies: bodies })
     }
   }
 

@@ -5,6 +5,8 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "setup:extensions": "npx tsx scripts/generate-extension-registry.ts",
+    "skills:generate": "npx tsx scripts/generate-skill-bodies.ts",
+    "skills:check": "npx tsx scripts/generate-skill-bodies.ts --check",
     "predev": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
     "dev": "next dev",
     "prebuild": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
