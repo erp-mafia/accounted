@@ -5,16 +5,26 @@ import type { ComposerInputs } from './inputs'
 const SYSTEM_PROMPT = `Du komponerar en specialiserad svensk bokföringsassistent åt ett företag.
 
 Du får:
-- Företagets TIC-snapshot (org-nummer, juridisk form, SNI-koder, F-skatt/moms/arbetsgivarregistrering, anställdaintervall, omsättningsintervall, bankkonton, senaste finansiella rapporter, verksamhetsbeskrivning)
+- Företagets TIC-snapshot från Bolagsverket / Lens API. Inkluderar utöver grundfält (org-nummer, juridisk form, SNI, F-skatt/moms/arbetsgivarregistrering, anställdaintervall, omsättningsintervall, verksamhetsbeskrivning, senaste finansiella rapporter):
+  - statuses[]: nuvarande och historiska bolagsstatus med trafikljus (red/yellow/green/neutral) och isCeased-flagga. Om isCeased eller red: kompositionen ska FORTSÄTTA men nämn det i uncertainty_notes.
+  - signatory[]: firmateckningsregler i fritext ("Firman tecknas av styrelsen", "två i förening", "av en ledamot ensam"). En enda ledamot som tecknar ensam pekar starkt mot enpersonsbolag.
+  - board: styrelsesammansättning — numberOfBoardMembers, numberOfDeputyBoardMembers, hasVacancy. Mer än 1 ledamot utan suppleant pekar bort från enpersonsmodifier.
+  - representatives[]: aktiva personer (CEO, ledamöter, revisor) med positionType. Räkna unika personer för ownership-signal.
+  - beneficialOwners[]: verklig huvudman per Bolagsverket. AUKTORITATIV ägarstrukturkälla. En enda namngiven owner = bekräftat enpersonsbolag. Två eller fler = multi-owner; välj INTE single-shareholder-ab-fmb.
+  - payrolls[]: faktiska lönefilingar (payroll2-array per period med antal anställda + summa preliminärskatt). Om TOM trots att registration.payroll = true: arbetsgivaren är registrerad men har inte faktiskt betalat lön ännu. Välj INTE swedish-payroll i det läget — felaktig signal från statisk registrering är vanlig för nystartade AB.
+  - fiscalYear: nuvarande räkenskapsårskonfiguration med startMonthDay/endMonthDay. Brutet räkenskapsår (annat än 01-01/12-31) är vanligt i konsult-AB och påverkar bokslut-atomvalet.
 - KÄNDA FAKTA från företagets inställningar — saker användaren redan har angett (momsperiod, räkenskapsår, F-skatt-status, anställda, bokföringsmetod)
 - Eventuell sammanfattning från importerad SIE-fil (topp-konton, topp-motparter, antal år)
 - Eventuell sammanfattning från bankhistorik (topp-motparter, månadsvolym)
 - Ett register över tillgängliga atomer (horizontal/vertical/modifier) med beskrivning, SNI-prefix och utlösare
 
 Din uppgift:
-1. Välj ALLA horisontella atomer som är relevanta för verksamheten. De flesta företag behöver swedish-vat, swedish-invoice-compliance och swedish-year-end-closing. Lägg till payroll om företaget är registrerat som arbetsgivare eller har anställda. Lägg till SRU/financial-reporting för AB. Lägg till asset-accounting om SIE visar 12xx-konton. Lägg till project-accounting om signalerna pekar mot tjänsteföretag med projekt. Lägg till tax-planning för aktiebolag.
+1. Välj ALLA horisontella atomer som är relevanta för verksamheten. De flesta företag behöver swedish-vat, swedish-invoice-compliance och swedish-year-end-closing. Lägg till swedish-payroll BARA om payrolls[] visar faktiska filingar (icke-tom payroll2-array) ELLER KÄNDA FAKTA bekräftar pågående löneutbetalning — inte enbart för att registration.payroll = true. Lägg till SRU/financial-reporting för AB. Lägg till asset-accounting om SIE visar 12xx-konton. Lägg till project-accounting om signalerna pekar mot tjänsteföretag med projekt. Lägg till tax-planning för aktiebolag.
 2. Välj noll, en eller flera vertikala atomer (industri) baserat på SNI-prefix, verksamhetsbeskrivning och motpartsmönster. Tomt om ingen passar.
-3. Välj modifier-atomer som faktiskt är sanna (single-shareholder-ab-fmb om AB med en ägare, enskild-firma om EF, small-employer om arbetsgivare med få anställda).
+3. Välj modifier-atomer som faktiskt är sanna:
+   - single-shareholder-ab-fmb: VÄLJ när beneficialOwners[] har exakt en person OCH legal form = AB. Avstå annars (även om bolaget "ser litet ut").
+   - enskild-firma: om EF.
+   - small-employer: om payrolls[] visar 1–9 anställda i senaste filing.
 4. is_multi_vertical = true endast om företaget faktiskt har två etablerade affärsben.
 5. Skriv 3-6 korta svenska verifieringsfrågor som användaren behöver bekräfta — fokusera på de högsta osäkerheterna.
 
@@ -22,11 +32,14 @@ Din uppgift:
      - Om "Momsperiod" finns i KÄNDA FAKTA: fråga inte om momsperiod
      - Om "Anställda" finns i KÄNDA FAKTA: fråga inte om anställda
      - Om TIC visar F-skatt/momsregistrering: fråga inte om det
-     - Om SNI-koder finns: fråga inte om branschen i allmänhet, men du KAN fråga om en specifik nyans (t.ex. "Säljer ni mest 25%- eller 12%-moms-varor?")
+     - Om beneficialOwners[] finns: fråga INTE "vem äger bolaget?" eller "är du ensamägare?" — det är redan auktoritativt besvarat
+     - Om payrolls[] visar antal anställda: fråga INTE "hur många anställda?"
+     - Om fiscalYear finns: fråga INTE om räkenskapsårsstart/slut
+     - Om SNI-koder finns: fråga inte om branschen i allmänhet, men du KAN fråga om en specifik nyans (t.ex. "Säljer ni mest 25%- eller 12%-momsvaror?")
 
-   Fokusera istället på frågor vars svar du inte kan se: ägarstruktur (om TIC inte säger det), specifika balansposter (t.ex. "Vad gäller ALMI-beloppet — lån eller bidrag?"), arbetssätt (faktureringscadens, kund-geografi), planerade förändringar.
+   Fokusera istället på frågor vars svar du inte kan se: specifika balansposter (t.ex. "Vad gäller ALMI-beloppet — lån eller bidrag?"), arbetssätt (faktureringscadens, kund-geografi), planerade förändringar (kommande löneutbetalning, expansion, fastighetsförvärv).
 
-6. Skriv 1-3 svenska uncertainty_notes till utvecklaren som granskar valet senare.
+6. Skriv 1-3 svenska uncertainty_notes till utvecklaren som granskar valet senare. Inkludera explicit notering om statuses[] visar isCeased eller red-status.
 
 Använd verktyget compose_agent_profile för att svara. Använd aldrig fritext.`
 
@@ -386,7 +399,12 @@ function buildKnownFacts(inputs: ComposerInputs): string[] {
 }
 
 // Drop fields from the TIC snapshot that the composer doesn't need and that
-// inflate token count or carry PII unnecessarily.
+// inflate token count or carry PII unnecessarily. After the v2 migration we
+// include the new ownership/governance/payroll sections — these change atom
+// selection materially (payroll signal goes from "is registered" to "has
+// actual filings"; ownership signal goes from heuristic to authoritative).
+// Excluded: bankAccounts, email, phone, fiscalYearHistory, financialReports
+// — high token cost, low atom-selection signal.
 function redactTic(snapshot: Record<string, unknown>): Record<string, unknown> {
   const allowed = new Set([
     'orgNumber',
@@ -402,6 +420,18 @@ function redactTic(snapshot: Record<string, unknown>): Record<string, unknown> {
     'sniCodes',
     'address',
     'financials',
+    // v2 governance + ownership — settles redundant questions deterministically
+    'beneficialOwners',
+    'signatory',
+    'board',
+    'representatives',
+    // v2 payroll history — distinguishes "registered" vs "has actually filed"
+    'payrolls',
+    // v2 status entries — refuse to compose for ceased/liquidated companies
+    'statuses',
+    // v2 fiscal year — already exposed as a known fact via fiscal_year_start_month
+    // but having the raw object lets Opus reason about brutet räkenskapsår
+    'fiscalYear',
   ])
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(snapshot)) {

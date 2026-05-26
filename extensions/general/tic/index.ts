@@ -423,6 +423,8 @@ export const ticExtension: Extension = {
                   endMonthDay: fiscalYear.endMonthDay ?? null,
                 }
               : null,
+            legalEntityType: doc.legalEntityType ?? null,
+            registrationDate: doc.registrationDate ?? null,
           }
 
           return NextResponse.json({ data: result })

@@ -62,6 +62,30 @@ function parseStartMonthDay(value: string | null | undefined): number | null {
   return month
 }
 
+// Derive the Step-3 first-year defaults from TIC's `registrationDate`.
+// A company is treated as "first year" when registered less than 12 months
+// ago — fits BFL's 6-18 month opening-period window comfortably. Returns
+// both the toggle state and a seeded `first_year_start` (always the 1st of
+// the registration month, the format Step 3's date inputs expect).
+function deriveFirstYearDefaults(registrationDate: number | null | undefined): {
+  isFirstFiscalYear: boolean
+  firstYearStart: string | undefined
+} {
+  if (!registrationDate || !Number.isFinite(registrationDate)) {
+    return { isFirstFiscalYear: false, firstYearStart: undefined }
+  }
+  const regDate = new Date(registrationDate)
+  if (Number.isNaN(regDate.getTime())) {
+    return { isFirstFiscalYear: false, firstYearStart: undefined }
+  }
+  const monthsAgo =
+    (Date.now() - regDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44)
+  if (monthsAgo >= 12) return { isFirstFiscalYear: false, firstYearStart: undefined }
+  const year = regDate.getUTCFullYear()
+  const month = String(regDate.getUTCMonth() + 1).padStart(2, '0')
+  return { isFirstFiscalYear: true, firstYearStart: `${year}-${month}-01` }
+}
+
 interface WelcomeOnboardingProps {
   firstName?: string | null
   teamId: string
@@ -69,6 +93,11 @@ interface WelcomeOnboardingProps {
   hasExistingCompanies?: boolean
   /** Pre-fill Step 2 org_number when the picker routed here via ?org_number=. */
   initialOrgNumber?: string
+  /** Mapped from a server-side /lookup (deep-link path only). Pre-selects Step 1's radio. */
+  initialEntityType?: EntityType
+  /** Server-prefetched lookup result. Hydrates ticLookup state so Step 3's
+   *  first-year inference + Step 2's name/address pre-fill work on first render. */
+  initialLookup?: CompanyLookupResult | null
 }
 
 export default function WelcomeOnboarding({
@@ -77,6 +106,8 @@ export default function WelcomeOnboarding({
   skipWelcome,
   hasExistingCompanies,
   initialOrgNumber,
+  initialEntityType,
+  initialLookup,
 }: WelcomeOnboardingProps) {
   const router = useRouter()
   const { toast } = useToast()
@@ -86,11 +117,24 @@ export default function WelcomeOnboarding({
   const [started, setStarted] = useState(skipWelcome ?? false)
   const [isSaving, setIsSaving] = useState(false)
   const [currentStep, setCurrentStep] = useState(1)
-  const [settings, setSettings] = useState<Partial<CompanySettings>>(
-    initialOrgNumber ? { org_number: initialOrgNumber } : {},
-  )
+  // Seed settings with whatever the server-side /lookup pre-fetch gave us.
+  // entity_type is pre-selected when TIC reports a supported legal form;
+  // org_number, name, and city flow in from the same lookup so Step 2's
+  // debounced client-side fetch effectively just confirms what we already
+  // have. Anything missing (TIC unreachable, unsupported entity type) leaves
+  // the field untouched and the user fills it manually.
+  const [settings, setSettings] = useState<Partial<CompanySettings>>(() => {
+    const seed: Partial<CompanySettings> = {}
+    if (initialOrgNumber) seed.org_number = initialOrgNumber
+    if (initialEntityType) seed.entity_type = initialEntityType
+    if (initialLookup?.companyName) seed.company_name = initialLookup.companyName
+    if (initialLookup?.address?.street) seed.address_line1 = initialLookup.address.street
+    if (initialLookup?.address?.postalCode) seed.postal_code = initialLookup.address.postalCode
+    if (initialLookup?.address?.city) seed.city = initialLookup.address.city
+    return seed
+  })
   const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
-  const [ticLookup, setTicLookup] = useState<CompanyLookupResult | null>(null)
+  const [ticLookup, setTicLookup] = useState<CompanyLookupResult | null>(initialLookup ?? null)
 
   const totalSteps = 4
 
@@ -318,7 +362,14 @@ export default function WelcomeOnboarding({
                 />
               )}
 
-              {currentStep === 3 && (
+              {currentStep === 3 && (() => {
+                // Derive both first-year defaults from TIC's registrationDate
+                // (null-safe — returns { false, undefined } for established
+                // companies and for missing registrationDate).
+                const firstYearDefaults = deriveFirstYearDefaults(
+                  ticLookup?.registrationDate,
+                )
+                return (
                 <Step3TaxRegistration
                   initialData={{
                     f_skatt: settings.f_skatt ?? (ticLookup ? ticLookup.registration.fTax : undefined),
@@ -331,13 +382,21 @@ export default function WelcomeOnboarding({
                       settings.fiscal_year_start_month
                       ?? parseStartMonthDay(ticLookup?.fiscalYear?.startMonthDay)
                       ?? undefined,
+                    // Companies registered <12 months ago land in their first
+                    // fiscal year — pre-check the toggle and seed the start
+                    // date so the user only confirms the end date.
+                    is_first_fiscal_year:
+                      settings.is_first_fiscal_year ?? firstYearDefaults.isFirstFiscalYear,
+                    first_year_start:
+                      settings.first_year_start ?? firstYearDefaults.firstYearStart,
                   }}
                   entityType={settings.entity_type as EntityType}
                   onNext={(data) => handleNext(data)}
                   onBack={handleBack}
                   isSaving={isSaving}
                 />
-              )}
+                )
+              })()}
 
               {currentStep === 4 && (
                 <Step4VatAccounting
