@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { renderAgentGroundRules } from './shared-rules'
 
 // general.help — always-present "Fråga min assistent" from the top nav.
 //
@@ -106,6 +107,8 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
       lines.push('')
     }
     lines.push('Användaren öppnade ditt fönster med "Fråga min assistent". Inget specifikt ärende ännu.')
+    lines.push('')
+    lines.push(renderAgentGroundRules())
     lines.push('')
     lines.push('Härifrån kan du (använd verktygen — citera siffrorna):')
     lines.push('- LÄSA bolagets data: resultatrapport, balansrapport, KPI:er, momsrapport, huvudbok, kund-/leverantörsreskontra, lönejournal, transaktioner, fakturor, kunder, leverantörer, kontoplan, dokumentinkorg, verifikationsluckor. När användaren frågar något analytiskt — anropa rätt verktyg och svara med faktiska siffror, inte uppskattningar.')

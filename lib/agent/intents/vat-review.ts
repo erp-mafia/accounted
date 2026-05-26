@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { renderAgentGroundRules } from './shared-rules'
 
 // vat.review — "Fråga [namn]" from the VAT declaration preview.
 //
@@ -104,6 +105,8 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
     if (profileSummary) lines.push(`Företagets profil: ${profileSummary}`, '')
 
     lines.push('Användaren granskar en momsdeklaration innan inlämning.')
+    lines.push('')
+    lines.push(renderAgentGroundRules())
     lines.push('')
     lines.push(`Period: ${captured.period.label ?? '?'} (${captured.period.period_type ?? '?'})`)
     if (captured.company_moms_period) {

@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { renderAgentGroundRules } from './shared-rules'
 
 // supplier_invoice.review — "Fråga din assistent" from a supplier invoice
 // detail page. Helps the user verify a supplier invoice before attestering
@@ -248,6 +249,8 @@ export const supplierInvoiceReview = defineAgentIntent<
     const lines: string[] = []
     if (profileSummary) lines.push(`Företagets profil: ${profileSummary}`, '')
 
+    lines.push(renderAgentGroundRules())
+    lines.push('')
     lines.push('Granska denna leverantörsfaktura innan attestering:')
     lines.push(`- Ankomst #${inv.arrival_number ?? '?'} / Fakturanummer ${inv.supplier_invoice_number ?? '?'}`)
     if (captured.supplier) {

@@ -1,0 +1,41 @@
+// Cross-cutting agent rules shared by every intent that can answer
+// bookkeeping / VAT / categorization questions.
+//
+// These rules existed in transaction-categorization's prompt body but
+// general.help (and other intents) never inherited them — so the
+// floating "Fråga min assistent" pill would happily invent BAS account
+// numbers and skip the underlag check, while the transaction-row
+// "Fråga om denna" stayed disciplined. Centralising the rules here
+// keeps both surfaces consistent.
+//
+// Render these by joining with newlines and dropping into the intent's
+// promptTemplate before any intent-specific guidance.
+
+export const AGENT_GROUND_RULES: string[] = [
+  '## ARBETSSÄTT (gäller alltid)',
+  '',
+  // -- Underlag first --
+  '- UNDERLAG FÖRST: när användaren frågar HUR något ska bokföras — kvitto, faktura, prenumeration, valutaväxling — börja med att titta efter underlaget. Anropa gnubok_list_inbox_items, gnubok_list_unmatched_documents, eller gnubok_query_journal för att se om det finns en faktura/ett kvitto i systemet. Om det FINNS underlag, läs det med gnubok_get_document_content innan du föreslår bokföring.',
+  '- SAKNAS UNDERLAG: be användaren ladda upp fakturan/kvittot till Dokumentinkorgen (sidomenyn → "Underlag") eller vidarebefordra det till företagets inbox-adress. Säg det rakt och kort: "Har du fakturan? Lägg den i Dokumentinkorgen så läser jag av den och föreslår bokföring." Försök INTE att gissa specifik bokföring på en faktura du inte har sett. Generellt resonemang ("Vercel är amerikanskt → omvänd skattskyldighet") är okej som bakgrund, men säg att det DEFINITIVA förslaget kommer när du sett underlaget.',
+  '',
+  // -- Follow-up questions --
+  '- FRÅGA HELLRE ÄN GISSA: om svaret beror på faktorer du inte kan se — valuta, prenumerationstyp (privat vs företag), syfte (representation vs personal), period (skall periodiseras?), F-skatt-status på motparten, om det är lån eller bidrag — ställ 1–3 raka följdfrågor INNAN du föreslår. Hellre en kort dialog än en självsäker felaktig bokning.',
+  '',
+  // -- No BAS numbers in chat --
+  '- INGA BAS-KONTONUMMER I SVAR: prata i kategorinamn ("Molntjänster/IT-tjänster", "Ingående moms omvänd skattskyldighet", "Leverantörsskuld"), aldrig fyrsiffriga kontonummer som "6212" eller "2614". Bokföringsmotorn mappar kategori → konto automatiskt, och godkännandekortet visar det faktiska kontot för revisorn. Skriver du ut kontonummer förvirrar du användare som inte är revisorer.',
+  '',
+  // -- Cite atoms, not training data --
+  '- KÄLLOR: när du resonerar om moms, BFL, BFNAR, K2/K3, SKV-regler — citera atomen som är laddad (swedish-vat, swedish-accounting-compliance, etc.) eller ladda den med gnubok_load_skill. Gissa ALDRIG från träningsdata. Om du inte är säker: säg att du behöver kontrollera och anropa gnubok_load_skill.',
+  '',
+  // -- Anchor in user's own history --
+  '- KOLLA HISTORIK FÖRST: innan du föreslår "så här gör du" på en återkommande motpart, anropa gnubok_query_journal med motpartens namn. Om de bokfört Vercel/Spotify/SJ förut — följ samma mönster. "Så här har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Bryt bara mönstret om underlaget tydligt säger något annat.',
+]
+
+/**
+ * Convenience: render the rules as a single block. Intents inject this
+ * into their promptTemplate BEFORE any intent-specific guidance so the
+ * ground rules anchor the rest.
+ */
+export function renderAgentGroundRules(): string {
+  return AGENT_GROUND_RULES.join('\n')
+}

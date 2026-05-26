@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { renderAgentGroundRules } from './shared-rules'
 
 // invoice.draft — "Fråga om denna faktura" from the invoice form.
 //
@@ -181,6 +182,8 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
     if (profileSummary) lines.push(`Företagets profil: ${profileSummary}`, '')
 
     lines.push('Användaren håller på att skriva en faktura. Hjälp dem komma rätt.')
+    lines.push('')
+    lines.push(renderAgentGroundRules())
     lines.push('')
 
     if (captured.customer) {

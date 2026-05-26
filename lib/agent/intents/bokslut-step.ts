@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { renderAgentGroundRules } from './shared-rules'
 
 // bokslut.step — "Fråga [namn]" inside the year-end (bokslut) wizard.
 //
@@ -111,6 +112,8 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
       )
     }
     if (captured.entity_type) lines.push(`Företagsform: ${captured.entity_type}`)
+    lines.push('')
+    lines.push(renderAgentGroundRules())
     lines.push('')
     lines.push('Arbetssätt — hjälp användaren genom STEGET de står i:')
     lines.push('1. Kör gnubok_year_end_readiness för att se vad som saknas.')

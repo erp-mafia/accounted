@@ -281,7 +281,32 @@ export default function AgentChat({
         break
       }
       case 'text_delta':
-        setMessages((prev) => updateLastAssistant(prev, (m) => ({ ...m, text: m.text + (ev.delta as string) })))
+        // Streaming text resumes after every tool call. The model often
+        // continues with the next sentence without a leading newline,
+        // which collapses two paragraphs into one ("kategoriseras.Inget
+        // historik" instead of two separate paragraphs). Guard: if the
+        // current text already ends with text content (not whitespace)
+        // and the incoming delta starts with non-whitespace AND a tool
+        // call has run in between (toolCalls.length > 0), insert a
+        // paragraph break.
+        setMessages((prev) =>
+          updateLastAssistant(prev, (m) => {
+            const delta = ev.delta as string
+            const needsBreak =
+              m.text.length > 0 &&
+              !/\s$/.test(m.text) &&
+              delta.length > 0 &&
+              !/^\s/.test(delta) &&
+              (m.toolCalls?.length ?? 0) > 0 &&
+              // Only inject the break on the first resume-after-tool —
+              // a sentinel `\n\n` end of buffer means we already did.
+              !m.text.endsWith('\n\n')
+            return {
+              ...m,
+              text: needsBreak ? m.text + '\n\n' + delta : m.text + delta,
+            }
+          }),
+        )
         break
       case 'tool_use':
         setMessages((prev) =>

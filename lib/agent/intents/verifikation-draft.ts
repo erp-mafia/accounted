@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { renderAgentGroundRules } from './shared-rules'
 
 // verifikation.draft — "Fråga [namn]" on the journal entry creation form.
 //
@@ -132,6 +133,9 @@ export const verifikationDraft = defineAgentIntent<
     } else {
       lines.push('Ny verifikation, inga rader än.')
     }
+    lines.push('')
+    lines.push(renderAgentGroundRules())
+    lines.push('')
 
     if (captured.current_lines.length > 0) {
       lines.push('')
