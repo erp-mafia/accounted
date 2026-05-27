@@ -170,7 +170,7 @@ function WorkspaceSkeleton() {
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { openAgentSheet } = useAgentSheet()
+  const { openAgentSheet, identity } = useAgentSheet()
 
   const [items, setItems] = useState<InboxItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -899,13 +899,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 }
                 await Promise.all([fetchItems(), handleSelect(targetId)])
               }}
-              onAskAssistant={(transactionId) => {
-                openAgentSheet({
-                  intentId: 'transaction.categorization',
-                  intentArgs: { transaction_id: transactionId },
-                  contextRef: `transaction:${transactionId}`,
-                })
-              }}
+              onAskAssistant={
+                identity.isVerified
+                  ? (transactionId) => {
+                      openAgentSheet({
+                        intentId: 'transaction.categorization',
+                        intentArgs: { transaction_id: transactionId },
+                        contextRef: `transaction:${transactionId}`,
+                      })
+                    }
+                  : undefined
+              }
               isDeleting={isDeleting}
               onRetryRequested={async () => {
                 await Promise.all([fetchItems(), handleSelect(selected.id)])
@@ -1369,7 +1373,7 @@ function FieldsRail({
   onBookDirect: () => void
   onMatchTransaction: () => void
   onUnmatchTransaction: () => Promise<void>
-  onAskAssistant: (transactionId: string) => void
+  onAskAssistant?: (transactionId: string) => void
   isDeleting: boolean
   onFieldsUpdated: (data: InvoiceExtractionResult) => void
   onRetryRequested: () => Promise<void>
@@ -1549,14 +1553,16 @@ function FieldsRail({
                 Öppna transaktionen →
               </Link>
             </div>
-            <Button
-              variant="default"
-              size="sm"
-              className="w-full"
-              onClick={() => onAskAssistant(item.matched_transaction_id!)}
-            >
-              Fråga assistenten
-            </Button>
+            {onAskAssistant && (
+              <Button
+                variant="default"
+                size="sm"
+                className="w-full"
+                onClick={() => onAskAssistant(item.matched_transaction_id!)}
+              >
+                Fråga assistenten
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
