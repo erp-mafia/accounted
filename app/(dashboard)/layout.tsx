@@ -88,26 +88,28 @@ export default async function DashboardLayout({
           isSandbox: false,
         }}
       >
-        <CompanyTabSync />
-        <div className="min-h-screen bg-background">
-          <DashboardNav
-            companyName={getBranding().appName.toLowerCase()}
-            entityType="enskild_firma"
-            uncategorizedTransactionCount={0}
-            pendingOperationsCount={0}
-            isSandbox={false}
-            extensionNavItems={getExtensionNavItems()}
-          />
-          <main
-            id="main-content"
-            className="safe-area-main-padding md:!pb-0 md:pl-64"
-            role="main"
-          >
-            <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
-              {children}
-            </div>
-          </main>
-        </div>
+        <AgentSheetProvider>
+          <CompanyTabSync />
+          <div className="min-h-screen bg-background">
+            <DashboardNav
+              companyName={getBranding().appName.toLowerCase()}
+              entityType="enskild_firma"
+              uncategorizedTransactionCount={0}
+              pendingOperationsCount={0}
+              isSandbox={false}
+              extensionNavItems={getExtensionNavItems()}
+            />
+            <main
+              id="main-content"
+              className="safe-area-main-padding md:!pb-0 md:pl-64"
+              role="main"
+            >
+              <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
+                {children}
+              </div>
+            </main>
+          </div>
+        </AgentSheetProvider>
       </CompanyProvider>
     )
   }
@@ -140,22 +142,24 @@ export default async function DashboardLayout({
 
     return (
       <CompanyProvider value={companyContextValue}>
-        <CompanyTabSync />
-        <div className="min-h-screen bg-background">
-          <DashboardNav
-            companyName={getBranding().appName.toLowerCase()}
-            entityType="enskild_firma"
-            uncategorizedTransactionCount={0}
-            pendingOperationsCount={0}
-            isSandbox={false}
-            extensionNavItems={getExtensionNavItems()}
-          />
-          <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
-            <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
-              {children}
-            </div>
-          </main>
-        </div>
+        <AgentSheetProvider>
+          <CompanyTabSync />
+          <div className="min-h-screen bg-background">
+            <DashboardNav
+              companyName={getBranding().appName.toLowerCase()}
+              entityType="enskild_firma"
+              uncategorizedTransactionCount={0}
+              pendingOperationsCount={0}
+              isSandbox={false}
+              extensionNavItems={getExtensionNavItems()}
+            />
+            <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
+              <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
+                {children}
+              </div>
+            </main>
+          </div>
+        </AgentSheetProvider>
       </CompanyProvider>
     )
   }

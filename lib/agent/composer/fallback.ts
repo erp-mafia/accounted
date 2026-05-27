@@ -102,22 +102,36 @@ function buildFallbackQuestions(inputs: ComposerInputs): string[] {
 }
 
 // Build a minimal Swedish narrative for the fallback path so Phase B has
-// something to render even when the Sonnet call also failed.
+// something to render even when the Sonnet call also failed. Mirrors the
+// Sonnet prompt's voice-branching: second-person only when the user is a
+// confirmed director, neutral otherwise.
 export function fallbackNarrative(inputs: ComposerInputs): string {
   const parts: string[] = []
   const name = inputs.companyName || 'företaget'
-  if (inputs.entityType === 'aktiebolag') {
-    parts.push(`Du driver ${name} som aktiebolag.`)
-  } else if (inputs.entityType === 'enskild_firma') {
-    parts.push(`Du driver ${name} som enskild firma.`)
+  const isAB = inputs.entityType === 'aktiebolag'
+  const isEF = inputs.entityType === 'enskild_firma'
+  const form = isAB ? 'aktiebolag' : isEF ? 'enskild firma' : null
+
+  if (inputs.userIsConfirmedDirector) {
+    if (form) {
+      parts.push(`Du driver ${name} som ${form}.`)
+    } else {
+      parts.push(`Du driver ${name}.`)
+    }
   } else {
-    parts.push(`Du driver ${name}.`)
+    if (form) {
+      parts.push(`${name} är ${form === 'enskild firma' ? 'en enskild firma' : 'ett aktiebolag'}.`)
+    } else {
+      parts.push(`${name} är ett företag i gnubok.`)
+    }
   }
   parts.push(
     'Jag har laddat de svenska reglerna som gäller bredast — moms, fakturering, bokslut och årsavslutning.',
   )
   parts.push(
-    'Berätta gärna lite mer om din verksamhet i nästa steg så kan jag skräddarsy stöden mer.',
+    inputs.userIsConfirmedDirector
+      ? 'Berätta gärna lite mer om din verksamhet i nästa steg så kan jag skräddarsy stöden mer.'
+      : 'Berätta gärna lite mer om verksamheten i nästa steg så kan jag skräddarsy stöden mer.',
   )
   return parts.join(' ')
 }

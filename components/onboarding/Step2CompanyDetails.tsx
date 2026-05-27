@@ -41,6 +41,12 @@ interface Step2Props {
   onBack: () => void
   isSaving: boolean
   orgNumberLocked?: boolean
+  // Orgnr we already trust without a Lens call — typically because it came
+  // from BankID CompanyRoles which confirms the user has a director role at
+  // this company. When set and the form's orgnr matches, Step 2 skips the
+  // debounced `/lookup` to avoid burning a Lens call on something we know
+  // exists. The guard clears as soon as the user edits the field.
+  preverifiedOrgNumber?: string | null
 }
 
 export default function Step2CompanyDetails({
@@ -52,6 +58,7 @@ export default function Step2CompanyDetails({
   onBack,
   isSaving,
   orgNumberLocked,
+  preverifiedOrgNumber,
 }: Step2Props) {
   const t = useTranslations('onboarding')
   const {
@@ -78,6 +85,14 @@ export default function Step2CompanyDetails({
   const [orgNumberExists, setOrgNumberExists] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const dupAbortRef = useRef<AbortController | null>(null)
+  // Tracks an orgnr that's been pre-verified (BankID CompanyRoles match) so
+  // the client-side Lens lookup is skipped for that exact value. Cleared
+  // (set to null) the moment the user edits the org number — a different
+  // orgnr is no longer covered by the BankID confirmation and needs a real
+  // lookup.
+  const prefetchedForOrgRef = useRef<string | null>(
+    preverifiedOrgNumber ? normalizeOrgNumber(preverifiedOrgNumber) : null,
+  )
 
   const orgNumber = watch('org_number')
 
@@ -116,6 +131,17 @@ export default function Step2CompanyDetails({
     if (!ticEnabled || !orgNumber || normalizeOrgNumber(orgNumber) === null) {
       return
     }
+
+    // Server already fetched this orgnr (BankID deep-link). Don't burn a
+    // second TIC call to re-confirm what we already have in `initialLookup`.
+    // Once the user edits the field, normalizeOrgNumber(orgNumber) will
+    // diverge from the prefetched value and the lookup re-arms.
+    const normalized = normalizeOrgNumber(orgNumber)
+    if (prefetchedForOrgRef.current && normalized === prefetchedForOrgRef.current) {
+      return
+    }
+    // Any subsequent edit invalidates the prefetched-match guard for good.
+    prefetchedForOrgRef.current = null
 
     setLookupError(null)
     setLookupDone(null)

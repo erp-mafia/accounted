@@ -9,6 +9,7 @@ import {
   getSignatory,
   getRepresentatives,
   getCompanyStatus,
+  __resetTicCacheForTest,
 } from '../lib/tic-client'
 import { TICAPIError } from '../lib/tic-types'
 
@@ -16,6 +17,7 @@ const PROXY_URL = 'https://proxy.example.com/api/tic/proxy'
 
 describe('tic-client', () => {
   beforeEach(() => {
+    __resetTicCacheForTest()
     vi.stubGlobal('fetch', vi.fn())
     vi.stubEnv('TIC_API_PROXY_URL', PROXY_URL)
   })
@@ -218,6 +220,63 @@ describe('tic-client', () => {
       await getCompanyStatus(123)
       const calledUrl = mockFetch.mock.calls[0][0] as string
       expect(calledUrl).toContain(encodeURIComponent('/companies/123/status'))
+    })
+  })
+
+  // The in-process cache is the single most impactful change for TIC budget
+  // hygiene. Onboarding fires the same orgnr lookup 2-3 times in <2 s
+  // (server prefetch + client useEffect + duplicate-check). Without the
+  // cache, that's 3x Lens spend per signup; with it, 1x. Test pins the
+  // behavior so it can't regress silently.
+  describe('in-process cache', () => {
+    it('returns cached result for identical endpoint within TTL — fetch fires once', async () => {
+      const mockFetch = vi.mocked(fetch)
+      const body = { facet_counts: [], found: 1, hits: [{ document: { id: 1 } }] }
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+
+      const first = await ticApiFetch('/search-public/companies?q=5560125790&query_by=registrationNumber')
+      const second = await ticApiFetch('/search-public/companies?q=5560125790&query_by=registrationNumber')
+
+      expect(first).toEqual(body)
+      expect(second).toEqual(body)
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('caches 404 responses so org-number typos do not re-spend a call per keystroke', async () => {
+      const mockFetch = vi.mocked(fetch)
+      mockFetch.mockResolvedValue(new Response('Not found', { status: 404 }))
+
+      const first = await ticApiFetch('/search-public/companies?q=000000-0000&query_by=registrationNumber')
+      const second = await ticApiFetch('/search-public/companies?q=000000-0000&query_by=registrationNumber')
+
+      expect(first).toBeNull()
+      expect(second).toBeNull()
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('does NOT cache 429 rate-limit responses (allows recovery after window resets)', async () => {
+      const mockFetch = vi.mocked(fetch)
+      mockFetch.mockResolvedValueOnce(new Response('Rate limit', { status: 429 }))
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ found: 0, hits: [] }), { status: 200 }))
+
+      await expect(ticApiFetch('/search-public/companies?q=5560125790')).rejects.toMatchObject({
+        code: 'RATE_LIMIT_EXCEEDED',
+      })
+      // Second call should re-fetch (cache must not poison after a 429)
+      const second = await ticApiFetch('/search-public/companies?q=5560125790')
+      expect(second).toEqual({ found: 0, hits: [] })
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('different endpoints have independent cache entries', async () => {
+      const mockFetch = vi.mocked(fetch)
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ found: 1 }), { status: 200 }))
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify([{ accountNumber: '123' }]), { status: 200 }))
+
+      await ticApiFetch('/search-public/companies?q=A')
+      await ticApiFetch('/companies/42/bank-accounts')
+
+      expect(mockFetch).toHaveBeenCalledTimes(2)
     })
   })
 })

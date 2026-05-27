@@ -66,6 +66,32 @@ export interface TICCompanyDocument {
     km_NetProfitMargin?: number
     km_EquityAssetsRatio?: number
   }
+  // Top-level fields the Lens search index already returns alongside the
+  // company core. /lookup reads these directly instead of fanning out to
+  // dedicated v2 endpoints — saves 5 calls per invocation.
+  sniCodes?: Array<{
+    rank?: number
+    sni_2007Code?: string
+    sni_2007Name?: string
+    sni_2007Section?: string
+  }>
+  bankAccounts?: Array<{
+    accountNumber?: string | number
+    bankAccountType?: string
+  }>
+  emailAddresses?: Array<{
+    emailAddress?: string
+    emailAddressType?: string
+  }>
+  phoneNumbers?: Array<{
+    phoneNumberFormatted?: string
+    e164PhoneNumber?: string
+    phoneNumberType?: string
+  }>
+  mostRecentSignatory?: {
+    signatureDescription?: string
+    firstSeenAt?: number
+  }
 }
 
 /**

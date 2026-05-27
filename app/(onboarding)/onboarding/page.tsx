@@ -1,46 +1,44 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { headers } from 'next/headers'
 import WelcomeOnboarding from '@/components/dashboard/WelcomeOnboarding'
 import type { EntityType } from '@/types'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
+import { mapEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
 
 export const dynamic = 'force-dynamic'
 
-// Maps TIC's `legalEntityType` codes onto our two supported EntityType
-// values. Anything else (HB, KB, ...) returns undefined so Step 1's radio
-// stays unselected and the user picks manually.
-function mapEntityType(code: string | null | undefined): EntityType | undefined {
-  if (!code) return undefined
-  const upper = code.toUpperCase()
-  if (upper === 'AB') return 'aktiebolag'
-  if (upper === 'EF') return 'enskild_firma'
-  return undefined
-}
-
-// Server-side TIC lookup for the deep-link path (BankID picker routes here
-// with ?org_number=…). Returns null on any error so the page still renders
-// even when TIC is unreachable or the proxy isn't configured. Best-effort.
-async function prefetchLookup(
+// Look up the user's CompanyRoles enrichment (from BankID auth) and find the
+// role whose orgnr matches the incoming `?org_number=`. CompanyRoles lives on
+// the TIC Identity API — separate product, separate quota from the Lens
+// `/lookup` endpoint — so this is free: no Lens calls.
+//
+// Returns enough to pre-fill Step 1's entity-type radio + Step 2's
+// company_name field. The rest (address, F-skatt, VAT) is captured by the
+// user in Steps 2–4. F-skatt/VAT defaults can't be safely guessed without
+// Bolagsverket data (ML 17 kap 24§ violation if we default a momsregistrerat
+// bolag to false), so we make the user confirm in Step 4.
+//
+// Exported for unit testing.
+export async function findCompanyRoleByOrgNumber(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
   orgNumber: string,
-  cookieHeader: string,
-  origin: string,
-): Promise<CompanyLookupResult | null> {
-  try {
-    const res = await fetch(
-      `${origin}/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`,
-      {
-        headers: { cookie: cookieHeader, Accept: 'application/json' },
-        signal: AbortSignal.timeout(5_000),
-        cache: 'no-store',
-      },
-    )
-    if (!res.ok) return null
-    const json = (await res.json()) as { data?: CompanyLookupResult }
-    return json.data ?? null
-  } catch {
-    return null
-  }
+): Promise<{ legalName: string; legalEntityType: string } | null> {
+  const { data } = await supabase
+    .from('bankid_enrichment')
+    .select('company_roles')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  const roles = (data?.company_roles ?? []) as EnrichmentCompanyRole[]
+  if (!Array.isArray(roles) || roles.length === 0) return null
+
+  const match = roles.find(
+    (r) => r.companyRegistrationNumber.replace(/[\s-]/g, '') === orgNumber,
+  )
+  if (!match) return null
+
+  return { legalName: match.legalName, legalEntityType: match.legalEntityType }
 }
 
 export default async function OnboardingPage({
@@ -85,25 +83,27 @@ export default async function OnboardingPage({
 
   const firstName = profile?.full_name?.split(' ')[0] || null
 
-  // The BankID picker routes here with ?org_number=… when TIC /lookup fails
-  // or the entity type isn't one-click-provisionable. Strip formatting so
-  // whatever Step2 displays matches what the rest of the flow will store.
+  // The BankID picker routes here with ?org_number=… for every pick. Strip
+  // formatting so whatever Step 2 displays matches what the rest of the flow
+  // will store.
   const { org_number: rawOrgNumber } = await searchParams
   const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
 
-  // Deep-link pre-fetch: when the BankID picker handed us an org-number, run
-  // /lookup server-side so Step 1's entity_type radio and Step 3's first-
-  // year toggle can land pre-selected. Pure UX optimization — the rest of
-  // the form continues to work on lookup failure.
-  let initialLookup: CompanyLookupResult | null = null
+  // BankID prefill: look up the CompanyRoles row (no Lens call) to pre-fill
+  // Step 1's entity_type radio and Step 2's company_name. If no role matches,
+  // the user fills everything manually — same fallback as a non-BankID
+  // signup. `preverifiedOrgNumber` tells Step 2 to skip the client-side
+  // /lookup since CompanyRoles already confirms existence.
   let initialEntityType: EntityType | undefined
+  let initialLegalName: string | undefined
+  let preverifiedOrgNumber: string | undefined
   if (initialOrgNumber) {
-    const hdrs = await headers()
-    const cookieHeader = hdrs.get('cookie') ?? ''
-    const host = hdrs.get('host') ?? 'localhost:3000'
-    const proto = hdrs.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https')
-    initialLookup = await prefetchLookup(initialOrgNumber, cookieHeader, `${proto}://${host}`)
-    initialEntityType = mapEntityType(initialLookup?.legalEntityType)
+    const match = await findCompanyRoleByOrgNumber(supabase, user.id, initialOrgNumber)
+    if (match) {
+      initialEntityType = mapTicEntityType(match.legalEntityType) ?? undefined
+      initialLegalName = match.legalName
+      preverifiedOrgNumber = initialOrgNumber
+    }
   }
 
   return (
@@ -114,7 +114,8 @@ export default async function OnboardingPage({
       hasExistingCompanies={hasCompanies}
       initialOrgNumber={initialOrgNumber}
       initialEntityType={initialEntityType}
-      initialLookup={initialLookup}
+      initialLegalName={initialLegalName}
+      preverifiedOrgNumber={preverifiedOrgNumber}
     />
   )
 }

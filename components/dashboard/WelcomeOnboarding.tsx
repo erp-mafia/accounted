@@ -93,11 +93,15 @@ interface WelcomeOnboardingProps {
   hasExistingCompanies?: boolean
   /** Pre-fill Step 2 org_number when the picker routed here via ?org_number=. */
   initialOrgNumber?: string
-  /** Mapped from a server-side /lookup (deep-link path only). Pre-selects Step 1's radio. */
+  /** Mapped from a TIC `legalEntityType`. Pre-selects Step 1's radio. */
   initialEntityType?: EntityType
-  /** Server-prefetched lookup result. Hydrates ticLookup state so Step 3's
-   *  first-year inference + Step 2's name/address pre-fill work on first render. */
-  initialLookup?: CompanyLookupResult | null
+  /** Legal name from CompanyRoles. Pre-fills Step 2's company_name field. */
+  initialLegalName?: string
+  /** Set when the orgnr came from BankID CompanyRoles. Step 2 treats the
+   *  field as pre-verified — skips the client-side Lens `/lookup` since
+   *  CompanyRoles already confirms the company exists. Cleared the moment
+   *  the user edits the orgnr. */
+  preverifiedOrgNumber?: string
 }
 
 export default function WelcomeOnboarding({
@@ -107,7 +111,8 @@ export default function WelcomeOnboarding({
   hasExistingCompanies,
   initialOrgNumber,
   initialEntityType,
-  initialLookup,
+  initialLegalName,
+  preverifiedOrgNumber,
 }: WelcomeOnboardingProps) {
   const router = useRouter()
   const { toast } = useToast()
@@ -117,24 +122,19 @@ export default function WelcomeOnboarding({
   const [started, setStarted] = useState(skipWelcome ?? false)
   const [isSaving, setIsSaving] = useState(false)
   const [currentStep, setCurrentStep] = useState(1)
-  // Seed settings with whatever the server-side /lookup pre-fetch gave us.
-  // entity_type is pre-selected when TIC reports a supported legal form;
-  // org_number, name, and city flow in from the same lookup so Step 2's
-  // debounced client-side fetch effectively just confirms what we already
-  // have. Anything missing (TIC unreachable, unsupported entity type) leaves
-  // the field untouched and the user fills it manually.
+  // Seed settings with what BankID CompanyRoles already told us. address /
+  // F-skatt / VAT come later — user types address in Step 2 and confirms
+  // F-skatt/VAT in Step 4. We deliberately don't pre-fetch from Lens to
+  // preserve the 3000/mo budget for the manual-orgnr path.
   const [settings, setSettings] = useState<Partial<CompanySettings>>(() => {
     const seed: Partial<CompanySettings> = {}
     if (initialOrgNumber) seed.org_number = initialOrgNumber
     if (initialEntityType) seed.entity_type = initialEntityType
-    if (initialLookup?.companyName) seed.company_name = initialLookup.companyName
-    if (initialLookup?.address?.street) seed.address_line1 = initialLookup.address.street
-    if (initialLookup?.address?.postalCode) seed.postal_code = initialLookup.address.postalCode
-    if (initialLookup?.address?.city) seed.city = initialLookup.address.city
+    if (initialLegalName) seed.company_name = initialLegalName
     return seed
   })
   const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
-  const [ticLookup, setTicLookup] = useState<CompanyLookupResult | null>(initialLookup ?? null)
+  const [ticLookup, setTicLookup] = useState<CompanyLookupResult | null>(null)
 
   const totalSteps = 4
 
@@ -356,6 +356,7 @@ export default function WelcomeOnboarding({
                   entityType={settings.entity_type as EntityType}
                   ticEnabled={ticEnabled}
                   onTicLookup={setTicLookup}
+                  preverifiedOrgNumber={preverifiedOrgNumber}
                   onNext={(data) => handleNext(data)}
                   onBack={handleBack}
                   isSaving={isSaving}

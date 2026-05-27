@@ -1,13 +1,9 @@
 'use server'
 
-import { headers, cookies } from 'next/headers'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
-import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
-import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 
 /**
@@ -82,16 +78,26 @@ export async function createCompanyFromOnboarding(params: {
   // supplied, persisted to companies.tic_snapshot so downstream features
   // (specialized accountant agent composer, MCP briefing) can read the same
   // Bolagsverket-sourced data the form used. Empty for manual entry paths.
-  ticLookup?: {
-    companyName: string
-    isCeased: boolean
-    address: { street: string | null; postalCode: string | null; city: string | null } | null
-    registration: { fTax: boolean; vat: boolean }
-    bankAccounts: { type: string; accountNumber: string; bic: string | null }[]
-    email: string | null
-    phone: string | null
-    sniCodes: { code: string; name: string }[]
-  } | null
+  ticLookup?: CompanyLookupResult | null
+}): Promise<{ companyId?: string; error?: string }> {
+  try {
+    return await createCompanyFromOnboardingImpl(params)
+  } catch (err) {
+    // Defensive top-level catch: a thrown error escapes to the client as
+    // an opaque Next.js server-action exception with no message in dev
+    // and a redacted message in prod. Logging the full error here gives
+    // us a server-side trace and returns a localized fallback to the UI.
+    console.error('[createCompanyFromOnboarding] unexpected error', err)
+    const message = err instanceof Error ? err.message : String(err)
+    return { error: message || 'Något gick fel när företaget skulle skapas. Försök igen.' }
+  }
+}
+
+async function createCompanyFromOnboardingImpl(params: {
+  teamId: string
+  settings: Record<string, unknown>
+  fiscalPeriod: { startDate: string; endDate: string; name: string }
+  ticLookup?: CompanyLookupResult | null
 }): Promise<{ companyId?: string; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -173,47 +179,15 @@ export async function createCompanyFromOnboarding(params: {
     }
   }
 
-  // Persist the FULL TIC profile (sniCodes + purpose + beneficial-owners +
-  // financials + …) once at signup. We call ensureTicSnapshot which:
-  //   1. Reads companies.tic_snapshot — empty for a brand-new row, so misses
-  //   2. Falls back to company_settings.org_number → uses the cleaned one
-  //   3. Self-fetches /api/extensions/ext/tic/profile with forwarded cookies
-  //   4. Persists the full profile + fetched_at timestamp
-  //
-  // This avoids the double-fetch the agent build path would otherwise
-  // trigger (lookup at form, then profile at agent build). On failure we
-  // fall through silently — the company row is already created, the agent
-  // build path will retry enrichment later, and we don't block signup.
-  if (cleanedOrgNumber) {
-    try {
-      const hdrs = await headers()
-      const cookieStore = await cookies()
-      const host = hdrs.get('host')
-      const proto =
-        hdrs.get('x-forwarded-proto') ?? (host?.startsWith('localhost') ? 'http' : 'https')
-      const origin = host
-        ? `${proto}://${host}`
-        : (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000')
-      const cookieHeader = cookieStore
-        .getAll()
-        .map((c) => `${c.name}=${c.value}`)
-        .join('; ')
-
-      await ensureTicSnapshot({
-        supabase,
-        companyId: newCompanyId,
-        cookieHeader,
-        origin,
-      })
-    } catch (err) {
-      // Best-effort enrichment. Signup must not fail because TIC is slow,
-      // unavailable, or the extension is disabled.
-      console.warn('[createCompanyFromOnboarding] tic profile enrichment failed', err)
-    }
-  } else if (params.ticLookup) {
-    // No org_number — we can't call /profile authoritatively, but the
-    // wizard already had a lookup result. Persist it as a degraded snapshot
-    // so the agent build at least sees what the user typed.
+  // Persist whatever lookup data the wizard already gathered. Do NOT call
+  // /profile here — that handler fans out to 13 Lens calls and the 5 s
+  // timeout in tic-fetch.ts ate ~530 wasted calls in May before yielding
+  // zero snapshots (every signup's /profile timed out, but the in-flight
+  // upstream fetches still counted against quota). The agent build path
+  // (app/(onboarding)/onboarding/agent/page.tsx) calls ensureTicSnapshot
+  // with upgradeV1: true lazily, which is the right place: only companies
+  // that actually reach agent onboarding spend the budget.
+  if (params.ticLookup) {
     const { error: ticErr } = await supabase
       .from('companies')
       .update({
@@ -294,129 +268,3 @@ export async function createCompanyFromOnboarding(params: {
   return { companyId: newCompanyId }
 }
 
-/**
- * One-click company setup from a TIC/Bolagsverket company role.
- *
- * The picker page at /select-company passes a `CompanyLookupResult` already
- * fetched from `/api/extensions/ext/tic/lookup`, plus the `EnrichmentCompanyRole`
- * minimums (org number, legal name, legal entity type). This action derives
- * sensible defaults (accrual, quarterly moms for VAT-registered, Jan-Dec
- * fiscal year) and delegates to `createCompanyFromOnboarding` so the
- * provisioning path is identical to the manual wizard. On success it clears
- * the enrichment row consumed by this path — the manual wizard leaves it
- * intact so a returning BankID user can still reach `/select-company` and
- * pick another directorship.
- *
- * Requires `lookup` to be non-null: if TIC `/lookup` is unreachable, the client
- * must route to the manual wizard instead. Silently defaulting `vat_registered`
- * to false for a momsregistrerat bolag would violate ML 17 kap (invoices
- * without moms), so we refuse to guess.
- */
-export async function createCompanyFromTicRole(params: {
-  teamId: string
-  orgNumber: string
-  legalName: string
-  legalEntityType: string
-  lookup: CompanyLookupResult | null
-}): Promise<{ companyId?: string; error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return { error: 'Unauthorized' }
-  }
-
-  const entityType = mapEntityType(params.legalEntityType)
-  if (!entityType) {
-    return { error: 'Den här företagsformen måste sättas upp manuellt.' }
-  }
-
-  // If the TIC lookup failed we don't know the company's VAT/F-skatt status.
-  // Refuse to silently guess — the caller routes to the manual wizard so the
-  // user can confirm these fields themselves.
-  if (!params.lookup) {
-    return { error: 'lookup_missing' }
-  }
-
-  // Ceased/struck-off companies must not be provisioned. Under BFL 2 kap,
-  // bokföringsskyldighet ends when a company is avregistrerad; creating a
-  // new gnubok accounting entity for a non-existent legal entity would let
-  // users file momsdeklarationer or årsredovisning for it.
-  if (params.lookup.isCeased) {
-    return { error: 'company_ceased' }
-  }
-
-  // Look up the enrichment row so we can delete it after successful
-  // provisioning (one-time use). We only need `id` here; the picker has
-  // already used the `companyRoles` field server-side to render the cards.
-  const { data: enrichmentRow } = await supabase
-    .from('extension_data')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('extension_id', 'tic')
-    .eq('key', 'bankid_enrichment')
-    .maybeSingle()
-
-  const addressStreet = params.lookup.address?.street ?? null
-  const addressPostal = params.lookup.address?.postalCode ?? null
-  const addressCity = params.lookup.address?.city ?? null
-
-  const fTax = params.lookup.registration.fTax
-  const vatRegistered = params.lookup.registration.vat
-
-  // moms_period: Skatteverket assigns the actual reporting period from
-  // annual beskattningsunderlag (≤1 MSEK → yearly, ≤40 MSEK → quarterly,
-  // >40 MSEK → monthly). TIC /lookup doesn't expose turnover, so we pick the
-  // middle-tier default. The user must verify it matches their Skatteverket
-  // assignment in /settings/tax — a mismatch causes late-filing penalties
-  // under SFL.
-  const momsPeriod = vatRegistered ? 'quarterly' : null
-
-  // Default by entity_type: EF → kontantmetoden, AB → faktureringsmetoden.
-  // Both forms may use either method under BFL 5 kap. 2 § when annual net
-  // turnover is normally ≤ 3 MSEK; users can change in /settings/bookkeeping.
-  const accountingMethod = entityType === 'enskild_firma' ? 'cash' : 'accrual'
-
-  const settings: Record<string, unknown> = {
-    entity_type: entityType,
-    company_name: params.legalName,
-    org_number: params.orgNumber.replace(/[\s-]/g, ''),
-    f_skatt: fTax,
-    vat_registered: vatRegistered,
-    moms_period: momsPeriod,
-    accounting_method: accountingMethod,
-    fiscal_year_start_month: 1,
-    address_line1: addressStreet,
-    postal_code: addressPostal,
-    city: addressCity,
-  }
-
-  const periodResult = computeFiscalPeriod(settings)
-  if (periodResult.error) {
-    return { error: 'Kunde inte beräkna räkenskapsår.' }
-  }
-
-  const result = await createCompanyFromOnboarding({
-    teamId: params.teamId,
-    settings,
-    fiscalPeriod: {
-      startDate: periodResult.startStr,
-      endDate: periodResult.endStr,
-      name: periodResult.periodName,
-    },
-  })
-
-  if (result.error || !result.companyId) {
-    return { error: result.error ?? 'Kunde inte skapa företag. Försök igen.' }
-  }
-
-  // One-time use: drop the enrichment row now that the user has committed to
-  // a TIC-suggested company. The manual wizard intentionally does NOT do this
-  // so a user with multiple directorships can still reach /select-company
-  // afterwards and provision another one.
-  if (enrichmentRow?.id) {
-    await supabase.from('extension_data').delete().eq('id', enrichmentRow.id)
-  }
-
-  return { companyId: result.companyId }
-}

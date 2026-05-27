@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
+  // The handler no longer calls these — kept mocked so the import doesn't
+  // throw and so we can assert below that they're NOT invoked.
   getBankAccounts: vi.fn(),
   getIndustryCodes: vi.fn(),
   getEmails: vi.fn(),
   getPhones: vi.fn(),
   getCompanyPurpose: vi.fn(),
+  getSignatory: vi.fn(),
   getCompanyDocuments: vi.fn(),
   getFiscalYears: vi.fn(),
   getPayrolls: vi.fn(),
-  getSignatory: vi.fn(),
   getRepresentatives: vi.fn(),
   getCompanyStatus: vi.fn(),
   getBeneficialOwners: vi.fn(),
@@ -40,10 +42,10 @@ const mockIndustries = vi.mocked(getIndustryCodes)
 const mockEmails = vi.mocked(getEmails)
 const mockPhones = vi.mocked(getPhones)
 const mockPurpose = vi.mocked(getCompanyPurpose)
+const mockSignatory = vi.mocked(getSignatory)
 const mockDocuments = vi.mocked(getCompanyDocuments)
 const mockFiscalYears = vi.mocked(getFiscalYears)
 const mockPayrolls = vi.mocked(getPayrolls)
-const mockSignatory = vi.mocked(getSignatory)
 const mockRepresentatives = vi.mocked(getRepresentatives)
 const mockStatus = vi.mocked(getCompanyStatus)
 const mockBeneficialOwners = vi.mocked(getBeneficialOwners)
@@ -57,6 +59,9 @@ function makeRequest(orgNumber?: string): Request {
 
 const profileHandler = ticExtension.apiRoutes![1].handler
 
+// The search doc now carries everything we used to pull from dedicated v2
+// endpoints — sniCodes, bankAccounts, emailAddresses, phoneNumbers,
+// mostRecentSignatory — at the top level. /profile reads those directly.
 const mockDoc: TICCompanyDocument = {
   companyId: 42,
   registrationNumber: '5560360793',
@@ -92,20 +97,19 @@ const mockDoc: TICCompanyDocument = {
     km_NetProfitMargin: 12.3,
     km_EquityAssetsRatio: 45.2,
   },
+  sniCodes: [
+    { rank: 1, sni_2007Code: '62010', sni_2007Name: 'Dataprogrammering', sni_2007Section: 'J' },
+  ],
+  bankAccounts: [{ accountNumber: '1234567', bankAccountType: 'bankgiro' }],
+  emailAddresses: [{ emailAddress: 'info@test.se', emailAddressType: 'general' }],
+  phoneNumbers: [{ phoneNumberFormatted: '08-1234567' }],
+  mostRecentSignatory: {
+    signatureDescription: 'Firman tecknas av styrelsen.',
+    firstSeenAt: 1700000000,
+  },
 }
 
-function mockAllSupplementary() {
-  mockBank.mockResolvedValue([
-    { bankgironumber: 1234567, terminated: false, name: 'Test AB' },
-  ])
-  mockIndustries.mockResolvedValue([
-    { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
-  ])
-  mockEmails.mockResolvedValue([{ emailAddress: 'info@test.se' }])
-  mockPhones.mockResolvedValue([{ phoneNumberFormatted: '08-1234567' }])
-  mockPurpose.mockResolvedValue([
-    { companyPurposeId: 1, purpose: 'Försäljning av drycker' },
-  ])
+function mockKeptSupplementary() {
   mockBeneficialOwners.mockResolvedValue([])
   mockDocuments.mockResolvedValue([
     {
@@ -123,7 +127,6 @@ function mockAllSupplementary() {
         auditCompanyName: 'Big Audit AB',
       },
     },
-    // A non-financial document type that should be filtered out
     {
       id: 'FRF_xyz999',
       type: 'minutes',
@@ -138,7 +141,6 @@ function mockAllSupplementary() {
       lastUpdatedAtUtc: '2024-06-01T00:00:00Z',
     },
     {
-      // Older row with different period — proves history dedup
       startMonthDay: '07-01',
       endMonthDay: '06-30',
       startEndDescription: 'Jul–Jun',
@@ -161,15 +163,6 @@ function mockAllSupplementary() {
     ],
     payrolls: [],
   })
-  mockSignatory.mockResolvedValue([
-    {
-      companySignatoryId: 1,
-      signatureDescription: 'Firman tecknas av styrelsen.',
-      lastUpdatedAtUtc: '2024-06-01T00:00:00Z',
-    },
-    // Empty descriptions get filtered out
-    { companySignatoryId: 2, signatureDescription: '   ', lastUpdatedAtUtc: '2024-06-01T00:00:00Z' },
-  ])
   mockRepresentatives.mockResolvedValue({
     representativeInformation: [
       {
@@ -228,7 +221,7 @@ describe('TIC profile route', () => {
 
   it('returns full profile on happy path', async () => {
     mockSearch.mockResolvedValue(mockDoc)
-    mockAllSupplementary()
+    mockKeptSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     expect(res.status).toBe(200)
@@ -239,7 +232,7 @@ describe('TIC profile route', () => {
     expect(data.companyName).toBe('Test AB')
     expect(data.legalEntityType).toBe('AB')
     expect(data.activityStatus).toBe('isActive')
-    expect(data.purpose).toBe('Försäljning av drycker')
+    expect(data.purpose).toBe('Software development')
     expect(data.address).toEqual({
       street: 'Storgatan 1',
       postalCode: '111 22',
@@ -258,9 +251,23 @@ describe('TIC profile route', () => {
     expect(data.fetchedAt).toBeDefined()
   })
 
+  it('does NOT fan out to bank/industries/emails/phones/purposes/signatory anymore', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    mockKeptSupplementary()
+
+    await profileHandler(makeRequest('556036-0793'))
+
+    expect(mockBank).not.toHaveBeenCalled()
+    expect(mockIndustries).not.toHaveBeenCalled()
+    expect(mockEmails).not.toHaveBeenCalled()
+    expect(mockPhones).not.toHaveBeenCalled()
+    expect(mockPurpose).not.toHaveBeenCalled()
+    expect(mockSignatory).not.toHaveBeenCalled()
+  })
+
   it('maps activityStatus to "ceased" when isCeased is true', async () => {
     mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isNoLongerActive' })
-    mockAllSupplementary()
+    mockKeptSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     const { data } = await res.json()
@@ -269,7 +276,7 @@ describe('TIC profile route', () => {
 
   it('includes financial summary from company document', async () => {
     mockSearch.mockResolvedValue(mockDoc)
-    mockAllSupplementary()
+    mockKeptSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     const { data } = await res.json()
@@ -289,12 +296,11 @@ describe('TIC profile route', () => {
 
   it('maps v2 documents (annualReport only) to financial-report summaries', async () => {
     mockSearch.mockResolvedValue(mockDoc)
-    mockAllSupplementary()
+    mockKeptSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     const { data } = await res.json()
 
-    // The 'minutes' document is filtered out; only the annualReport remains.
     expect(data.financialReports).toHaveLength(1)
     expect(data.financialReports[0]).toMatchObject({
       title: 'Årsredovisning',
@@ -309,7 +315,7 @@ describe('TIC profile route', () => {
   it('handles missing financial summary gracefully', async () => {
     const docWithoutFinancials = { ...mockDoc, mostRecentFinancialSummary: undefined }
     mockSearch.mockResolvedValue(docWithoutFinancials)
-    mockAllSupplementary()
+    mockKeptSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     const { data } = await res.json()
@@ -317,36 +323,33 @@ describe('TIC profile route', () => {
     expect(data.financials).toBeNull()
   })
 
-  it('handles partial Phase 2 failures gracefully', async () => {
+  it('degrades gracefully when remaining Phase 2 calls fail', async () => {
+    // Doc still provides bankAccounts/sniCodes/email/phone/purpose/signatory
+    // — only the kept Phase 2 endpoints can now fail.
     mockSearch.mockResolvedValue(mockDoc)
-    mockBank.mockRejectedValue(new Error('timeout'))
-    mockIndustries.mockResolvedValue([
-      { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
-    ])
-    mockEmails.mockRejectedValue(new Error('timeout'))
-    mockPhones.mockResolvedValue(null)
-    mockPurpose.mockRejectedValue(new Error('timeout'))
     mockDocuments.mockRejectedValue(new Error('timeout'))
     mockFiscalYears.mockRejectedValue(new Error('timeout'))
     mockPayrolls.mockRejectedValue(new Error('timeout'))
-    mockSignatory.mockRejectedValue(new Error('timeout'))
     mockRepresentatives.mockRejectedValue(new Error('timeout'))
     mockStatus.mockRejectedValue(new Error('timeout'))
+    mockBeneficialOwners.mockRejectedValue(new Error('timeout'))
 
     const res = await profileHandler(makeRequest('556036-0793'))
     expect(res.status).toBe(200)
 
     const { data } = await res.json()
     expect(data.companyName).toBe('Test AB')
-    expect(data.bankAccounts).toEqual([])
+    // These come from the search doc, so they survive Phase 2 failures
+    expect(data.bankAccounts).toHaveLength(1)
     expect(data.sniCodes).toHaveLength(1)
-    expect(data.email).toBeNull()
-    expect(data.phone).toBeNull()
-    expect(data.purpose).toBe('Software development') // falls back to mostRecentPurpose
+    expect(data.email).toBe('info@test.se')
+    expect(data.phone).toBe('08-1234567')
+    expect(data.purpose).toBe('Software development')
+    expect(data.signatory).toEqual([{ description: 'Firman tecknas av styrelsen.' }])
+    // These come from Phase 2, so they degrade to empty
     expect(data.financialReports).toEqual([])
     expect(data.fiscalYear).toBeNull()
     expect(data.fiscalYearHistory).toEqual([])
-    expect(data.signatory).toEqual([])
     expect(data.board).toBeNull()
     expect(data.representatives).toEqual([])
     expect(data.payrolls).toEqual([])
@@ -355,7 +358,7 @@ describe('TIC profile route', () => {
 
   it('exposes fiscal year, payroll history, signatory, board, representatives and status', async () => {
     mockSearch.mockResolvedValue(mockDoc)
-    mockAllSupplementary()
+    mockKeptSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     const { data } = await res.json()
@@ -376,7 +379,6 @@ describe('TIC profile route', () => {
       hasVacancy: false,
     })
 
-    // Active CEO only; the boardMember whose positionEnd is in the past is dropped
     expect(data.representatives).toHaveLength(1)
     expect(data.representatives[0]).toMatchObject({
       name: 'Anna Andersson',
@@ -411,17 +413,12 @@ describe('TIC profile route', () => {
       registrationDate: 0,
     }
     mockSearch.mockResolvedValue(minimalDoc)
-    mockBank.mockResolvedValue(null)
-    mockIndustries.mockResolvedValue(null)
-    mockEmails.mockResolvedValue(null)
-    mockPhones.mockResolvedValue(null)
-    mockPurpose.mockResolvedValue(null)
     mockDocuments.mockResolvedValue(null)
     mockFiscalYears.mockResolvedValue(null)
     mockPayrolls.mockResolvedValue(null)
-    mockSignatory.mockResolvedValue(null)
     mockRepresentatives.mockResolvedValue(null)
     mockStatus.mockResolvedValue(null)
+    mockBeneficialOwners.mockResolvedValue(null)
 
     const res = await profileHandler(makeRequest('1234567890'))
     const { data } = await res.json()

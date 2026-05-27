@@ -19,6 +19,47 @@ import { TICAPIError } from './tic-types'
 
 const TIC_API_TIMEOUT = 15_000
 
+// In-process TTL cache for proxy responses. Onboarding currently fires the
+// same org-number lookup 2–3 times in <2 s (server prefetch + client
+// useEffect + duplicate-check) and the agent build re-fetches /profile data
+// minutes later. The TIC budget (3000/mo Lens calls) can't absorb the
+// duplication. 5 min is long enough to collapse a full onboarding flow into
+// one upstream hit and short enough that stale data never matters (TIC
+// data changes on Bolagsverket filing cycles measured in days).
+const CACHE_TTL_MS = 5 * 60_000
+const CACHE_MAX_ENTRIES = 500
+interface CacheEntry {
+  expiresAt: number
+  value: unknown
+}
+const proxyCache = new Map<string, CacheEntry>()
+
+function cacheGet<T>(key: string): T | undefined {
+  const entry = proxyCache.get(key)
+  if (!entry) return undefined
+  if (entry.expiresAt < Date.now()) {
+    proxyCache.delete(key)
+    return undefined
+  }
+  return entry.value as T
+}
+
+function cacheSet(key: string, value: unknown): void {
+  if (proxyCache.size >= CACHE_MAX_ENTRIES) {
+    // LRU-ish eviction: drop the oldest 10% so we never grow unbounded.
+    const drop = Math.max(1, Math.floor(CACHE_MAX_ENTRIES / 10))
+    const keys = Array.from(proxyCache.keys()).slice(0, drop)
+    for (const k of keys) proxyCache.delete(k)
+  }
+  proxyCache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, value })
+}
+
+// Test-only: flush the in-process cache so per-test fixtures don't bleed
+// across cases. Not used by production code.
+export function __resetTicCacheForTest(): void {
+  proxyCache.clear()
+}
+
 /**
  * Generic TIC API fetch helper.
  *
@@ -33,6 +74,15 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
     throw new TICAPIError('TIC_API_PROXY_URL is not configured', undefined, 'NOT_CONFIGURED')
   }
 
+  // Check the in-process cache first. The cache key is the endpoint (which
+  // includes the org-number / company-id) so each unique upstream call is
+  // memoized; 404 responses are cached as `null` deliberately so a typo'd
+  // org-number doesn't re-spend a call on every keystroke.
+  const cached = cacheGet<T | null>(endpoint)
+  if (cached !== undefined) {
+    return cached
+  }
+
   const url = `${proxyUrl}?endpoint=${encodeURIComponent(endpoint)}`
 
   try {
@@ -42,10 +92,13 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
     })
 
     if (response.status === 404) {
+      cacheSet(endpoint, null)
       return null
     }
 
     if (response.status === 429) {
+      // Do NOT cache rate-limit responses — the next call after the window
+      // resets should be allowed through.
       throw new TICAPIError('Rate limit exceeded', 429, 'RATE_LIMIT_EXCEEDED')
     }
 
@@ -53,7 +106,9 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
       throw new TICAPIError(`TIC API error: ${response.statusText}`, response.status)
     }
 
-    return await response.json()
+    const body = await response.json()
+    cacheSet(endpoint, body)
+    return body
   } catch (error: unknown) {
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       throw new TICAPIError('Request timeout', undefined, 'TIMEOUT')

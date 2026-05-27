@@ -2,12 +2,18 @@ import { getAnthropic, SONNET_MODEL } from './client'
 import type { AtomSelection } from './schemas'
 import type { ComposerInputs } from './inputs'
 
-const SYSTEM_PROMPT = `Du skriver en kort, saklig profil av ett företag. Profilen visas för användaren under rubriken "Profil" och används som bakgrund åt en bokföringsassistent. Den är INTE en hälsning och INTE ett chattmeddelande.
+// Two voices: second-person ownership ("Du driver…") only when BankID
+// CompanyRoles has confirmed the active user holds a director-like position
+// at this company. Otherwise we use neutral third-person ("Coredination AB
+// är…") so manual-orgnr signups (accountant-on-behalf-of, employees,
+// family members setting up a parent's company) don't get a narrative
+// presuming they personally own the company. Same content, different voice.
+const SHARED_PROMPT_HEADER = `Du skriver en kort, saklig profil av ett företag. Profilen visas för användaren under rubriken "Profil" och används som bakgrund åt en bokföringsassistent. Den är INTE en hälsning och INTE ett chattmeddelande.
 
 Stil:
 - Max 80 ord, två till tre meningar.
-- Andra person: "Du driver…", "Din verksamhet…". Skriv ALDRIG i jag-form ("Jag ser att…"). Det är en beskrivning, inte assistenten som talar.
 - Saklig och konkret. Inga floskler, inga utropstecken, inga emoji, ingen avslutande fråga ("Stämmer det?").
+- Skriv ALDRIG i jag-form ("Jag ser att…"). Det är en beskrivning, inte assistenten som talar.
 - Använd ALDRIG tankstreck (— eller –). Använd kommatecken, punkt eller skriv "till" för intervall ("2,5 till 5 miljoner"). Hård regel.
 
 Innehåll:
@@ -15,6 +21,14 @@ Innehåll:
 2. Avsluta med en mening om vad assistenten är inställd på att hjälpa till med för den här typen av verksamhet, utifrån de valda specialiteterna.
 
 Skriv endast själva profiltexten. Ingen rubrik, inga punktlistor.`
+
+const VOICE_DIRECTOR = `\n\nRöst: Andra person, ägar-/ledningsperspektiv. "Du driver…", "Din verksamhet…". Användaren är verifierad styrelseledamot eller firmatecknare i bolaget.`
+
+const VOICE_NEUTRAL = `\n\nRöst: Tredje person, neutral. "Coredination AB är…", "Bolaget bedriver…". Användaren kan vara ägare, anställd eller redovisningskonsult — vi vet inte. Skriv ALDRIG "Du driver…", "Din verksamhet…" eller andra formuleringar som antar att användaren själv äger eller leder bolaget. Använd företagsnamnet eller "Bolaget".`
+
+function systemPromptFor(userIsConfirmedDirector: boolean): string {
+  return SHARED_PROMPT_HEADER + (userIsConfirmedDirector ? VOICE_DIRECTOR : VOICE_NEUTRAL)
+}
 
 export async function writeNarrative(
   inputs: ComposerInputs,
@@ -25,7 +39,7 @@ export async function writeNarrative(
   const response = await anthropic.messages.create({
     model: SONNET_MODEL,
     max_tokens: 400,
-    system: SYSTEM_PROMPT,
+    system: systemPromptFor(inputs.userIsConfirmedDirector),
     messages: [
       {
         role: 'user',

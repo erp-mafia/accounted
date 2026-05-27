@@ -1,15 +1,15 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Building2, ArrowRight, Loader2, Plus, Check, AlertTriangle } from 'lucide-react'
+import { Building2, ArrowRight, Loader2, Plus, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
-import { switchCompany, createCompanyFromTicRole } from '@/lib/company/actions'
+import { switchCompany } from '@/lib/company/actions'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
-import type { CompanyLookupResult, EnrichmentCompanyRole } from '@/lib/company-lookup/types'
+import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { getBranding } from '@/lib/branding/service'
 
 const branding = getBranding()
@@ -39,7 +39,6 @@ interface BankIdCompanyPickerProps {
 type SetupState =
   | { kind: 'idle' }
   | { kind: 'opening'; companyId: string }
-  | { kind: 'creating'; orgNumber: string; step: 'lookup' | 'provision' }
 
 // Swedish legal entity names (Aktiebolag, Enskild firma, etc.) are statutory
 // terms — kept in Swedish in both locales.
@@ -79,12 +78,11 @@ export default function BankIdCompanyPicker({
   const { toast } = useToast()
   const t = useTranslations('select_company')
   const [setup, setSetup] = useState<SetupState>({ kind: 'idle' })
-  const [isPending, startTransition] = useTransition()
 
   const hour = new Date().getHours()
   const greeting = hour < 5 ? t('greeting_night') : hour < 10 ? t('greeting_morning') : hour < 14 ? t('greeting_hello') : hour < 18 ? t('greeting_afternoon') : t('greeting_evening')
 
-  const busy = setup.kind !== 'idle' || isPending
+  const busy = setup.kind !== 'idle'
 
   async function handleOpenMember(companyId: string) {
     if (busy) return
@@ -98,167 +96,16 @@ export default function BankIdCompanyPicker({
     window.location.assign('/')
   }
 
-  async function handleCreateFromTic(role: EnrichmentCompanyRole) {
+  // BankID picker no longer one-click-provisions. Every pick routes to the
+  // onboarding wizard with the orgnr (and entity_type via the server-side
+  // CompanyRoles match in /onboarding) pre-filled. F-skatt / VAT / address
+  // are confirmed by the user in Steps 2-4 instead of being auto-fetched
+  // from TIC — costs us ~1 Lens call per signup but avoids any TIC budget
+  // spend (companyRoles is on the Identity API, which is a separate quota).
+  function handleCreateFromTic(role: EnrichmentCompanyRole) {
     if (busy) return
     const orgNumber = role.companyRegistrationNumber.replace(/[\s-]/g, '')
-    const mapped = mapEntityType(role.legalEntityType)
-    if (!mapped) {
-      // Entity type isn't supported end-to-end — route to manual wizard with
-      // the org number pre-filled.
-      router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
-      return
-    }
-
-    setSetup({ kind: 'creating', orgNumber, step: 'lookup' })
-
-    let lookup: CompanyLookupResult | null = null
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`,
-        { method: 'GET' },
-      )
-      if (res.ok) {
-        const json = await res.json()
-        lookup = (json?.data as CompanyLookupResult | undefined) ?? null
-      }
-    } catch {
-      // Network/parse failure — fall through to the lookup-missing branch below.
-    }
-
-    // Without a lookup we don't know the company's VAT/F-skatt status.
-    // Defaulting those to false for a momsregistrerat bolag would silently
-    // create a company that issues invoices without moms — ML 17 kap violation.
-    // Route to the manual wizard with the known fields pre-filled instead.
-    if (!lookup) {
-      toast({
-        title: t('toast_lookup_failed_title'),
-        description: t('toast_lookup_failed_description'),
-      })
-      setSetup({ kind: 'idle' })
-      router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
-      return
-    }
-
-    // Block provisioning for companies that are avregistrerade/likviderade.
-    // Under BFL 2 kap, bokföringsskyldighet ends when a company is struck off.
-    if (lookup.isCeased) {
-      toast({
-        title: t('toast_company_ceased_title'),
-        description: t('toast_company_ceased_description'),
-        variant: 'destructive',
-      })
-      setSetup({ kind: 'idle' })
-      return
-    }
-
-    setSetup({ kind: 'creating', orgNumber, step: 'provision' })
-
-    startTransition(async () => {
-      const result = await createCompanyFromTicRole({
-        teamId,
-        orgNumber,
-        legalName: role.legalName,
-        legalEntityType: role.legalEntityType,
-        lookup,
-      })
-
-      if (result.error === 'lookup_missing') {
-        // Extremely unlikely (we just verified lookup above) but if it happens,
-        // the same fallback applies.
-        setSetup({ kind: 'idle' })
-        router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
-        return
-      }
-
-      if (result.error === 'org_number_exists') {
-        toast({
-          title: t('toast_company_exists_title'),
-          description: t('toast_company_exists_description'),
-          variant: 'destructive',
-        })
-        setSetup({ kind: 'idle' })
-        return
-      }
-
-      if (result.error === 'company_ceased') {
-        // Belt-and-suspenders: we already check lookup.isCeased client-side
-        // above, but the server-side guard catches any race where TIC's
-        // cached result differs between the two calls.
-        toast({
-          title: t('toast_company_ceased_title'),
-          description: t('toast_company_ceased_description'),
-          variant: 'destructive',
-        })
-        setSetup({ kind: 'idle' })
-        return
-      }
-
-      if (result.error === 'org_number_invalid') {
-        toast({
-          title: t('toast_org_invalid_title'),
-          description: t('toast_org_invalid_description'),
-          variant: 'destructive',
-        })
-        setSetup({ kind: 'idle' })
-        router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
-        return
-      }
-
-      if (result.error || !result.companyId) {
-        toast({
-          title: t('toast_create_failed_title'),
-          description: result.error ?? t('toast_create_failed_description'),
-          variant: 'destructive',
-        })
-        setSetup({ kind: 'idle' })
-        return
-      }
-
-      toast({ title: t('toast_welcome_title'), description: t('toast_company_ready') })
-      window.location.assign('/')
-    })
-  }
-
-  // Progress card while creating
-  if (setup.kind === 'creating') {
-    const lookupDone = setup.step === 'provision'
-    return (
-      <div className="stagger-enter">
-        <header className="mb-10">
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
-            {greeting}{firstName ? `, ${firstName}` : ''}
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1.5">{t('setting_up')}</p>
-        </header>
-
-        <div className="max-w-lg rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-          <div className="flex items-start gap-3">
-            <Building2 className="h-5 w-5 text-muted-foreground mt-0.5" />
-            <div className="flex-1">
-              <p className="font-medium text-sm">{t('org_nr_prefix', { orgNumber: setup.orgNumber })}</p>
-              <ul className="mt-3 space-y-2 text-sm">
-                <li className="flex items-center gap-2">
-                  {lookupDone
-                    ? <Check className="h-4 w-4 text-sage" />
-                    : <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-                  <span className={cn(!lookupDone && 'text-muted-foreground')}>
-                    {t('progress_lookup')}
-                  </span>
-                </li>
-                <li className="flex items-center gap-2">
-                  {lookupDone
-                    ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    : <span className="h-4 w-4 inline-block rounded-full border border-border" />}
-                  <span className={cn(!lookupDone && 'text-muted-foreground/50')}>
-                    {t('progress_provision')}
-                  </span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
+    router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
   }
 
   return (

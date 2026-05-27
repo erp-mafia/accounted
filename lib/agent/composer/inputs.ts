@@ -76,6 +76,74 @@ export async function loadCompanySettings(
   return (data ?? null) as CompanySettingsForComposer | null
 }
 
+// Whether the currently-onboarding user is a confirmed director / signatory
+// at this company per BankID CompanyRoles. When true, the narrative is safe
+// to use second-person ownership voice ("Du driver…"); when false (manual-
+// orgnr signup, accountant-on-behalf-of, etc.) the narrative falls back to
+// neutral third-person ("Coredination AB är…") so we don't put words about
+// ownership in the user's mouth.
+//
+// We match the user's enrichment row against this company's org_number.
+// `companyId` is the gnubok UUID — we need to read the orgnr from
+// `companies` to do the match. Cheap (single SELECT each) and only runs once
+// per agent build.
+//
+// Director-like positions per Bolagsverket: 'ceo', 'boardMember', 'chairman',
+// 'externalSignatory'. Deputy positions ('deputyBoardMember') and external
+// auditors are intentionally excluded — they don't run the company day-to-day.
+const DIRECTOR_POSITION_TYPES = new Set([
+  'ceo',
+  'boardMember',
+  'chairman',
+  'externalSignatory',
+  // Lowercase variants in case TIC normalises differently
+  'CEO',
+  'BoardMember',
+  'Chairman',
+  'ExternalSignatory',
+])
+
+export async function loadUserDirectorship(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<{ confirmedDirector: boolean }> {
+  // Read this company's org_number — the BankID CompanyRoles row keys on
+  // companyRegistrationNumber, not the gnubok company UUID.
+  const { data: companyRow } = await supabase
+    .from('companies')
+    .select('org_number')
+    .eq('id', companyId)
+    .single()
+  const orgNumber = (companyRow?.org_number as string | null)?.replace(/[\s-]/g, '')
+  if (!orgNumber) return { confirmedDirector: false }
+
+  // Read the active user's enrichment row. Composer runs inside the user's
+  // request context (RLS-scoped client), so .maybeSingle() only sees the row
+  // for the authenticated user — no need to join through company_members.
+  const { data: enrichmentRow } = await supabase
+    .from('bankid_enrichment')
+    .select('company_roles')
+    .maybeSingle()
+  const roles = (enrichmentRow?.company_roles ?? []) as Array<{
+    companyRegistrationNumber?: string
+    positionTypes?: string[]
+    positionEnd?: string | null
+  }>
+  if (!Array.isArray(roles) || roles.length === 0) return { confirmedDirector: false }
+
+  const match = roles.find(
+    (r) => r.companyRegistrationNumber?.replace(/[\s-]/g, '') === orgNumber,
+  )
+  if (!match) return { confirmedDirector: false }
+
+  // Position must be a director-type AND not already ended.
+  const nowIso = new Date().toISOString()
+  if (match.positionEnd && match.positionEnd < nowIso) return { confirmedDirector: false }
+  const positions = match.positionTypes ?? []
+  const isDirector = positions.some((p) => DIRECTOR_POSITION_TYPES.has(p))
+  return { confirmedDirector: isDirector }
+}
+
 interface SieSummary {
   top_accounts: { account: string; abs_amount: number }[]
   top_counterparties: { name: string; abs_amount: number }[]
@@ -285,6 +353,12 @@ export interface ComposerInputs {
   sieSummary: SieSummary | null
   bankingSummary: BankingSummary | null
   atomIndex: AtomRegistryIndexRow[]
+  // True when BankID CompanyRoles confirms the active user holds a
+  // director-like position at this company. Controls whether the narrative
+  // uses second-person ownership voice ("Du driver…") or neutral
+  // third-person ("Coredination AB är…"). Default false so unknown users
+  // never get the presumptive voice.
+  userIsConfirmedDirector: boolean
 }
 
 export async function gatherComposerInputs(
@@ -297,12 +371,14 @@ export async function gatherComposerInputs(
     sieSummary,
     bankingSummary,
     companySettings,
+    directorship,
   ] = await Promise.all([
     loadCompanyTicSnapshot(supabase, companyId),
     loadAtomRegistryIndex(supabase),
     loadSieSummary(supabase, companyId).catch(() => null),
     loadBankingSummary(supabase, companyId).catch(() => null),
     loadCompanySettings(supabase, companyId).catch(() => null),
+    loadUserDirectorship(supabase, companyId).catch(() => ({ confirmedDirector: false })),
   ])
 
   return {
@@ -315,6 +391,7 @@ export async function gatherComposerInputs(
     sieSummary,
     bankingSummary,
     atomIndex,
+    userIsConfirmedDirector: directorship.confirmedDirector,
   }
 }
 

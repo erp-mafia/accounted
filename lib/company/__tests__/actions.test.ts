@@ -14,8 +14,7 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 import { createClient, createServiceClient } from '@/lib/supabase/server'
-import { createCompanyFromTicRole, createCompanyFromOnboarding } from '../actions'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import { createCompanyFromOnboarding } from '../actions'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockCreateServiceClient = vi.mocked(createServiceClient)
@@ -110,159 +109,6 @@ beforeEach(() => {
   // Default: no existing company with this org_number. Individual tests can
   // override by calling mockServiceClientForOrgNumber('...') inside the test.
   mockServiceClientForOrgNumber(undefined)
-})
-
-describe('createCompanyFromTicRole', () => {
-  it('returns Unauthorized when no user session', async () => {
-    const { supabase } = buildSupabase({ user: null })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await createCompanyFromTicRole({
-      teamId: 'team-1',
-      orgNumber: '5560125790',
-      legalName: 'Acme AB',
-      legalEntityType: 'AB',
-      lookup: null,
-    })
-
-    expect(result.error).toBe('Unauthorized')
-  })
-
-  it('rejects unmappable entity types before any DB work', async () => {
-    const { supabase, calls } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await createCompanyFromTicRole({
-      teamId: 'team-1',
-      orgNumber: '969696-1212',
-      legalName: 'Beta HB',
-      legalEntityType: 'Handelsbolag',
-      lookup: null,
-    })
-
-    expect(result.error).toMatch(/manuellt/i)
-    // Entity-type rejection should short-circuit — no table writes.
-    const writes = calls.filter((c) => ['insert', 'upsert', 'delete', 'update'].includes(c.method))
-    expect(writes).toEqual([])
-  })
-
-  it('refuses to guess when TIC lookup is missing (prevents silent ML 17 kap violation)', async () => {
-    const { supabase, calls } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await createCompanyFromTicRole({
-      teamId: 'team-1',
-      orgNumber: '5560125790',
-      legalName: 'Acme AB',
-      legalEntityType: 'AB',
-      lookup: null,
-    })
-
-    expect(result.error).toBe('lookup_missing')
-    // Must not have provisioned anything with a guessed VAT status.
-    const writes = calls.filter((c) => ['insert', 'upsert', 'delete', 'update'].includes(c.method))
-    expect(writes).toEqual([])
-  })
-
-  it('provisions with sensible defaults for a VAT-registered aktiebolag', async () => {
-    const lookup: CompanyLookupResult = {
-      companyName: 'Acme Konsult AB',
-      isCeased: false,
-      address: { street: 'Storgatan 1', postalCode: '11122', city: 'Stockholm' },
-      registration: { fTax: true, vat: true },
-      bankAccounts: [],
-      email: null,
-      phone: null,
-      sniCodes: [],
-    }
-
-    const { supabase, calls } = buildSupabase({
-      user: { id: 'user-1' },
-      results: {
-        // Seed an enrichment row so the cleanup branch runs and the test
-        // can verify it fires.
-        extension_data: {
-          maybeSingle: { data: { id: 'enrichment-1', value: {} } },
-        },
-      },
-      rpcResults: {
-        create_company_with_owner: { data: 'new-company-id' },
-        seed_chart_of_accounts: { data: null },
-      },
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await createCompanyFromTicRole({
-      teamId: 'team-1',
-      orgNumber: '5560125790',
-      legalName: 'Acme Konsult AB',
-      legalEntityType: 'AB',
-      lookup,
-    })
-
-    expect(result.companyId).toBe('new-company-id')
-    expect(result.error).toBeUndefined()
-
-    // The settings upsert on company_settings should reflect our derived defaults.
-    const settingsUpsert = calls.find((c) => c.table === 'company_settings' && c.method === 'upsert')
-    expect(settingsUpsert).toBeDefined()
-    const settings = (settingsUpsert!.args[0] as Record<string, unknown>)
-    expect(settings.entity_type).toBe('aktiebolag')
-    expect(settings.company_name).toBe('Acme Konsult AB')
-    expect(settings.org_number).toBe('5560125790')
-    expect(settings.f_skatt).toBe(true)
-    expect(settings.vat_registered).toBe(true)
-    expect(settings.moms_period).toBe('quarterly')
-    expect(settings.accounting_method).toBe('accrual')
-    expect(settings.address_line1).toBe('Storgatan 1')
-    expect(settings.postal_code).toBe('11122')
-    expect(settings.city).toBe('Stockholm')
-
-    // The enrichment row must be cleaned up by the one-click path so the
-    // picker doesn't re-offer this company on a return visit.
-    const enrichmentDelete = calls.find(
-      (c) => c.table === 'extension_data' && c.method === 'delete',
-    )
-    expect(enrichmentDelete).toBeDefined()
-  })
-
-  it('defaults enskild firma to kontantmetoden (K1), leaves moms_period null when non-VAT', async () => {
-    const lookup: CompanyLookupResult = {
-      companyName: 'Liten EF',
-      isCeased: false,
-      address: null,
-      registration: { fTax: true, vat: false },
-      bankAccounts: [],
-      email: null,
-      phone: null,
-      sniCodes: [],
-    }
-
-    const { supabase, calls } = buildSupabase({
-      user: { id: 'user-1' },
-      rpcResults: {
-        create_company_with_owner: { data: 'new-company-id' },
-        seed_chart_of_accounts: { data: null },
-      },
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    await createCompanyFromTicRole({
-      teamId: 'team-1',
-      orgNumber: '8001011231',
-      legalName: 'Liten EF',
-      legalEntityType: 'Enskild firma',
-      lookup,
-    })
-
-    const settingsUpsert = calls.find((c) => c.table === 'company_settings' && c.method === 'upsert')
-    const settings = settingsUpsert!.args[0] as Record<string, unknown>
-    expect(settings.entity_type).toBe('enskild_firma')
-    expect(settings.vat_registered).toBe(false)
-    expect(settings.moms_period).toBeNull()
-    // Default for EF is kontantmetoden (BFL 5 kap. 2 §); AB defaults to accrual but may switch.
-    expect(settings.accounting_method).toBe('cash')
-  })
 })
 
 describe('createCompanyFromOnboarding — duplicate org_number guard', () => {
@@ -459,32 +305,131 @@ describe('createCompanyFromOnboarding — duplicate org_number guard', () => {
   })
 })
 
-describe('createCompanyFromTicRole — ceased companies', () => {
-  it('refuses to provision when TIC lookup reports the company is ceased', async () => {
-    const lookup: CompanyLookupResult = {
-      companyName: 'Avregistrerat AB',
-      isCeased: true, // <- key field
-      address: null,
-      registration: { fTax: false, vat: false },
+describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
+  it('persists the supplied ticLookup to companies.tic_snapshot', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const ticLookup = {
+      companyName: 'Acme AB',
+      isCeased: false,
+      address: { street: 'Storgatan 1', postalCode: '11122', city: 'Stockholm' },
+      registration: { fTax: true, vat: true },
       bankAccounts: [],
       email: null,
       phone: null,
-      sniCodes: [],
+      sniCodes: [{ code: '62010', name: 'Dataprogrammering' }],
+      fiscalYear: { startMonthDay: '01-01', endMonthDay: '12-31' },
+      legalEntityType: 'AB',
+      registrationDate: 0,
     }
 
-    const { supabase, calls } = buildSupabase({ user: { id: 'user-1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
-    const result = await createCompanyFromTicRole({
+    const result = await createCompanyFromOnboarding({
       teamId: 'team-1',
-      orgNumber: '5560125790',
-      legalName: 'Avregistrerat AB',
-      legalEntityType: 'AB',
-      lookup,
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Acme AB',
+        org_number: '5560125790',
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+      ticLookup,
     })
 
-    expect(result.error).toBe('company_ceased')
-    const writes = calls.filter((c) => ['insert', 'upsert', 'delete', 'update'].includes(c.method))
-    expect(writes).toEqual([])
+    expect(result.companyId).toBe('new-company-id')
+
+    // The lookup must have been UPDATEd onto the freshly-created company row.
+    // Two updates run on `companies`: one for org_number, one for tic_snapshot.
+    const companyUpdates = calls.filter(
+      (c) => c.table === 'companies' && c.method === 'update',
+    )
+    const snapshotUpdate = companyUpdates.find((c) => {
+      const payload = c.args[0] as Record<string, unknown>
+      return 'tic_snapshot' in payload
+    })
+    expect(snapshotUpdate).toBeDefined()
+    const payload = snapshotUpdate!.args[0] as Record<string, unknown>
+    expect(payload.tic_snapshot).toEqual(ticLookup)
+    expect(payload.tic_snapshot_fetched_at).toBeDefined()
+  })
+
+  it('skips the snapshot update when no ticLookup is supplied (manual signup)', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Manual AB',
+        // No org_number — exercises the path where the org_number UPDATE also
+        // doesn't run, so we can isolate the no-snapshot guarantee.
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+      // ticLookup intentionally omitted
+    })
+
+    expect(result.companyId).toBe('new-company-id')
+
+    // No update touched tic_snapshot at all.
+    const snapshotUpdate = calls.find((c) => {
+      if (c.table !== 'companies' || c.method !== 'update') return false
+      const payload = c.args[0] as Record<string, unknown>
+      return 'tic_snapshot' in payload
+    })
+    expect(snapshotUpdate).toBeUndefined()
+  })
+
+  it('does NOT call the heavy /profile endpoint at signup (regression: was 13 calls/signup)', async () => {
+    // The signup path used to call ensureTicSnapshot which fetches /profile.
+    // We removed it because it timed out 100% of the time, costing 13 Lens
+    // calls each. This test prevents anyone from re-adding it by checking
+    // that fetch is never invoked during the action.
+    vi.stubGlobal('fetch', vi.fn())
+
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Acme AB',
+        org_number: '5560125790',
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+    })
+
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
+

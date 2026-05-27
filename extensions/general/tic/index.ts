@@ -204,6 +204,28 @@ function toFinancialReportSummary(
  * Always logs the cleaned org number so we can correlate failures with input
  * in Vercel logs.
  */
+// Derive `{ startMonthDay, endMonthDay }` (e.g. "01-01" / "12-31") from the
+// search doc's mostRecentFinancialSummary. periodStart/periodEnd are Unix
+// timestamps in seconds. Returns null when the company has no closed period
+// yet — the client's deriveFirstYearDefaults handles newly-registered
+// companies from registrationDate instead.
+function deriveFiscalYearMonthDay(
+  fin: { periodStart?: number; periodEnd?: number } | undefined,
+): { startMonthDay: string | null; endMonthDay: string | null } | null {
+  if (!fin?.periodStart || !fin?.periodEnd) return null
+  const toMonthDay = (unixSeconds: number): string | null => {
+    const d = new Date(unixSeconds * 1000)
+    if (Number.isNaN(d.getTime())) return null
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+    const dd = String(d.getUTCDate()).padStart(2, '0')
+    return `${mm}-${dd}`
+  }
+  const startMonthDay = toMonthDay(fin.periodStart)
+  const endMonthDay = toMonthDay(fin.periodEnd)
+  if (!startMonthDay && !endMonthDay) return null
+  return { startMonthDay, endMonthDay }
+}
+
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
@@ -301,7 +323,16 @@ export const ticExtension: Extension = {
         const cleanedOrgNumber = orgNumber.replace(/[\s-]/g, '')
 
         try {
-          // Phase 1: Search — returns name, address, registration flags
+          // Single Lens call: the search-public document already includes
+          // sniCodes, bankAccounts, emailAddresses, phoneNumbers, and the
+          // registration flags at the top level — we used to fan out to
+          // five dedicated endpoints for the same data (6 calls total) and
+          // the 3 000/mo TIC budget couldn't sustain it. This endpoint now
+          // costs ~1 call. Fiscal-year MM-DD is derived from
+          // mostRecentFinancialSummary.periodStart/periodEnd when present;
+          // newly-registered companies without a financial summary return
+          // fiscalYear: null and the client-side first-year derivation
+          // takes over (see deriveFirstYearDefaults).
           const doc = await searchCompanyByOrgNumber(orgNumber)
 
           if (!doc) {
@@ -311,14 +342,10 @@ export const ticExtension: Extension = {
             )
           }
 
-          // Extract company name (prefer 'name' type over other naming types)
           const nameEntry =
             doc.names.find((n) => n.companyNamingType === 'name') ?? doc.names[0]
           const companyName = nameEntry?.nameOrIdentifier ?? ''
 
-          // v2 exposes a top-level `isCeased` boolean; `activityStatus` is
-          // now an enum (`hasNeverBeenActive | isActive | isNoLongerActive
-          // | unknown`) rather than the v1 string with a `'ceased'` value.
           const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
 
           const address = doc.mostRecentRegisteredAddress
@@ -334,79 +361,31 @@ export const ticExtension: Extension = {
             vat: doc.isRegisteredForVAT ?? false,
           }
 
-          // Phase 2: Supplementary data (non-blocking)
-          const companyId = doc.companyId
-          const [bankResult, industriesResult, emailResult, phoneResult, fiscalYearResult] =
-            await Promise.allSettled([
-              getBankAccounts(companyId),
-              getIndustryCodes(companyId),
-              getEmails(companyId),
-              getPhones(companyId),
-              getFiscalYears(companyId),
-            ])
+          const bankAccounts = (doc.bankAccounts ?? [])
+            .filter((ba) => ba.accountNumber != null && ba.bankAccountType === 'bankgiro')
+            .map((ba) => ({
+              type: 'bankgiro',
+              accountNumber: String(ba.accountNumber),
+              bic: null,
+            }))
 
-          // v2 `/companies/{id}/bank-accounts` now returns Bankgirot only.
-          // Drop terminated entries and emit the canonical { type:
-          // 'bankgiro', accountNumber } shape; BIC is no longer
-          // available from this endpoint.
-          const bankAccounts =
-            bankResult.status === 'fulfilled' && bankResult.value
-              ? bankResult.value
-                  .filter((ba) => ba.terminated !== true && ba.bankgironumber != null)
-                  .map((ba) => ({
-                    type: 'bankgiro',
-                    accountNumber: String(ba.bankgironumber),
-                    bic: null,
-                  }))
-              : []
+          // Search-doc shape is `{ rank, sni_2007Code, sni_2007Name, ... }`;
+          // map to the canonical { code, name } the rest of the app expects.
+          const sniCodes = (doc.sniCodes ?? [])
+            .filter((s) => s.sni_2007Code)
+            .map((s) => ({
+              code: s.sni_2007Code ?? '',
+              name: s.sni_2007Name ?? '',
+            }))
 
-          // v2 returns a discriminated array across SNI 2007 / 2025;
-          // preserve v1's behavior of surfacing SNI 2007 only.
-          const sniCodes =
-            industriesResult.status === 'fulfilled' && industriesResult.value
-              ? industriesResult.value
-                  .filter((i) => i.companyIndustryCodeType === 'sni2007')
-                  .map((i) => ({
-                    code: i.industryCode ?? '',
-                    name: i.description ?? '',
-                  }))
-              : []
+          const email = doc.emailAddresses?.[0]?.emailAddress ?? null
 
-          const email =
-            emailResult.status === 'fulfilled' && emailResult.value?.[0]?.emailAddress
-              ? emailResult.value[0].emailAddress
-              : null
-
-          // v2 renamed the phone field to `phoneNumberFormatted` and
-          // added `e164PhoneNumber` as a normalized form.
           const phone =
-            phoneResult.status === 'fulfilled' && phoneResult.value?.[0]
-              ? phoneResult.value[0].phoneNumberFormatted
-                  ?? phoneResult.value[0].e164PhoneNumber
-                  ?? null
-              : null
+            doc.phoneNumbers?.[0]?.phoneNumberFormatted
+              ?? doc.phoneNumbers?.[0]?.e164PhoneNumber
+              ?? null
 
-          // Pick the most recently updated fiscal-year row that still
-          // has both start and end month/day populated — older rows can
-          // be missing endMonthDay during Bolagsverket transitions.
-          const fiscalYear =
-            fiscalYearResult.status === 'fulfilled' && fiscalYearResult.value?.length
-              ? fiscalYearResult.value
-                  .filter((fy) => fy.startMonthDay && fy.endMonthDay)
-                  .sort((a, b) => (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? ''))[0]
-                  ?? null
-              : null
-
-          // Log Phase 2 failures for debugging
-          if (bankResult.status === 'rejected') {
-            log.warn('[tic] bank accounts fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(bankResult.reason) })
-          }
-          if (industriesResult.status === 'rejected') {
-            log.warn('[tic] industry codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(industriesResult.reason) })
-          }
-          if (fiscalYearResult.status === 'rejected') {
-            log.warn('[tic] fiscal years fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(fiscalYearResult.reason) })
-          }
+          const fiscalYear = deriveFiscalYearMonthDay(doc.mostRecentFinancialSummary)
 
           const result: CompanyLookupResult = {
             companyName,
@@ -417,12 +396,7 @@ export const ticExtension: Extension = {
             email,
             phone,
             sniCodes,
-            fiscalYear: fiscalYear
-              ? {
-                  startMonthDay: fiscalYear.startMonthDay ?? null,
-                  endMonthDay: fiscalYear.endMonthDay ?? null,
-                }
-              : null,
+            fiscalYear,
             legalEntityType: doc.legalEntityType ?? null,
             registrationDate: doc.registrationDate ?? null,
           }
@@ -468,73 +442,58 @@ export const ticExtension: Extension = {
           const companyName = nameEntry?.nameOrIdentifier ?? ''
           const companyId = doc.companyId
 
-          // Phase 2: Supplementary data (non-blocking). Each row is its
-          // own Lens endpoint; we fire them in parallel and degrade
-          // gracefully when any one fails.
+          // Phase 2: ONLY data not already present at the top level of the
+          // search doc. We dropped bank-accounts, industries, email-addresses,
+          // phone-numbers, purposes, and signatory — those duplicate the
+          // search-doc fields and were burning 6 Lens calls per /profile
+          // for nothing. Per-/profile cost: 13 → 7 calls.
           const [
-            bankResult,
-            industriesResult,
-            emailResult,
-            phoneResult,
-            purposeResult,
             documentsResult,
             fiscalYearResult,
             payrollsResult,
-            signatoryResult,
             representativesResult,
             statusResult,
             beneficialOwnersResult,
           ] = await Promise.allSettled([
-            getBankAccounts(companyId),
-            getIndustryCodes(companyId),
-            getEmails(companyId),
-            getPhones(companyId),
-            getCompanyPurpose(companyId),
             getCompanyDocuments(companyId),
             getFiscalYears(companyId),
             getPayrolls(companyId),
-            getSignatory(companyId),
             getRepresentatives(companyId),
             getCompanyStatus(companyId),
             getBeneficialOwners(companyId),
           ])
 
-          const bankAccounts =
-            bankResult.status === 'fulfilled' && bankResult.value
-              ? bankResult.value
-                  .filter((ba) => ba.terminated !== true && ba.bankgironumber != null)
-                  .map((ba) => ({
-                    type: 'bankgiro',
-                    accountNumber: String(ba.bankgironumber),
-                    bic: null,
-                  }))
-              : []
+          // Bankgiro list from search-doc (v2 `bankAccounts` array with
+          // `{accountNumber, bankAccountType}`).
+          const bankAccounts = (doc.bankAccounts ?? [])
+            .filter((ba) => ba.accountNumber != null && ba.bankAccountType === 'bankgiro')
+            .map((ba) => ({
+              type: 'bankgiro',
+              accountNumber: String(ba.accountNumber),
+              bic: null,
+            }))
 
-          const sniCodes =
-            industriesResult.status === 'fulfilled' && industriesResult.value
-              ? industriesResult.value
-                  .filter((i) => i.companyIndustryCodeType === 'sni2007')
-                  .map((i) => ({
-                    code: i.industryCode ?? '',
-                    name: i.description ?? '',
-                  }))
-              : []
+          // SNI codes from search-doc (`sniCodes` array with `sni_2007Code`).
+          const sniCodes = (doc.sniCodes ?? [])
+            .filter((s) => s.sni_2007Code)
+            .map((s) => ({
+              code: s.sni_2007Code ?? '',
+              name: s.sni_2007Name ?? '',
+            }))
 
-          const email =
-            emailResult.status === 'fulfilled' && emailResult.value?.[0]?.emailAddress
-              ? emailResult.value[0].emailAddress
-              : null
+          const email = doc.emailAddresses?.[0]?.emailAddress ?? null
 
           const phone =
-            phoneResult.status === 'fulfilled' && phoneResult.value?.[0]
-              ? phoneResult.value[0].phoneNumberFormatted
-                  ?? phoneResult.value[0].e164PhoneNumber
-                  ?? null
-              : null
+            doc.phoneNumbers?.[0]?.phoneNumberFormatted
+              ?? doc.phoneNumbers?.[0]?.e164PhoneNumber
+              ?? null
 
           // v2 `/companies/{id}/documents` returns every document the
           // company has filed; filter to annualReport rows and map into
-          // the legacy summary shape the workspace expects.
+          // the legacy summary shape the workspace expects. Kept as a
+          // dedicated call: doc.documents has a different shape
+          // (`companyDocumentType` vs `type`) so direct substitution
+          // would silently drop annualReport detection.
           const financialReports =
             documentsResult.status === 'fulfilled' && documentsResult.value
               ? documentsResult.value
@@ -542,23 +501,11 @@ export const ticExtension: Extension = {
                   .map(toFinancialReportSummary)
               : []
 
-          // Use dedicated purpose endpoint, fall back to search result.
-          // /purposes returns every historical verksamhetsföremål filing;
-          // sort by lastUpdatedAtUtc desc so we pick the most recently
-          // registered one. Older filings still describe a "holding /
-          // förvalta egendom" boilerplate purpose for companies that have
-          // since shifted focus — taking [0] without sorting surfaces that
-          // stale text and confuses the agent's review card.
-          const sortedPurposes =
-            purposeResult.status === 'fulfilled' && Array.isArray(purposeResult.value)
-              ? [...purposeResult.value].sort((a, b) =>
-                  (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? ''),
-                )
-              : []
-          const latestPurpose = sortedPurposes.find(
-            (p) => typeof p.purpose === 'string' && p.purpose.trim().length > 0,
-          )?.purpose
-          const purpose = latestPurpose ?? doc.mostRecentPurpose ?? null
+          // Purpose: take `doc.mostRecentPurpose` directly. Dropped the
+          // /purposes call (which sorted history descending and picked
+          // the latest non-empty entry) — the search doc's
+          // mostRecentPurpose is the same most-recently-registered string.
+          const purpose = doc.mostRecentPurpose ?? null
 
           // ── New v2 sections ─────────────────────────────────────────
           // Fiscal years: pick most-recently-updated row with both
@@ -595,14 +542,15 @@ export const ticExtension: Extension = {
             })
           }
 
-          // Signatory: free-form firmateckning descriptions
-          const signatory =
-            signatoryResult.status === 'fulfilled' && signatoryResult.value
-              ? signatoryResult.value
-                  .map((s) => (s.signatureDescription ?? '').trim())
-                  .filter((d) => d.length > 0)
-                  .map((d) => ({ description: d }))
-              : []
+          // Signatory: free-form firmateckning descriptions. v2 search doc
+          // exposes `mostRecentSignatory` directly (single entry). Drops the
+          // dedicated /signatory call — historical signatory entries are rare
+          // to use in onboarding and the current entry is what the review
+          // card surfaces.
+          const signatory = (() => {
+            const desc = doc.mostRecentSignatory?.signatureDescription?.trim()
+            return desc ? [{ description: desc }] : []
+          })()
 
           // Board summary: most recently updated row from
           // representativeInformation
@@ -685,12 +633,6 @@ export const ticExtension: Extension = {
               : []
 
           // Log Phase 2 failures
-          if (bankResult.status === 'rejected') {
-            log.warn('[tic] profile: bank accounts fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(bankResult.reason) })
-          }
-          if (industriesResult.status === 'rejected') {
-            log.warn('[tic] profile: industry codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(industriesResult.reason) })
-          }
           if (documentsResult.status === 'rejected') {
             log.warn('[tic] profile: documents fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(documentsResult.reason) })
           }
@@ -699,9 +641,6 @@ export const ticExtension: Extension = {
           }
           if (payrollsResult.status === 'rejected') {
             log.warn('[tic] profile: payrolls fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(payrollsResult.reason) })
-          }
-          if (signatoryResult.status === 'rejected') {
-            log.warn('[tic] profile: signatory fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(signatoryResult.reason) })
           }
           if (representativesResult.status === 'rejected') {
             log.warn('[tic] profile: representatives fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(representativesResult.reason) })
