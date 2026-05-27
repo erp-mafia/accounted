@@ -2,9 +2,11 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Check, X, Loader2, AlertTriangle, Lock, ShieldCheck, Pencil, ArrowRight } from 'lucide-react'
+import { Check, X, Loader2, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import type { PendingOperationRejectionCategory } from '@/types'
 import { cn } from '@/lib/utils'
 import { formatCurrency } from '@/lib/utils'
 
@@ -41,9 +43,23 @@ interface Props {
   toolName?: string
   preview?: unknown
   periodStatus?: PeriodStatus
+  // Fired after a reject that carries a reason — the chat feeds this synthetic
+  // correction back as a hidden user turn so the agent re-proposes inline.
+  onRequestCorrection?: (correctionMessage: string) => void
 }
 
 type State = 'pending' | 'committing' | 'committed' | 'rejecting' | 'rejected' | 'error'
+
+// Mirrors the granskning (/pending) reject dialog so chat rejections capture
+// the same structured feedback. Stored on the op + surfaced to the agent via
+// gnubok_get_recent_rejections.
+const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, string> = {
+  wrong_category: 'Fel kategori / konto',
+  wrong_amount: 'Fel belopp',
+  duplicate: 'Dubblett',
+  wrong_period: 'Fel period',
+  other: 'Annat',
+}
 
 // Subset of fields the commit response may return that the success state
 // uses to deep-link to the freshly-created artifact. Different
@@ -63,17 +79,25 @@ export default function ApprovalCard({
   toolName,
   preview,
   periodStatus,
+  onRequestCorrection,
 }: Props) {
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
-  // Local preview state so PATCH-based edits (category override etc.) can
-  // refresh what's rendered without remounting the whole card.
-  const [livePreview, setLivePreview] = useState<unknown>(preview)
+  // Reject-with-reason form (mirrors the granskning dialog). Clicking "Avslå"
+  // opens it; both fields are optional. When a reason is given, the rejection
+  // is fed back so the agent re-proposes.
+  const [showRejectForm, setShowRejectForm] = useState(false)
+  const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
+  const [rejectReason, setRejectReason] = useState('')
   // Surfaced in the "Godkänt" success state so the user can jump directly
   // to the newly-created artifact (verifikation / faktura / kund) instead
   // of hunting through /bookkeeping.
   const [commitResult, setCommitResult] = useState<CommitResultData | null>(null)
+  // Set when commit fails because the booking posts to BAS accounts not yet
+  // active in the chart. Drives the inline "activate and approve" affordance
+  // (the op stays pending server-side, so retrying after activation works).
+  const [accountsToActivate, setAccountsToActivate] = useState<string[] | null>(null)
 
   const requiresTextConfirm = riskLevel === 'high'
   const canCommit =
@@ -82,25 +106,28 @@ export default function ApprovalCard({
   async function handleCommit() {
     setState('committing')
     setErrorMessage(null)
+    setAccountsToActivate(null)
     try {
       const res = await fetch(`/api/pending-operations/${operationId}/commit`, {
         method: 'POST',
       })
+      const body = (await res.json().catch(() => ({}))) as {
+        data?: CommitResultData
+        error?: string | { code?: string; message?: string; account_numbers?: string[] }
+      }
       if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `HTTP ${res.status}`)
-      }
-      // Parse the commit response so the success state can deep-link to
-      // the artifact. Best-effort: a malformed body still completes the
-      // commit visually, just without the link.
-      try {
-        const body = (await res.clone().json().catch(() => ({}))) as {
-          data?: CommitResultData
+        // Recoverable: the booking posts to BAS accounts not active in the
+        // chart. Offer to activate them and retry — the op stays pending.
+        const structured = typeof body.error === 'object' && body.error !== null ? body.error : null
+        if (structured?.code === 'ACCOUNTS_NOT_IN_CHART' && structured.account_numbers?.length) {
+          setAccountsToActivate(structured.account_numbers)
+          setState('pending')
+          return
         }
-        if (body?.data) setCommitResult(body.data)
-      } catch {
-        // ignore — success state without a deep-link is still correct
+        throw new Error(errorText(body.error) || `HTTP ${res.status}`)
       }
+      // Best-effort deep-link to the created artifact in the success state.
+      if (body?.data) setCommitResult(body.data)
       setState('committed')
     } catch (err) {
       setState('error')
@@ -108,18 +135,66 @@ export default function ApprovalCard({
     }
   }
 
+  // Activate the missing BAS accounts (one POST) then retry the commit. The
+  // pending_operation was left 'pending' server-side precisely so this retry
+  // commits the same booking without re-staging it.
+  async function handleActivateAndCommit() {
+    if (!accountsToActivate || accountsToActivate.length === 0) return
+    setState('committing')
+    setErrorMessage(null)
+    try {
+      const res = await fetch('/api/bookkeeping/accounts/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_numbers: accountsToActivate }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error || 'Kunde inte aktivera kontona.')
+      }
+      setAccountsToActivate(null)
+      await handleCommit()
+    } catch (err) {
+      setState('error')
+      setErrorMessage(err instanceof Error ? err.message : 'Kunde inte aktivera kontona.')
+    }
+  }
+
   async function handleReject() {
     setState('rejecting')
     setErrorMessage(null)
+    const categoryLabel = rejectCategory ? REJECTION_CATEGORY_LABELS[rejectCategory] : null
+    const reason = rejectReason.trim()
+    // Both fields optional — a bare "Avvisa" still rejects (parity with the
+    // granskning dialog and older bodyless clients).
+    const body =
+      rejectCategory || reason
+        ? {
+            ...(rejectCategory ? { rejection_category: rejectCategory } : {}),
+            ...(reason ? { rejection_reason: reason } : {}),
+          }
+        : undefined
     try {
       const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
         method: 'POST',
+        ...(body
+          ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+          : {}),
       })
       if (!res.ok) {
         const text = await res.text()
         throw new Error(text || `HTTP ${res.status}`)
       }
+      setShowRejectForm(false)
       setState('rejected')
+      // Feed the correction back so the agent re-proposes — only when the user
+      // actually said what was wrong. A bare reject just stops here.
+      const parts = [categoryLabel, reason].filter(Boolean) as string[]
+      if (parts.length > 0) {
+        onRequestCorrection?.(
+          `Jag avvisade förslaget. Det som var fel: ${parts.join(' — ')}. Föreslå en korrigerad bokning.`,
+        )
+      }
     } catch (err) {
       setState('error')
       setErrorMessage(err instanceof Error ? err.message : 'Kunde inte avslå.')
@@ -187,6 +262,9 @@ export default function ApprovalCard({
       >
         <p className="flex items-center gap-2">
           <X className="h-4 w-4" /> Avslaget
+          {rejectCategory && (
+            <span className="text-xs text-muted-foreground/80">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
+          )}
         </p>
       </div>
     )
@@ -216,13 +294,7 @@ export default function ApprovalCard({
         {periodStatus && <PeriodBadge status={periodStatus} />}
       </div>
 
-      <PreviewBlock
-        toolName={toolName}
-        preview={livePreview}
-        operationId={operationId}
-        disabled={isBusy}
-        onPreviewUpdated={(p) => setLivePreview(p)}
-      />
+      <PreviewBlock toolName={toolName} preview={preview} />
 
       {requiresTextConfirm && (
         <div className="space-y-1">
@@ -244,29 +316,110 @@ export default function ApprovalCard({
 
       {errorMessage && <p className="text-xs text-destructive">{errorMessage}</p>}
 
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          onClick={handleCommit}
-          disabled={isBusy || !canCommit}
-          className="flex-1"
-        >
-          {state === 'committing' ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            'Godkänn'
-          )}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleReject}
-          disabled={isBusy}
-          className="flex-1"
-        >
-          {state === 'rejecting' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Avslå'}
-        </Button>
-      </div>
+      {showRejectForm ? (
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2.5">
+          <p className="text-xs font-medium">Vad är fel?</p>
+          <Select
+            value={rejectCategory}
+            onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
+          >
+            <SelectTrigger className="h-8 text-xs" aria-label="Anledning">
+              <SelectValue placeholder="Anledning (valfritt)" />
+            </SelectTrigger>
+            {/* The agent sheet panel is z-[60]; SelectContent defaults to z-50
+                and portals to <body>, so without this it opens BEHIND the
+                sheet. z-[70] sits above the sheet, below toasts (z-[100]). */}
+            <SelectContent className="z-[70]">
+              {(Object.keys(REJECTION_CATEGORY_LABELS) as PendingOperationRejectionCategory[]).map((cat) => (
+                <SelectItem key={cat} value={cat}>{REJECTION_CATEGORY_LABELS[cat]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Textarea
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            placeholder="T.ex. ska vara IT-tjänster, inte telefoni…"
+            rows={2}
+            maxLength={2000}
+            disabled={isBusy}
+            className="text-xs"
+            aria-label="Notering"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Med en anledning eller notering föreslår assistenten en korrigerad bokning direkt.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleReject}
+              disabled={isBusy}
+              className="flex-1"
+            >
+              {state === 'rejecting' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Avvisa'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowRejectForm(false)}
+              disabled={isBusy}
+              className="flex-1"
+            >
+              Avbryt
+            </Button>
+          </div>
+        </div>
+      ) : accountsToActivate ? (
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2.5">
+          <p className="text-xs leading-5">
+            Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
+            <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={handleActivateAndCommit}
+              disabled={isBusy}
+              className="flex-1"
+            >
+              {state === 'committing' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Aktivera och godkänn'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAccountsToActivate(null)}
+              disabled={isBusy}
+              className="flex-1"
+            >
+              Avbryt
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            onClick={handleCommit}
+            disabled={isBusy || !canCommit}
+            className="flex-1"
+          >
+            {state === 'committing' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              'Godkänn'
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowRejectForm(true)}
+            disabled={isBusy}
+            className="flex-1"
+          >
+            Avslå
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -279,30 +432,14 @@ export default function ApprovalCard({
 interface PreviewBlockProps {
   toolName?: string
   preview?: unknown
-  operationId: string
-  disabled?: boolean
-  onPreviewUpdated?: (newPreview: unknown) => void
 }
 
-function PreviewBlock({
-  toolName,
-  preview,
-  operationId,
-  disabled,
-  onPreviewUpdated,
-}: PreviewBlockProps) {
+function PreviewBlock({ toolName, preview }: PreviewBlockProps) {
   if (!preview || typeof preview !== 'object') return null
   const p = preview as Record<string, unknown>
 
   if (toolName === 'gnubok_categorize_transaction') {
-    return (
-      <CategorizeTransactionPreview
-        preview={p}
-        operationId={operationId}
-        disabled={disabled}
-        onPreviewUpdated={onPreviewUpdated}
-      />
-    )
+    return <CategorizeTransactionPreview preview={p} />
   }
   if (toolName === 'gnubok_create_invoice') {
     return <CreateInvoicePreview preview={p} />
@@ -340,14 +477,8 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 
 function CategorizeTransactionPreview({
   preview,
-  operationId,
-  disabled,
-  onPreviewUpdated,
 }: {
   preview: Record<string, unknown>
-  operationId: string
-  disabled?: boolean
-  onPreviewUpdated?: (newPreview: unknown) => void
 }) {
   const debit = preview.debit_account as string | undefined
   const credit = preview.credit_account as string | undefined
@@ -365,38 +496,6 @@ function CategorizeTransactionPreview({
         description?: string
       }[]
     | undefined) ?? []
-  const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [editError, setEditError] = useState<string | null>(null)
-
-  async function applyCategory(newCategory: string) {
-    if (newCategory === category) {
-      setEditing(false)
-      return
-    }
-    setSaving(true)
-    setEditError(null)
-    try {
-      const res = await fetch(`/api/pending-operations/${operationId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: newCategory }),
-      })
-      const json = (await res.json().catch(() => ({}))) as {
-        data?: { preview_data: unknown }
-        error?: string
-      }
-      if (!res.ok || !json.data) {
-        throw new Error(json.error ?? `HTTP ${res.status}`)
-      }
-      onPreviewUpdated?.(json.data.preview_data)
-      setEditing(false)
-    } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Kunde inte ändra kategori')
-    } finally {
-      setSaving(false)
-    }
-  }
 
   return (
     <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs space-y-1.5">
@@ -404,39 +503,8 @@ function CategorizeTransactionPreview({
         <span className="w-20 shrink-0 text-muted-foreground text-[10px] uppercase tracking-wider">
           Kategori
         </span>
-        <span className="flex-1 min-w-0 leading-5">
-          {editing ? (
-            <Select
-              value={category}
-              onValueChange={applyCategory}
-              disabled={saving || disabled}
-            >
-              <SelectTrigger className="h-7 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CATEGORY_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="text-foreground">{prettyCategory(category)}</span>
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
-                disabled={disabled}
-                className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-                title="Ändra kategori"
-                aria-label="Ändra kategori"
-              >
-                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
-              </button>
-            </span>
-          )}
+        <span className="flex-1 min-w-0 leading-5 text-foreground">
+          {prettyCategory(category)}
         </span>
       </div>
       {debit && credit && amount != null && (
@@ -476,11 +544,16 @@ function CategorizeTransactionPreview({
           })}
         </div>
       )}
-      {editError && (
-        <p className="pt-1 text-[11px] text-destructive">{editError}</p>
-      )}
     </div>
   )
+}
+
+// Pull a human message out of an API error body that may be either a bare
+// string ({ error: "…" }) or the structured envelope ({ error: { message } }).
+function errorText(error: string | { message?: string } | undefined): string | null {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && typeof error.message === 'string') return error.message
+  return null
 }
 
 function prettyCategory(value: string | undefined): string {

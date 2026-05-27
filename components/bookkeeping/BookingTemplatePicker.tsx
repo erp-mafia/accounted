@@ -20,6 +20,9 @@ import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 interface Props {
   onApply: (lines: FormLine[], description: string) => void
   entityType?: EntityType
+  /** Prefill the "total amount" field when the caller already knows it (e.g.
+   *  booking from an underlag with a known total). The user can still edit it. */
+  defaultAmount?: number
 }
 
 const SCOPE_ICONS = {
@@ -28,7 +31,7 @@ const SCOPE_ICONS = {
   company: Building2,
 } as const
 
-export default function BookingTemplatePicker({ onApply, entityType }: Props) {
+export default function BookingTemplatePicker({ onApply, entityType, defaultAmount }: Props) {
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
@@ -37,6 +40,15 @@ export default function BookingTemplatePicker({ onApply, entityType }: Props) {
   const [selectedCategory, setSelectedCategory] = useState<BookingTemplateCategory | 'all'>('all')
   const [amount, setAmount] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  // Prefill the amount from the caller's known total each time the picker
+  // opens. Only when provided — callers without a known amount (e.g. the
+  // journal-entry form) keep the blank-then-type behaviour.
+  useEffect(() => {
+    if (open && defaultAmount != null && defaultAmount > 0) {
+      setAmount(String(Math.round(defaultAmount * 100) / 100))
+    }
+  }, [open, defaultAmount])
 
   const fetchTemplates = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true)

@@ -46,3 +46,14 @@ export function getAnthropic(): AnthropicBedrock {
 // once Opus access lands.
 export const OPUS_MODEL = process.env.BEDROCK_OPUS_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
 export const SONNET_MODEL = process.env.BEDROCK_SONNET_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
+
+// Extended-thinking budgets (budget_tokens) for the chat intents. These are
+// ceilings, not floors: the model spends only what a turn needs, so a generous
+// cap improves hard turns (multi-source VAT synthesis, anomaly detection)
+// without taxing simple ones. run-turn derives max_tokens = budget + 4096, so
+// raising these is safe — no manual max_tokens bookkeeping. Tiered to match the
+// model split: DEEP for the Opus / heavy-reasoning intents, STANDARD for the
+// rest. Early-stage default favours reasoning quality over token cost; dial
+// down here in one place if latency/cost ever bites.
+export const THINKING_BUDGET_STANDARD = 6000
+export const THINKING_BUDGET_DEEP = 12000

@@ -112,6 +112,7 @@ function buildValuesRow(atom: DiscoveredAtom, version: number): string {
     `    ${atom.estimated_tokens},`,
     `    ${sqlStr(atom.body_path)},`,
     `    ${dollarQuote(atom.body)},`,
+    `    ${atom.parent_atom_id ? sqlStr(atom.parent_atom_id) : 'NULL'},`,
     `    ${version},`,
     `    ${atom.schema_version}`,
     '  )',
@@ -131,7 +132,7 @@ export function buildMigrationSql(atoms: DiscoveredAtom[], versions: Record<stri
   const values = atoms.map((a) => buildValuesRow(a, versions[a.id])).join(',\n')
 
   const insert = `INSERT INTO public.agent_atom_registry
-  (id, tier, title, description, sni_prefixes, trigger_signals, estimated_tokens, body_path, body, version, schema_version)
+  (id, tier, title, description, sni_prefixes, trigger_signals, estimated_tokens, body_path, body, parent_atom_id, version, schema_version)
 VALUES
 ${values}
 ON CONFLICT (id) DO UPDATE SET
@@ -143,6 +144,7 @@ ON CONFLICT (id) DO UPDATE SET
   estimated_tokens = EXCLUDED.estimated_tokens,
   body_path = EXCLUDED.body_path,
   body = EXCLUDED.body,
+  parent_atom_id = EXCLUDED.parent_atom_id,
   version = EXCLUDED.version,
   schema_version = EXCLUDED.schema_version,
   updated_at = now();

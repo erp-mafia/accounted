@@ -63,6 +63,7 @@ export async function GET(request: Request) {
     .select('id, tier, title, description')
     .eq('is_active', true)
     .eq('mcp_exposed', true)
+    .is('parent_atom_id', null) // show top-level skills only; reference children are internal
     .order('tier', { ascending: true })
     .order('title', { ascending: true })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

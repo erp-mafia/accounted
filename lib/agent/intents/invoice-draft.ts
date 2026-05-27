@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // invoice.draft — "Fråga om denna faktura" from the invoice form.
@@ -79,6 +79,11 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
   ],
 
   model: SONNET_MODEL,
+
+  // Draft the invoice lines + VAT in the thinking channel, so the visible reply
+  // is one short confirmation after staging rather than a play-by-play that
+  // repeats once before the tool call and once after it.
+  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
 
   capture: async ({ customer_id, invoice_id }, { supabase, companyId }) => {
     // Resolve the effective customer_id. When the FAB lands here from
@@ -227,7 +232,7 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
       }
     }
 
-    lines.push('Arbetssätt: gather information first, propose second.')
+    lines.push('Arbetssätt: hämta information via verktygsanrop FÖRST (tyst — statusraderna visar att du söker, och ditt resonemang sker i tankekanalen), föreslå sedan. Skriv din förklaring EN gång efteråt, inte i flera block runt anropen.')
     lines.push('- Hjälp användaren välja rätt momsbehandling baserat på kundens land + typ + VAT-validering:')
     lines.push('  · SE-kund: 25/12/6 % beroende på vara/tjänst.')
     lines.push('  · EU näringsidkare med validerat VAT-nr: omvänd skattskyldighet (reverse charge) på tjänster.')

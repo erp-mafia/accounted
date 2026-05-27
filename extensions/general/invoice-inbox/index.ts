@@ -432,7 +432,11 @@ export const invoiceInboxExtension: Extension = {
 
         const url = new URL(request.url)
         const status = url.searchParams.get('status')
-        const limit = Math.min(Math.max(1, Number(url.searchParams.get('limit')) || 20), 50)
+        // Cap raised from 50 → 500: the inbox is a workqueue and booked items
+        // now drop out of the default view client-side, so a low cap silently
+        // hid active underlag behind older booked ones. 500 covers realistic
+        // single-company volumes; pagination is the next step beyond that.
+        const limit = Math.min(Math.max(1, Number(url.searchParams.get('limit')) || 50), 500)
 
         let query = ctx.supabase
           .from('invoice_inbox_items')

@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { OPUS_MODEL, THINKING_BUDGET_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // supplier_invoice.review — "Fråga din assistent" from a supplier invoice
@@ -103,6 +103,12 @@ export const supplierInvoiceReview = defineAgentIntent<
   // Opus per plan §8 — anomaly detection + multi-source synthesis benefits
   // from deeper reasoning than Sonnet's strength on selection tasks.
   model: OPUS_MODEL,
+
+  // Reason about underlag, VAT treatment and anomalies in the thinking channel
+  // so the visible reply is a single conclusion after the booking is staged —
+  // not a pre-tool analysis echoed again post-tool. Matches the always-on
+  // prompt's promise that reasoning happens in the (separately shown) tankekanal.
+  thinking: { budgetTokens: THINKING_BUDGET_DEEP },
 
   capture: async ({ supplier_invoice_id }, { supabase, companyId }) => {
     const { data: invoice } = await supabase
@@ -324,7 +330,7 @@ export const supplierInvoiceReview = defineAgentIntent<
     lines.push('   - Tredje land: import-moms via Tullverket eller deklareras via momsdeklaration ruta 60–62.')
     lines.push('2. Avvikelse mot tidigare fakturor från samma leverantör? Beloppen i ungefär samma härad?')
     lines.push('3. Saknas obligatoriska fält (ML 17 kap 24§): fakturanummer, datum, org.nr, moms-belopp, VAT-id vid reverse charge?')
-    lines.push('4. Föreslå rätt BAS-konto för varje rad. Om bara summarad finns — föreslå för hela fakturan. Innan du beslutar konto: anropa gnubok_query_journal({ text: "<leverantörens namn>", source_type: "supplier_invoice", limit: 5 }) och se hur tidigare fakturor från samma leverantör bokfördes. Följ mönstret om inget i den nya fakturan motsäger det.')
+    lines.push('4. Föreslå rätt BAS-konto för varje rad (eller för hela fakturan om bara en summarad finns). Följ leverantörens historik — gnubok_query_journal({ text: "<leverantörens namn>", source_type: "supplier_invoice", limit: 5 }) — när du väljer konto.')
     lines.push('5. Om du är säker, staga attestering via gnubok_approve_supplier_invoice. Annars: peka på vad som ska klargöras innan attestering.')
     lines.push('')
     lines.push('Svara på svenska, var direkt och konkret. Ditt första svar är det första användaren ser.')

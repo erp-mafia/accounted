@@ -96,6 +96,24 @@ function pickSupplierName(item: InboxItem): string | null {
   return item.extracted_data?.supplier?.name ?? null
 }
 
+// Lifecycle stage of an inbox item. Single source of truth shared by the list
+// filter, the count pills, and the row icons so they never drift apart.
+//
+// Precedence mirrors the FieldsRail: a booked item (supplier invoice OR a
+// direct journal entry) is done and drops out of the active inbox. A
+// matched-but-unbooked item is "linked" — it STAYS in the inbox as its own
+// category because the bank payment still needs booking (a document attached
+// to a transaction is not the same as a booked one). An extraction failure is
+// "error"; everything else needs a first action.
+type InboxStatus = 'needs_action' | 'linked' | 'booked' | 'error'
+
+function deriveInboxStatus(item: InboxItem): InboxStatus {
+  if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (item.matched_transaction_id) return 'linked'
+  if (item.status === 'error') return 'error'
+  return 'needs_action'
+}
+
 // ── Skeleton ─────────────────────────────────────────────────
 // Mirrors the live layout (top bar + 3-pane card) so the transition from
 // the route-level loading.tsx to data-loaded content has no visible reflow.
@@ -158,7 +176,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // List filter + search (client-side over the already-fetched items list).
-  const [filter, setFilter] = useState<'all' | 'needs_action' | 'done' | 'error'>('all')
+  // Defaults to 'todo' — the active inbox (everything not yet booked) — so
+  // booked underlag drop out of the default view while attached-but-unbooked
+  // ones stay visible.
+  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all'>('todo')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -194,7 +215,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   const fetchItems = useCallback(async () => {
     try {
-      const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=50')
+      const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=500')
       const json = await res.json()
       if (res.ok) setItems(json.data?.items ?? [])
     } catch (err) {
@@ -269,19 +290,44 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   // ── List filter + search (client-side over the fetched list) ─
 
+  // Per-status counts for the filter pills. Computed once over the full list.
+  const statusCounts = useMemo(() => {
+    const counts = { todo: 0, linked: 0, booked: 0, error: 0, all: items.length }
+    for (const item of items) {
+      const status = deriveInboxStatus(item)
+      if (status !== 'booked') counts.todo += 1
+      if (status === 'linked') counts.linked += 1
+      if (status === 'booked') counts.booked += 1
+      if (status === 'error') counts.error += 1
+    }
+    return counts
+  }, [items])
+
+  // Pills, in order. The error pill only appears when there's something errored
+  // (or it's the active filter) — keeps the happy-path inbox uncluttered.
+  const pills = useMemo(() => {
+    const list: { key: typeof filter; label: string; count: number }[] = [
+      { key: 'todo', label: 'Att göra', count: statusCounts.todo },
+      { key: 'linked', label: 'Kopplade', count: statusCounts.linked },
+      { key: 'booked', label: 'Bokförda', count: statusCounts.booked },
+    ]
+    if (statusCounts.error > 0 || filter === 'error') {
+      list.push({ key: 'error', label: 'Fel', count: statusCounts.error })
+    }
+    list.push({ key: 'all', label: 'Alla', count: statusCounts.all })
+    return list
+  }, [statusCounts, filter])
+
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
     return items.filter((item) => {
-      // Status filter
-      const isErr = item.status === 'error'
-      const isDone =
-        !!item.created_supplier_invoice_id ||
-        !!item.matched_transaction_id ||
-        !!item.created_journal_entry_id
-      const needsAction = !isErr && !isDone
-      if (filter === 'error' && !isErr) return false
-      if (filter === 'done' && !isDone) return false
-      if (filter === 'needs_action' && !needsAction) return false
+      // Status filter. "todo" is the active inbox — everything except booked.
+      const status = deriveInboxStatus(item)
+      if (filter === 'todo' && status === 'booked') return false
+      if (filter === 'linked' && status !== 'linked') return false
+      if (filter === 'booked' && status !== 'booked') return false
+      if (filter === 'error' && status !== 'error') return false
+      // 'all' → no status narrowing
 
       // Search filter — supplier name, email subject/from, placeholder filename
       if (term === '') return true
@@ -678,14 +724,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 />
               </div>
               <div className="flex flex-wrap gap-1">
-                {(
-                  [
-                    { key: 'all', label: 'Alla' },
-                    { key: 'needs_action', label: 'Behöver åtgärd' },
-                    { key: 'done', label: 'Bearbetade' },
-                    { key: 'error', label: 'Fel' },
-                  ] as const
-                ).map((pill) => (
+                {pills.map((pill) => (
                   <button
                     key={pill.key}
                     type="button"
@@ -698,6 +737,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     )}
                   >
                     {pill.label}
+                    {pill.count > 0 && (
+                      <span
+                        className={cn(
+                          'ml-1 tabular-nums',
+                          filter === pill.key ? 'opacity-80' : 'opacity-50'
+                        )}
+                      >
+                        {pill.count}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -767,7 +816,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             )
           ) : filteredItems.length === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
-              Inga poster matchar filtret.
+              {filter === 'todo'
+                ? 'Inget att åtgärda — allt är bearbetat.'
+                : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
@@ -932,10 +983,11 @@ function InboxRow({
 }) {
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
-  const isErrored = item.status === 'error'
-  const isProcessed = !!item.created_supplier_invoice_id
-  const isLinkedToTransaction = !isProcessed && !!item.matched_transaction_id
   const isPlaceholder = !!item.isPlaceholder
+  const status = deriveInboxStatus(item)
+  const isErrored = status === 'error'
+  const isBooked = status === 'booked'
+  const isLinkedToTransaction = status === 'linked'
 
   return (
     <li
@@ -985,13 +1037,13 @@ function InboxRow({
               : (supplierName ?? item.email_subject ?? 'Okänt dokument')}
           </span>
           {isErrored && (
-            <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />
+            <AlertTriangle className="h-3 w-3 text-destructive shrink-0" aria-label="Fel vid bearbetning" />
           )}
           {isLinkedToTransaction && (
             <Link2 className="h-3 w-3 text-emerald-600 shrink-0" aria-label="Kopplad till transaktion" />
           )}
-          {isProcessed && (
-            <Check className="h-3 w-3 text-emerald-600 shrink-0" />
+          {isBooked && (
+            <Check className="h-3 w-3 text-emerald-600 shrink-0" aria-label="Bokförd" />
           )}
         </div>
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">

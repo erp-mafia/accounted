@@ -120,10 +120,24 @@ export default async function DashboardPage() {
     redirect('/onboarding')
   }
 
-  // Agent not built yet → show the build-agent checklist instead of the
-  // dashboard. Once verified, / renders the Översikt below. The agent chat
-  // lives at /chat (its own nav entry) regardless.
-  if (!agentProfile?.verified_at) {
+  const agentBuilt = Boolean(agentProfile?.verified_at)
+
+  // "Has the company already been used?" Any real business data means we must
+  // NOT hijack the dashboard with the full-screen onboarding gate — existing
+  // and migrated users get the normal Översikt with a build-assistant prompt
+  // in the hero slot (see DashboardContent's agentBuilt branch) instead.
+  const hasData =
+    (transactionCount || 0) > 0 ||
+    (sieImportCount || 0) > 0 ||
+    (invoiceCount || 0) > 0 ||
+    (receiptCount || 0) > 0 ||
+    (customerCount || 0) > 0 ||
+    (postedEntriesCount || 0) > 0
+
+  // Only a genuinely empty company without an assistant sees the full
+  // onboarding checklist (where building the assistant is the last step).
+  // Everyone else falls through to the dashboard below.
+  if (!agentBuilt && !hasData) {
     return (
       <WelcomeGate
         companyId={companyId}
@@ -262,6 +276,7 @@ export default async function DashboardPage() {
   return (
     <DashboardContent
       companyId={companyId}
+      agentBuilt={agentBuilt}
       summary={{
         ytd: ytdTotals,
         mtd: mtdTotals,

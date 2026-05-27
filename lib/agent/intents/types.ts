@@ -36,6 +36,12 @@ export interface AgentIntent<Args = Record<string, unknown>, Captured = unknown>
   // override to Opus.
   model: string
 
+  // Extended-thinking budget. When set, run-turn enables a reasoning channel
+  // (thinking: { type: 'enabled', budget_tokens }) on every model call in the
+  // loop, so the agent reasons before it answers instead of narrating its
+  // steps in the visible reply. Omit to disable. budget_tokens must be ≥ 1024.
+  thinking?: { budgetTokens: number }
+
   // Captures the page-context object the prompt template needs. Runs server-
   // side after the user clicks the button. Failures bubble up to the route.
   capture: (args: Args, ctx: CaptureContext) => Promise<Captured>

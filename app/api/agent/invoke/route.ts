@@ -29,6 +29,11 @@ const BodySchema = z.object({
   intent_args: z.record(z.string(), z.unknown()).nullable().optional(),
   // Optional context_ref for the conversation row, e.g. 'transaction:<id>'.
   context_ref: z.string().max(200).nullable().optional(),
+  // When true (and user_message is provided), persist the turn but flag it
+  // hidden so it doesn't render as a user bubble on resume. Used by the chat's
+  // rejection-correction flow (ApprovalCard → AgentChat) to feed the agent a
+  // synthetic correction without showing it as something the user typed.
+  user_message_hidden: z.boolean().nullable().optional(),
 })
 
 // POST /api/agent/invoke
@@ -80,6 +85,30 @@ export async function POST(request: Request) {
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
+  // onboarding.intake completion signal — once the user has actually
+  // engaged (typed a real reply, not the auto-fired greeting prompt that
+  // mounts the chat), stamp intake_completed_at on the profile so re-entry
+  // logic and opportunistic follow-up logic in other intents can tell the
+  // intake happened. Idempotent: the IS NULL guard ensures we never
+  // overwrite the first engagement timestamp. Best-effort — failure here
+  // doesn't break the chat; the next user turn retries.
+  if (
+    body.intent_id === 'onboarding.intake' &&
+    typeof body.user_message === 'string' &&
+    body.user_message.trim().length > 0 &&
+    body.user_message_hidden !== true
+  ) {
+    try {
+      await supabase
+        .from('agent_profiles')
+        .update({ intake_completed_at: new Date().toISOString() })
+        .eq('company_id', companyId)
+        .is('intake_completed_at', null)
+    } catch {
+      // ignored — see comment above
+    }
+  }
+
   // Load lightweight company + user signals for the system prompt.
   const [{ data: company }, { data: profile }] = await Promise.all([
     supabase.from('companies').select('name').eq('id', companyId).single(),
@@ -118,8 +147,10 @@ export async function POST(request: Request) {
   let effectiveUserMessage = body.user_message ?? ''
   // When the caller didn't supply a user_message, we synthesize one from the
   // intent's promptTemplate. Mark that synthetic turn hidden so the UI
-  // doesn't render the template scaffolding as a user bubble on resume.
-  let userMessageHidden = false
+  // doesn't render the template scaffolding as a user bubble on resume. The
+  // client can also explicitly request a hidden turn (rejection correction)
+  // even when it DID supply a user_message.
+  let userMessageHidden = body.user_message_hidden === true
   if (!effectiveUserMessage) {
     try {
       const captured = await intent.capture(body.intent_args ?? {}, {

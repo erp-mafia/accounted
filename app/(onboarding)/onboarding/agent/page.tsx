@@ -79,6 +79,7 @@ export default async function AgentOnboardingPage() {
     .from('agent_atom_registry')
     .select('id, title')
     .eq('is_active', true)
+    .is('parent_atom_id', null) // skill titles only; reference children never appear as profile chips
   const atomTitles: Record<string, string> = {}
   for (const row of (atomRows ?? []) as { id: string; title: string }[]) {
     atomTitles[row.id] = row.title

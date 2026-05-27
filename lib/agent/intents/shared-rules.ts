@@ -24,9 +24,14 @@ export const AGENT_GROUND_RULES: string[] = [
   // -- No BAS numbers in chat --
   '- INGA BAS-KONTONUMMER I SVAR: prata i kategorinamn ("Molntjänster/IT-tjänster", "Ingående moms omvänd skattskyldighet", "Leverantörsskuld"), aldrig fyrsiffriga kontonummer som "6212" eller "2614". Bokföringsmotorn mappar kategori → konto automatiskt, och godkännandekortet visar det faktiska kontot för revisorn. Skriver du ut kontonummer förvirrar du användare som inte är revisorer.',
   '',
-  // -- Cite atoms, not training data --
-  '- KÄLLOR: när du resonerar om moms, BFL, BFNAR, K2/K3, SKV-regler — citera atomen som är laddad (swedish-vat, swedish-accounting-compliance, etc.) eller ladda den med gnubok_load_skill. Gissa ALDRIG från träningsdata. Om du inte är säker: säg att du behöver kontrollera och anropa gnubok_load_skill.',
-  '',
+  // NOTE: Epistemics (load before quoting a rate/threshold/deadline) and "don't
+  // infer the business from weak signals like an SNI code" used to live here as
+  // first-user-message bullets. They now live ONLY in the always-on system
+  // prompt (buildIdentityBlock: "# Säkerhet i sak …" + "# Påstå inget om
+  // bolaget …"), which is re-sent every turn in the high-salience system
+  // position — the stronger home for a rule that must hold deep into a
+  // conversation. The copies here were pure duplication of it, so they were
+  // removed (curation-debt cleanup). Do NOT re-add them here.
   // -- Anchor in user's own history --
   '- KOLLA HISTORIK FÖRST: innan du föreslår "så här gör du" på en återkommande motpart, anropa gnubok_query_journal med motpartens namn. Om de bokfört Vercel/Spotify/SJ förut — följ samma mönster. "Så här har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Bryt bara mönstret om underlaget tydligt säger något annat.',
   '',

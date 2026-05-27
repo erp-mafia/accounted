@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Pencil, X, Loader2, ArrowLeft, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -28,6 +28,10 @@ interface ProfilePayload {
   modifier_atoms: string[]
   is_multi_vertical: boolean
   profile_summary: string
+  // Still carried from the composer + stored on the profile row, but no
+  // longer surfaced as a form step here — the Phase C chat intake owns the
+  // questions now (reads them server-side). Kept on the type so the payload
+  // shape stays aligned with the stream event.
   verification_questions: string[]
   uncertainty_notes: string[]
   composer_model: string
@@ -82,26 +86,21 @@ export default function ReviewCard({
   const [displayName, setDisplayName] = useState('')
   const [avatarId, setAvatarId] = useState<string>(AVATAR_OPTIONS[0].id)
   const [seedMemory, setSeedMemory] = useState('')
-  // Per-question inline answers — keyed by question index. Non-empty entries
-  // are persisted as agent_memory (kind=fact, source=user_taught) on verify,
-  // so the chat agent has the answers in its prompt next time it opens.
-  const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({})
   const [verifying, setVerifying] = useState(false)
   const [verifyError, setVerifyError] = useState<string | null>(null)
 
-  const verificationQuestions = useMemo(() => profile?.verification_questions ?? [], [profile])
-
-  // Step 1: meet your assistant (name + avatar)
-  // Step 2: agree on the facts (form fields + atom chips + verksamhet + profile)
-  // Step 3: a short interview — questions one at a time, then seed memory + kör
-  type Step = 1 | 2 | 3
+  // Two steps now:
+  //   1 — meet your assistant (name + avatar)
+  //   2 — agree on the facts (profile + specialties + form fields + optional
+  //       seed note), then "kör" which hands off to the Phase C chat intake.
+  // The verification-question interview that used to live here as a form
+  // stepper is gone — the chat conducts the real interview instead.
+  type Step = 1 | 2
   const [step, setStep] = useState<Step>(1)
-  // Within step 3: position inside the question stepper.
-  //   0..N-1 → showing question at that index
-  //   N      → finished questions, showing seed memory + final CTA
-  const [questionIndex, setQuestionIndex] = useState(0)
-  const totalSteps = 3
-  const finalCtaPhase = questionIndex >= verificationQuestions.length
+  const totalPositions = 2
+  const currentPosition = step - 1
+
+  const agentName = displayName.trim() || 'din assistent'
 
   async function handleVerify() {
     setVerifying(true)
@@ -166,35 +165,6 @@ export default function ReviewCard({
         })
       }
 
-      // Persist each answered verification question as a memory entry.
-      // The question + answer text together is what the agent will read back,
-      // so memory content is the full "Q: ... A: ..." string. Relevance is
-      // elevated because these are foundational onboarding answers.
-      const answerWrites: Promise<Response>[] = []
-      for (const [idxStr, answer] of Object.entries(questionAnswers)) {
-        const trimmed = answer.trim()
-        if (trimmed.length < 1) continue
-        const question = verificationQuestions[Number(idxStr)] ?? ''
-        if (!question) continue
-        answerWrites.push(
-          fetch('/api/agent/memory', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              company_id: companyId,
-              content: `Fråga: ${question}\nSvar: ${trimmed}`,
-              kind: 'fact',
-              source: 'user_taught',
-              source_ref: `onboarding_question_${idxStr}`,
-              relevance_score: 1.0,
-            }),
-          }),
-        )
-      }
-      if (answerWrites.length > 0) {
-        await Promise.allSettled(answerWrites)
-      }
-
       const verifyRes = await fetch('/api/agent/profile/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -213,23 +183,11 @@ export default function ReviewCard({
     }
   }
 
-  const stepTitle =
-    step === 1
-      ? 'Träffa din assistent'
-      : step === 2
-        ? 'Stäm av detaljerna'
-        : finalCtaPhase
-          ? 'En sista sak'
-          : 'En kort intervju'
-
+  const stepTitle = step === 1 ? 'Träffa din assistent' : 'Stäm av detaljerna'
   const stepSubtitle =
     step === 1
       ? 'Ge din assistent ett namn och välj en avatar.'
-      : step === 2
-        ? 'Bekräfta att uppgifterna stämmer, eller ändra det som blivit fel.'
-        : finalCtaPhase
-          ? 'Lägg till något du vill att assistenten ska veta direkt.'
-          : `Fråga ${questionIndex + 1} av ${verificationQuestions.length}. Du kan också svara mer i chatten sedan.`
+      : 'Bekräfta att uppgifterna stämmer, eller ändra det som blivit fel. Sen lär din assistent känna dig i en kort intervju.'
 
   return (
     <div className="w-full">
@@ -241,25 +199,16 @@ export default function ReviewCard({
         <p className="text-muted-foreground mt-2">{stepSubtitle}</p>
       </header>
 
-      {/* Progress dots — clickable to jump back to a completed step. */}
-      <div className="flex items-center gap-2 mb-6">
-        {Array.from({ length: totalSteps }, (_, i) => i + 1).map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => {
-              if (s < step || s === step) setStep(s as Step)
-            }}
-            disabled={s > step}
+      {/* Progress — one segment per step. Back navigation lives on the
+          "Tillbaka" button below. */}
+      <div className="flex items-center gap-1.5 mb-6" aria-hidden="true">
+        {Array.from({ length: totalPositions }, (_, i) => i).map((pos) => (
+          <div
+            key={pos}
             className={cn(
               'h-1.5 flex-1 rounded-full transition-colors',
-              s === step
-                ? 'bg-foreground'
-                : s < step
-                  ? 'bg-foreground/40 cursor-pointer hover:bg-foreground/60'
-                  : 'bg-border cursor-not-allowed',
+              pos <= currentPosition ? 'bg-foreground' : 'bg-border',
             )}
-            aria-label={`Gå till steg ${s}`}
           />
         ))}
       </div>
@@ -318,208 +267,176 @@ export default function ReviewCard({
 
           {step === 2 && (
             <>
-          {/* Inferred fields */}
-          <section>
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-4">
-              Uppgifter
-            </h2>
-            <dl className="divide-y divide-border">
-              <FieldRow
-                label="Form"
-                value={fields.entity_type_label}
-                editing={editing === 'entity_type_label'}
-                onEdit={() => setEditing('entity_type_label')}
-                onChange={(v) => setFields((f) => ({ ...f, entity_type_label: v }))}
-                onCommit={() => setEditing(null)}
-              />
-              <SniRow sniCodes={fields.sni_codes} />
-              <FieldRow
-                label="Säte"
-                value={fields.city ?? ''}
-                placeholder="—"
-                editing={editing === 'city'}
-                onEdit={() => setEditing('city')}
-                onChange={(v) => setFields((f) => ({ ...f, city: v }))}
-                onCommit={() => setEditing(null)}
-              />
-              <FieldRow
-                label="Räkenskapsår"
-                value={fields.fiscal_period ?? ''}
-                placeholder="januari–december"
-                editing={editing === 'fiscal_period'}
-                onEdit={() => setEditing('fiscal_period')}
-                onChange={(v) => setFields((f) => ({ ...f, fiscal_period: v }))}
-                onCommit={() => setEditing(null)}
-              />
-              <FieldRow
-                label="Moms"
-                value={fields.vat_period ?? ''}
-                placeholder="Kvartal / månad / år"
-                editing={editing === 'vat_period'}
-                onEdit={() => setEditing('vat_period')}
-                onChange={(v) => setFields((f) => ({ ...f, vat_period: v }))}
-                onCommit={() => setEditing(null)}
-              />
-              <FieldRow
-                label="F-skatt"
-                value={fields.f_skatt ?? ''}
-                placeholder="Aktivt / saknas"
-                editing={editing === 'f_skatt'}
-                onEdit={() => setEditing('f_skatt')}
-                onChange={(v) => setFields((f) => ({ ...f, f_skatt: v }))}
-                onCommit={() => setEditing(null)}
-              />
-              <FieldRow
-                label="Anställda"
-                value={fields.employees ?? ''}
-                placeholder="0"
-                editing={editing === 'employees'}
-                onEdit={() => setEditing('employees')}
-                onChange={(v) => setFields((f) => ({ ...f, employees: v }))}
-                onCommit={() => setEditing(null)}
-              />
-            </dl>
-          </section>
+              {/* Value first — the prose summary the composer wrote, so the
+                  user sees the assistant understood them before being asked to
+                  check dry registry facts. */}
+              <section>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                    Så här har jag förstått dig
+                  </h2>
+                  {!editingSummary && summary && (
+                    <button
+                      onClick={() => setEditingSummary(true)}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="Redigera profil"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {editingSummary ? (
+                  <textarea
+                    value={summary}
+                    onChange={(e) => setSummary(e.target.value)}
+                    onBlur={() => setEditingSummary(false)}
+                    autoFocus
+                    rows={5}
+                    className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                ) : (
+                  <p className="text-sm leading-6 italic text-muted-foreground">
+                    {summary || 'Ingen sammanfattning ännu.'}
+                  </p>
+                )}
+              </section>
 
-          {/* Verksamhetsbeskrivning from Bolagsverket — verbatim, since
-              authoritative legal text. Hidden when TIC didn't return one. */}
-          {fields.purpose && (
-            <section>
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
-                Verksamhet
-              </h2>
-              <p className="text-sm leading-6 text-muted-foreground italic">
-                {fields.purpose}
-              </p>
-            </section>
-          )}
-
-          {/* Profile summary */}
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                Profil
-              </h2>
-              {!editingSummary && summary && (
-                <button
-                  onClick={() => setEditingSummary(true)}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                  aria-label="Redigera profil"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
+              {/* What the assistant can actually do — the differentiated
+                  output of the build. Plain-language heading, not the internal
+                  "atoms/specialiteter" framing. */}
+              {(horizontal.length > 0 || vertical.length > 0 || modifier.length > 0) && (
+                <section>
+                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                    Vad jag kan hjälpa dig med
+                  </h2>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Kunskapsområden jag läst in för din verksamhet. Ta bort det som inte passar, så slipper du förslag som inte är relevanta.
+                  </p>
+                  <ChipGroup
+                    primaryLabel="Bransch"
+                    secondaryLabel="Övrigt"
+                    primary={vertical.map((id) => ({ id, label: atomLabel(id, atomTitles) }))}
+                    secondary={[
+                      ...modifier.map((id) => ({ id, label: atomLabel(id, atomTitles), group: 'modifier' as const })),
+                      ...horizontal.map((id) => ({ id, label: atomLabel(id, atomTitles), group: 'horizontal' as const })),
+                    ]}
+                    onRemove={(id, group) => {
+                      if (group === 'horizontal') setHorizontal((arr) => arr.filter((x) => x !== id))
+                      else if (group === 'vertical') setVertical((arr) => arr.filter((x) => x !== id))
+                      else setModifier((arr) => arr.filter((x) => x !== id))
+                    }}
+                  />
+                </section>
               )}
-            </div>
-            {editingSummary ? (
-              <textarea
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                onBlur={() => setEditingSummary(false)}
-                autoFocus
-                rows={5}
-                className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            ) : (
-              <p className="text-sm leading-6 italic text-muted-foreground">
-                {summary || 'Ingen sammanfattning ännu.'}
-              </p>
-            )}
-          </section>
 
-          {/* Specialty chips */}
-          {(horizontal.length > 0 || vertical.length > 0 || modifier.length > 0) && (
-            <section>
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
-                Inlästa specialiteter
-              </h2>
-              <ChipGroup
-                primaryLabel="Bransch"
-                secondaryLabel="Övrigt"
-                primary={vertical.map((id) => ({ id, label: atomLabel(id, atomTitles) }))}
-                secondary={[
-                  ...modifier.map((id) => ({ id, label: atomLabel(id, atomTitles), group: 'modifier' as const })),
-                  ...horizontal.map((id) => ({ id, label: atomLabel(id, atomTitles), group: 'horizontal' as const })),
-                ]}
-                onRemove={(id, group) => {
-                  if (group === 'horizontal') setHorizontal((arr) => arr.filter((x) => x !== id))
-                  else if (group === 'vertical') setVertical((arr) => arr.filter((x) => x !== id))
-                  else setModifier((arr) => arr.filter((x) => x !== id))
-                }}
-              />
-            </section>
-          )}
+              {/* Inferred facts to confirm */}
+              <section>
+                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-4">
+                  Uppgifter
+                </h2>
+                <dl className="divide-y divide-border">
+                  <FieldRow
+                    label="Form"
+                    value={fields.entity_type_label}
+                    editing={editing === 'entity_type_label'}
+                    onEdit={() => setEditing('entity_type_label')}
+                    onChange={(v) => setFields((f) => ({ ...f, entity_type_label: v }))}
+                    onCommit={() => setEditing(null)}
+                  />
+                  <SniRow sniCodes={fields.sni_codes} />
+                  <FieldRow
+                    label="Säte"
+                    value={fields.city ?? ''}
+                    placeholder="—"
+                    editing={editing === 'city'}
+                    onEdit={() => setEditing('city')}
+                    onChange={(v) => setFields((f) => ({ ...f, city: v }))}
+                    onCommit={() => setEditing(null)}
+                  />
+                  <FieldRow
+                    label="Räkenskapsår"
+                    value={fields.fiscal_period ?? ''}
+                    placeholder="januari–december"
+                    editing={editing === 'fiscal_period'}
+                    onEdit={() => setEditing('fiscal_period')}
+                    onChange={(v) => setFields((f) => ({ ...f, fiscal_period: v }))}
+                    onCommit={() => setEditing(null)}
+                  />
+                  <FieldRow
+                    label="Moms"
+                    value={fields.vat_period ?? ''}
+                    placeholder="Kvartal / månad / år"
+                    editing={editing === 'vat_period'}
+                    onEdit={() => setEditing('vat_period')}
+                    onChange={(v) => setFields((f) => ({ ...f, vat_period: v }))}
+                    onCommit={() => setEditing(null)}
+                  />
+                  <FieldRow
+                    label="F-skatt"
+                    value={fields.f_skatt ?? ''}
+                    placeholder="Aktivt / saknas"
+                    editing={editing === 'f_skatt'}
+                    onEdit={() => setEditing('f_skatt')}
+                    onChange={(v) => setFields((f) => ({ ...f, f_skatt: v }))}
+                    onCommit={() => setEditing(null)}
+                  />
+                  <FieldRow
+                    label="Anställda"
+                    value={fields.employees ?? ''}
+                    placeholder="0"
+                    editing={editing === 'employees'}
+                    onEdit={() => setEditing('employees')}
+                    onChange={(v) => setFields((f) => ({ ...f, employees: v }))}
+                    onCommit={() => setEditing(null)}
+                  />
+                </dl>
+              </section>
 
+              {/* Verksamhetsbeskrivning from Bolagsverket — verbatim, since
+                  authoritative legal text. Hidden when TIC didn't return one. */}
+              {fields.purpose && (
+                <section>
+                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                    Verksamhet
+                  </h2>
+                  <p className="text-sm leading-6 text-muted-foreground italic">
+                    {fields.purpose}
+                  </p>
+                </section>
+              )}
+
+              {/* Optional seed note — the fast path for users who'd rather jot
+                  one thing than chat. The Phase C intake will draw the rest
+                  out conversationally. */}
+              <section>
+                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                  Bra att veta
+                </h2>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Valfritt — du kan också berätta i chatten strax. T.ex. återkommande kunder, en hyresfaktura som kommer den 25:e, eller att kunderna mest finns i Tyskland.
+                </p>
+                <textarea
+                  id="seed-memory"
+                  value={seedMemory}
+                  onChange={(e) => setSeedMemory(e.target.value)}
+                  rows={3}
+                  placeholder="Skriv något, eller lämna tomt"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </section>
             </>
-          )}
-
-          {step === 3 && !finalCtaPhase && (
-            // Conversational question stepper — present one question at a
-            // time. Skip moves to next without storing. Next stores the typed
-            // answer (if any) and advances. At the end of the list we fall
-            // through to the finalCtaPhase block below.
-            <section className="space-y-4">
-              <label
-                htmlFor={`q-${questionIndex}`}
-                className="block font-display text-xl tracking-tight"
-              >
-                {verificationQuestions[questionIndex]}
-              </label>
-              <textarea
-                id={`q-${questionIndex}`}
-                key={questionIndex}
-                value={questionAnswers[questionIndex] ?? ''}
-                onChange={(e) =>
-                  setQuestionAnswers((prev) => ({ ...prev, [questionIndex]: e.target.value }))
-                }
-                rows={4}
-                placeholder="Ditt svar (valfritt)"
-                autoFocus
-                className="w-full resize-none rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </section>
-          )}
-
-          {step === 3 && finalCtaPhase && (
-            <section className="space-y-4">
-              <label
-                htmlFor="seed-memory"
-                className="block font-display text-xl tracking-tight"
-              >
-                Något du vill att jag ska veta från start?
-              </label>
-              <p className="text-sm text-muted-foreground">
-                Valfritt. T.ex. återkommande kunder, hyresfaktura som kommer den 25:e, eller att kunderna mest finns i Tyskland.
-              </p>
-              <textarea
-                id="seed-memory"
-                value={seedMemory}
-                onChange={(e) => setSeedMemory(e.target.value)}
-                rows={4}
-                placeholder="Skriv något, eller lämna tomt"
-                className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </section>
           )}
 
           {verifyError && (
             <p className="text-sm text-destructive">{verifyError}</p>
           )}
 
-          {/* Step nav. Forward / back depending on phase. The final CTA on
-              step 3 (after questions or when there are none) triggers the
-              full verify pipeline. */}
+          {/* Step nav. Step 1 → forward to review. Step 2 → back to meet, or
+              run the verify pipeline and hand off to the chat intake. */}
           <div className="flex items-center justify-between gap-3 pt-2">
             <Button
               variant="ghost"
-              onClick={() => {
-                if (step === 3 && questionIndex > 0) {
-                  setQuestionIndex((i) => i - 1)
-                } else if (step === 3 && questionIndex === 0) {
-                  setStep(2)
-                } else if (step > 1) {
-                  setStep((s) => (s - 1) as Step)
-                }
-              }}
+              onClick={() => setStep(1)}
               disabled={step === 1}
             >
               <ArrowLeft className="h-4 w-4 mr-2" />
@@ -533,46 +450,17 @@ export default function ReviewCard({
               </Button>
             )}
             {step === 2 && (
-              <Button
-                onClick={() => {
-                  setStep(3)
-                  setQuestionIndex(0)
-                }}
-              >
-                Nästa
-                <ArrowRight className="h-4 w-4 ml-2" />
-              </Button>
-            )}
-            {step === 3 && !finalCtaPhase && (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setQuestionAnswers((prev) => ({ ...prev, [questionIndex]: '' }))
-                    setQuestionIndex((i) => i + 1)
-                  }}
-                >
-                  Hoppa över
-                </Button>
-                <Button onClick={() => setQuestionIndex((i) => i + 1)}>
-                  Nästa fråga
-                  <ArrowRight className="h-4 w-4 ml-2" />
-                </Button>
-              </div>
-            )}
-            {step === 3 && finalCtaPhase && (
-              <Button
-                size="lg"
-                onClick={handleVerify}
-                disabled={verifying}
-              >
+              <Button size="lg" onClick={handleVerify} disabled={verifying}>
                 {verifying ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     Sparar…
                   </>
                 ) : (
-                  'Det här ser rätt ut, kör'
+                  <>
+                    Möt {agentName}
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </>
                 )}
               </Button>
             )}

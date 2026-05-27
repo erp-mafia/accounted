@@ -6,6 +6,10 @@ import { SONNET_MODEL } from '@/lib/agent/composer/client'
 // way a new redovisningskonsult would: one question at a time, unhurried,
 // shaped by the loaded vertical + modifier atoms.
 //
+// Phase B now only confirms the inferred facts and names the assistant — it
+// no longer asks the verification questions as a form. This chat is the
+// entire interview, so it carries the composer's questions as its bank.
+//
 // Declarative atom mode — full bodies. Intake is the highest-leverage chat
 // in the company's lifetime, so we pay the cache-prefix cost once and load
 // everything. The intake conversation also tends to be longer than other
@@ -25,13 +29,11 @@ interface CapturedIntake {
   userFirstName: string | null
   companyName: string | null
   profileSummary: string | null
+  // The composer's flagged uncertainties. Phase B no longer asks these as a
+  // form — the chat intake is the only place they get answered, so the agent
+  // treats them as its highest-leverage question bank.
   verificationQuestions: string[]
   intakeAlreadyCompleted: boolean
-  // Tracks what Phase B inline questions the user already answered or
-  // skipped. Sourced from agent_memory rows with source_ref =
-  // 'onboarding_question_<idx>'. The agent uses this to avoid re-asking
-  // what's already in memory and to focus on what was skipped.
-  alreadyAnsweredQuestionIndices: number[]
   // Titles of the loaded specialty atoms — used in the prompt to remind the
   // agent which industry depth it can lean on for follow-up questions.
   loadedAtomTitles: string[]
@@ -67,7 +69,6 @@ export const onboardingIntake = defineAgentIntent<IntakeArgs, CapturedIntake>({
       { data: profile },
       { data: company },
       { data: userProfile },
-      { data: questionMemories },
     ] = await Promise.all([
       supabase
         .from('agent_profiles')
@@ -78,24 +79,12 @@ export const onboardingIntake = defineAgentIntent<IntakeArgs, CapturedIntake>({
         .maybeSingle(),
       supabase.from('companies').select('name').eq('id', companyId).maybeSingle(),
       supabase.from('profiles').select('full_name').eq('id', userId).maybeSingle(),
-      supabase
-        .from('agent_memory')
-        .select('source_ref')
-        .eq('company_id', companyId)
-        .eq('is_active', true)
-        .like('source_ref', 'onboarding_question_%'),
     ])
 
     const verificationQuestions =
       ((profile?.verification_questions as string[] | null) ?? []).filter(
         (q) => typeof q === 'string' && q.trim().length > 0,
       )
-
-    const alreadyAnsweredQuestionIndices: number[] = []
-    for (const row of (questionMemories ?? []) as { source_ref: string | null }[]) {
-      const m = row.source_ref?.match(/^onboarding_question_(\d+)$/)
-      if (m) alreadyAnsweredQuestionIndices.push(Number(m[1]))
-    }
 
     const atomIds = [
       ...((profile?.vertical_atoms as string[] | null) ?? []),
@@ -120,7 +109,6 @@ export const onboardingIntake = defineAgentIntent<IntakeArgs, CapturedIntake>({
       profileSummary: (profile?.profile_summary as string | null) ?? null,
       verificationQuestions,
       intakeAlreadyCompleted: !!profile?.intake_completed_at,
-      alreadyAnsweredQuestionIndices,
       loadedAtomTitles,
     }
   },
@@ -144,29 +132,13 @@ export const onboardingIntake = defineAgentIntent<IntakeArgs, CapturedIntake>({
       lines.push('')
     }
 
-    // The Phase B inline question stepper already answered (or explicitly
-    // skipped) some verification questions. Surface that state so the agent
-    // doesn't re-ask what's already in memory and focuses on the skipped
-    // ones first.
-    const skippedQuestions: string[] = []
+    // The composer flagged these as the highest-leverage uncertainties. This
+    // intake is the only place they get answered — weave them into the
+    // conversation naturally, starting with the ones that matter most. Never
+    // dump them on the user as a list.
     if (captured.verificationQuestions.length > 0) {
-      for (let i = 0; i < captured.verificationQuestions.length; i++) {
-        if (!captured.alreadyAnsweredQuestionIndices.includes(i)) {
-          skippedQuestions.push(captured.verificationQuestions[i])
-        }
-      }
-    }
-
-    if (captured.alreadyAnsweredQuestionIndices.length > 0) {
-      lines.push(
-        `Användaren har redan svarat på ${captured.alreadyAnsweredQuestionIndices.length} av ${captured.verificationQuestions.length} introduktionsfrågor i föregående steg (svaren ligger i minnet — använd dem, fråga inte om dem igen).`,
-      )
-      lines.push('')
-    }
-
-    if (skippedQuestions.length > 0) {
-      lines.push('Dessa frågor hoppade användaren över i föregående steg — börja med dem som du tycker är viktigast, en i taget:')
-      for (const q of skippedQuestions) lines.push(`  • ${q}`)
+      lines.push('Det här är de viktigaste sakerna du fortfarande är osäker på och vill få klarhet i under samtalet (väv in dem naturligt, en i taget, börja med de viktigaste):')
+      for (const q of captured.verificationQuestions) lines.push(`  • ${q}`)
       lines.push('')
     }
 

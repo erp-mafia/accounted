@@ -18,6 +18,7 @@ import {
   FileWarning,
   Clock,
   ArrowRight,
+  MessageCircle,
 } from 'lucide-react'
 import type { Deadline, ReceiptQueueSummary, OnboardingProgress } from '@/types'
 import { getBranding } from '@/lib/branding/service'
@@ -44,9 +45,16 @@ interface DashboardContentProps {
     staleUncategorizedCount: number
   }
   onboardingProgress?: OnboardingProgress
+  /**
+   * False until the company has a verified agent_profile. When false the hero
+   * slot shows a build-assistant prompt instead of the next-best-action card,
+   * so existing/migrated users are nudged to build the assistant without a
+   * full-screen onboarding takeover.
+   */
+  agentBuilt?: boolean
 }
 
-export default function DashboardContent({ companyId, summary, onboardingProgress }: DashboardContentProps) {
+export default function DashboardContent({ companyId, summary, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
   const [showAllAlerts, setShowAllAlerts] = useState(false)
   const t = useTranslations('dashboard')
 
@@ -286,41 +294,63 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
 
   return (
     <div className="stagger-enter space-y-8">
-      {slim && (
-        <>
-          {/* Next best action — single hero card */}
-          <section>
-            <Link href={nextBestAction.href} className="block group">
-              <Card className={cn(
-                'transition-colors',
-                nextBestAction.tone === 'destructive' && 'border-destructive/30 hover:bg-destructive/[0.03]',
-                nextBestAction.tone === 'primary' && 'hover:border-primary/50',
-                nextBestAction.tone === 'neutral' && 'hover:border-primary/30',
-              )}>
-                <CardContent className="p-6 flex items-center gap-5">
-                  <div className={cn(
-                    'flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center',
-                    nextBestAction.tone === 'destructive' && 'bg-destructive/10 text-destructive',
-                    nextBestAction.tone === 'primary' && 'bg-secondary text-foreground',
-                    nextBestAction.tone === 'neutral' && 'bg-secondary text-foreground',
-                  )}>
-                    <nextBestAction.icon className="h-5 w-5" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-display text-xl leading-tight">{nextBestAction.title}</p>
-                    <p className="text-sm text-muted-foreground mt-1">{nextBestAction.body}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                    <span>{nextBestAction.cta}</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          </section>
-
-        </>
-      )}
+      {!agentBuilt ? (
+        /* Build-assistant hero — shown until the company has a verified
+           agent_profile. Takes the hero slot so existing/migrated users get a
+           clear prompt instead of a full-screen onboarding takeover. */
+        <section>
+          <Link href="/onboarding/agent" className="block group">
+            <Card className="transition-colors hover:border-primary/50">
+              <CardContent className="p-6 flex items-center gap-5">
+                <div className="flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center bg-foreground text-background">
+                  <MessageCircle className="h-5 w-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-display text-xl leading-tight">Bygg din bokföringsassistent</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig. Gratis i 30 dagar.
+                  </p>
+                </div>
+                <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
+                  <span>Kom igång</span>
+                  <ArrowRight className="h-4 w-4" />
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+        </section>
+      ) : slim ? (
+        /* Next best action — single hero card */
+        <section>
+          <Link href={nextBestAction.href} className="block group">
+            <Card className={cn(
+              'transition-colors',
+              nextBestAction.tone === 'destructive' && 'border-destructive/30 hover:bg-destructive/[0.03]',
+              nextBestAction.tone === 'primary' && 'hover:border-primary/50',
+              nextBestAction.tone === 'neutral' && 'hover:border-primary/30',
+            )}>
+              <CardContent className="p-6 flex items-center gap-5">
+                <div className={cn(
+                  'flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center',
+                  nextBestAction.tone === 'destructive' && 'bg-destructive/10 text-destructive',
+                  nextBestAction.tone === 'primary' && 'bg-secondary text-foreground',
+                  nextBestAction.tone === 'neutral' && 'bg-secondary text-foreground',
+                )}>
+                  <nextBestAction.icon className="h-5 w-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-display text-xl leading-tight">{nextBestAction.title}</p>
+                  <p className="text-sm text-muted-foreground mt-1">{nextBestAction.body}</p>
+                </div>
+                <div className="flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
+                  <span>{nextBestAction.cta}</span>
+                  <ArrowRight className="h-4 w-4" />
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+        </section>
+      ) : null}
 
       {/* Key metrics — 4 compact cards */}
       <section>

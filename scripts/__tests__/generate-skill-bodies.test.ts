@@ -14,6 +14,7 @@ function atom(overrides: Partial<DiscoveredAtom>): DiscoveredAtom {
     estimated_tokens: 1,
     body_path: '.claude/skills/test/SKILL.md',
     body: 'body',
+    parent_atom_id: null,
     frontmatter_version: 1,
     schema_version: 1,
     ...overrides,
@@ -46,6 +47,28 @@ describe('buildMigrationSql', () => {
   it('escapes single quotes in short text fields (title/id)', () => {
     const sql = buildMigrationSql([atom({ title: "O'Brien & Co" })], { 'horizontal/test': 1 })
     expect(sql).toContain("'O''Brien & Co'")
+  })
+
+  it('emits parent_atom_id — NULL for top-level skills, a quoted id for reference children', () => {
+    const sql = buildMigrationSql(
+      [
+        atom({ id: 'horizontal/swedish-vat', parent_atom_id: null }),
+        atom({
+          id: 'horizontal/swedish-vat/vat-compliance-reference',
+          parent_atom_id: 'horizontal/swedish-vat',
+        }),
+      ],
+      {
+        'horizontal/swedish-vat': 1,
+        'horizontal/swedish-vat/vat-compliance-reference': 1,
+      },
+    )
+    // Column wired into both the INSERT list and the conflict update.
+    expect(sql).toContain(', body, parent_atom_id, version,')
+    expect(sql).toContain('parent_atom_id = EXCLUDED.parent_atom_id')
+    // Parent row carries a literal NULL; child row carries the parent id.
+    expect(sql).toMatch(/\$gb\$body\$gb\$,\n {4}NULL,/)
+    expect(sql).toContain("'horizontal/swedish-vat',\n    1,")
   })
 
   it('omits is_active / mcp_exposed from the upsert so manual flips survive re-seed', () => {

@@ -4,7 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
-import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import type { PendingOperation } from '@/types'
 
 ensureInitialized()
@@ -48,6 +48,15 @@ export async function POST(
 
     if (result.status === 'committed') {
       return NextResponse.json({ data: result.data })
+    }
+    // Recoverable accounts-not-in-chart: return the structured envelope (code +
+    // account_numbers) so the client can offer activation and retry the still-
+    // pending op, instead of leaking the raw error string into the chat.
+    if (result.code === ACCOUNTS_NOT_IN_CHART && result.account_numbers?.length) {
+      const structured = bookkeepingErrorResponse(
+        new AccountsNotInChartError(result.account_numbers)
+      )
+      if (structured) return structured
     }
     return NextResponse.json(
       { error: result.error },

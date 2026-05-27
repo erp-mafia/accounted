@@ -8,6 +8,7 @@ import {
   makeCompanySettings,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
 const { supabase: mockSupabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -139,6 +140,38 @@ describe('POST /api/pending-operations/:id/commit', () => {
       expect(status).toBe(200)
       expect(body.data.journal_entry_id).toBe('je-1')
       expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns the structured ACCOUNTS_NOT_IN_CHART envelope when the chart lacks accounts', async () => {
+      // The booking is valid but posts to reverse-charge accounts (2614/2645)
+      // not active in the chart. The engine throws AccountsNotInChartError; the
+      // dispatcher must release the op back to 'pending' (retryable, see the
+      // 6th enqueued response) and the route must return the structured error
+      // with code + account_numbers so the chat can offer activation — NOT a
+      // raw error string.
+      const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+      const settings = makeCompanySettings()
+      mockCreateJournalEntry.mockRejectedValueOnce(new AccountsNotInChartError(['2645', '2614']))
+
+      enqueueMany([
+        { data: pendingOp },                         // route fetch op
+        { data: { id: 'op-1' } },                    // CAS claim (pending -> committing)
+        { data: tx },                                 // fetch transaction
+        { data: settings },                           // fetch company settings
+        { data: [{ id: 'fp-1' }] },                  // fiscal period exists
+        { data: null, error: null },                  // dispatcher releases op back to 'pending'
+      ])
+
+      const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
+      const response = await POST(request, routeParams)
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; account_numbers: string[] }
+      }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      // Numeric sort puts 2614 before 2645 regardless of input order.
+      expect(body.error.account_numbers).toEqual(['2614', '2645'])
     })
 
     it('returns 409 when transaction already categorized', async () => {

@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // verifikation.draft — "Fråga [namn]" on the journal entry creation form.
@@ -64,6 +64,13 @@ export const verifikationDraft = defineAgentIntent<
   ],
 
   model: SONNET_MODEL,
+
+  // Work out the entry (accounts, VAT, balance) in the thinking channel, so the
+  // visible reply lands once — after the voucher is staged — instead of an
+  // analysis before the tool call and a near-identical answer after it. The
+  // always-on prompt promises "resonemang sker i tankekanalen"; without this
+  // that channel doesn't exist and the reasoning spills into the visible reply.
+  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
 
   capture: async ({ journal_entry_id, description }, { supabase, companyId }) => {
     let entry: CapturedVerifikationDraft['entry'] = null
@@ -170,7 +177,7 @@ export const verifikationDraft = defineAgentIntent<
     }
     lines.push('')
     lines.push('Arbetssätt:')
-    lines.push('1. Förslå rätt BAS-konton baserat på beskrivningen. Om en motpart syns i beskrivningen — anropa gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ samma kontomönster som tidigare verifikat om inget motsäger det.')
+    lines.push('1. Föreslå rätt BAS-konton baserat på beskrivningen. Syns en motpart i beskrivningen — kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }).')
     lines.push('2. Säkerställ att debet = kredit. Förklara varje rad kort.')
     lines.push('3. Om transaktionen i själva verket är en faktura/leverantörsfaktura/bankrad — be användaren matcha det istället. Direktbokning skapar dubbletter.')
     lines.push('4. Staga via gnubok_create_voucher när allt stämmer.')

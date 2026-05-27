@@ -10,11 +10,10 @@ interface Props {
   hasSkatteverketConnected: boolean
 }
 
-// Thin client wrapper around NewUserChecklist. Owns the "I'm starting
-// fresh" handler — clicking it forwards the user straight to /onboarding/agent
-// since the agent is the only remaining required step when bookkeeping is
-// optional. The server page already gated on hasAgentBuilt before rendering
-// us, so we don't pass that flag through to the checklist's redirect logic.
+// Thin client wrapper around NewUserChecklist, shown only to a genuinely empty
+// company (no data, no assistant). The data-import steps lead and building the
+// assistant is the last step; the "I'm starting fresh" escape hatch forwards
+// straight to /onboarding/agent for users with no books to bring in.
 export default function WelcomeGate({
   companyId: _companyId,
   hasBookkeepingImported,

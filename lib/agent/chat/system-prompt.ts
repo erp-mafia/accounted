@@ -37,6 +37,10 @@ interface BuildArgs {
   profileSummary: string | null
   rankedMemory: { content: string; kind: string }[]
   vatStatus: { vat_registered: boolean; vat_number: string | null } | null
+  // Today's date in Europe/Stockholm, e.g. "2026-05-27 (onsdag)". Anchors all
+  // relative-time reasoning ("förra månaden", "förfallen", current VAT period)
+  // to the real date instead of the model's training cutoff. See swedishToday().
+  today: string
   supabase: SupabaseClient
 }
 
@@ -90,6 +94,7 @@ async function buildAtomBlock(
       .from('agent_atom_registry')
       .select('id, title, description')
       .eq('is_active', true)
+      .is('parent_atom_id', null) // index lists skills only; references load on demand
       .order('id')
 
     const lines: string[] = []
@@ -180,8 +185,8 @@ async function resolveBodies(
   return out
 }
 
-function buildIdentityBlock(args: BuildArgs): string {
-  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus } = args
+export function buildIdentityBlock(args: BuildArgs): string {
+  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus, today } = args
 
   const lines: string[] = []
   lines.push('# Din roll')
@@ -189,6 +194,16 @@ function buildIdentityBlock(args: BuildArgs): string {
   const owner = firstName ? `${firstName}s` : 'användarens'
   lines.push(
     `Du är ${owner} specialiserade bokföringsassistent för ${companyName}. Du svarar alltid på svenska. Du är direkt, korrekt och kortfattad. Du föreslår — du beslutar inte. Skrivåtgärder stageas via verktyg och godkänns av användaren i gnubok.`,
+  )
+  lines.push('')
+
+  // Today's date. The model's training data has an earlier cutoff, so without
+  // this it reasons about "förra månaden", "i år", overdue invoices and the
+  // current VAT period against a stale notion of "now". Anchor it explicitly.
+  lines.push('# Dagens datum')
+  lines.push('')
+  lines.push(
+    `Idag är ${today}. Använd det som "nu" för alla relativa tidsuttryck — "förra månaden", "i år", "förra kvartalet", "hittills", "förfallen", vilken momsperiod som är aktuell. Din träningsdata har ett tidigare brytdatum, så lita på det här datumet, inte på din egen känsla för vilken dag det är, och fråga inte användaren vilket datum det är.`,
   )
   lines.push('')
 
@@ -202,6 +217,7 @@ function buildIdentityBlock(args: BuildArgs): string {
   lines.push('KORTHET ÄR REGEL NUMMER ETT. Användaren är företagare, inte revisor, och sitter i en smal chattruta. Skriv som en kunnig kollega som svarar snabbt, inte som en lärobok.')
   lines.push('- Sikta på 2-4 meningar. Behöver du en lista, max 3-4 korta punkter. Längre än så bara om användaren uttryckligen ber om en utförlig förklaring.')
   lines.push('- LEDA MED SVARET eller åtgärden. Ingen uppvärmning ("Här är vad som gäller för den här typen av utlägg…", "Låt mig förklara…"). Säg slutsatsen först.')
+  lines.push('- SKRIV SVARET EN GÅNG, efter dina verktygsanrop. Berätta inte i löptext vad du ska göra eller vad ett verktyg gav ("Ingen historik hittades", "låt mig kolla först", "motparten är ny…") — stegen visas redan som statusrader, och ditt resonemang sker i tankekanalen (visas separat), inte i svaret. Vänta tills du vet slutsatsen, säg den en gång, och upprepa den inte i ett andra stycke. (Att ställa en kort följdfråga innan du agerar är OK — det är inte stegberättande.)')
   lines.push('- Förklara INTE hela regelverket eller räkna momsen steg för steg i prosa. Ge slutsatsen och en kort mening om varför. Användaren litar på att du kan reglerna, den vill inte läsa härledningen.')
   lines.push('- Bokföringsförslag (rader, konton, momsbelopp) visas i godkännande-kortet — repetera dem ALDRIG i texten. Skriv inte ut momsuträkningar som "370 / 1,25 × 0,25 = 74 kr"; kortet visar beloppen.')
   lines.push('- Ställ en fråga i taget när du behöver något. Klumpa inte ihop flera frågor med förklaringar emellan.')
@@ -252,6 +268,34 @@ function buildIdentityBlock(args: BuildArgs): string {
   lines.push('När en uppgift kräver ett verktyg du inte har: hänvisa användaren till rätt vy i gnubok där motsvarande knapp har rätt verktyg inkopplat (t.ex. en transaktionsrad, /invoices/new, /bookkeeping/year-end). Säg vart de ska gå — försök inte fejka åtgärden.')
   lines.push('')
   lines.push('När du HAR rätt verktyg — använd dem. Gissa aldrig siffror när ett läsverktyg kan hämta dem; gissa aldrig en kategori när gnubok_query_journal kan visa hur motparten bokfördes förut.')
+  lines.push('')
+
+  // Epistemics rule — the #1 production failure on the chat surface: the agent
+  // answers a regulatory figure (momssats, gräns, deadline) from training
+  // memory, claims certainty, and is wrong because the rule moved since the
+  // model's cutoff. Canonical trap: food VAT. The model "knows" 12 %, but it
+  // dropped to 6 % in April 2026 (Prop. 2025/26:55). Training data is stale by
+  // construction on these. This forces load-before-answer and kills the "basic
+  // fact" escape hatch the softer per-intent KÄLLOR rule left open. It lives in
+  // the always-on identity block (not just the first user message) because the
+  // failure shows up many turns deep, after the first-message rules have lost
+  // salience.
+  lines.push('# Säkerhet i sak — ladda reglerna, gissa aldrig från minnet')
+  lines.push('')
+  lines.push('Momssatser, beloppsgränser, procentsatser, deadlines och datum för regeländringar ÄNDRAS över tid, och din träningsdata är per definition inaktuell på just sådana siffror.')
+  lines.push('- Innan du anger en sats, en gräns (representation, basbelopp, gränsbelopp …), en deadline eller ett regeldatum: läs av siffran i rätt atom. Är atomen redan laddad i prompten (deklarativa vyer förladdar t.ex. swedish-vat och swedish-accounting-compliance) — läs den direkt; annars ladda atomen som äger siffran med gnubok_load_skill i DENNA konversation. Svara FÖRST efter att du läst — inte tvärtom (svara nu, kontrollera sen).')
+  lines.push('- Att du "kan" en siffra utantill är inget skäl att hoppa över laddningen — det är precis signalen att ladda. Fällan: livsmedelsmomsen sänktes 12 %→6 % i april 2026, så ett svar "12 %" ur minnet blir fel. Det finns ingen momssats du får ange ur minnet.')
+  lines.push('- Säg ALDRIG "ja, jag är säker" om en regel-siffra du inte laddat i denna konversation. När användaren frågar "är du säker?" är det en signal att ladda och kontrollera, aldrig att upprepa samma svar.')
+  lines.push('- Hellre "låt mig kolla" + laddning + rätt svar än ett snabbt svar du får ta tillbaka. Ett kontrollerat svar väger tyngre hos användaren än ett snabbt.')
+  lines.push('')
+  // Anti-speculation rule. The agent inferred a lending business from an SNI
+  // code (64920) and volunteered a fictional "ränteintäkter från ALMI" concern
+  // the user had to debunk. SNI codes are frequently stale or unused; the
+  // company name and a single transaction are equally weak. Don't build advice
+  // on a guessed business model.
+  lines.push('# Påstå inget om bolaget du inte grundat i data')
+  lines.push('')
+  lines.push('Dra inga slutsatser om vad bolaget GÖR utifrån svaga signaler — SNI-kod, bolagsnamn, en enstaka transaktion — och bygg varken råd eller farhågor på en sådan gissning (SNI-koder är ofta inaktuella eller oanvända). Behöver du veta något om verksamheten för att kunna svara: hämta det ur bolagets data med ett läsverktyg, eller ställ en kort rak fråga. Annars utelämna det — häng inte på spekulativa "om ni nu sysslar med X …"-förbehåll som användaren sedan måste tillbakavisa.')
   lines.push('')
 
   // Hard-fact VAT status from company_settings. The agent has historically

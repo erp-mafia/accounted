@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { OPUS_MODEL, THINKING_BUDGET_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // vat.review — "Fråga [namn]" from the VAT declaration preview.
@@ -58,6 +58,11 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
   ],
 
   model: OPUS_MODEL,
+
+  // Reason over the period figures + Rutor in the thinking channel, so the
+  // visible reply is one conclusion, not a running commentary of each read
+  // followed by a restated summary. Parity with the other reasoning intents.
+  thinking: { budgetTokens: THINKING_BUDGET_DEEP },
 
   capture: async ({ period_type, year, period }, { supabase, companyId }) => {
     const { data: settings } = await supabase

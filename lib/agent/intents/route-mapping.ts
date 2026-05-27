@@ -1,10 +1,10 @@
 // Route → intent dispatch for the floating "Fråga [namn]" trigger.
 //
-// The page-specific buttons ("Fråga om denna transaktion" on a row, "Granska
-// med assistent" on a supplier invoice page) already open the right intent
-// because they know what they're attached to. The floating FAB previously
-// always opened general.help with just the URL string, so clicking it on
-// /invoices/abc-123 gave the agent zero context about that invoice.
+// The page-specific buttons ("Granska med assistent" on a supplier invoice
+// page, "Fråga om bokslutet" in the year-end wizard) already open the right
+// intent because they know what they're attached to. The floating FAB
+// previously always opened general.help with just the URL string, so clicking
+// it on /invoices/abc-123 gave the agent zero context about that invoice.
 //
 // This module gives the FAB the same situational awareness: it inspects the
 // pathname and picks the intent + intentArgs that the equivalent on-page

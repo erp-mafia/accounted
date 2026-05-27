@@ -41,9 +41,11 @@ Din uppgift:
      - Om fiscalYear finns: fråga INTE om räkenskapsårsstart/slut
      - Om SNI-koder finns: fråga inte om branschen i allmänhet, men du KAN fråga om en specifik nyans (t.ex. "Säljer ni mest 25%- eller 12%-momsvaror?")
 
-   Fokusera istället på frågor vars svar du inte kan se: specifika balansposter (t.ex. "Vad gäller ALMI-beloppet — lån eller bidrag?"), arbetssätt (faktureringscadens, kund-geografi), planerade förändringar (kommande löneutbetalning, expansion, fastighetsförvärv).
+   Fokusera istället på frågor vars svar du inte kan se: specifika balansposter (t.ex. "Vad gäller ALMI-beloppet, lån eller bidrag?"), arbetssätt (faktureringscadens, kund-geografi), planerade förändringar (kommande löneutbetalning, expansion, fastighetsförvärv).
 
 6. Skriv 1-3 svenska uncertainty_notes till utvecklaren som granskar valet senare. Inkludera explicit notering om statuses[] visar isCeased eller red-status.
+
+Stil i all text du skriver (verifieringsfrågor och notes): använd ALDRIG tankstreck (— eller –). Använd kommatecken, punkt, eller "till" för intervall ("2,5 till 5 miljoner"). Hård regel.
 
 Använd verktyget compose_agent_profile för att svara. Använd aldrig fritext.`
 

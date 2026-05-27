@@ -9,6 +9,7 @@ import {
   BookmarkCheck,
   BookmarkX,
   Check,
+  Brain,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -38,6 +39,9 @@ import ApprovalCard from './ApprovalCard'
 export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
+  // Extended-thinking reasoning, streamed token-by-token via reasoning_delta.
+  // Shown in a collapsible "Tänkte…" block. Stream-time only — not hydrated.
+  reasoning?: string
   // Tool-use chips. `completed` flips true when the matching `tool_result`
   // event arrives so the UI can swap the pulsing dot for a static check
   // instead of yanking the chip out from under the user. Hydrated messages
@@ -186,6 +190,10 @@ export default function AgentChat({
   async function startTurn(body: {
     conversationId: string | null
     userMessage: string
+    // When true, the user_message is persisted for agent context but flagged
+    // hidden so it never renders as a user bubble (e.g. a rejection correction
+    // fed back into the chat). The caller also skips adding a visible bubble.
+    hidden?: boolean
   }): Promise<void> {
     // Abort any in-flight turn before starting a new one — guards against
     // racing two turns when handleSend is triggered twice fast.
@@ -208,6 +216,7 @@ export default function AgentChat({
           context_ref: contextRef,
           conversation_id: body.conversationId,
           user_message: body.userMessage,
+          user_message_hidden: body.hidden ?? false,
         }),
         signal,
       })
@@ -296,6 +305,14 @@ export default function AgentChat({
     void startTurn({ conversationId, userMessage: userMsg.text })
   }
 
+  // Fired after the user rejects a proposal with a reason. The rejection is
+  // already recorded server-side; here we feed the correction back as a HIDDEN
+  // user turn so the agent re-proposes inline — no synthetic user bubble (we
+  // don't add a user row, and the turn is persisted hidden).
+  function handleCorrection(correctionMessage: string) {
+    void startTurn({ conversationId, userMessage: correctionMessage, hidden: true })
+  }
+
   function handleEvent(event: unknown) {
     if (typeof event !== 'object' || event === null) return
     const ev = event as { kind: string } & Record<string, unknown>
@@ -308,6 +325,16 @@ export default function AgentChat({
         onConversationIdChange?.(id)
         break
       }
+      case 'reasoning_delta':
+        // Extended-thinking tokens. Accumulate onto the active assistant
+        // message; the ReasoningBlock renders them live, then collapses.
+        setMessages((prev) =>
+          updateLastAssistant(prev, (m) => ({
+            ...m,
+            reasoning: (m.reasoning ?? '') + (ev.delta as string),
+          })),
+        )
+        break
       case 'text_delta':
         // Insert a paragraph break ONCE when text resumes after a tool
         // call, so post-tool narration starts on its own line instead of
@@ -476,6 +503,7 @@ export default function AgentChat({
                 m.text.length > 0
               }
               onRegenerate={handleRegenerate}
+              onCorrection={handleCorrection}
             />
           </div>
         ))}
@@ -549,20 +577,29 @@ function MessageBubble({
   streamingTail,
   showRegenerate,
   onRegenerate,
+  onCorrection,
 }: {
   message: ChatMessage
   streamingTail: boolean
   showRegenerate?: boolean
   onRegenerate?: () => void
+  onCorrection?: (message: string) => void
 }) {
   const isUser = message.role === 'user'
   // An assistant turn that contains only tool calls (no text, no streaming
   // tail) is the LLM's "I want to call tool X" handshake. Rendering the
   // empty border-card around nothing looks like a broken bubble; show the
   // chips standalone in that case.
-  const hideEmptyBubble = !isUser && !message.text && !streamingTail
+  // While the model is still in its extended-thinking phase (reasoning streamed
+  // but no answer text yet), the ReasoningBlock is the activity indicator, so
+  // suppress the empty cursor bubble underneath it.
+  const isThinking = !isUser && streamingTail && !message.text && !!message.reasoning
+  const hideEmptyBubble = (!isUser && !message.text && !streamingTail) || isThinking
   return (
     <div className={cn('flex flex-col gap-2', isUser ? 'items-end' : 'items-start')}>
+      {!isUser && message.reasoning && (
+        <ReasoningBlock reasoning={message.reasoning} active={isThinking} />
+      )}
       {!hideEmptyBubble && (
       <div
         className={cn(
@@ -630,6 +667,7 @@ function MessageBubble({
                 toolName={s.tool_name}
                 preview={s.preview}
                 periodStatus={s.period_status}
+                onRequestCorrection={onCorrection}
               />
             ) : (
               <div
@@ -669,6 +707,40 @@ function Cursor() {
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-foreground/50 animate-typing-dot" style={{ animationDelay: '150ms' }} />
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-foreground/50 animate-typing-dot" style={{ animationDelay: '300ms' }} />
     </span>
+  )
+}
+
+// Collapsible extended-thinking trace. While the model is still reasoning
+// (active), it auto-expands and streams — doubling as the "working" indicator
+// in place of the typing cursor. Once the answer starts it collapses to a
+// quiet toggle so the reply stays the focus and the surface stays calm.
+function ReasoningBlock({ reasoning, active }: { reasoning: string; active: boolean }) {
+  const [open, setOpen] = useState(false)
+  const show = open || active
+  return (
+    <div className="w-full max-w-[85%]">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+        aria-expanded={show}
+      >
+        {active ? (
+          <span className="relative inline-flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40 opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
+          </span>
+        ) : (
+          <Brain className="h-3 w-3" />
+        )}
+        {active ? 'Tänker…' : show ? 'Dölj resonemang' : 'Visa resonemang'}
+      </button>
+      {show && (
+        <div className="mt-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground whitespace-pre-wrap">
+          {reasoning}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -792,7 +864,7 @@ export function normalizeStoredMessages(
   const out: ChatMessage[] = []
   for (const r of rows) {
     if (r.role === 'tool') continue // tool_result blocks aren't shown in the timeline
-    if (r.hidden === true) continue // synthetic first-turn prompt templates
+    if (r.hidden === true) continue // synthetic first-turn templates + hidden correction turns
     const content = r.content
     if (typeof content === 'string') {
       out.push({ role: r.role === 'assistant' ? 'assistant' : 'user', text: content })

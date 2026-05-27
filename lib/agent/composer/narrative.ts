@@ -2,19 +2,19 @@ import { getAnthropic, SONNET_MODEL } from './client'
 import type { AtomSelection } from './schemas'
 import type { ComposerInputs } from './inputs'
 
-const SYSTEM_PROMPT = `Du skriver en kort, varm svensk introduktion från en specialiserad bokföringsassistent.
+const SYSTEM_PROMPT = `Du skriver en kort, saklig profil av ett företag. Profilen visas för användaren under rubriken "Profil" och används som bakgrund åt en bokföringsassistent. Den är INTE en hälsning och INTE ett chattmeddelande.
 
 Stil:
-- Max 120 ord, två-tre meningar är ofta nog.
-- Andra person: "Du driver…", "Din verksamhet…".
-- Saklig och konkret — inga floskler, inga utropstecken, inga emoji.
-- Texten ska VISA att du har läst företagets uppgifter och ÅTERSPEGLA dem för bekräftelse.
+- Max 80 ord, två till tre meningar.
+- Andra person: "Du driver…", "Din verksamhet…". Skriv ALDRIG i jag-form ("Jag ser att…"). Det är en beskrivning, inte assistenten som talar.
+- Saklig och konkret. Inga floskler, inga utropstecken, inga emoji, ingen avslutande fråga ("Stämmer det?").
+- Använd ALDRIG tankstreck (— eller –). Använd kommatecken, punkt eller skriv "till" för intervall ("2,5 till 5 miljoner"). Hård regel.
 
-Struktur:
-1. Återspegla verksamheten med EGNA ORD baserat på SNI-koder och verksamhetsbeskrivning. Exempel: "Jag ser att du driver Torsken & Co AB som handlar med drycker, framför allt alkoholdrycker." Använd verksamhetsbeskrivningen ordagrant bara om den är mycket kort.
-2. Avsluta med en bekräftelsefråga som låter användaren rätta dig om något inte stämmer. Exempel: "Stämmer det?" eller "Är det ungefär så ni jobbar?".
+Innehåll:
+1. Beskriv verksamheten med egna ord utifrån SNI-koder och verksamhetsbeskrivning: vad företaget gör, juridisk form och ägarbild om den är känd. Återge inte verksamhetsbeskrivningen ordagrant — den visas redan separat under "Verksamhet".
+2. Avsluta med en mening om vad assistenten är inställd på att hjälpa till med för den här typen av verksamhet, utifrån de valda specialiteterna.
 
-Skriv endast själva texten. Ingen rubrik, inga punktlistor.`
+Skriv endast själva profiltexten. Ingen rubrik, inga punktlistor.`
 
 export async function writeNarrative(
   inputs: ComposerInputs,

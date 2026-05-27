@@ -23,6 +23,7 @@ vi.mock('@/lib/supabase/server', () => ({
 function makeSupabaseWithEmptyAtomRegistry(
   rows: unknown[] = [],
   overrides: { entityType?: string | null; vatRegistered?: boolean; employeeCount?: number } = {},
+  refRow: unknown = null,
 ) {
   const entityType = overrides.entityType ?? 'AB'
   const vatRegistered = overrides.vatRegistered ?? true
@@ -51,13 +52,17 @@ function makeSupabaseWithEmptyAtomRegistry(
           })),
         }
       }
-      // Default: agent_atom_registry shape. Supports chained .eq().eq()...order()
-      // (loadAtomsAsSkills filters on both is_active AND mcp_exposed).
+      // Default: agent_atom_registry. The same chain serves two query shapes:
+      //   - loadAtomsAsSkills:   .eq().eq().is('parent_atom_id', null).order()  → resolves `rows`
+      //   - loadReferenceById:   .eq('id').not('parent_atom_id','is',null).maybeSingle() → resolves `refRow`
       return {
         select: vi.fn(() => {
-          const chain: { eq: ReturnType<typeof vi.fn>; order: ReturnType<typeof vi.fn> } = {
+          const chain: Record<string, ReturnType<typeof vi.fn>> = {
             eq: vi.fn(() => chain),
+            is: vi.fn(() => chain),
+            not: vi.fn(() => chain),
             order: vi.fn().mockResolvedValue({ data: rows, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: refRow, error: null }),
           }
           return chain
         }),
@@ -349,6 +354,54 @@ describe('gnubok_load_skill tool', () => {
     // Frontmatter preserved, and the body is the DB value (not the on-disk file).
     expect(result.body).toContain('id: vertical/konsult-it')
     expect(result.body).toContain('loaded from DB')
+  })
+
+  it('resolves a reference child by id even though it is hidden from the listed atom set', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    // Listed atoms (loadAtomsAsSkills) is empty — the reference is only reachable
+    // via loadReferenceById, which findSkill falls back to.
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, {
+      id: 'horizontal/swedish-vat/vat-compliance-reference',
+      tier: 'horizontal',
+      title: 'Swedish VAT (Moms) Complete Compliance Reference',
+      description: 'desc',
+      sni_prefixes: [],
+      body: '# Swedish VAT (Moms) Complete Compliance Reference\n\nDeep reference body.',
+      body_path: '.claude/skills/swedish-vat/references/vat-compliance-reference.md',
+      is_active: true,
+      mcp_exposed: true,
+      parent_atom_id: 'horizontal/swedish-vat',
+    })
+    const result = (await tool.execute(
+      { slug: 'horizontal/swedish-vat/vat-compliance-reference' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { slug: string; tier: string; tags: string[]; body: string }
+    expect(result.slug).toBe('horizontal/swedish-vat/vat-compliance-reference')
+    expect(result.tier).toBe('horizontal')
+    expect(result.tags).toContain('reference')
+    expect(result.body).toContain('Deep reference body.')
+  })
+
+  it('does not resolve a reference whose curation switch (mcp_exposed) is off', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, {
+      id: 'horizontal/swedish-vat/vat-compliance-reference',
+      tier: 'horizontal',
+      title: 'x',
+      description: 'desc',
+      sni_prefixes: [],
+      body: '# body',
+      body_path: '.claude/skills/swedish-vat/references/vat-compliance-reference.md',
+      is_active: true,
+      mcp_exposed: false,
+      parent_atom_id: 'horizontal/swedish-vat',
+    })
+    await expect(
+      tool.execute(
+        { slug: 'horizontal/swedish-vat/vat-compliance-reference' },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/Skill not found/)
   })
 
   it('skips an atom whose body is null in the DB (no on-disk fallback in prod)', async () => {

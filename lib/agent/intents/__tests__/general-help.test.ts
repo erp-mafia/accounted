@@ -34,10 +34,13 @@ describe('general.help — the /chat read-only assistant', () => {
     }
   })
 
-  it('redirects categorization to the per-transaction flow instead of proposing in prose', () => {
+  it('redirects categorization to the Dokumentinkorgen flow instead of proposing in prose', () => {
     const out = renderPrompt()
-    expect(out).toContain('Fråga om denna transaktion')
-    expect(out).toContain('Transaktioner')
+    // Per-transaction agent help now lives in Dokumentinkorgen (match the
+    // underlag to the transaction, then ask there) — not a transactions-page row
+    // button, which was removed.
+    expect(out).toContain('Dokumentinkorgen')
+    expect(out).toContain('matcha det mot transaktionen')
     // Must explicitly forbid per-transaction prose proposals + the fake "approve?" prompt.
     expect(out).toContain('INTE per-transaktions-bokföringsförslag')
     expect(out.toLowerCase()).toContain('godkänner du dessa')

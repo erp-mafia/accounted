@@ -109,15 +109,18 @@ describe('transaction.categorization prompt template', () => {
     expect(out.toLowerCase()).toContain('hellre en fråga än en felaktig bokning')
   })
 
-  it('grounds the agent in atoms (BFL / ML / BFNAR), not training data', () => {
+  it('points at the loaded atoms as primary source, without re-stating the system-prompt epistemics', () => {
     // Compliance content lives in the loaded atoms (swedish-vat,
-    // swedish-accounting-compliance, ...). The prompt must tell the agent
-    // to reason from those — not from generic LLM training data.
+    // swedish-accounting-compliance, ...). The intent prompt points at them as
+    // the primary source to cite from…
     const out = renderPrompt({ hasUnderlag: true })
-    expect(out).toContain('KÄLLOR')
     expect(out.toLowerCase()).toContain('atomerna')
     expect(out).toMatch(/swedish-(vat|accounting-compliance|invoice-compliance)/)
-    expect(out.toLowerCase()).toContain('gissa aldrig från träningsdata')
+    // …but it must NOT re-duplicate the load-before-answer epistemics rule. That
+    // rule now lives once in the always-on system prompt (Block 2); re-adding it
+    // here restores the triplication this cleanup removed.
+    expect(out).not.toContain('12 %→6 %')
+    expect(out.toLowerCase()).not.toContain('träningsdata')
   })
 
   it('instructs the agent to check counterparty history before proposing', () => {

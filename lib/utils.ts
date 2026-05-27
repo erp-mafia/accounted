@@ -42,6 +42,31 @@ export function formatDateLong(date: Date | string, locale: string = 'sv'): stri
   })
 }
 
+/**
+ * Today's date in Europe/Stockholm, labelled for the bookkeeping agent's system
+ * prompt — e.g. "2026-05-27 (onsdag)".
+ *
+ * Date granularity (no clock time) is deliberate: the agent system prompt is
+ * cached (cache_control ttl=1h) and this string sits inside the cached prefix,
+ * so a full timestamp would bust the cache on every request while the value
+ * actually changes at most once a day. Stockholm time zone — not the server's
+ * UTC — so "idag" is right for Swedish users near midnight, where a UTC date can
+ * read a day behind.
+ */
+export function swedishToday(now: Date = new Date()): string {
+  const date = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now)
+  const weekday = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    weekday: 'long',
+  }).format(now)
+  return `${date} (${weekday})`
+}
+
 export function formatOrgNumber(orgNumber: string): string {
   // Format Swedish org number: XXXXXX-XXXX
   const cleaned = orgNumber.replace(/\D/g, '')

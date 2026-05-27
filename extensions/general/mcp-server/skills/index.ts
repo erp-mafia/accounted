@@ -8,7 +8,7 @@ import { payrollMonthlySkill } from './payroll-monthly'
 import { bankReconciliationSkill } from './bank-reconciliation'
 import { kreditfakturaProcessSkill } from './kreditfaktura-process'
 import { customerOnboardingSkill } from './customer-onboarding'
-import { loadAtomsAsSkills } from './atoms'
+import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 
 /** Static workflow skills the server ships with. Tier: 'workflow'. */
 export const workflowSkills: Skill[] = [
@@ -37,7 +37,12 @@ export async function findSkill(slug: string, supabase?: SupabaseClient): Promis
   if (wf) return wf
   if (!supabase) return null
   const atoms = await loadAtomsAsSkills(supabase)
-  return atoms.find((s) => s.slug === slug) ?? null
+  const atom = atoms.find((s) => s.slug === slug)
+  if (atom) return atom
+  // Reference children (e.g. "horizontal/swedish-vat/vat-compliance-reference")
+  // are excluded from the listed atom set above, so resolve them directly. This
+  // is what makes a SKILL.md footer's gnubok_load_skill(<reference id>) work.
+  return loadReferenceById(supabase, slug)
 }
 
 /** Workflow skills + registry-loaded atoms in one list. */

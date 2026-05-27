@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 
 // transaction.categorization — "Fråga om denna transaktion" on a transaction
 // row.
@@ -74,6 +74,11 @@ export const transactionCategorization = defineAgentIntent<
   ],
 
   model: SONNET_MODEL,
+
+  // Reason before proposing — read underlag + history and work out the VAT
+  // treatment in the thinking channel, so the visible reply is one short
+  // motivation, not a play-by-play of each tool call.
+  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
 
   capture: async ({ transaction_id }, { supabase, companyId }) => {
     const { data: tx } = await supabase
@@ -311,9 +316,9 @@ export const transactionCategorization = defineAgentIntent<
       lines.push('VIKTIGT: extraktionen ovan är det vi REDAN VET. Återupprepa inte frågor som "vilken leverantör är det?" eller "vad var beloppet?" — det står ovan. Använd uppgifterna direkt och föreslå kategori + moms-behandling.')
     }
     lines.push('')
-    lines.push('Arbetssätt: gather information first, propose second.')
-    lines.push('- KÄLLOR: atomerna i systemprompten (swedish-vat, swedish-accounting-compliance, swedish-invoice-compliance + företagets vertikal/modifier-atomer) är primärkällan. Citera BFL / ML 2023:200 / BFNAR / BAS därifrån när du resonerar. Gissa ALDRIG från träningsdata.')
-    lines.push('- KOLLA HUR MOTPARTEN BOKFÖRTS FÖRUT innan du föreslår kategori. Anropa gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) — använd det renaste namn-signalen du har (underlagets leverantörsnamn när det finns, annars ett kort utdrag ur transaktionsbeskrivningen utan adress/stad-cruft, t.ex. "Linear" inte "LINEAR.APP*HQ STOCKHOLM"). Granska de returnerade raderna: vilka BAS-konton användes, vilken momsbehandling, samma summor i samma härad? Om det finns ett tydligt mönster — följ det om inte underlaget motsäger det. "Så har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Om query_journal returnerar 0 träffar: motparten är ny — säg det kort och grunda förslaget på atomerna.')
+    lines.push('Arbetssätt: hämta information via verktygsanrop FÖRST (tyst — statusraderna visar att du söker, och ditt resonemang sker i tankekanalen), föreslå sedan. Skriv din förklaring EN gång efteråt, inte i flera block runt anropen.')
+    lines.push('- Atomerna i systemprompten (swedish-vat, swedish-accounting-compliance, swedish-invoice-compliance + företagets vertikal/modifier-atomer) är din primärkälla — citera BFL / ML 2023:200 / BFNAR / BAS därifrån i din korta motivering. (Disciplinen kring satser och gränser, ladda-före-svar, styrs av systemprompten.)')
+    lines.push('- KOLLA HUR MOTPARTEN BOKFÖRTS FÖRUT innan du föreslår kategori. Anropa gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) — använd det renaste namn-signalen du har (underlagets leverantörsnamn när det finns, annars ett kort utdrag ur transaktionsbeskrivningen utan adress/stad-cruft, t.ex. "Linear" inte "LINEAR.APP*HQ STOCKHOLM"). Granska de returnerade raderna: vilka BAS-konton användes, vilken momsbehandling, samma summor i samma härad? Om det finns ett tydligt mönster — följ det om inte underlaget motsäger det. "Så har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Om query_journal returnerar 0 träffar är motparten ny: grunda förslaget på atomerna (nämn att den är ny bara om det är relevant, i din korta motivering — skriv ingen separat rad om sökresultatet).')
     lines.push('- Om underlaget inte är extraherat tillräckligt djupt (t.ex. saknar momsbelopp), läs PDF/bilden med gnubok_get_document_content(document_id=…) och fyll i luckorna.')
     lines.push('- Om något i underlaget är oklart eller motsägelsefullt (t.ex. moms saknas men säljaren är svensk, eller belopp inte stämmer med transaktionen), FRÅGA användaren först innan du stagear.')
     lines.push('- STÄLL en kort följdfråga (2–3 alternativ) när kategorin beror på syfte som inte syns på kvittot: restaurang/café, Systembolaget, detaljhandel (ICA/Clas Ohlson/Apoteket), resor, drivmedel, gåvor. Hellre en fråga än en felaktig bokning. Spara användarens svar via gnubok_remember_fact så du inte behöver fråga igen nästa gång liknande motpart dyker upp.')

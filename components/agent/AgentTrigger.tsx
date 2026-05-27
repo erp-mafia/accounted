@@ -18,9 +18,10 @@ import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 // the button reads "Fråga Anna" (with Anna's face) rather than the generic
 // "Fråga min assistent".
 //
-// Page-specific triggers ("Fråga om denna transaktion" on a transaction row)
+// Page-specific triggers (e.g. "Granska med assistent" on a supplier invoice)
 // still call useAgentSheet() directly from their own buttons because they
-// know exactly which row entity to pass.
+// know exactly which entity to pass. (Per-transaction help is reached from
+// Dokumentinkorgen, not a transactions-page row button.)
 export default function AgentTrigger() {
   const { openAgentSheet, isOpen, identity } = useAgentSheet()
   const pathname = usePathname()

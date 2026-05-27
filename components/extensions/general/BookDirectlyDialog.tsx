@@ -18,13 +18,16 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, AlertTriangle, Search, Check } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
+import { useCompany } from '@/contexts/CompanyContext'
 import {
   useSubmitWithAccountActivation,
   throwOnStructuredError,
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import type { BASAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
@@ -40,6 +43,19 @@ interface PickerTransaction {
   description: string
   amount: number
   currency: string | null
+  amount_sek?: number | null
+  exchange_rate?: number | null
+}
+
+// SEK magnitude of a (usually-SEK) bank transaction. Foreign rows are
+// normalised via their stored amount_sek/exchange_rate so ranking against the
+// underlag's SEK value is apples-to-apples.
+function txSekAmount(tx: PickerTransaction): number {
+  const cur = (tx.currency ?? 'SEK').toUpperCase()
+  if (cur === 'SEK') return Math.abs(tx.amount)
+  return Math.abs(
+    resolveSekAmount(tx.amount, tx.amount_sek ?? null, tx.currency, tx.exchange_rate ?? null),
+  )
 }
 
 interface FormLine {
@@ -116,21 +132,31 @@ function buildPrefillLines(
   return lines
 }
 
-function rankByAmount(
+// Rank candidates by closeness to the underlag's SEK value. `targetSek` is the
+// document total already converted to SEK (the bank charge for a 216 USD
+// receipt is ~2 109 kr, not 216) — ranking against the raw foreign total used
+// to bury the real match far down the list. Null target → leave order intact.
+function rankBySekCloseness(
   rows: PickerTransaction[],
-  target: number | null
+  targetSek: number | null
 ): PickerTransaction[] {
-  if (target == null) return rows
-  const abs = Math.abs(target)
-  return [...rows].sort((a, b) => {
-    const da = Math.abs(Math.abs(a.amount) - abs)
-    const db = Math.abs(Math.abs(b.amount) - abs)
-    return da - db
-  })
+  if (targetSek == null) return rows
+  const abs = Math.abs(targetSek)
+  return [...rows].sort((a, b) => Math.abs(txSekAmount(a) - abs) - Math.abs(txSekAmount(b) - abs))
 }
 
 export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess }: Props) {
   const { toast } = useToast()
+  const { company } = useCompany()
+
+  // Underlag total + currency. Booking happens in SEK, so a foreign total needs
+  // an FX rate to rank/compare against the (SEK) bank transactions.
+  const targetAmount = item.extracted_data?.totals?.total ?? null
+  const targetCurrency = (item.extracted_data?.invoice?.currency ?? 'SEK').toUpperCase()
+  // SEK per unit of the underlag currency (e.g. ~9.8 for USD). null = SEK,
+  // pending, or unsupported.
+  const [fxRate, setFxRate] = useState<number | null>(null)
+
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   const [entryDate, setEntryDate] = useState<string>(
@@ -168,13 +194,50 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 
+  // Fetch the underlag's SEK rate for a foreign-currency document so candidate
+  // transactions can be ranked against the SEK-equivalent total (and not the
+  // raw foreign number). SEK / unsupported currencies skip the fetch.
+  useEffect(() => {
+    if (!open) return
+    setFxRate(null)
+    if (targetCurrency === 'SEK' || !['EUR', 'USD', 'GBP', 'NOK', 'DKK'].includes(targetCurrency)) {
+      return
+    }
+    let cancelled = false
+    const invoiceDate = item.extracted_data?.invoice?.invoiceDate
+    const dateParam = invoiceDate ? `&date=${invoiceDate}` : ''
+    fetch(`/api/currency/rate?currency=${targetCurrency}${dateParam}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled) return
+        const rate = body?.data?.rate
+        if (typeof rate === 'number' && rate > 0) setFxRate(rate)
+      })
+      .catch(() => { /* leave null — ranking falls back to face amounts */ })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, targetCurrency, item.id])
+
+  // SEK-equivalent of the underlag total — the anchor for ranking candidates.
+  const targetSek = useMemo(() => {
+    if (targetAmount == null) return null
+    if (targetCurrency === 'SEK') return targetAmount
+    if (fxRate != null) return Math.round(targetAmount * fxRate * 100) / 100
+    return null
+  }, [targetAmount, targetCurrency, fxRate])
+
   // When the user picks a transaction (or the toggle changes), re-derive
   // the prefilled amounts so foreign-currency invoices follow the SEK
-  // figure on the actual bank movement.
+  // figure on the actual bank movement. Normalised to SEK — a foreign bank
+  // row is booked at its SEK value, never its face amount.
   const selectedTransactionAmount = useMemo(() => {
     if (!selectedTransactionId) return null
     const tx = transactions.find((t) => t.id === selectedTransactionId)
-    return tx?.amount ?? null
+    if (!tx) return null
+    const cur = (tx.currency ?? 'SEK').toUpperCase()
+    return cur === 'SEK'
+      ? tx.amount
+      : resolveSekAmount(tx.amount, tx.amount_sek ?? null, tx.currency, tx.exchange_rate ?? null)
   }, [selectedTransactionId, transactions])
 
   useEffect(() => {
@@ -237,7 +300,6 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     if (!open) return
     let cancelled = false
     setIsLoadingTransactions(true)
-    const targetAmount = item.extracted_data?.totals?.total ?? null
     ;(async () => {
       try {
         const res = await fetch('/api/transactions?unmatched=true')
@@ -250,8 +312,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
             description: t.description,
             amount: t.amount,
             currency: t.currency || 'SEK',
+            amount_sek: t.amount_sek ?? null,
+            exchange_rate: t.exchange_rate ?? null,
           }))
-        setTransactions(rankByAmount(rows, targetAmount))
+        // Ranking happens in a memo (it depends on the async FX rate).
+        setTransactions(rows)
       } catch (err) {
         console.error('[book-direct] fetch transactions failed:', err)
       } finally {
@@ -259,13 +324,30 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       }
     })()
     return () => { cancelled = true }
-  }, [open, item.extracted_data?.totals?.total])
+  }, [open])
+
+  // FX-aware ranking by closeness to the underlag's SEK value.
+  const rankedTransactions = useMemo(
+    () => rankBySekCloseness(transactions, targetSek),
+    [transactions, targetSek],
+  )
 
   const filteredTransactions = useMemo(() => {
     const term = txSearch.trim().toLowerCase()
-    if (!term) return transactions
-    return transactions.filter((t) => (t.description || '').toLowerCase().includes(term))
-  }, [transactions, txSearch])
+    if (!term) return rankedTransactions
+    return rankedTransactions.filter((t) => (t.description || '').toLowerCase().includes(term))
+  }, [rankedTransactions, txSearch])
+
+  // Pin the already-selected/matched transaction to the top so it's always
+  // visible — otherwise a correct match that ranks past the rendered cap looks
+  // unselected and the user re-picks it. The pinned row carries a "Matchad"
+  // badge when it's the one matched in the inbox.
+  const displayedTransactions = useMemo(() => {
+    if (!selectedTransactionId) return filteredTransactions
+    const sel = filteredTransactions.find((t) => t.id === selectedTransactionId)
+    if (!sel) return filteredTransactions
+    return [sel, ...filteredTransactions.filter((t) => t.id !== selectedTransactionId)]
+  }, [filteredTransactions, selectedTransactionId])
 
   const totals = useMemo(() => {
     const debit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
@@ -291,6 +373,27 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   const removeLine = useCallback((idx: number) => {
     setLines((prev) => prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx))
   }, [])
+
+  // Replace the line set with a booking template's computed rows. The picker
+  // hands back JournalEntryForm-shaped lines; we keep only the three fields
+  // book-direct posts. A meaningful supplier description is preserved — the
+  // template name only fills an empty field.
+  const handleTemplateApply = useCallback(
+    (
+      templateLines: Array<{ account_number: string; debit_amount: string; credit_amount: string }>,
+      templateDescription: string,
+    ) => {
+      setLines(
+        templateLines.map((l) => ({
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+        })),
+      )
+      setDescription((prev) => (prev.trim() ? prev : templateDescription))
+    },
+    [],
+  )
 
   const disabledReason = useMemo(() => {
     if (isSubmitting) return null
@@ -365,9 +468,6 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       setIsSubmitting(false)
     }
   }, [canSubmit, runSubmit, toast, onSuccess, onOpenChange])
-
-  const targetAmount = item.extracted_data?.totals?.total ?? null
-  const targetCurrency = item.extracted_data?.invoice?.currency ?? 'SEK'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -465,8 +565,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
                   </p>
                 ) : (
                   <ul className="divide-y">
-                    {filteredTransactions.slice(0, 30).map((tx) => {
+                    {displayedTransactions.slice(0, 30).map((tx) => {
                       const isSelected = selectedTransactionId === tx.id
+                      const isInboxMatch = item.matched_transaction_id === tx.id
+                      const cur = (tx.currency || 'SEK').toUpperCase()
+                      const sek = txSekAmount(tx)
                       return (
                         <li key={tx.id}>
                           <button
@@ -488,17 +591,31 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
                               ) : null}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="truncate">{tx.description}</p>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <p className="truncate">{tx.description}</p>
+                                {isInboxMatch && (
+                                  <Badge variant="secondary" className="shrink-0 text-[10px] px-1.5 py-0">
+                                    Matchad
+                                  </Badge>
+                                )}
+                              </div>
                               <p className="text-xs text-muted-foreground tabular-nums">{tx.date}</p>
                             </div>
-                            <span
-                              className={cn(
-                                'tabular-nums text-sm shrink-0',
-                                tx.amount < 0 ? 'text-destructive' : 'text-foreground'
+                            <div className="text-right shrink-0">
+                              <span
+                                className={cn(
+                                  'tabular-nums text-sm block',
+                                  tx.amount < 0 ? 'text-destructive' : 'text-foreground'
+                                )}
+                              >
+                                {formatCurrency(tx.amount, tx.currency || 'SEK')}
+                              </span>
+                              {cur !== 'SEK' && (
+                                <span className="text-[11px] text-muted-foreground tabular-nums">
+                                  ≈ {formatCurrency(sek, 'SEK')}
+                                </span>
                               )}
-                            >
-                              {formatCurrency(tx.amount, tx.currency || 'SEK')}
-                            </span>
+                            </div>
                           </button>
                         </li>
                       )
@@ -627,16 +744,27 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
               </table>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={addLine}
-                disabled={isSubmitting}
-              >
-                <Plus className="h-3.5 w-3.5 mr-1.5" />
-                Lägg till rad
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={addLine}
+                  disabled={isSubmitting}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />
+                  Lägg till rad
+                </Button>
+                <BookingTemplatePicker
+                  onApply={handleTemplateApply}
+                  entityType={company?.entity_type}
+                  defaultAmount={
+                    selectedTransactionAmount != null
+                      ? Math.abs(selectedTransactionAmount)
+                      : targetSek ?? undefined
+                  }
+                />
+              </div>
               {totals.balanced ? (
                 <Badge variant="success" className="text-[11px]">
                   Balanserad

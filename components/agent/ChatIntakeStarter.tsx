@@ -27,9 +27,9 @@ export default function ChatIntakeStarter() {
       <header className="flex items-center gap-3 border-b border-border px-5 py-4 shrink-0">
         <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName} />
         <div className="min-w-0">
-          <h1 className="font-display text-lg tracking-tight truncate">Introduktion</h1>
-          <p className="text-xs text-muted-foreground truncate">
-            Bekanta dig med {agentName}
+          <h1 className="font-display text-lg tracking-tight truncate">{agentName} är redo</h1>
+          <p className="text-xs text-muted-foreground">
+            Några frågor för att lära känna din verksamhet — svara i din egen takt, du kan avsluta när du vill.
           </p>
         </div>
       </header>
@@ -39,10 +39,14 @@ export default function ChatIntakeStarter() {
           intentId="onboarding.intake"
           initialMessages={[]}
           initialConversationId={null}
-          onConversationIdChange={(id) => {
+          onFirstTurnComplete={(id) => {
+            // Wait for the greeting to finish streaming AND persist before
+            // swapping the URL. Swapping on the early `conversation` event
+            // unmounts AgentChat mid-stream, so the greeting is never saved
+            // and /chat/[id] hydrates empty — the bug where the chat lands
+            // blank and only shows the intro on a later visit.
             if (swapped) return
             setSwapped(true)
-            // Replace so the back button skips the bootstrap URL.
             router.replace(`/chat/${id}`)
           }}
           scrollerClassName="px-6 py-8"

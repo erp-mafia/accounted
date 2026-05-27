@@ -42,7 +42,7 @@ import {
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
-import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -86,6 +86,12 @@ export interface CommitResult {
   error?: string
   http_status?: number
   auto_rejected?: boolean
+  // Set when the commit failed because the booking posts to BAS accounts not
+  // active in the company chart. Recoverable — the op is left 'pending' so the
+  // caller can activate the accounts and retry. Lets the route rebuild the
+  // structured ACCOUNTS_NOT_IN_CHART envelope (code + account_numbers).
+  code?: string
+  account_numbers?: string[]
 }
 
 export interface CommitOptions {
@@ -2581,6 +2587,24 @@ export async function commitPendingOperation(
         }
     }
   } catch (err) {
+    // Accounts-not-in-chart is RECOVERABLE: the booking itself is valid; the
+    // company's chart just lacks the (standard BAS) accounts it posts to. Do
+    // NOT consume the op — release the atomic claim back to 'pending' so the
+    // user can activate the accounts and retry the SAME op — and surface the
+    // structured code + numbers so the client can offer one-click activation.
+    if (err instanceof AccountsNotInChartError) {
+      await supabase
+        .from('pending_operations')
+        .update({ status: 'pending' })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: err.message,
+        http_status: 400,
+        code: ACCOUNTS_NOT_IN_CHART,
+        account_numbers: err.accountNumbers,
+      }
+    }
     const isBkErr = isBookkeepingError(err)
     const message = err instanceof Error ? err.message : (isBkErr ? 'Bookkeeping error' : 'Executor failed')
     // Release the claim by transitioning to 'rejected' so the row never gets

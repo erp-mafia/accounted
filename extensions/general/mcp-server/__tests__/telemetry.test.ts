@@ -58,10 +58,15 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
         }
         return {
           select: vi.fn(() => {
-            // Chainable .eq() — loadAtomsAsSkills now filters is_active AND mcp_exposed.
-            const chain: { eq: ReturnType<typeof vi.fn>; order: ReturnType<typeof vi.fn> } = {
+            // Chainable: loadAtomsAsSkills filters .eq(is_active).eq(mcp_exposed)
+            // .is(parent_atom_id, null).order(); loadReferenceById uses
+            // .eq(id).not(parent_atom_id,is,null).maybeSingle().
+            const chain: Record<string, ReturnType<typeof vi.fn>> = {
               eq: vi.fn(() => chain),
+              is: vi.fn(() => chain),
+              not: vi.fn(() => chain),
               order: vi.fn().mockResolvedValue({ data: [], error: null }),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
             }
             return chain
           }),

@@ -4,6 +4,7 @@ import {
   normalizeMerchantName,
   calculateMerchantSimilarity,
   calculateMatchConfidence,
+  amountVarianceForMatch,
 } from '../core-receipt-matcher'
 
 describe('levenshteinDistance', () => {
@@ -103,5 +104,60 @@ describe('calculateMatchConfidence', () => {
     const narrow = calculateMatchConfidence(2, 0.03, 0.5, 3, 0.05)
     const wide = calculateMatchConfidence(2, 0.03, 0.5, 7, 0.10)
     expect(wide.confidence).toBeGreaterThan(narrow.confidence)
+  })
+
+  it('drops the amount signal when amountVariance is null (cross-currency)', () => {
+    // A null variance means the amounts could not be compared across
+    // currencies. Confidence must rely on date + merchant only, never reward
+    // a coincidental same-number match (750 EUR vs 750 SEK).
+    const { confidence, matchReasons } = calculateMatchConfidence(0, null, 1.0)
+    // Date (1.0) + merchant (1.0) both perfect, amount excluded → still ~1.0,
+    // but no amount reason is emitted.
+    expect(confidence).toBeGreaterThan(0.9)
+    expect(matchReasons).not.toContain('Exakt belopp')
+    expect(matchReasons).toContain('Exakt datum')
+    expect(matchReasons).toContain('Handlare matchar')
+  })
+
+  it('does not let a coincidental number reward a cross-currency mismatch', () => {
+    // Same date, no merchant signal. With a real 0 amountVariance the score is
+    // high; with null (uncomparable currencies) it must fall back to date only.
+    const sameNumber = calculateMatchConfidence(5, 0, 0, 120)
+    const uncomparable = calculateMatchConfidence(5, null, 0, 120)
+    expect(uncomparable.confidence).toBeLessThan(sameNumber.confidence)
+  })
+})
+
+describe('amountVarianceForMatch', () => {
+  it('compares raw magnitudes for same-currency rows (expense sign-agnostic)', () => {
+    // 750 EUR underlag vs a -750 EUR bank expense → exact.
+    expect(amountVarianceForMatch(750, 'EUR', null, -750, 'EUR', -8625)).toBe(0)
+  })
+
+  it('does NOT match 750 EUR against 750 SEK (the reported bug)', () => {
+    // No FX rate (receiptSek null) and different currencies → not comparable,
+    // so the amount signal is dropped rather than rewarding the coincidence.
+    expect(amountVarianceForMatch(750, 'EUR', null, -750, 'SEK', -750)).toBeNull()
+  })
+
+  it('normalises to SEK when a rate is available and matches the equivalent charge', () => {
+    // 750 EUR ≈ 8625 SEK (rate 11.5). A -8505 SEK bank charge is ~1.4% off.
+    const v = amountVarianceForMatch(750, 'EUR', 8625, -8505, 'SEK', -8505)
+    expect(v).not.toBeNull()
+    expect(v!).toBeLessThan(0.05)
+  })
+
+  it('flags a real SEK mismatch as a large variance', () => {
+    const v = amountVarianceForMatch(750, 'EUR', 8625, -500, 'SEK', -500)
+    expect(v!).toBeGreaterThan(0.05)
+  })
+
+  it('returns null when there is no underlag total or it is zero', () => {
+    expect(amountVarianceForMatch(null, 'SEK', null, -100, 'SEK', -100)).toBeNull()
+    expect(amountVarianceForMatch(0, 'SEK', 0, -100, 'SEK', -100)).toBeNull()
+  })
+
+  it('treats currency codes case-insensitively', () => {
+    expect(amountVarianceForMatch(100, 'eur', null, -100, 'EUR', -1150)).toBe(0)
   })
 })

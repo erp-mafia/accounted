@@ -44,6 +44,7 @@ export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill
     .select('id, tier, title, description, sni_prefixes, body, body_path')
     .eq('is_active', true)
     .eq('mcp_exposed', true)
+    .is('parent_atom_id', null) // list top-level skills only; references resolve via loadReferenceById
     .order('id')
 
   if (error) {
@@ -91,6 +92,56 @@ export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill
 
   cache = out
   return cache
+}
+
+/**
+ * Resolve a single reference child (parent_atom_id IS NOT NULL) by exact id —
+ * e.g. "horizontal/swedish-vat/vat-compliance-reference". References are
+ * deliberately excluded from `loadAtomsAsSkills` (the listed catalog), so this
+ * is the only path that surfaces them; gnubok_load_skill falls back here when a
+ * slug isn't a workflow or a top-level atom. Returns null for unknown ids,
+ * inactive rows, or rows the curation switch (mcp_exposed) has turned off.
+ *
+ * Not cached: references load rarely and on demand, so a per-id query is cheaper
+ * than holding ~90 reference bodies in the process between calls.
+ */
+export async function loadReferenceById(
+  supabase: SupabaseClient,
+  id: string,
+): Promise<Skill | null> {
+  const { data, error } = await supabase
+    .from('agent_atom_registry')
+    .select('id, tier, title, description, sni_prefixes, body, body_path, is_active, mcp_exposed, parent_atom_id')
+    .eq('id', id)
+    .not('parent_atom_id', 'is', null)
+    .maybeSingle()
+
+  if (error) throw new Error(`Failed to load reference ${id}: ${error.message}`)
+  if (!data || data.is_active === false || data.mcp_exposed === false) return null
+
+  const row = data as AtomRegistryRow & { is_active: boolean; mcp_exposed: boolean }
+  let body = row.body ?? ''
+  if (!body) {
+    // Same dev fallback as loadAtomsAsSkills: before the seed migration runs,
+    // read the references/*.md straight off disk. Never taken in production.
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        body = await readFile(join(process.cwd(), row.body_path), 'utf8')
+      } catch {
+        return null
+      }
+    }
+    if (!body) return null
+  }
+
+  return {
+    slug: row.id,
+    name: row.title ?? row.id,
+    summary: row.description,
+    tags: [row.tier, 'reference'],
+    body,
+    tier: row.tier as SkillTier,
+  }
 }
 
 /** Test-only: clear the module-level cache so the next call re-queries. */

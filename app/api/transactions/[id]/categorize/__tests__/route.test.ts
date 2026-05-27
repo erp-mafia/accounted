@@ -197,6 +197,72 @@ describe('POST /api/transactions/[id]/categorize', () => {
     )
   })
 
+  it('flags an inbox underlag matched to the transaction as booked', async () => {
+    // A document was attached to this transaction in the inbox
+    // (matched_transaction_id) but not booked from there. Booking the
+    // transaction here — no inbox_item_id in the body — must still stamp the
+    // matched inbox item with the new journal entry and link its document.
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'GitHub',
+      journal_entry_id: null,
+      document_id: null, // ensure document_attachments is touched ONLY by the inbox propagation
+    })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // fiscal period check
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update (CAS matched)
+    // Inbox propagation: one matched item with a document
+    enqueue({ data: [{ id: 'inbox-1', document_id: 'doc-1' }], error: null })
+    enqueue({ data: null, error: null }) // document_attachments update
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_id).toBe('je-1')
+    // The propagation looked up matched inbox items and linked the document.
+    expect(mockSupabase.from).toHaveBeenCalledWith('invoice_inbox_items')
+    expect(mockSupabase.from).toHaveBeenCalledWith('document_attachments')
+  })
+
+  it('does not touch the inbox when no underlag is matched to the transaction', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'GitHub',
+      journal_entry_id: null,
+      document_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update
+    enqueue({ data: [], error: null }) // inbox propagation: no matched items
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // No matched underlag → no document/inbox writes from the propagation.
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
+  })
+
   it('returns success with error when journal entry creation fails (non-blocking)', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

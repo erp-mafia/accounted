@@ -703,6 +703,46 @@ export const POST = withRouteContext(
       return errorResponseFromCode('TX_CATEGORIZE_RACE', txLog, { requestId })
     }
 
+    // Flag any inbox underlag already matched to this transaction as booked.
+    // The block above only fires when the caller passes an explicit
+    // inbox_item_id (booking straight from the inbox flow). Booking the same
+    // transaction from anywhere else — the /transactions list, quick review —
+    // would otherwise leave an attached underlag stuck as "Kopplad" in the
+    // inbox forever. Here we resolve it by the link itself (matched_transaction
+    // _id) so the inbox reflects the booking regardless of entry point. Mirrors
+    // the propagation in lib/pending-operations/commit.ts. Runs post-CAS so we
+    // never stamp the inbox with a journal entry that lost the race.
+    if (journalEntryId) {
+      try {
+        const { data: matchedInboxItems } = await supabase
+          .from('invoice_inbox_items')
+          .select('id, document_id')
+          .eq('company_id', companyId)
+          .eq('matched_transaction_id', id)
+          .is('created_journal_entry_id', null)
+
+        for (const inbox of (matchedInboxItems ?? []) as Array<{
+          id: string
+          document_id: string | null
+        }>) {
+          if (inbox.document_id) {
+            await supabase
+              .from('document_attachments')
+              .update({ journal_entry_id: journalEntryId })
+              .eq('id', inbox.document_id)
+              .eq('company_id', companyId)
+          }
+          await supabase
+            .from('invoice_inbox_items')
+            .update({ created_journal_entry_id: journalEntryId })
+            .eq('id', inbox.id)
+            .eq('company_id', companyId)
+        }
+      } catch (inboxErr) {
+        txLog.warn('failed to flag matched inbox items after booking (non-critical)', inboxErr as Error)
+      }
+    }
+
     await eventBus.emit({
       type: 'transaction.categorized',
       payload: {

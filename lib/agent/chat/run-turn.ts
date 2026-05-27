@@ -6,6 +6,7 @@ import type { AgentTool, AgentActorContext, StagedOperationResult } from '@/lib/
 import { isStagedOperation } from '@/lib/agent/tools/types'
 import { buildSystemPrompt } from './system-prompt'
 import { createLogger } from '@/lib/logger'
+import { swedishToday } from '@/lib/utils'
 
 const log = createLogger('agent.chat.run-turn')
 
@@ -60,6 +61,10 @@ export function friendlyModelError(err: unknown): string {
 
 export type StreamEvent =
   | { kind: 'text_delta'; delta: string }
+  // Extended-thinking reasoning stream. Emitted token-by-token while the model
+  // reasons, before it answers or calls a tool. Stream-time only — not
+  // persisted, not hydrated on resume.
+  | { kind: 'reasoning_delta'; delta: string }
   | { kind: 'tool_use'; tool_use_id: string; name: string; input: Record<string, unknown> }
   | { kind: 'tool_result'; tool_use_id: string; result: unknown }
   | {
@@ -109,6 +114,26 @@ interface RunTurnArgs {
 // run away forever. Real conversations rarely use more than 5-6 round trips.
 const MAX_TOOL_ITERATIONS = 12
 
+// Bound a tool result before it enters the model context. Read tools — above
+// all gnubok_get_document_content, which returns full OCR/PDF text — can return
+// arbitrarily large payloads. Unbounded, that payload is re-sent on every later
+// iteration of this turn's loop AND replayed on every future turn (it is
+// persisted as a 'tool' message and rehydrated by loadConversationMessages),
+// re-introducing the exact context rot we keep out of the system prompt. We cap
+// the serialized result and tell the model how to narrow if it was truncated.
+//
+// Per Anthropic's tool guidance: truncate with sensible defaults and steer the
+// agent to a narrower request; the practical ceiling cited for a single tool
+// return is ~25k tokens, so 40k chars (~10k tokens) sits well under that while
+// leaving multi-page receipts/invoices intact — only pathological dumps get cut.
+export const MAX_TOOL_RESULT_CHARS = 40_000
+
+export function boundToolResultText(raw: string): string {
+  if (raw.length <= MAX_TOOL_RESULT_CHARS) return raw
+  const head = raw.slice(0, MAX_TOOL_RESULT_CHARS)
+  return `${head}\n\n[avkortat: resultatet var ${raw.length} tecken, visar de första ${MAX_TOOL_RESULT_CHARS}. Be om en smalare sökning (limit, datumintervall, specifikt dokument-id eller fält) för att se mer.]`
+}
+
 // Anthropic content block types ------------------------------------------------
 // We don't import the SDK type — accept any to keep this file decoupled from
 // SDK version churn. The shapes we read are stable: text blocks have `text`,
@@ -147,6 +172,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     profileSummary: profile,
     rankedMemory: memory,
     vatStatus,
+    today: swedishToday(),
     supabase,
   })
 
@@ -183,6 +209,17 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   let assistantText = ''
   let iterations = 0
 
+  // Extended thinking ("tänka längre"): when the intent opts in, every model
+  // call in the loop gets a reasoning channel so the agent reasons BEFORE it
+  // answers or commits to a tool, instead of narrating its steps in the
+  // visible reply. budget_tokens must be ≥ 1024 and strictly below max_tokens,
+  // so the normal 4096 output budget is added on top. The reasoning streams to
+  // the client as reasoning_delta and renders in a collapsible "Tänkte…" block.
+  const thinking = intent.thinking
+    ? { type: 'enabled' as const, budget_tokens: intent.thinking.budgetTokens }
+    : undefined
+  const maxTokens = (intent.thinking?.budgetTokens ?? 0) + 4096
+
   // 4 + 5 + 6 — iterate until the model stops requesting tools.
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++
@@ -194,10 +231,11 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     // for tool detection, persistence and stop-reason control flow.
     const stream = anthropic.messages.stream({
       model,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
       system: systemPrompt.blocks,
       messages,
       tools: tools.length > 0 ? tools.map(toAnthropicTool) : undefined,
+      ...(thinking ? { thinking } : {}),
     })
 
     stream.on('text', (delta) => {
@@ -212,10 +250,19 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     // after the entire response is buffered.
     const eagerToolIds = new Set<string>()
     stream.on('streamEvent', (ev) => {
-      // The raw stream event shape depends on the SDK; we only care about
-      // content_block_start events with a tool_use content block.
+      // The raw stream event shape depends on the SDK; we care about
+      // content_block_start with a tool_use block, and content_block_delta
+      // carrying extended-thinking text.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const e = ev as any
+      if (
+        e?.type === 'content_block_delta' &&
+        e?.delta?.type === 'thinking_delta' &&
+        typeof e.delta.thinking === 'string'
+      ) {
+        emit({ kind: 'reasoning_delta', delta: e.delta.thinking })
+        return
+      }
       if (e?.type === 'content_block_start' && e?.content_block?.type === 'tool_use') {
         const block = e.content_block
         if (typeof block.id === 'string' && typeof block.name === 'string') {
@@ -251,9 +298,10 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
 
     const assistantContent: ContentBlock[] = response.content
 
-    // Persist the assistant turn (text + tool_use blocks together).
+    // Persist the assistant turn (text + tool_use blocks). Thinking blocks are
+    // stripped for storage but kept in `messages` below for the in-turn loop.
     if (persist) {
-      await persistMessage(supabase, conversationId, 'assistant', assistantContent)
+      await persistMessage(supabase, conversationId, 'assistant', stripThinking(assistantContent))
     }
     messages.push({ role: 'assistant', content: assistantContent })
 
@@ -349,11 +397,14 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           }
         }
 
+        // Emit the full result to the client (display only — not model
+        // context). The block that re-enters the model loop and gets persisted
+        // is bounded so a large read can't dominate the context window.
         emit({ kind: 'tool_result', tool_use_id: tu.id, result })
         toolResultBlocks.push({
           type: 'tool_result',
           tool_use_id: tu.id,
-          content: JSON.stringify(result),
+          content: boundToolResultText(JSON.stringify(result)),
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown tool error'
@@ -552,6 +603,19 @@ async function stampAgentMetadata(
 
 async function collectIntentTools(intent: AgentIntent): Promise<AgentTool[]> {
   return agentToolRegistry.getMany(intent.tools)
+}
+
+// Thinking blocks stay in the in-memory `messages` array — Anthropic requires
+// the preceding assistant turn's thinking block to be present when you return
+// tool_results within the same turn — but we strip them before persistence:
+// they hold the raw chain of thought (storage bloat), and replaying past-turn
+// thinking on resume is neither required nor used by the model. The chat
+// surface shows reasoning live via reasoning_delta; it is not hydrated.
+export function stripThinking(content: ContentBlock[]): ContentBlock[] {
+  if (!Array.isArray(content)) return content
+  return content.filter(
+    (b: ContentBlock) => b?.type !== 'thinking' && b?.type !== 'redacted_thinking',
+  )
 }
 
 function toAnthropicTool(t: AgentTool) {

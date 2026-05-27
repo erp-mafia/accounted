@@ -24,8 +24,6 @@ import {
   Loader2,
   Trash2,
 } from 'lucide-react'
-import AgentAvatar from '@/components/agent/AgentAvatar'
-import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 // True when the AI tier is active — gates user-facing strings that promise
@@ -72,7 +70,6 @@ export default function TransactionInboxCard({
   const isProcessing = processingId === transaction.id
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
-  const { openAgentSheet, identity } = useAgentSheet()
   // Optimistic override — flips the indicator to "attached" as soon as the
   // upload POST succeeds, without waiting for the parent to refetch. The
   // next parent refresh will sync; in the meantime the user sees the
@@ -263,33 +260,10 @@ export default function TransactionInboxCard({
                 {/* The Paperclip indicator next to the description
                     (TransactionAttachmentIndicator) is the single click
                     target for opening the underlag. We deliberately don't
-                    duplicate that with a second icon in the trailing slot. */}
-                {/* Hand-off to the agent for categorization help. Hidden
-                    pre-onboarding so the row doesn't sprout an avatar button
-                    that leads to a generic chat. */}
-                {identity.isVerified && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 text-muted-foreground hover:text-foreground"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    openAgentSheet({
-                      intentId: 'transaction.categorization',
-                      intentArgs: { transaction_id: transaction.id },
-                      contextRef: `transaction:${transaction.id}`,
-                    })
-                  }}
-                  disabled={isProcessing || isDisabled}
-                  aria-label={`Fråga ${identity.displayName?.trim() || 'din assistent'} om denna transaktion`}
-                >
-                  <AgentAvatar
-                    avatarId={identity.avatarId}
-                    size="xs"
-                    alt={identity.displayName ?? 'Assistent'}
-                  />
-                </Button>
-                )}
+                    duplicate that with a second icon in the trailing slot.
+                    Per-transaction agent help has moved to Dokumentinkorgen:
+                    match the underlag to the transaction and ask from there,
+                    where the receipt/invoice is in view. */}
                 {isDeletable && onDelete && (
                   <Button
                     variant="ghost"

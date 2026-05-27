@@ -60,6 +60,7 @@ async function main() {
     estimated_tokens: a.estimated_tokens,
     body_path: a.body_path,
     body: a.body,
+    parent_atom_id: a.parent_atom_id,
     version: a.frontmatter_version,
     is_active: true,
     schema_version: a.schema_version,

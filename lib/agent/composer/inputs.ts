@@ -22,6 +22,7 @@ export async function loadAtomRegistryIndex(
     .from('agent_atom_registry')
     .select('id, tier, title, description, sni_prefixes, trigger_signals, estimated_tokens, version')
     .eq('is_active', true)
+    .is('parent_atom_id', null) // top-level skills only; reference children are load-on-demand
     .order('id')
   if (error) throw new Error(`Failed to load agent_atom_registry: ${error.message}`)
   return (data ?? []) as AtomRegistryIndexRow[]

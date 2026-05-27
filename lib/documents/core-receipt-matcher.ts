@@ -84,15 +84,69 @@ export function calculateMerchantSimilarity(name1: string, name2: string): numbe
 }
 
 /**
+ * Compute the relative amount variance between a bank transaction and an
+ * underlag (receipt/invoice) total, currency-aware. Feeds the `amountVariance`
+ * argument of calculateMatchConfidence.
+ *
+ * Returns `null` when the amounts cannot be compared — either there is no
+ * underlag total, or the two are in different currencies and the underlag has
+ * no SEK value (no FX rate). A null result is the signal for
+ * calculateMatchConfidence to drop the amount weight entirely instead of
+ * comparing raw magnitudes across currencies — that cross-currency raw compare
+ * is exactly what made a 750 EUR receipt falsely match a 750 SEK transaction.
+ *
+ * Magnitudes are compared (Math.abs) because a bank expense row is negative
+ * while an underlag total is positive.
+ *
+ * @param receiptTotal    underlag total in its own currency (sign-agnostic)
+ * @param receiptCurrency underlag currency, e.g. 'EUR'
+ * @param receiptSek      underlag total converted to SEK, or null if unknown
+ * @param txAmount        transaction amount in its own currency (sign-agnostic)
+ * @param txCurrency      transaction currency, e.g. 'SEK'
+ * @param txSek           transaction amount in SEK (equals txAmount for SEK rows)
+ */
+export function amountVarianceForMatch(
+  receiptTotal: number | null,
+  receiptCurrency: string,
+  receiptSek: number | null,
+  txAmount: number,
+  txCurrency: string,
+  txSek: number,
+): number | null {
+  if (receiptTotal == null) return null
+  const absTotal = Math.abs(receiptTotal)
+  if (absTotal === 0) return null
+
+  // Same currency → compare raw magnitudes (most reliable, needs no rate).
+  if (txCurrency.toUpperCase() === receiptCurrency.toUpperCase()) {
+    return Math.abs(Math.abs(txAmount) - absTotal) / absTotal
+  }
+
+  // Different currencies → compare in SEK, but only with an SEK value for both.
+  if (receiptSek != null && Math.abs(receiptSek) > 0) {
+    return Math.abs(Math.abs(txSek) - Math.abs(receiptSek)) / Math.abs(receiptSek)
+  }
+
+  // Cross-currency with no rate → not comparable.
+  return null
+}
+
+/**
  * Calculate a weighted match confidence score from date, amount, and merchant signals.
  * Weights: amount 40%, merchant 35%, date 25%.
  *
  * When merchant similarity is 0, the merchant weight is excluded from the
  * total weight so the confidence is normalized across the active signals only.
+ *
+ * `amountVariance` may be `null` when the candidate and the underlag are in
+ * different currencies and no FX rate was available to normalise them. In that
+ * case the amount signal is dropped entirely (same treatment as a missing
+ * merchant) rather than comparing raw magnitudes across currencies — that is
+ * what made a 750 EUR receipt falsely match a 750 SEK transaction.
  */
 export function calculateMatchConfidence(
   dateVariance: number,
-  amountVariance: number,
+  amountVariance: number | null,
   merchantSimilarity: number,
   dateTolerance: number = DATE_TOLERANCE_DAYS,
   amountTolerance: number = AMOUNT_TOLERANCE_PERCENT
@@ -109,15 +163,18 @@ export function calculateMatchConfidence(
   weightedScore += dateScore * 0.25
   totalWeight += 0.25
 
-  // Amount score (weight: 40%)
-  const amountScore = Math.max(0, 1 - amountVariance / amountTolerance)
-  if (amountVariance < 0.01) {
-    matchReasons.push('Exakt belopp')
-  } else if (amountVariance < amountTolerance) {
-    matchReasons.push(`Belopp ±${Math.round(amountVariance * 100)}%`)
+  // Amount score (weight: 40%) — only counted when the amounts are comparable
+  // (same currency, or both normalisable to SEK).
+  if (amountVariance != null) {
+    const amountScore = Math.max(0, 1 - amountVariance / amountTolerance)
+    if (amountVariance < 0.01) {
+      matchReasons.push('Exakt belopp')
+    } else if (amountVariance < amountTolerance) {
+      matchReasons.push(`Belopp ±${Math.round(amountVariance * 100)}%`)
+    }
+    weightedScore += amountScore * 0.4
+    totalWeight += 0.4
   }
-  weightedScore += amountScore * 0.4
-  totalWeight += 0.4
 
   // Merchant score (weight: 35%) — only counted when there's data
   if (merchantSimilarity > 0) {

@@ -143,7 +143,7 @@ export default function AgentOnboarding({
           {firstName ? `${firstName}, ` : ''}ett ögonblick
         </p>
         <h1 className="font-display text-3xl md:text-4xl tracking-tight mt-2">
-          Jag bygger din bokföringsassistent
+          Vi bygger din bokföringsassistent
         </h1>
         <p className="text-muted-foreground mt-3 text-balance">
           Skräddarsyr för {companyName}. Tar oftast under en halv minut.
