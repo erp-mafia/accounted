@@ -17,7 +17,12 @@ const BodySchema = z.object({
   company_id: z.string().uuid().optional(),
 })
 
-const TIC_BUDGET_MS = 5_000
+// 10s — the user is on a wait-screen with visible progress, so we can afford
+// the longer budget. The prior 5s clipped legitimate fetches (TIC fans out to
+// ~13 Lens calls upstream) into the fallback bucket while still burning the
+// in-flight upstream calls against quota. See actions.ts:182-189 for the
+// May 2026 incident context.
+const TIC_BUDGET_MS = 10_000
 // Bedrock cold-starts can take 2-3s before the first token, plus the actual
 // Opus selection call typically lands at 10-14s. 15s was too tight and put
 // real Opus calls into the fallback bucket on the first turn of the day.
@@ -114,16 +119,32 @@ export async function POST(request: Request) {
         // disabled, the company has no org_number, or the request times out.
         send({ step: 'tic', status: 'in_progress' })
         const cookieHeader = request.headers.get('cookie') ?? ''
-        const host = request.headers.get('host') ?? 'localhost:3000'
-        const proto =
+        // SSRF guard: derive origin from NEXT_PUBLIC_APP_URL (a required env
+        // var per CLAUDE.md) instead of request.headers.host. On self-hosted
+        // Docker the Host header can be attacker-controlled and would
+        // otherwise let an attacker redirect the cookie-bearing TIC fetch to
+        // a host they control.
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, '') ?? ''
+        const fallbackHost = request.headers.get('host') ?? 'localhost:3000'
+        const fallbackProto =
           request.headers.get('x-forwarded-proto') ??
-          (host.startsWith('localhost') ? 'http' : 'https')
-        const origin = `${proto}://${host}`
+          (fallbackHost.startsWith('localhost') ? 'http' : 'https')
+        const origin = appUrl || `${fallbackProto}://${fallbackHost}`
         const ticResult = await withTimeout(
           // upgradeV1: agent build is the consumer of the v2-only sections;
           // bounded to companies actively creating an agent, so the TIC
           // budget stays safe even when upgrading pre-v2 snapshots.
-          ensureTicSnapshot({ supabase, companyId, cookieHeader, origin, upgradeV1: true }),
+          // timeoutMs: lift the internal fetch signal to match the outer
+          // budget — otherwise the 5s default fires first and we get the
+          // pre-fix behavior even with the longer outer budget.
+          ensureTicSnapshot({
+            supabase,
+            companyId,
+            cookieHeader,
+            origin,
+            upgradeV1: true,
+            timeoutMs: TIC_BUDGET_MS,
+          }),
           TIC_BUDGET_MS,
         ).catch(() => ({ snapshot: null, source: 'fallback' as const }))
         send({

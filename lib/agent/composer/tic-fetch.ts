@@ -1,4 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent.composer.tic-fetch')
 
 // Live-fetch the TIC company profile via the existing extension HTTP route
 // and cache it on `companies.tic_snapshot`. Used by the agent onboarding
@@ -24,6 +27,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // just the agent-onboarding paths, a deliberate once-per-company action).
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+// Default fetch timeout. The agent-onboarding callers override with a longer
+// budget (10s) since the user is on a wait-screen with visible progress and
+// the prior 5s default killed every signup-time fetch in May (~530 wasted
+// upstream Lens calls — the abort fired client-side but the upstream calls
+// kept running and counted against quota). Other callers (background jobs,
+// dev tooling) stay on the conservative default.
 const FETCH_TIMEOUT_MS = 5_000
 
 export interface TicSnapshotResult {
@@ -54,8 +63,20 @@ export async function ensureTicSnapshot(opts: {
   // callers (agent onboarding) so the v1→v2 upgrade doesn't fan out across
   // every company and exhaust the monthly TIC budget.
   upgradeV1?: boolean
+  // Override the default 5s fetch timeout. Use when the caller has a UI
+  // affordance for waiting (agent onboarding wait-screen) so legitimate
+  // fetches don't get aborted before the ~13-call Lens fan-out completes —
+  // which was the root cause of the May 2026 quota-burn incident.
+  timeoutMs?: number
 }): Promise<TicSnapshotResult> {
-  const { supabase, companyId, cookieHeader, origin, upgradeV1 = false } = opts
+  const {
+    supabase,
+    companyId,
+    cookieHeader,
+    origin,
+    upgradeV1 = false,
+    timeoutMs = FETCH_TIMEOUT_MS,
+  } = opts
 
   const { data: companyRow } = await supabase
     .from('companies')
@@ -95,7 +116,7 @@ export async function ensureTicSnapshot(opts: {
     return { snapshot: (companyRow.tic_snapshot as Record<string, unknown> | null) ?? null, source: 'fallback' }
   }
 
-  const profile = await fetchTicProfile(orgNumber, cookieHeader, origin)
+  const profile = await fetchTicProfile(orgNumber, cookieHeader, origin, timeoutMs)
   if (!profile) {
     // Fall through with whatever (possibly stale) snapshot we already have.
     return {
@@ -114,7 +135,10 @@ export async function ensureTicSnapshot(opts: {
     })
     .eq('id', companyId)
   if (error) {
-    // Silent — surfaces in dev log only. Caller doesn't care if cache write fails.
+    // Stale data is fine for the current request — but a silent write
+    // failure means the next caller re-fetches TIC unnecessarily and the
+    // monthly TIC budget bleeds. Surface it via the structured logger.
+    log.warn('tic snapshot persist failed', { error: error.message, companyId })
   }
 
   return { snapshot: profile, source: 'fetched' }
@@ -131,6 +155,7 @@ async function fetchTicProfile(
   orgNumber: string,
   cookieHeader: string,
   origin: string | undefined,
+  timeoutMs: number,
 ): Promise<Record<string, unknown> | null> {
   const baseUrl = origin || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   const url = `${baseUrl}/api/extensions/ext/tic/profile?org_number=${encodeURIComponent(orgNumber)}`
@@ -138,10 +163,10 @@ async function fetchTicProfile(
   try {
     const res = await fetch(url, {
       headers: cookieHeader ? { cookie: cookieHeader } : undefined,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!res.ok) {
-      console.warn(`[tic-fetch] ${url} → ${res.status}`)
+      log.warn('tic profile non-ok', { url, status: res.status })
       return null
     }
     const body = (await res.json()) as { data?: Record<string, unknown> }
@@ -150,7 +175,10 @@ async function fetchTicProfile(
     // Network error, timeout, TIC extension disabled, TIC API misconfigured.
     // Any of these is a normal fallback — return null so the caller can
     // degrade gracefully.
-    console.warn(`[tic-fetch] ${url} failed:`, err instanceof Error ? err.message : err)
+    log.warn('tic profile fetch failed', {
+      url,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return null
   }
 }
