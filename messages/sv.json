@@ -3548,8 +3548,6 @@
     "no_data": "Inga uppgifter att visa",
     "support_hint_subject": "Behöver hjälp att komma igång",
     "support_hint_label": "Behöver du hjälp? Kontakta support",
-    "agent_default_name": "assistenten",
-    "agent_ask_link": "Eller fråga {name} hur du kommer igång",
     "preset_invoices_title": "Inga fakturor ännu",
     "preset_invoices_description": "Skapa din första faktura på under 60 sekunder. Vi fyller i dina uppgifter automatiskt.",
     "preset_invoices_action": "Skapa faktura",

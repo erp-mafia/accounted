@@ -12,7 +12,6 @@ import { KPITopSuppliersChart } from '@/components/kpi/KPITopSuppliersChart'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 
 export default function KpiPage() {
   const t = useTranslations('kpi')
@@ -85,14 +84,6 @@ export default function KpiPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
         <div className="flex gap-2">
-          <AgentSparkleButton
-            intentId="kpi.explain"
-            intentArgs={{
-              kpi_key: 'översikt',
-              period_label: selectedPeriod || null,
-            }}
-            contextRef={`kpi:${selectedPeriod || 'overview'}`}
-          />
           <KPISettingsDialog
             preferences={preferences}
             onSave={handleSavePreferences}

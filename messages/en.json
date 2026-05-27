@@ -3548,8 +3548,6 @@
     "no_data": "No data to display",
     "support_hint_subject": "Need help getting started",
     "support_hint_label": "Need help? Contact support",
-    "agent_default_name": "the assistant",
-    "agent_ask_link": "Or ask {name} how to get started",
     "preset_invoices_title": "No invoices yet",
     "preset_invoices_description": "Create your first invoice in under 60 seconds. We fill in your details automatically.",
     "preset_invoices_action": "Create invoice",

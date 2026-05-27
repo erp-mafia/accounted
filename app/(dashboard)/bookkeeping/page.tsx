@@ -12,7 +12,6 @@ import ChartOfAccountsManager from '@/components/bookkeeping/ChartOfAccountsMana
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { useToast } from '@/components/ui/use-toast'
 import { Lock, Loader2, Copy } from 'lucide-react'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
@@ -139,13 +138,7 @@ export default function BookkeepingPage() {
         title={t('title')}
         action={
           <div className="flex gap-2 w-full sm:w-auto">
-            <AgentSparkleButton
-              intentId="verifikation.draft"
-              contextRef="verifikation:new"
-              size="default"
-              className="flex-1 sm:flex-initial"
-            />
-          <Button variant="outline" asChild className="w-full sm:w-auto">
+            <Button variant="outline" asChild className="w-full sm:w-auto">
             <Link href="/bookkeeping/year-end">
               <Lock className="mr-2 h-4 w-4" />
               {t('year_end')}
