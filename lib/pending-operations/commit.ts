@@ -2450,6 +2450,90 @@ async function commitReverseEntry(
   }
 }
 
+// ── Payroll executors ────────────────────────────────────────────
+
+async function commitCreateSalaryRun(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const periodYear = params.period_year as number
+  const periodMonth = params.period_month as number
+  const paymentDate = params.payment_date as string
+  if (
+    !Number.isInteger(periodYear) ||
+    !Number.isInteger(periodMonth) ||
+    typeof paymentDate !== 'string'
+  ) {
+    return { error: 'period_year, period_month, payment_date are required', status: 400 }
+  }
+
+  try {
+    const { createSalaryRunWithEmployees } = await import('@/lib/salary/create-run')
+    const { run, employeeCount } = await createSalaryRunWithEmployees(
+      supabase,
+      companyId,
+      userId,
+      { periodYear, periodMonth, paymentDate },
+    )
+    return {
+      data: {
+        salary_run_id: (run as { id?: string }).id,
+        employee_count: employeeCount,
+        period: `${periodYear}-${String(periodMonth).padStart(2, '0')}`,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to create salary run',
+      status: 500,
+    }
+  }
+}
+
+async function commitGenerateAgi(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  if (!salaryRunId) return { error: 'salary_run_id is required', status: 400 }
+
+  try {
+    const { generateAgiDeclaration } = await import('@/lib/salary/agi/generate-declaration')
+    const { randomUUID } = await import('node:crypto')
+    const result = await generateAgiDeclaration({
+      supabase,
+      companyId,
+      userId,
+      userEmail: null,
+      salaryRunId,
+      log: createLogger('commit/generate_agi'),
+      requestId: randomUUID(),
+    })
+    if (!result.ok) {
+      return { error: `AGI-generering misslyckades: ${result.code}`, status: 500 }
+    }
+    const period = `${result.periodYear}-${String(result.periodMonth).padStart(2, '0')}`
+    return {
+      data: {
+        agi_declaration_id: result.agiDeclarationId,
+        period,
+        employee_count: result.employeeCount,
+        is_correction: result.isCorrection,
+        download_url: `/api/salary/runs/${salaryRunId}/agi/xml`,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to generate AGI',
+      status: 500,
+    }
+  }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -2578,6 +2662,12 @@ export async function commitPendingOperation(
         break
       case 'post_annual_depreciation':
         result = await commitPostAnnualDepreciation(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_salary_run':
+        result = await commitCreateSalaryRun(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'generate_agi':
+        result = await commitGenerateAgi(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {

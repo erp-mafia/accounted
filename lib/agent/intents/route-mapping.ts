@@ -79,16 +79,10 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
     }
   }
 
-  // /bookkeeping/[id] — single verifikation. /bookkeeping/year-end is handled
-  // above; /bookkeeping/new has no entity yet, so it falls through.
-  if (first === 'bookkeeping' && second && second !== 'year-end' && second !== 'new') {
-    return {
-      intentId: 'verifikation.draft',
-      intentArgs: { journal_entry_id: second },
-      contextRef: `journal_entry:${second}`,
-      labelSuffix: 'om denna verifikation',
-    }
-  }
+  // /bookkeeping/[id] (single verifikation) is intentionally NOT mapped
+  // here — AgentTrigger suppresses the FAB on that route entirely. The
+  // verifikation editor is a dense regulatory surface and the floating
+  // pill earned its way off the page.
 
   // /kpi — nyckeltal dashboard. Match the page's "Fråga om nyckeltalen" button
   // (kpi.explain) so the FAB and the page button agree on this page.

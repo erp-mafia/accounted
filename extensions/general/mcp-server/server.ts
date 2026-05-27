@@ -2255,7 +2255,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_transactions_without_documents',
-    description: 'List bank transactions that have a journal entry but no attached receipt/invoice document. Use to find verifikationer that need their kvitto attached for BFL compliance. Newest first, paginated.',
+    description: 'List BANK TRANSACTIONS booked without an attached underlag. For imported/manual verifikat (no bank tx row) call gnubok_list_verifikat_without_documents — this tool only covers bank-driven entries.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2328,6 +2328,103 @@ export const tools: McpTool[] = [
         total_count: total,
         has_more: hasMore,
         ...(hasMore ? { next_offset: offset + (data?.length ?? 0) } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_list_verifikat_without_documents',
+    description: 'List POSTED journal entries (verifikat) that have no document_attachments row. Covers SIE-imported, manual and salary vouchers that the transactions-based tool misses. Newest first, paginated.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'number', description: 'Max results to return, 1–100 (default 20)' },
+        offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
+        since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return entries on or after this date.' },
+        min_amount: { type: 'number', description: 'Optional minimum gross amount (sum of debits) to filter low-value entries. Default 0.' },
+      },
+    },
+    outputSchema: paginatedSchema('verifikat', {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        journal_entry_id: { type: 'string' },
+        voucher_series: { type: 'string' },
+        voucher_number: { type: 'number' },
+        entry_date: { type: 'string' },
+        description: { type: 'string' },
+        source_type: { type: 'string' },
+        gross_amount: { type: 'number' },
+      },
+    }),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
+      const offset = Math.max(0, Number(args.offset) || 0)
+      const since = typeof args.since === 'string' ? args.since : null
+      const minAmount = typeof args.min_amount === 'number' && Number.isFinite(args.min_amount)
+        ? args.min_amount
+        : 0
+
+      // PostgREST left-join filter: journal_entries left-joined to
+      // document_attachments and filtered to rows where the join produced
+      // no document. The filter syntax `document_attachments.id=is.null`
+      // applies the predicate post-join (Supabase: foreign-table is-null).
+      let query = supabase
+        .from('journal_entries')
+        .select(
+          'id, voucher_series, voucher_number, entry_date, description, source_type, document_attachments!left(id), journal_entry_lines(debit_amount)',
+          { count: 'exact' },
+        )
+        .eq('company_id', companyId)
+        .eq('status', 'posted')
+        .is('document_attachments.id', null)
+      if (since) query = query.gte('entry_date', since)
+
+      const { data, error, count } = await query
+        .order('entry_date', { ascending: false })
+        .order('voucher_number', { ascending: false })
+        .range(offset, offset + limit - 1)
+      if (error) throw new Error(`Database error: ${error.message}`)
+
+      const rows = ((data ?? []) as Array<{
+        id: string
+        voucher_series: string
+        voucher_number: number
+        entry_date: string
+        description: string
+        source_type: string
+        journal_entry_lines: { debit_amount: number | string }[] | null
+      }>).map((e) => {
+        const lines = e.journal_entry_lines ?? []
+        const gross = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+        return {
+          journal_entry_id: e.id,
+          voucher_series: e.voucher_series,
+          voucher_number: e.voucher_number,
+          entry_date: e.entry_date,
+          description: e.description,
+          source_type: e.source_type,
+          gross_amount: Math.round(gross * 100) / 100,
+        }
+      })
+
+      const filtered = minAmount > 0 ? rows.filter((r) => r.gross_amount >= minAmount) : rows
+
+      const total = count ?? 0
+      const hasMore = total > offset + filtered.length
+      return {
+        verifikat: filtered,
+        count: filtered.length,
+        total_count: total,
+        has_more: hasMore,
+        ...(hasMore ? { next_offset: offset + filtered.length } : {}),
       }
     },
   },
@@ -5256,6 +5353,12 @@ export const tools: McpTool[] = [
         {
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
           dryRun: args.dry_run === true,
+          // Pin the period-status envelope to the transaction date so the
+          // approver sees locked/closed periods on the same row that
+          // categorize_transaction surfaces them — the attach silently
+          // becomes part of the verifikation underlag once categorize
+          // propagates it (BFL 5 kap 6 § rättelse-räkenskapsinformation).
+          dateForPeriodCheck: typeof tx.date === 'string' ? tx.date : undefined,
         }
       )
     },
@@ -5343,7 +5446,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_create_salary_run',
-    description: 'Create a draft salary run for a period and add all active employees with base lines. Use gnubok_calculate_salary_run next; final approval/booking happens in the web UI.',
+    description: 'Stage creation of a draft salary run for a period + base lines for all active employees. Commit via gnubok_approve_pending_operation; then run gnubok_calculate_salary_run. Final booking happens in the web UI.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5354,29 +5457,46 @@ export const tools: McpTool[] = [
       },
       required: ['period_year', 'period_month', 'payment_date'],
     },
-    outputSchema: { type: 'object' },
+    outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const { period_year, period_month, payment_date } = args as { period_year: number; period_month: number; payment_date: string }
-      // Delegate to the shared helper, which seeds base lines for every active
-      // employee and compensating-deletes the run on any mid-loop failure (no
-      // half-populated runs). Replaces the previous non-transactional inline loop.
-      const { createSalaryRunWithEmployees } = await import('@/lib/salary/create-run')
-      const { run, employeeCount } = await createSalaryRunWithEmployees(supabase, companyId, userId, {
-        periodYear: period_year,
-        periodMonth: period_month,
-        paymentDate: payment_date,
-      })
-      return {
-        ...run,
-        employee_count: employeeCount,
-        message: `Salary run created with ${employeeCount} employees.`,
-        next: {
-          description: 'Calculate tax, arbetsgivaravgifter, vacation accrual and totals.',
-          tool: 'gnubok_calculate_salary_run',
-          args: { salary_run_id: (run as { id?: string }).id },
-        },
+      if (!Number.isInteger(period_year) || period_year < 1900 || period_year > 9999) {
+        throw new Error('period_year must be a 4-digit year')
       }
+      if (!Number.isInteger(period_month) || period_month < 1 || period_month > 12) {
+        throw new Error('period_month must be 1-12')
+      }
+      if (typeof payment_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) {
+        throw new Error('payment_date must be YYYY-MM-DD')
+      }
+
+      // Preview: count active employees and surface base monthly salaries so
+      // the approver knows what would be seeded. No writes here — the commit
+      // path re-runs createSalaryRunWithEmployees atomically.
+      const { count: employeeCount } = await supabase
+        .from('employees')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+
+      const period = `${period_year}-${String(period_month).padStart(2, '0')}`
+      return stagePendingOperation(
+        supabase, companyId, userId, 'create_salary_run',
+        `Skapa löneutbetalning: ${period} (${employeeCount ?? 0} anställda)`,
+        { period_year, period_month, payment_date },
+        {
+          period,
+          payment_date,
+          employee_count: employeeCount ?? 0,
+        },
+        actor,
+        {
+          description: 'After approval, calculate tax, avgifter and totals.',
+          tool: 'gnubok_calculate_salary_run',
+        },
+        { dateForPeriodCheck: payment_date },
+      )
     },
   },
   {
@@ -5426,7 +5546,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_generate_agi',
-    description: 'Generate AGI XML (Arbetsgivardeklaration) for a salary run. Run must be past draft. Stored 7 years per BFL; download URL returned.',
+    description: 'Stage AGI XML generation (Arbetsgivardeklaration) for a salary run. High-risk: produces statutory Skatteverket underlag (BFL 7-year retention). Commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5435,49 +5555,38 @@ export const tools: McpTool[] = [
       },
       required: ['salary_run_id'],
     },
-    outputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        message: { type: 'string' },
-        agi_declaration_id: { type: 'string' },
-        period: { type: 'string' },
-        employee_count: { type: 'number' },
-        is_correction: { type: 'boolean' },
-        download_url: { type: 'string' },
-      },
-    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const id = args.salary_run_id as string
       if (!id) throw new Error('salary_run_id is required')
-      // Actually generate + persist the AGI declaration (XML is räkenskapsinformation,
-      // 7-year retention). Previously this returned only a URL without generating
-      // anything. The lib validates run status (must be past draft) itself.
-      const { generateAgiDeclaration } = await import('@/lib/salary/agi/generate-declaration')
-      const { createLogger } = await import('@/lib/logger')
-      const { randomUUID } = await import('node:crypto')
-      const result = await generateAgiDeclaration({
-        supabase,
-        companyId,
-        userId,
-        userEmail: null, // helper falls back to company_settings / profile contact
-        salaryRunId: id,
-        log: createLogger('mcp/generate_agi'),
-        requestId: randomUUID(),
-      })
-      if (!result.ok) {
-        throw new Error(`AGI-generering misslyckades: ${result.code}`)
+
+      const { data: run } = await supabase
+        .from('salary_runs')
+        .select('id, status, period_year, period_month, payment_date')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!run) throw new Error('Salary run not found')
+      if (run.status === 'draft') {
+        throw new Error('Salary run must be past draft before AGI can be generated')
       }
-      const period = `${result.periodYear}-${String(result.periodMonth).padStart(2, '0')}`
-      return {
-        message: `AGI genererad för ${period} (${result.employeeCount} anställda)${result.isCorrection ? ' — rättelse' : ''}.`,
-        agi_declaration_id: result.agiDeclarationId,
-        period,
-        employee_count: result.employeeCount,
-        is_correction: result.isCorrection,
-        download_url: `/api/salary/runs/${id}/agi/xml`,
-      }
+
+      const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+      return stagePendingOperation(
+        supabase, companyId, userId, 'generate_agi',
+        `Generera AGI: ${period}`,
+        { salary_run_id: id },
+        {
+          period,
+          status: run.status,
+          payment_date: run.payment_date,
+          retention_years: 7,
+        },
+        actor,
+        undefined,
+        run.payment_date ? { dateForPeriodCheck: run.payment_date } : {},
+      )
     },
   },
 

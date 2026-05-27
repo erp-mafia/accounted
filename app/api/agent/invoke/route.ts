@@ -11,8 +11,13 @@ import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
 // agent tool registry which is populated by the mcp-server extension at load.
 ensureInitialized()
 
+// Hard cap on the per-turn user input. Generous for a chat composer (about
+// 5k words / 20 pages) but bounds Bedrock token cost if the rate limiter is
+// ever fail-open and a client floods large payloads.
+const MAX_USER_MESSAGE_LEN = 20_000
+
 const BodySchema = z.object({
-  intent_id: z.string().min(1),
+  intent_id: z.string().min(1).max(200),
   // Existing conversation to resume; if omitted, the route creates one. The
   // chat sheet's React state holds the conversation id as `string | null`
   // and serializes `null` on the first turn, so accept null alongside
@@ -21,12 +26,27 @@ const BodySchema = z.object({
   // Optional company override; defaults to active_company_id.
   company_id: z.string().uuid().nullable().optional(),
   // The user's message (or, on the first turn, this is empty and we send the
-  // intent's prompt template instead).
-  user_message: z.string().nullable().optional(),
+  // intent's prompt template instead). Capped to bound LLM cost.
+  user_message: z.string().max(MAX_USER_MESSAGE_LEN).nullable().optional(),
   // Intent-specific capture args (e.g. { transaction_id: '...' } for
   // transaction.categorization). Used only on the first turn to build the
-  // prompt template.
-  intent_args: z.record(z.string(), z.unknown()).nullable().optional(),
+  // prompt template. Each value is bounded so capture inputs can't be a
+  // megabyte each; the dispatcher rejects oversize values upfront.
+  intent_args: z
+    .record(z.string().max(120), z.unknown())
+    .nullable()
+    .optional()
+    .refine(
+      (v) => {
+        if (!v) return true
+        try {
+          return JSON.stringify(v).length <= MAX_USER_MESSAGE_LEN
+        } catch {
+          return false
+        }
+      },
+      { message: 'intent_args too large' },
+    ),
   // Optional context_ref for the conversation row, e.g. 'transaction:<id>'.
   context_ref: z.string().max(200).nullable().optional(),
   // When true (and user_message is provided), persist the turn but flag it

@@ -49,7 +49,7 @@ export default function AgentSheet({
       aria-label={sheetTitle}
       // z-[60] sits above the mobile bottom nav (z-50) so on phones the sheet
       // covers the full screen including where the nav would otherwise show.
-      className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-[480px] flex-col border-l border-border bg-background shadow-2xl"
+      className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-[480px] flex-col border-l border-border bg-background shadow-lg"
       style={{
         // iOS notch / Android cutout — the sheet top edge needs to clear the
         // status bar. Bottom is handled inside the form below.

@@ -16,7 +16,8 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 //   is_pinned  — boost into the top-N prompt block regardless of score.
 //   is_active  — false = dismiss (removes from ranking pool); true = restore.
 //
-// RLS scopes to user_company_ids(); no need to filter by company_id here.
+// RLS scopes to user_company_ids(); we ALSO re-verify membership for the
+// row's company_id as defense in depth before mutating.
 
 const PatchSchema = z
   .object({
@@ -57,10 +58,27 @@ export async function PATCH(
   if (body.is_pinned !== undefined) update.is_pinned = body.is_pinned
   if (body.is_active !== undefined) update.is_active = body.is_active
 
+  // Look up the row's company_id and re-check membership before mutating.
+  const { data: existing } = await supabase
+    .from('agent_memory')
+    .select('company_id')
+    .eq('id', id)
+    .maybeSingle()
+  if (!existing) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
+
+  const { data: membership } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', existing.company_id)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!membership) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
+
   const { data, error } = await supabase
     .from('agent_memory')
     .update(update)
     .eq('id', id)
+    .eq('company_id', existing.company_id)
     .select(
       'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at',
     )

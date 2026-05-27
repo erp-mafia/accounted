@@ -98,6 +98,22 @@ export async function POST(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
+  // requireWritePermission above checks the *active* company's role; if the
+  // caller passes a different company_id in the body, re-check membership +
+  // non-viewer role for THAT company specifically.
+  const { data: bodyMembership } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!bodyMembership || bodyMembership.role === 'viewer') {
+    return NextResponse.json(
+      { error: 'Du har endast läsbehörighet i detta företag.' },
+      { status: 403 },
+    )
+  }
+
   const { data, error } = await supabase
     .from('agent_memory')
     .insert({

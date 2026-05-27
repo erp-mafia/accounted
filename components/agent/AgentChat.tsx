@@ -180,11 +180,26 @@ export default function AgentChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Autoscroll on new content.
+  // Autoscroll on new content — but only if the user was already pinned to the
+  // bottom. Scrolling up to re-read a long answer should NOT yank the user
+  // back on every streaming token. Threshold accounts for sub-pixel rounding.
+  const wasAtBottomRef = useRef(true)
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    const onScroll = () => {
+      const distance = el.scrollHeight - (el.scrollTop + el.clientHeight)
+      wasAtBottomRef.current = distance < 64
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    if (wasAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
   }, [messages])
 
   async function startTurn(body: {
@@ -201,6 +216,11 @@ export default function AgentChat({
     const controller = new AbortController()
     activeControllerRef.current = controller
     const signal = controller.signal
+
+    // Reset the post-tool paragraph-break ref at the start of every turn so a
+    // prior turn that ended on tool_use can't leak a leading "\n\n" into the
+    // next turn's first text delta.
+    breakBeforeNextTextRef.current = false
 
     setStreaming(true)
     setErrorMessage(null)
@@ -246,7 +266,16 @@ export default function AgentChat({
       return
     }
 
-    setMessages((prev) => [...prev, { role: 'assistant', text: '' }])
+    // Assistant bubble is appended LAZILY — only when the first event that
+    // produces user-visible content arrives. Eagerly appending here would
+    // leave an empty bubble dangling if the stream errors or yields zero
+    // events (e.g. proxy hiccup) before any content.
+    let assistantBubbleAppended = false
+    const ensureAssistantBubble = () => {
+      if (assistantBubbleAppended) return
+      assistantBubbleAppended = true
+      setMessages((prev) => [...prev, { role: 'assistant', text: '' }])
+    }
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -261,7 +290,27 @@ export default function AgentChat({
           const line = buffer.slice(0, nl).trim()
           buffer = buffer.slice(nl + 1)
           if (!line) continue
-          handleEvent(JSON.parse(line))
+          // Guard JSON.parse per line — a malformed line (proxy split,
+          // partial buffer flush) must NOT abort the entire stream. Skip and
+          // continue; the next well-formed line will be handled normally.
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(line)
+          } catch {
+            continue
+          }
+          // First user-visible event lazily mounts the bubble. `conversation`
+          // is a metadata event with no visible payload so it does not.
+          const ev = parsed as { kind?: string } | null
+          if (
+            ev &&
+            typeof ev.kind === 'string' &&
+            ev.kind !== 'conversation' &&
+            ev.kind !== 'turn_complete'
+          ) {
+            ensureAssistantBubble()
+          }
+          handleEvent(parsed)
         }
       }
     } catch (err) {
@@ -274,8 +323,10 @@ export default function AgentChat({
       } catch {
         // already released
       }
-      setStreaming(false)
+      // Guard against an aborted prior turn clobbering the new turn's
+      // streaming flag — only the active controller may reset the state.
       if (activeControllerRef.current === controller) {
+        setStreaming(false)
         activeControllerRef.current = null
       }
     }
@@ -532,7 +583,7 @@ export default function AgentChat({
             onChange={(e) => setInput(e.target.value)}
             placeholder="Skriv din fråga…"
             rows={1}
-            className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring max-h-32 overflow-y-auto"
+            className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring max-h-32 overflow-y-auto"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -612,7 +663,7 @@ function MessageBubble({
         {isUser ? (
           message.text || (streamingTail ? <Cursor /> : '')
         ) : message.text ? (
-          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] [&_td]:border-b [&_td]:border-border/60 [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
+          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
           </div>
         ) : streamingTail ? (
@@ -627,7 +678,7 @@ function MessageBubble({
             <span
               key={tc.tool_use_id}
               className={cn(
-                'inline-flex items-center gap-1.5 text-[11px] rounded-full border border-border px-2.5 py-0.5',
+                'inline-flex items-center gap-1.5 text-[11px] rounded-full border border-border px-2 py-0.5',
                 tc.completed
                   ? 'text-muted-foreground/70 bg-card'
                   : 'text-muted-foreground bg-secondary/40',

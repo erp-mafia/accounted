@@ -41,6 +41,15 @@ export async function GET(request: Request) {
     url.searchParams.get('company_id') ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
+  // Defense in depth alongside RLS — confirm membership before reading.
+  const { data: membership } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
   const { data, error } = await supabase
     .from('agent_profiles')
     .select(

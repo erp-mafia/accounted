@@ -317,7 +317,7 @@ export default function ApprovalCard({
       {errorMessage && <p className="text-xs text-destructive">{errorMessage}</p>}
 
       {showRejectForm ? (
-        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2.5">
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs font-medium">Vad är fel?</p>
           <Select
             value={rejectCategory}
@@ -370,7 +370,7 @@ export default function ApprovalCard({
           </div>
         </div>
       ) : accountsToActivate ? (
-        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2.5">
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs leading-5">
             Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
             <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.
@@ -498,7 +498,7 @@ function CategorizeTransactionPreview({
     | undefined) ?? []
 
   return (
-    <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs space-y-1.5">
+    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1.5">
       <div className="flex items-baseline gap-3">
         <span className="w-20 shrink-0 text-muted-foreground text-[10px] uppercase tracking-wider">
           Kategori
@@ -522,7 +522,7 @@ function CategorizeTransactionPreview({
         />
       )}
       {vatLines.length > 0 && (
-        <div className="pt-1 mt-1 border-t border-border/40">
+        <div className="pt-1 mt-1 border-t border-border">
           {vatLines.map((v, i) => {
             const debit = typeof v.debit_amount === 'number' ? v.debit_amount : 0
             const credit = typeof v.credit_amount === 'number' ? v.credit_amount : 0
@@ -571,7 +571,7 @@ function CreateInvoicePreview({ preview }: { preview: Record<string, unknown> })
     (preview.items as { description?: string; line_total?: number }[] | undefined) ?? []
 
   return (
-    <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs space-y-1.5">
+    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1.5">
       {customer && (
         <Row label="Kund" value={<span className="text-foreground">{customer}</span>} />
       )}
@@ -600,7 +600,7 @@ function CreateInvoicePreview({ preview }: { preview: Record<string, unknown> })
           )}
         </div>
       )}
-      <div className="pt-1 mt-1 border-t border-border/40 space-y-0.5">
+      <div className="pt-1 mt-1 border-t border-border space-y-0.5">
         {subtotal != null && (
           <Row
             label="Netto"
@@ -640,12 +640,12 @@ function VoucherPreview({ preview }: { preview: Record<string, unknown> }) {
   if (lines.length === 0) return <GenericPreview preview={preview} />
 
   return (
-    <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs space-y-1.5">
+    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1.5">
       {date && <Row label="Datum" value={<span className="tabular-nums">{date}</span>} />}
       {description && (
         <Row label="Notering" value={<span className="text-foreground">{description}</span>} />
       )}
-      <div className="pt-1 mt-1 border-t border-border/40 space-y-0.5">
+      <div className="pt-1 mt-1 border-t border-border space-y-0.5">
         {lines.map((l, i) => (
           <Row
             key={i}
@@ -682,7 +682,7 @@ function GenericPreview({ preview }: { preview: Record<string, unknown> }) {
   }
   if (rows.length === 0) return null
   return (
-    <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs space-y-1">
+    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1">
       {rows.map((r) => (
         <Row key={r.key} label={r.key} value={<span className="tabular-nums">{r.value}</span>} />
       ))}

@@ -1,8 +1,13 @@
 /**
- * Safety tests for the salary MCP tools after de-risking (P0-2):
- *   - calculate_salary_run calls the extracted lib directly (no self-fetch / forged cookie)
- *   - generate_agi actually generates + persists the declaration (not a no-op URL)
- *   - create_salary_run delegates to the transactional helper
+ * Safety tests for the salary MCP tools.
+ *
+ * After the staging refactor (Phase: ship readiness of the in-app agent),
+ * gnubok_create_salary_run and gnubok_generate_agi STAGE a pending_operation
+ * instead of writing directly. Approval (and the actual library call) goes
+ * through lib/pending-operations/commit.ts — separately covered.
+ *
+ * gnubok_calculate_salary_run still calls the calculation lib synchronously
+ * (no side effects to stage — pure compute against an existing draft run).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -62,48 +67,70 @@ describe('gnubok_calculate_salary_run', () => {
 })
 
 describe('gnubok_generate_agi', () => {
-  it('generates + persists the declaration and surfaces agi_declaration_id', async () => {
-    mockGenerateAgi.mockResolvedValue({
-      ok: true, xml: '<x/>', agiDeclarationId: 'agi-1', periodYear: 2026, periodMonth: 3,
-      employeeCount: 2, isCorrection: false, totals: {}, orgNumber: '5566778899',
+  it('stages without calling generateAgiDeclaration', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // 1. salary_runs lookup → must be past draft
+    enqueue({
+      data: {
+        id: 'run-1', status: 'booked', period_year: 2026, period_month: 3, payment_date: '2026-03-25',
+      },
     })
-    const { supabase } = createQueuedMockSupabase()
-    const result = (await generateAgi.execute(
-      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    )) as { agi_declaration_id: string; period: string; employee_count: number }
+    // 2-3. resolvePeriodStatusForDate calls company_settings + fiscal_periods
+    enqueue({ data: null })
+    enqueue({ data: null })
+    // 4. pending_operations.insert
+    enqueue({ data: { id: 'op-1' }, error: null })
 
-    expect(result.agi_declaration_id).toBe('agi-1')
-    expect(result.period).toBe('2026-03')
-    expect(result.employee_count).toBe(2)
-    expect(mockGenerateAgi).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: 'company-1', userId: 'user-1', salaryRunId: 'run-1' }),
-    )
+    const result = (await generateAgi.execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+    )) as { staged: boolean; risk_level: string; operation_id?: string }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('high')
+    expect(mockGenerateAgi).not.toHaveBeenCalled()
   })
 
-  it('throws when the run is not eligible (past draft)', async () => {
-    mockGenerateAgi.mockResolvedValue({ ok: false, code: 'AGI_GENERATE_NOT_BOOKABLE' })
-    const { supabase } = createQueuedMockSupabase()
+  it('throws when the run is still in draft', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3, payment_date: '2026-03-25' },
+    })
     await expect(
-      generateAgi.execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
-    ).rejects.toThrow(/AGI_GENERATE_NOT_BOOKABLE/)
+      generateAgi.execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'agent_chat' }),
+    ).rejects.toThrow(/past draft/)
   })
 })
 
 describe('gnubok_create_salary_run', () => {
-  it('delegates to the transactional helper and returns a next hint', async () => {
-    mockCreateRun.mockResolvedValue({ run: { id: 'run-9', status: 'draft' }, employeeCount: 3 })
-    const { supabase } = createQueuedMockSupabase()
+  it('stages without calling the transactional helper', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // 1. employees count head
+    enqueue({ data: null, count: 3 })
+    // 2-3. resolvePeriodStatusForDate calls company_settings + fiscal_periods
+    enqueue({ data: null })
+    enqueue({ data: null })
+    // 4. pending_operations.insert
+    enqueue({ data: { id: 'op-2' }, error: null })
+
     const result = (await createSalaryRun.execute(
       { period_year: 2026, period_month: 3, payment_date: '2026-03-25' },
-      'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    )) as { id: string; employee_count: number; next: { tool: string } }
+      'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+    )) as { staged: boolean; risk_level: string; preview: { period: string; employee_count: number } }
 
-    expect(result.id).toBe('run-9')
-    expect(result.employee_count).toBe(3)
-    expect(result.next.tool).toBe('gnubok_calculate_salary_run')
-    expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.anything(), 'company-1', 'user-1',
-      { periodYear: 2026, periodMonth: 3, paymentDate: '2026-03-25' },
-    )
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.period).toBe('2026-03')
+    expect(result.preview.employee_count).toBe(3)
+    expect(mockCreateRun).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid period_month', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createSalaryRun.execute(
+        { period_year: 2026, period_month: 0, payment_date: '2026-03-25' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/period_month must be 1-12/)
   })
 })

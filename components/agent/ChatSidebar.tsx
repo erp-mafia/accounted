@@ -190,7 +190,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
       )}
     >
       <div className="border-b border-border px-5 py-4 space-y-3">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
           <div className="flex-1 min-w-0">
             <h2 className="font-display text-base tracking-tight truncate">
@@ -202,7 +202,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
             onClick={toggleCollapsed}
             aria-label="Dölj konversationer"
             title="Dölj konversationer"
-            className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+            className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
@@ -227,7 +227,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
               type="button"
               onClick={() => setQuery('')}
               aria-label="Rensa sökning"
-              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
             >
               <X className="h-3 w-3" />
             </button>
@@ -254,7 +254,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                     <Link
                       href={`/chat/${c.id}`}
                       className={cn(
-                        'group flex items-start gap-2.5 px-4 py-2.5 hover:bg-secondary/60 transition-colors border-l-2',
+                        'group flex items-start gap-2 px-4 py-2 hover:bg-secondary/60 transition-colors border-l-2',
                         activeId === c.id
                           ? 'bg-secondary/50 border-foreground'
                           : 'border-transparent',
@@ -285,7 +285,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                           title={c.pinned ? 'Avfäst' : 'Fäst'}
                           aria-label={c.pinned ? 'Avfäst konversation' : 'Fäst konversation'}
                           className={cn(
-                            'inline-flex h-6 w-6 items-center justify-center rounded transition-colors',
+                            'inline-flex h-8 w-8 items-center justify-center rounded transition-colors',
                             c.pinned
                               ? 'text-foreground'
                               : 'text-muted-foreground/50 hover:text-foreground hover:bg-secondary',
@@ -305,7 +305,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                           }}
                           title="Arkivera"
                           aria-label="Arkivera konversation"
-                          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
                         >
                           <Archive className="h-3 w-3" />
                         </button>

@@ -75,6 +75,15 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   create_voucher: 'high',
   correct_entry: 'high',
   reverse_entry: 'high',
+
+  // ── Payroll ────────────────────────────────────────────────────────
+  // Salary run creation materialises a draft + per-employee base lines. The
+  // run is reversible while still draft, so 'medium' aligns with other
+  // create-draft operations. AGI generation produces the Skatteverket
+  // underlag (XML, BFL 7-year retention) — statutory artifact, always
+  // staged.
+  create_salary_run: 'medium',
+  generate_agi: 'high',
 }
 
 export function getRiskLevel(operationType: string): RiskLevel {

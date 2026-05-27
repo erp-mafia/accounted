@@ -38,6 +38,22 @@ export async function GET(
   if (convErr) return NextResponse.json({ error: convErr.message }, { status: 500 })
   if (!conv) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
 
+  // Defense in depth alongside RLS — verify caller is a member of the
+  // conversation's company AND owns the conversation row. Conversations are
+  // user-scoped within a company; one team member should not see another's.
+  if (conv.user_id !== user.id) {
+    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+  }
+  const { data: membership } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', conv.company_id)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!membership) {
+    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+  }
+
   const { data: messages, error: msgErr } = await supabase
     .from('agent_messages')
     .select('id, role, content, tool_use_id, hidden, created_at')
@@ -75,10 +91,23 @@ export async function PATCH(
     return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
   }
 
+  // Defense in depth — verify ownership before update so a 404 is returned
+  // (instead of relying solely on RLS, which would silently 0-row).
+  const { data: existing } = await supabase
+    .from('agent_conversations')
+    .select('user_id, company_id')
+    .eq('id', id)
+    .maybeSingle()
+  if (!existing || existing.user_id !== user.id) {
+    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+  }
+
   const { data, error } = await supabase
     .from('agent_conversations')
     .update(update)
     .eq('id', id)
+    .eq('user_id', user.id)
+    .eq('company_id', existing.company_id)
     .select('id, intent_id, context_ref, title, pinned, archived, last_message_at, created_at')
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

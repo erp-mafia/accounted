@@ -60,12 +60,15 @@ describe('routeToIntent', () => {
     expect(out.intentId).toBe('general.help')
   })
 
-  it('routes /bookkeeping/[id] to verifikation.draft', () => {
+  it('falls through /bookkeeping/[id] to general.help (FAB is suppressed on the verifikation editor)', () => {
+    // The verifikation editor is a dense regulatory surface; AgentTrigger
+    // hides the FAB on /bookkeeping/[id] entirely. routeToIntent still
+    // returns a sensible default in case anything else queries it.
     const out = routeToIntent('/bookkeeping/je-7')
-    expect(out.intentId).toBe('verifikation.draft')
-    expect(out.intentArgs).toEqual({ journal_entry_id: 'je-7' })
-    expect(out.contextRef).toBe('journal_entry:je-7')
-    expect(out.labelSuffix).toBe('om denna verifikation')
+    expect(out.intentId).toBe('general.help')
+    expect(out.intentArgs).toEqual({ route: '/bookkeeping/je-7' })
+    expect(out.labelSuffix).toBeNull()
+    expect(out.contextRef).toBeUndefined()
   })
 
   it('routes /bookkeeping/year-end to bokslut.step (matches the page button — no two-agents-on-one-page)', () => {

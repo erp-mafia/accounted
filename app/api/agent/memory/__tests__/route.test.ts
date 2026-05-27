@@ -132,6 +132,10 @@ describe('POST /api/agent/memory', () => {
       created_at: '2026-05-18T10:00:00Z',
       updated_at: '2026-05-18T10:00:00Z',
     }
+    // Defense-in-depth: body company_id membership re-check happens after
+    // requireWritePermission. POST flow now is: (1) company_members lookup,
+    // (2) insert.
+    enqueue({ data: { role: 'member' } })
     enqueue({ data: inserted })
     const response = await POST(
       createMockRequest('/api/agent/memory', {
@@ -142,6 +146,17 @@ describe('POST /api/agent/memory', () => {
     const { status, body } = await parseJsonResponse<{ data: typeof inserted }>(response)
     expect(status).toBe(200)
     expect(body.data.id).toBe('mem-2')
+  })
+
+  it('rejects when user is a viewer in the target company', async () => {
+    enqueue({ data: { role: 'viewer' } })
+    const response = await POST(
+      createMockRequest('/api/agent/memory', {
+        method: 'POST',
+        body: { content: 'En sak att komma ihåg' },
+      }),
+    )
+    expect(response.status).toBe(403)
   })
 })
 
@@ -183,6 +198,7 @@ describe('PATCH /api/agent/memory/[id]', () => {
   })
 
   it('returns 404 when row not found / not visible via RLS', async () => {
+    // Row lookup returns null → defense-in-depth 404 before update.
     enqueue({ data: null })
     const response = await PATCH(
       createMockRequest('/api/agent/memory/mem-x', {
@@ -190,6 +206,19 @@ describe('PATCH /api/agent/memory/[id]', () => {
         body: { is_pinned: true },
       }),
       createMockRouteParams({ id: 'mem-x' }),
+    )
+    expect(response.status).toBe(404)
+  })
+
+  it('returns 404 when user has no membership in row company', async () => {
+    enqueue({ data: { company_id: 'company-2' } })
+    enqueue({ data: null }) // company_members lookup
+    const response = await PATCH(
+      createMockRequest('/api/agent/memory/mem-1', {
+        method: 'PATCH',
+        body: { is_pinned: true },
+      }),
+      createMockRouteParams({ id: 'mem-1' }),
     )
     expect(response.status).toBe(404)
   })
@@ -208,6 +237,9 @@ describe('PATCH /api/agent/memory/[id]', () => {
       created_at: '2026-05-10T09:00:00Z',
       updated_at: '2026-05-18T10:00:00Z',
     }
+    // PATCH flow: (1) row lookup, (2) membership lookup, (3) update.
+    enqueue({ data: { company_id: 'company-1' } })
+    enqueue({ data: { role: 'member' } })
     enqueue({ data: updated })
     const response = await PATCH(
       createMockRequest('/api/agent/memory/mem-1', {
@@ -235,6 +267,8 @@ describe('PATCH /api/agent/memory/[id]', () => {
       created_at: '2026-05-10T09:00:00Z',
       updated_at: '2026-05-18T10:00:00Z',
     }
+    enqueue({ data: { company_id: 'company-1' } })
+    enqueue({ data: { role: 'member' } })
     enqueue({ data: updated })
     const response = await PATCH(
       createMockRequest('/api/agent/memory/mem-1', {
