@@ -11,11 +11,23 @@ export interface VatRateOption {
  *
  * Swedish/EU-unvalidated customers can choose between 25%, 12%, 6%, and 0% (exempt).
  * Reverse charge and export customers are locked to 0%.
+ *
+ * When the seller is not VAT-registered (`vatRegistered=false`), every customer
+ * type collapses to a single 0% / exempt option. ML 1 kap. 1§ — only a
+ * skattskyldig person may charge VAT, so the picker must never offer non-zero
+ * rates in that mode. ML 16 kap. 23 § (faktureringsmoms) imposes liability for
+ * VAT erroneously stated on a document, but does NOT grant the right to charge
+ * it — so we block at source rather than allow + warn.
  */
 export function getAvailableVatRates(
   customerType: CustomerType,
-  vatNumberValidated: boolean = false
+  vatNumberValidated: boolean = false,
+  vatRegistered: boolean = true,
 ): VatRateOption[] {
+  if (!vatRegistered) {
+    return [{ rate: 0, label: '0% (ej momsregistrerad)', treatment: 'exempt' }]
+  }
+
   // EU business with validated VAT → reverse charge, locked to 0%
   if (customerType === 'eu_business' && vatNumberValidated) {
     return [{ rate: 0, label: '0% (omvänd skattskyldighet)', treatment: 'reverse_charge' }]
@@ -61,18 +73,33 @@ export interface VatRule {
 }
 
 /**
- * Determine VAT treatment based on customer type and VAT validation status
+ * Determine VAT treatment based on customer type and VAT validation status.
  *
  * Rules:
  * - Swedish customers: 25% VAT, moms ruta 05
  * - EU business with validated VAT: 0% reverse charge, moms ruta 39
  * - EU business without validated VAT: 25% VAT, moms ruta 05
  * - Non-EU business: 0% export, moms ruta 40
+ *
+ * When the seller is not VAT-registered (`vatRegistered=false`), the rules
+ * short-circuit to `{ treatment: 'exempt', rate: 0, momsRuta: '' }` regardless
+ * of customer type — ML 1 kap. 1§ bars a non-skattskyldig from charging output
+ * VAT. `momsRuta` is empty so a downstream momsdeklaration generator never
+ * mis-files a non-registered seller's "sales" into ruta 05.
  */
 export function getVatRules(
   customerType: CustomerType,
-  vatNumberValidated: boolean = false
+  vatNumberValidated: boolean = false,
+  vatRegistered: boolean = true,
 ): VatRule {
+  if (!vatRegistered) {
+    return {
+      treatment: 'exempt',
+      rate: 0,
+      momsRuta: '',
+    }
+  }
+
   switch (customerType) {
     case 'individual':
     case 'swedish_business':

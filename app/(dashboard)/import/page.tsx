@@ -477,7 +477,7 @@ function SIEImportWizard() {
 
       toast({
         title: 'Import ersatt',
-        description: `${data.cancelledEntries} verifikation${data.cancelledEntries === 1 ? '' : 'er'} makulerades. Importerar ny fil...`,
+        description: `${data.deletedEntries} verifikation${data.deletedEntries === 1 ? '' : 'er'} raderades. Importerar ny fil...`,
       })
 
       // Clear error state and re-trigger the file upload

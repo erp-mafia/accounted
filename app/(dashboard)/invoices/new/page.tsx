@@ -20,7 +20,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock } from 'lucide-react'
+import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { InvoiceReviewContent } from '@/components/invoices/InvoiceReviewContent'
@@ -31,6 +31,13 @@ import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDi
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany } from '@/contexts/CompanyContext'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
+import {
+  ROT_WORK_TYPES,
+  RUT_WORK_TYPES,
+  ROT_MAX,
+  RUT_MAX,
+  computeDeduction,
+} from '@/lib/invoices/rot-rut-rules'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
@@ -55,6 +62,12 @@ export default function NewInvoicePage() {
       unit: z.string().min(1, t('validation_unit_required')),
       unit_price: z.number().min(0, t('validation_price_positive')),
       vat_rate: z.number().min(0).max(25),
+      // ROT/RUT-avdrag per line. Optional — null means "no deduction".
+      deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
+      labor_hours: z.number().nonnegative().nullable().optional(),
+      work_type: z.string().nullable().optional(),
+      housing_designation: z.string().nullable().optional(),
+      apartment_number: z.string().nullable().optional(),
     })
     return z.object({
       customer_id: z.string().min(1, t('validation_customer_required')),
@@ -66,6 +79,10 @@ export default function NewInvoicePage() {
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       notes: z.string().optional(),
+      // Invoice-level ROT/RUT claim info. Personnummer is plaintext on
+      // the wire; the API encrypts it before storage.
+      deduction_personnummer: z.string().optional(),
+      deduction_housing_designation: z.string().optional(),
       items: z.array(itemSchema).min(1, t('validation_min_one_row')),
     })
   }, [t])
@@ -89,6 +106,7 @@ export default function NewInvoicePage() {
   const [showBankSetup, setShowBankSetup] = useState(false)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   const [oreRounding, setOreRounding] = useState<boolean>(true)
+  const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   // True only when the user had zero invoices when this page loaded. The
@@ -113,7 +131,18 @@ export default function NewInvoicePage() {
       due_date: '',
       currency: 'SEK',
       document_type: 'invoice' as InvoiceDocumentType,
-      items: [{ description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+      items: [{
+        description: '',
+        quantity: 1,
+        unit: 'st',
+        unit_price: 0,
+        vat_rate: 25,
+        deduction_type: null,
+        labor_hours: null,
+        work_type: null,
+        housing_designation: null,
+        apartment_number: null,
+      }],
     },
   })
 
@@ -155,7 +184,7 @@ export default function NewInvoicePage() {
     if (!company?.id) return
     const { data } = await supabase
       .from('company_settings')
-      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url')
+      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered')
       .eq('company_id', company.id)
       .single()
     if (data?.invoice_default_notes) {
@@ -172,6 +201,9 @@ export default function NewInvoicePage() {
       setOreRounding(data.ore_rounding)
     }
     setLogoUrl(data?.logo_url ?? null)
+    if (typeof data?.vat_registered === 'boolean') {
+      setVatRegistered(data.vat_registered)
+    }
   }
 
   // First-invoice detection (issue #520): captured at page load so the
@@ -230,9 +262,11 @@ export default function NewInvoicePage() {
         )
       }
 
-      // When customer forces a single rate (reverse charge/export), update all lines
+      // When customer forces a single rate (reverse charge/export), or the
+      // seller isn't VAT-registered, update all lines so the picker can't
+      // leave stale 25% values behind.
       if (customer) {
-        const rates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
+        const rates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated, vatRegistered)
         if (rates.length === 1) {
           const forcedRate = rates[0].rate
           watchItems.forEach((_, i) => {
@@ -241,7 +275,7 @@ export default function NewInvoicePage() {
         }
       }
     }
-  }, [watchCustomerId, customers, setValue])
+  }, [watchCustomerId, customers, setValue, vatRegistered])
 
   async function fetchCustomers() {
     if (!company?.id) return
@@ -298,11 +332,11 @@ export default function NewInvoicePage() {
   }, 0)
 
   const vatRules = selectedCustomer
-    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
+    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, vatRegistered)
     : null
 
   const availableRates = selectedCustomer
-    ? getAvailableVatRates(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
+    ? getAvailableVatRates(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, vatRegistered)
     : []
   const isRateLocked = availableRates.length === 1
 
@@ -321,10 +355,33 @@ export default function NewInvoicePage() {
   }
   const total = subtotal + vatAmount
 
+  // ROT/RUT-avdrag live preview. Computed client-side for instant feedback;
+  // the API recomputes server-side as the source of truth. Skipped for
+  // non-invoice document types (proformas and delivery notes don't book
+  // a deduction).
+  const isInvoiceDoc = watchDocumentType === 'invoice'
+  const deductionByKind = { rot: 0, rut: 0 }
+  if (isInvoiceDoc) {
+    for (const item of watchItems) {
+      if (!item.deduction_type) continue
+      const amount = computeDeduction({
+        unit_price: item.unit_price || 0,
+        quantity: item.quantity || 0,
+        deduction_type: item.deduction_type,
+      })
+      if (item.deduction_type === 'rot') deductionByKind.rot += amount
+      else deductionByKind.rut += amount
+    }
+  }
+  const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
+  const hasAnyDeduction = deductionTotal > 0
+  const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
+  const toPay = Math.round((total - deductionTotal) * 100) / 100
+
   async function onSubmit(data: FormData) {
     setPendingData(data)
     // Re-fetch the preview right before review so the displayed number
-    // reflects any concurrent invoice creations.
+    // reflects any concurrent invoice creations. Skip for delivery notes.
     if (data.document_type !== 'delivery_note') {
       try {
         const r = await fetch(`/api/invoices/next-number?document_type=${encodeURIComponent(data.document_type)}`)
@@ -371,11 +428,37 @@ export default function NewInvoicePage() {
     if (!pendingData) return
     setIsSubmitting(true)
 
+    // Privacy by default: ROT/RUT line fields and the invoice-level
+    // personnummer / housing designation are only sent to the API when the
+    // user actually claims a deduction. Defaults are pre-instantiated as
+    // null in the form state, but null personal-data fields shouldn't ride
+    // along on every regular invoice.
+    const anyDeduction = pendingData.items.some((i) => i.deduction_type)
+    const sanitizedItems = pendingData.items.map((item) => {
+      if (item.deduction_type) return item
+      const {
+        deduction_type: _dt,
+        labor_hours: _lh,
+        work_type: _wt,
+        housing_designation: _hd,
+        apartment_number: _an,
+        ...rest
+      } = item
+      return rest
+    })
+    const sanitizedPayload: CreateInvoiceInput = {
+      ...(pendingData as CreateInvoiceInput),
+      items: sanitizedItems as CreateInvoiceInput['items'],
+      ...(anyDeduction
+        ? {}
+        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
+    }
+
     try {
       const response = await fetch('/api/invoices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pendingData as CreateInvoiceInput),
+        body: JSON.stringify(sanitizedPayload),
       })
 
       const result = await response.json()
@@ -713,6 +796,117 @@ export default function NewInvoicePage() {
                         </Button>
                       </div>
 
+                      {/* ROT/RUT-avdrag per-row controls. Only shown on real
+                          invoices — proformas and delivery notes have no
+                          deduction model. Collapsed to a tiny segmented
+                          toggle by default; selecting ROT or RUT reveals the
+                          work-type picker. */}
+                      {isInvoiceDoc && (
+                        <div className="md:col-span-12 mt-2 md:mt-3">
+                          <Controller
+                            name={`items.${index}.deduction_type`}
+                            control={control}
+                            render={({ field }) => {
+                              const value = field.value ?? 'none'
+                              return (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-xs text-muted-foreground">Skattereduktion:</span>
+                                  <Select
+                                    value={value}
+                                    onValueChange={(v) => {
+                                      const next = v === 'none' ? null : (v as 'rot' | 'rut')
+                                      field.onChange(next)
+                                      if (next === null) {
+                                        setValue(`items.${index}.work_type`, null)
+                                        setValue(`items.${index}.labor_hours`, null)
+                                        setValue(`items.${index}.housing_designation`, null)
+                                        setValue(`items.${index}.apartment_number`, null)
+                                      }
+                                    }}
+                                  >
+                                    <SelectTrigger className="h-8 w-32">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">Ingen</SelectItem>
+                                      <SelectItem value="rot">ROT (30%)</SelectItem>
+                                      <SelectItem value="rut">RUT (50%)</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  {watchItems[index]?.deduction_type && (
+                                    <>
+                                      <Controller
+                                        name={`items.${index}.work_type`}
+                                        control={control}
+                                        render={({ field: workField }) => {
+                                          const opts =
+                                            watchItems[index]?.deduction_type === 'rot'
+                                              ? ROT_WORK_TYPES
+                                              : RUT_WORK_TYPES
+                                          return (
+                                            <Select
+                                              value={workField.value ?? ''}
+                                              onValueChange={(v) => workField.onChange(v || null)}
+                                            >
+                                              <SelectTrigger className="h-8 w-56">
+                                                <SelectValue placeholder="Välj arbetstyp" />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                {opts.map((w) => (
+                                                  <SelectItem key={w.code} value={w.code}>
+                                                    {w.label}
+                                                  </SelectItem>
+                                                ))}
+                                              </SelectContent>
+                                            </Select>
+                                          )
+                                        }}
+                                      />
+                                      <Input
+                                        type="number"
+                                        step="0.5"
+                                        inputMode="decimal"
+                                        placeholder="Arbetstimmar"
+                                        className="h-8 w-32 text-right tabular-nums"
+                                        {...register(`items.${index}.labor_hours`, {
+                                          valueAsNumber: true,
+                                          setValueAs: (v) =>
+                                            v === '' || Number.isNaN(v) ? null : Number(v),
+                                        })}
+                                      />
+                                      {(() => {
+                                        const amt = computeDeduction({
+                                          unit_price: watchItems[index]?.unit_price || 0,
+                                          quantity: watchItems[index]?.quantity || 0,
+                                          deduction_type: watchItems[index]?.deduction_type,
+                                        })
+                                        return amt > 0 ? (
+                                          <span className="text-xs tabular-nums text-muted-foreground">
+                                            −{formatCurrency(amt, watchCurrency)}
+                                          </span>
+                                        ) : null
+                                      })()}
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            }}
+                          />
+                          {/* Labor-only disclosure (Skatteverket fakturamodellen).
+                              30%/50% applies to the full line total — the seller
+                              must ensure the line is 100% labor; material has
+                              to be invoiced separately. */}
+                          {watchItems[index]?.deduction_type && (
+                            <div className="mt-2 flex items-start gap-2 text-xs text-warning-foreground">
+                              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 text-warning shrink-0" />
+                              <p>
+                                Skatteverket kräver att endast arbetskostnad ingår i ROT/RUT-grundlaget. Material ska faktureras separat. Sätt endast skattereduktion på rader som är 100% arbete.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Mobile summary row */}
                       <div className="flex justify-between text-sm pt-1 border-t border-border/40 md:hidden">
                         <span className="text-muted-foreground">{t('row_label', { index: index + 1 })}</span>
@@ -727,7 +921,18 @@ export default function NewInvoicePage() {
                   variant="outline"
                   className="w-full md:w-auto"
                   onClick={() =>
-                    append({ description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: availableRates[0]?.rate ?? 25 })
+                    append({
+                      description: '',
+                      quantity: 1,
+                      unit: 'st',
+                      unit_price: 0,
+                      vat_rate: availableRates[0]?.rate ?? 25,
+                      deduction_type: null,
+                      labor_hours: null,
+                      work_type: null,
+                      housing_designation: null,
+                      apartment_number: null,
+                    })
                   }
                 >
                   <Plus className="mr-2 h-4 w-4" />
@@ -736,6 +941,59 @@ export default function NewInvoicePage() {
               </div>
             </CardContent>
           </Card>
+
+            {/* ROT/RUT-avdrag claim info. Surfaces only when any item has
+                a deduction_type set — keeps the form quiet for the 90%+
+                of users who don't sell ROT/RUT-eligible services. */}
+            {isInvoiceDoc && hasAnyDeduction && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Underlag för skattereduktion</CardTitle>
+                  <CardDescription>
+                    ROT/RUT-avdrag begärs hos Skatteverket via fakturamodellen. Kunden behöver godkänna utbetalningen, så uppgifterna måste matcha köparen exakt.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="deduction_personnummer">
+                      Personnummer<RequiredMark />
+                    </Label>
+                    <Input
+                      id="deduction_personnummer"
+                      placeholder="ÅÅÅÅMMDD-NNNN"
+                      autoComplete="off"
+                      {...register('deduction_personnummer')}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Krypteras innan lagring. Endast de fyra sista siffrorna visas på fakturan.
+                    </p>
+                  </div>
+                  {hasAnyRotLine && (
+                    <div className="space-y-2">
+                      <Label htmlFor="deduction_housing_designation">
+                        Fastighetsbeteckning<RequiredMark />
+                      </Label>
+                      <Input
+                        id="deduction_housing_designation"
+                        placeholder="t.ex. Stockholm Vasastan 1:23"
+                        {...register('deduction_housing_designation')}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Krävs för ROT-avdrag (RUT behöver inte detta fält).
+                      </p>
+                    </div>
+                  )}
+                  {(deductionByKind.rot > ROT_MAX || deductionByKind.rut > RUT_MAX) && (
+                    <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                      Fakturans avdrag överstiger årstaket
+                      {deductionByKind.rot > ROT_MAX && ` (ROT ${ROT_MAX.toLocaleString('sv-SE')} kr)`}
+                      {deductionByKind.rut > RUT_MAX && ` (RUT ${RUT_MAX.toLocaleString('sv-SE')} kr)`}
+                      . Kunden behöver kontrollera sitt återstående utrymme själv.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Notes */}
             <Card>
@@ -887,11 +1145,23 @@ export default function NewInvoicePage() {
                   <span>{formatCurrency(0, watchCurrency)}</span>
                 </div>
               )}
+              {hasAnyDeduction && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Skattereduktion ROT/RUT</span>
+                  <span className="tabular-nums">−{formatCurrency(deductionTotal, watchCurrency)}</span>
+                </div>
+              )}
               <Separator />
               <div className="flex justify-between font-bold text-lg">
-                <span>{t('total_label')}</span>
-                <span>{formatCurrency(total, watchCurrency)}</span>
+                <span>{hasAnyDeduction ? 'Att betala' : t('total_label')}</span>
+                <span>{formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}</span>
               </div>
+              {hasAnyDeduction && (
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Totalt inkl. moms</span>
+                  <span className="tabular-nums">{formatCurrency(total, watchCurrency)}</span>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -913,8 +1183,12 @@ export default function NewInvoicePage() {
         <div className="md:hidden fixed left-0 right-0 z-40 bg-card/98 backdrop-blur-sm border-t border-border/40 px-5 py-3" style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}>
           <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
             <div>
-              <p className="text-xs text-muted-foreground">{t('total_label')}</p>
-              <p className="text-lg font-bold tabular-nums">{formatCurrency(total, watchCurrency)}</p>
+              <p className="text-xs text-muted-foreground">
+                {hasAnyDeduction ? 'Att betala' : t('total_label')}
+              </p>
+              <p className="text-lg font-bold tabular-nums">
+                {formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}
+              </p>
             </div>
             <Button
               type="submit"

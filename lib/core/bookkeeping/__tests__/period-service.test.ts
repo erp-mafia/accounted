@@ -29,7 +29,7 @@ function makeClient() {
   }
 }
 
-import { lockPeriod, unlockPeriod, closePeriod, createNextPeriod } from '../period-service'
+import { lockPeriod, unlockPeriod, closePeriod, createNextPeriod, findNextPeriod } from '../period-service'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -228,5 +228,80 @@ describe('createNextPeriod', () => {
     const result = await createNextPeriod(supabase as never, 'company-1', 'user-1', 'fp-2024')
     expect(result.period_start).toBe('2024-07-01')
     expect(result.period_end).toBe('2025-06-30')
+  })
+})
+
+describe('findNextPeriod', () => {
+  it('returns the period chained via previous_period_id', async () => {
+    const current = makeFiscalPeriod({
+      id: 'fp-2024',
+      period_start: '2024-01-01',
+      period_end: '2024-12-31',
+    })
+    const next = makeFiscalPeriod({
+      id: 'fp-2025',
+      period_start: '2025-01-01',
+      period_end: '2025-12-31',
+      previous_period_id: 'fp-2024',
+    })
+
+    results = [
+      { data: current, error: null }, // fetch current
+      { data: next, error: null },    // chained lookup (.maybeSingle)
+    ]
+
+    const supabase = makeClient()
+    const result = await findNextPeriod(supabase as never, 'company-1', 'fp-2024')
+    expect(result?.id).toBe('fp-2025')
+  })
+
+  it('falls back to period_start lookup when chain is missing', async () => {
+    const current = makeFiscalPeriod({
+      id: 'fp-2024',
+      period_start: '2024-01-01',
+      period_end: '2024-12-31',
+    })
+    const next = makeFiscalPeriod({
+      id: 'fp-2025',
+      period_start: '2025-01-01',
+      period_end: '2025-12-31',
+      previous_period_id: null,
+    })
+
+    results = [
+      { data: current, error: null }, // fetch current
+      { data: null, error: null },    // chained lookup misses
+      { data: next, error: null },    // date lookup hits
+    ]
+
+    const supabase = makeClient()
+    const result = await findNextPeriod(supabase as never, 'company-1', 'fp-2024')
+    expect(result?.id).toBe('fp-2025')
+  })
+
+  it('returns null when no next period exists', async () => {
+    const current = makeFiscalPeriod({
+      id: 'fp-2024',
+      period_start: '2024-01-01',
+      period_end: '2024-12-31',
+    })
+
+    results = [
+      { data: current, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ]
+
+    const supabase = makeClient()
+    const result = await findNextPeriod(supabase as never, 'company-1', 'fp-2024')
+    expect(result).toBeNull()
+  })
+
+  it('returns null when current period not found', async () => {
+    results = [{ data: null, error: { message: 'not found' } }]
+
+    const supabase = makeClient()
+    const result = await findNextPeriod(supabase as never, 'company-1', 'missing')
+    expect(result).toBeNull()
   })
 })

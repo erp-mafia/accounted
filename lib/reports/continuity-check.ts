@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ContinuityCheckResult, ContinuityDiscrepancy } from '@/types'
 import { generateTrialBalance } from './trial-balance'
 import { getOpeningBalances } from './opening-balances'
+import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 
 /**
  * Validate that a fiscal period's opening balances (IB) match the previous
@@ -11,8 +12,11 @@ import { getOpeningBalances } from './opening-balances'
  * UB and getOpeningBalances() for IB, so a passing check proves the reports
  * are consistent.
  *
- * Tolerance: 0.01 SEK per account — covers IEEE 754 rounding drift from
- * intermediate Math.round() calls, NOT Swedish öresavrundning (abolished 2010).
+ * Tolerance: ORE_TOLERANCE (0.005 SEK) per account. All monetary values
+ * funnel through roundOre() first, so a half-öre threshold is sufficient
+ * to absorb float drift and any larger difference is a real discrepancy.
+ * (Swedish öresavrundning was abolished 2010 — this is purely IEEE 754
+ * hygiene, not a regulatory rounding.)
  */
 export async function validateBalanceContinuity(
   supabase: SupabaseClient,
@@ -64,8 +68,8 @@ export async function validateBalanceContinuity(
   const previousUB = new Map<string, { net: number; name: string }>()
   for (const row of trialRows) {
     if (row.account_class >= 1 && row.account_class <= 2) {
-      const net = Math.round((row.closing_debit - row.closing_credit) * 100) / 100
-      if (Math.abs(net) >= 0.005) {
+      const net = roundOre(row.closing_debit - row.closing_credit)
+      if (Math.abs(net) >= ORE_TOLERANCE) {
         previousUB.set(row.account_number, { net, name: row.account_name })
       }
     }
@@ -79,8 +83,8 @@ export async function validateBalanceContinuity(
     // Only check balance sheet accounts
     const accountClass = parseInt(accountNumber[0]) || 0
     if (accountClass >= 1 && accountClass <= 2) {
-      const net = Math.round((bal.debit - bal.credit) * 100) / 100
-      if (Math.abs(net) >= 0.005) {
+      const net = roundOre(bal.debit - bal.credit)
+      if (Math.abs(net) >= ORE_TOLERANCE) {
         currentIB.set(accountNumber, net)
       }
     }
@@ -99,9 +103,9 @@ export async function validateBalanceContinuity(
   for (const accountNumber of allAccounts) {
     const ubNet = previousUB.get(accountNumber)?.net ?? 0
     const ibNet = currentIB.get(accountNumber) ?? 0
-    const difference = Math.round((ubNet - ibNet) * 100) / 100
+    const difference = roundOre(ubNet - ibNet)
 
-    if (Math.abs(difference) > 0.01) {
+    if (Math.abs(difference) > ORE_TOLERANCE) {
       discrepancies.push({
         account_number: accountNumber,
         account_name: accountNames.get(accountNumber) ?? `Konto ${accountNumber}`,

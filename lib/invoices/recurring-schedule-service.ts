@@ -19,6 +19,7 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -377,12 +378,15 @@ async function sendInvoiceFromSchedule(
 
   // Render PDF with status overridden to 'sent' so the customer doesn't
   // receive a "UTKAST" stamp.
+  const renderableInvoice = { ...invoice, status: 'sent' as const }
+  const { branding } = prepareInvoicePdfRender(company)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
-      invoice: { ...invoice, status: 'sent' as const },
+      invoice: renderableInvoice,
       customer: invoice.customer,
       items,
       company,
+      branding,
     }),
   )
 

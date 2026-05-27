@@ -3,7 +3,9 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
+import { K3ComponentSchema } from '@/lib/api/schemas'
 import { createAsset, listAssets } from '@/lib/bokslut/assets/asset-service'
+import { validateComponents } from '@/lib/bokslut/assets/k3-components'
 import type { AssetCategory, DepreciationMethod } from '@/types'
 
 const ASSET_CATEGORIES: readonly AssetCategory[] = [
@@ -17,17 +19,15 @@ const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'other_tangible',
 ] as const
 
-// The DB enum keeps all three methods so future phases can add support
-// without a migration, but the engine only implements linear today. Reject
-// the unsupported methods at create to avoid silently producing wrong
-// (linear) numbers under a misleading method label.
+// All four depreciation methods are now implemented by the engine. The DB
+// CHECK constraint mirrors this list (see
+// 20260526120100_restvardeavskrivning.sql).
 const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
   'linear',
   'declining_balance_30',
   'declining_balance_20',
+  'restvardesavskrivning_25',
 ] as const
-
-const SUPPORTED_DEPRECIATION_METHODS: readonly DepreciationMethod[] = ['linear'] as const
 
 const CreateAssetSchema = z
   .object({
@@ -41,18 +41,21 @@ const CreateAssetSchema = z
     useful_life_months: z.number().int().positive(),
     depreciation_method: z
       .enum(DEPRECIATION_METHODS as unknown as [DepreciationMethod, ...DepreciationMethod[]])
-      .optional()
-      .refine(
-        (m) => m === undefined || (SUPPORTED_DEPRECIATION_METHODS as readonly string[]).includes(m),
-        {
-          message:
-            'Only "linear" depreciation is supported by the engine today. ' +
-            'Declining-balance methods are reserved for a future phase.',
-        },
-      ),
+      .optional(),
+    // Restvärde-target floor for restvärdeavskrivning. Required iff
+    // depreciation_method = 'restvardesavskrivning_25'. The DB CHECK enforces
+    // the same biconditional; we mirror it in the API for an early, Swedish
+    // error message rather than a Postgres check_violation surfacing.
+    restvarde_target: z.number().nonnegative().nullable().optional(),
     bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
     bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
     bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
+    // K3 component depreciation (BFNAR 2012:1 ch.17.4). Only meaningful for
+    // companies with accounting_framework='k3' — the route handler rejects
+    // K3_REQUIRED_FOR_COMPONENTS for K2 companies. When present, the engine
+    // dispatches to per-component linear depreciation instead of the
+    // asset-level depreciation_method.
+    k3_components: z.array(K3ComponentSchema).nullable().optional(),
     notes: z.string().optional(),
   })
   .superRefine((value, ctx) => {
@@ -60,7 +63,69 @@ const CreateAssetSchema = z
     // outside the legitimate range for the asset category so the chart stays
     // BAS-aligned and INK2R mappings continue to work.
     validateBasOverrides(value, ctx)
+    validateRestvardeTarget(value, ctx)
+    validateK3Components(value, ctx)
   })
+
+function validateK3Components(
+  value: {
+    acquisition_cost: number
+    k3_components?: { name: string; cost: number; useful_life_months: number; salvage_value?: number }[] | null
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.k3_components === undefined || value.k3_components === null) return
+  const { errors } = validateComponents({
+    acquisition_cost: value.acquisition_cost,
+    k3_components: value.k3_components,
+  })
+  for (const message of errors) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['k3_components'],
+      message,
+    })
+  }
+}
+
+function validateRestvardeTarget(
+  value: {
+    depreciation_method?: DepreciationMethod
+    restvarde_target?: number | null
+    acquisition_cost?: number
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const isRestvarde = value.depreciation_method === 'restvardesavskrivning_25'
+  const hasTarget = value.restvarde_target !== undefined && value.restvarde_target !== null
+  if (isRestvarde && !hasTarget) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['restvarde_target'],
+      message: 'restvarde_target krävs när avskrivningsmetoden är restvärdeavskrivning (25 %).',
+    })
+  }
+  if (!isRestvarde && hasTarget) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['restvarde_target'],
+      message: 'restvarde_target får bara anges för restvärdeavskrivning (25 %).',
+    })
+  }
+  if (
+    isRestvarde &&
+    hasTarget &&
+    value.acquisition_cost !== undefined &&
+    (value.restvarde_target as number) >= value.acquisition_cost
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['restvarde_target'],
+      message:
+        'restvarde_target måste vara lägre än anskaffningsvärdet — annars finns inget kvar att skriva av.',
+    })
+  }
+}
 
 function validateBasOverrides(
   value: {
@@ -151,6 +216,28 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const validation = await validateBody(request, CreateAssetSchema)
     if (!validation.success) return validation.response
+    // K3_REQUIRED_FOR_COMPONENTS: K3 component depreciation is only
+    // meaningful when the company applies the K3 framework. Reject the
+    // write with 422 (Unprocessable Entity) rather than silently dropping
+    // the field so the user knows their input was discarded.
+    if (validation.data.k3_components !== undefined && validation.data.k3_components !== null) {
+      const { data: company } = await supabase
+        .from('companies')
+        .select('accounting_framework')
+        .eq('id', companyId)
+        .single()
+      if (!company || company.accounting_framework !== 'k3') {
+        return NextResponse.json(
+          {
+            error: {
+              code: 'K3_REQUIRED_FOR_COMPONENTS',
+              message: 'Komponentuppdelning (k3_components) kräver att företaget tillämpar K3 (BFNAR 2012:1).',
+            },
+          },
+          { status: 422 },
+        )
+      }
+    }
     try {
       const asset = await createAsset(supabase, companyId, user.id, validation.data)
       return NextResponse.json({ data: asset })

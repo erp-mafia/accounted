@@ -1,0 +1,22 @@
+-- Latent tax (uppskjuten skatt) — placeholder migration for K3 framework.
+--
+-- The chart-of-accounts already seeds the two relevant BAS 2026 accounts via
+-- seed_chart_of_accounts() when a company is created:
+--
+--   2240 Avsättningar för uppskjutna skatter   (liability, K3-only)
+--   8940 Uppskjuten skatt                      (expense, K3-only)
+--
+-- Both rows in lib/bookkeeping/bas-data/* carry k2_excluded=true so K2
+-- companies never see them in their chart. When an AB switches to K3 the
+-- application layer (settings handler) is responsible for inserting these
+-- two rows into chart_of_accounts for the company if they are not already
+-- present. We deliberately do NOT backfill them in this migration because
+-- (a) existing AB rows still default to K2 — those companies do not need
+-- the accounts until they opt-in, and (b) opt-in is a deliberate user
+-- action that should drive the seed, not a one-off DDL run.
+--
+-- This file exists to keep migration timestamps sequential alongside
+-- 20260526121500_k3_framework.sql, and to document the BAS account choice
+-- so future maintainers can find it.
+
+NOTIFY pgrst, 'reload schema';

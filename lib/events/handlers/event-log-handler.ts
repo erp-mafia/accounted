@@ -15,6 +15,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'journal_entry.corrected',
   'document.uploaded',
   'document.accessed',
+  'document.deleted',
   'invoice.created',
   'invoice.sent',
   'credit_note.created',

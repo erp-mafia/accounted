@@ -39,6 +39,7 @@ vi.mock('@react-pdf/renderer', () => ({
 }))
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue({}),
+  brandingFromCompanySettings: vi.fn().mockReturnValue({}),
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'

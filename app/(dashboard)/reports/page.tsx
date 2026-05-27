@@ -2,15 +2,17 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Download, AlertCircle, ChevronDown, ChevronRight, ArrowRight } from 'lucide-react'
+import { Download, FileSpreadsheet, AlertCircle, ChevronDown, ChevronRight, ArrowRight } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
@@ -23,6 +25,11 @@ import { TrialBalanceChart } from '@/components/reports/TrialBalanceChart'
 import { VatCompositionChart } from '@/components/reports/VatCompositionChart'
 import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
 import { IncomeExpenseChart } from '@/components/reports/IncomeExpenseChart'
+import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
+import type {
+  ReportSourceLine,
+  ReportSourceFetcher,
+} from '@/lib/reports/source-lines'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import type {
   TrialBalanceRow,
@@ -55,6 +62,7 @@ const TAB_LABEL_KEYS: Record<string, string> = {
 }
 
 export default function ReportsPage() {
+  const router = useRouter()
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [activeTab, setActiveTab] = useState('resultatrapport')
   const [isLoadingInit, setIsLoadingInit] = useState(true)
@@ -75,11 +83,27 @@ export default function ReportsPage() {
   }, [activeTab, t])
 
   const handleTabChange = useCallback((tab: string) => {
+    // Kassaflödesanalys lives on its own route; route there instead of swapping tabs.
+    if (tab === 'kassaflodesanalys') {
+      router.push('/reports/kassaflodesanalys')
+      return
+    }
+    // Årsredovisning is an editable document (narrative + signatures) and lives
+    // on its own route under the year-end flow. Forward the active period so
+    // the page opens directly on the right fiscal year.
+    if (tab === 'arsredovisning') {
+      router.push(
+        selectedPeriod
+          ? `/bookkeeping/year-end/arsredovisning?period=${selectedPeriod}`
+          : '/bookkeeping/year-end/arsredovisning',
+      )
+      return
+    }
     // Manual tab change clears drill-down state
     setActiveTab(tab)
     setGlAccountFilter(null)
     setDrillDownTrail([])
-  }, [])
+  }, [router, selectedPeriod])
 
   const navigateBack = useCallback((stepIndex: number) => {
     const step = drillDownTrail[stepIndex]
@@ -301,6 +325,16 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/trial-balance/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
+        </Button>
+      </div>
       <TrialBalanceChart rows={data.rows} />
       <Card>
         <CardHeader>
@@ -343,6 +377,7 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
               <table className="w-full text-sm min-w-[500px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
+                    <th className="py-2 w-8"></th>
                     <th className="py-2 w-20">Konto</th>
                     <th className="py-2">Namn</th>
                     <th className="py-2 w-32 text-right">Ingående saldo</th>
@@ -351,38 +386,23 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
                   </tr>
                 </thead>
                 <tbody>
-                  {data.rows.map((row) => {
-                    const ob = getNetBalance(row, 'opening')
-                    const ch = getNetBalance(row, 'period')
-                    const cb = getNetBalance(row, 'closing')
-                    return (
-                      <tr
-                        key={row.account_number}
-                        className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
-                        onClick={() => onNavigateToAccount(row.account_number)}
-                      >
-                        <td className="py-2">
-                          <AccountNumber number={row.account_number} name={row.account_name} />
-                        </td>
-                        <td className="py-2">{row.account_name}</td>
-                        <td className={`py-2 text-right tabular-nums ${ob < 0 ? 'text-destructive' : ''}`}>
-                          {formatSigned(ob)}
-                        </td>
-                        <td className={`py-2 text-right tabular-nums ${ch < 0 ? 'text-destructive' : ''}`}>
-                          {formatSigned(ch)}
-                        </td>
-                        <td className={`py-2 text-right tabular-nums font-medium ${cb < 0 ? 'text-destructive' : ''}`}>
-                          {formatSigned(cb)}
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {data.rows.map((row) => (
+                    <TrialBalanceSimplifiedRow
+                      key={row.account_number}
+                      row={row}
+                      periodId={periodId}
+                      onNavigateToAccount={onNavigateToAccount}
+                      getNetBalance={getNetBalance}
+                      formatSigned={formatSigned}
+                    />
+                  ))}
                 </tbody>
               </table>
             ) : (
               <table className="w-full text-sm min-w-[600px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
+                    <th className="py-2 w-8"></th>
                     <th className="py-2 w-20">Konto</th>
                     <th className="py-2">Namn</th>
                     <th className="py-2 w-28 text-right">Period debet</th>
@@ -393,32 +413,17 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
                 </thead>
                 <tbody>
                   {data.rows.map((row) => (
-                    <tr
+                    <TrialBalanceDetailedRow
                       key={row.account_number}
-                      className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
-                      onClick={() => onNavigateToAccount(row.account_number)}
-                    >
-                      <td className="py-2">
-                        <AccountNumber number={row.account_number} name={row.account_name} />
-                      </td>
-                      <td className="py-2">{row.account_name}</td>
-                      <td className="py-2 text-right">
-                        {row.period_debit > 0 ? formatAmount(row.period_debit) : ''}
-                      </td>
-                      <td className="py-2 text-right">
-                        {row.period_credit > 0 ? formatAmount(row.period_credit) : ''}
-                      </td>
-                      <td className="py-2 text-right">
-                        {row.closing_debit > 0 ? formatAmount(row.closing_debit) : ''}
-                      </td>
-                      <td className="py-2 text-right">
-                        {row.closing_credit > 0 ? formatAmount(row.closing_credit) : ''}
-                      </td>
-                    </tr>
+                      row={row}
+                      periodId={periodId}
+                      onNavigateToAccount={onNavigateToAccount}
+                    />
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="font-semibold border-t-2">
+                    <td className="py-2"></td>
                     <td colSpan={2} className="py-2">Summa</td>
                     <td className="py-2 text-right">
                       {formatAmount(data.rows.reduce((s, r) => s + r.period_debit, 0))}
@@ -440,6 +445,127 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+// Lazy fetcher for a TB account's source lines. Memoised at the row level so
+// repeated toggling never refetches.
+function makeTrialBalanceFetcher(accountNumber: string, periodId: string): ReportSourceFetcher {
+  return async () => {
+    const res = await fetch(
+      `/api/reports/trial-balance/account/${encodeURIComponent(accountNumber)}/sources?fiscal_period_id=${encodeURIComponent(periodId)}`
+    )
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta verifikat')
+    const lines: ReportSourceLine[] = json.data?.lines || []
+    return { lines, next_cursor: json.data?.next_cursor ?? null }
+  }
+}
+
+function TrialBalanceSimplifiedRow({
+  row,
+  periodId,
+  onNavigateToAccount,
+  getNetBalance,
+  formatSigned,
+}: {
+  row: TrialBalanceRow
+  periodId: string
+  onNavigateToAccount: (account: string) => void
+  getNetBalance: (row: TrialBalanceRow, type: 'opening' | 'period' | 'closing') => number
+  formatSigned: (amount: number) => string
+}) {
+  const fetcher = React.useMemo(
+    () => makeTrialBalanceFetcher(row.account_number, periodId),
+    [row.account_number, periodId]
+  )
+  const { Toggle, Panel } = useReportRowExpansion(fetcher, `tb-${row.account_number}`)
+
+  const ob = getNetBalance(row, 'opening')
+  const ch = getNetBalance(row, 'period')
+  const cb = getNetBalance(row, 'closing')
+
+  return (
+    <>
+      <tr className="border-b last:border-0 hover:bg-muted/50 transition-colors">
+        <td className="py-2" onClick={(e) => e.stopPropagation()}>
+          <Toggle />
+        </td>
+        <td
+          className="py-2 cursor-pointer"
+          onClick={() => onNavigateToAccount(row.account_number)}
+        >
+          <AccountNumber number={row.account_number} name={row.account_name} />
+        </td>
+        <td
+          className="py-2 cursor-pointer"
+          onClick={() => onNavigateToAccount(row.account_number)}
+        >
+          {row.account_name}
+        </td>
+        <td className={`py-2 text-right tabular-nums ${ob < 0 ? 'text-destructive' : ''}`}>
+          {formatSigned(ob)}
+        </td>
+        <td className={`py-2 text-right tabular-nums ${ch < 0 ? 'text-destructive' : ''}`}>
+          {formatSigned(ch)}
+        </td>
+        <td className={`py-2 text-right tabular-nums font-medium ${cb < 0 ? 'text-destructive' : ''}`}>
+          {formatSigned(cb)}
+        </td>
+      </tr>
+      <Panel colSpan={6} />
+    </>
+  )
+}
+
+function TrialBalanceDetailedRow({
+  row,
+  periodId,
+  onNavigateToAccount,
+}: {
+  row: TrialBalanceRow
+  periodId: string
+  onNavigateToAccount: (account: string) => void
+}) {
+  const fetcher = React.useMemo(
+    () => makeTrialBalanceFetcher(row.account_number, periodId),
+    [row.account_number, periodId]
+  )
+  const { Toggle, Panel } = useReportRowExpansion(fetcher, `tb-det-${row.account_number}`)
+
+  return (
+    <>
+      <tr className="border-b last:border-0 hover:bg-muted/50 transition-colors">
+        <td className="py-2" onClick={(e) => e.stopPropagation()}>
+          <Toggle />
+        </td>
+        <td
+          className="py-2 cursor-pointer"
+          onClick={() => onNavigateToAccount(row.account_number)}
+        >
+          <AccountNumber number={row.account_number} name={row.account_name} />
+        </td>
+        <td
+          className="py-2 cursor-pointer"
+          onClick={() => onNavigateToAccount(row.account_number)}
+        >
+          {row.account_name}
+        </td>
+        <td className="py-2 text-right">
+          {row.period_debit > 0 ? formatAmount(row.period_debit) : ''}
+        </td>
+        <td className="py-2 text-right">
+          {row.period_credit > 0 ? formatAmount(row.period_credit) : ''}
+        </td>
+        <td className="py-2 text-right">
+          {row.closing_debit > 0 ? formatAmount(row.closing_debit) : ''}
+        </td>
+        <td className="py-2 text-right">
+          {row.closing_credit > 0 ? formatAmount(row.closing_credit) : ''}
+        </td>
+      </tr>
+      <Panel colSpan={7} />
+    </>
   )
 }
 function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
@@ -516,7 +642,7 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -524,6 +650,14 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/income-statement/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
         </Button>
       </div>
 
@@ -662,7 +796,7 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -670,6 +804,14 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/balance-sheet/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
         </Button>
       </div>
 
@@ -784,10 +926,11 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
   }
 
   const hasPrior = data.prior_period !== null
+  const colCount = 4
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-2 flex-wrap">
         <Button
           variant="outline"
           size="sm"
@@ -795,6 +938,14 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/resultatrapport/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
         </Button>
       </div>
 
@@ -814,7 +965,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={4} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                      <td colSpan={colCount} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
@@ -853,7 +1004,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
 
       <Card className="border-2">
         <CardContent className="py-4">
-          <div className="grid grid-cols-[1fr_auto_auto] gap-x-6 items-baseline">
+          <div className="grid gap-x-6 items-baseline grid-cols-[1fr_auto_auto]">
             <span className="font-bold text-lg">Beräknat resultat</span>
             <span className={`tabular-nums font-bold text-lg w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
               {formatAmount(data.net_result_current)} kr
@@ -926,7 +1077,7 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -934,6 +1085,14 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/balansrapport/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
         </Button>
       </div>
 
@@ -1150,7 +1309,15 @@ function VatDeclarationView() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/vat-declaration/xlsx?periodType=${periodType}&year=${year}&period=${period}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
+        </Button>
         <AgentSparkleButton
           intentId="vat.review"
           intentArgs={{ period_type: periodType, year, period }}
@@ -1258,31 +1425,42 @@ function VatDeclarationView() {
                   <div><table className="w-full text-sm">
                     <tbody>
                       {data.rutor.ruta05 > 0 && (
-                        <tr className="border-b">
-                          <td className="py-2">
-                            <span className="font-mono text-xs bg-muted px-1 rounded mr-2">05</span>
-                            Momspliktig försäljning
-                          </td>
-                          <td className="py-2 text-right">{formatAmount(data.rutor.ruta05)} kr</td>
-                        </tr>
+                        <VatRutaRow
+                          ruta="05"
+                          label="Momspliktig försäljning"
+                          amount={data.rutor.ruta05}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
                       )}
                       <VatRutaRow
                         ruta="10"
                         label="Utgående moms 25%"
                         amount={data.rutor.ruta10}
                         baseAmount={data.breakdown.invoices.base25}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
                       />
                       <VatRutaRow
                         ruta="11"
                         label="Utgående moms 12%"
                         amount={data.rutor.ruta11}
                         baseAmount={data.breakdown.invoices.base12}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
                       />
                       <VatRutaRow
                         ruta="12"
                         label="Utgående moms 6%"
                         amount={data.rutor.ruta12}
                         baseAmount={data.breakdown.invoices.base6}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
                       />
                       <VatRutaRow
                         ruta="39"
@@ -1290,6 +1468,9 @@ function VatDeclarationView() {
                         amount={0}
                         baseAmount={data.rutor.ruta39}
                         noVat
+                        periodType={periodType}
+                        year={year}
+                        period={period}
                       />
                       <VatRutaRow
                         ruta="40"
@@ -1297,6 +1478,9 @@ function VatDeclarationView() {
                         amount={0}
                         baseAmount={data.rutor.ruta40}
                         noVat
+                        periodType={periodType}
+                        year={year}
+                        period={period}
                       />
                     </tbody>
                     <tfoot>
@@ -1319,14 +1503,14 @@ function VatDeclarationView() {
                       <h4 className="font-semibold mb-3 mt-6">Omvänd skattskyldighet (inköp)</h4>
                       <div><table className="w-full text-sm">
                         <tbody>
-                          <VatRutaRow ruta="20" label="Inköp av varor från annat EU-land" amount={0} baseAmount={data.rutor.ruta20} noVat />
-                          <VatRutaRow ruta="21" label="Inköp av tjänster från annat EU-land" amount={0} baseAmount={data.rutor.ruta21} noVat />
-                          <VatRutaRow ruta="22" label="Inköp av tjänster utanför EU" amount={0} baseAmount={data.rutor.ruta22} noVat />
-                          <VatRutaRow ruta="23" label="Inköp av varor i Sverige" amount={0} baseAmount={data.rutor.ruta23} noVat />
-                          <VatRutaRow ruta="24" label="Övriga inköp av tjänster i Sverige" amount={0} baseAmount={data.rutor.ruta24} noVat />
-                          <VatRutaRow ruta="30" label="Utgående moms 25% (omvänd)" amount={data.rutor.ruta30} baseAmount={0} />
-                          <VatRutaRow ruta="31" label="Utgående moms 12% (omvänd)" amount={data.rutor.ruta31} baseAmount={0} />
-                          <VatRutaRow ruta="32" label="Utgående moms 6% (omvänd)" amount={data.rutor.ruta32} baseAmount={0} />
+                          <VatRutaRow ruta="20" label="Inköp av varor från annat EU-land" amount={0} baseAmount={data.rutor.ruta20} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="21" label="Inköp av tjänster från annat EU-land" amount={0} baseAmount={data.rutor.ruta21} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="22" label="Inköp av tjänster utanför EU" amount={0} baseAmount={data.rutor.ruta22} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="23" label="Inköp av varor i Sverige" amount={0} baseAmount={data.rutor.ruta23} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="24" label="Övriga inköp av tjänster i Sverige" amount={0} baseAmount={data.rutor.ruta24} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="30" label="Utgående moms 25% (omvänd)" amount={data.rutor.ruta30} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="31" label="Utgående moms 12% (omvänd)" amount={data.rutor.ruta31} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="32" label="Utgående moms 6% (omvänd)" amount={data.rutor.ruta32} baseAmount={0} periodType={periodType} year={year} period={period} />
                         </tbody>
                       </table></div>
                     </>
@@ -1338,13 +1522,15 @@ function VatDeclarationView() {
                   <h4 className="font-semibold mb-3">Ingående moms (avdragsgill)</h4>
                   <div><table className="w-full text-sm">
                     <tbody>
-                      <tr className="border-b">
-                        <td className="py-2">
-                          <span className="font-mono text-xs bg-muted px-1 rounded mr-2">48</span>
-                          Ingående moms att dra av
-                        </td>
-                        <td className="py-2 text-right">{formatAmount(data.rutor.ruta48)} kr</td>
-                      </tr>
+                      <VatRutaRow
+                        ruta="48"
+                        label="Ingående moms att dra av"
+                        amount={data.rutor.ruta48}
+                        baseAmount={0}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
+                      />
                       {data.breakdown.transactions.ruta48 > 0 && (
                         <tr className="text-muted-foreground">
                           <td className="py-1 pl-6 text-xs">- från transaktioner</td>
@@ -1419,19 +1605,49 @@ function VatDeclarationView() {
   )
 }
 
+function makeVatFetcher(ruta: string, periodType: VatPeriodType, year: number, period: number): ReportSourceFetcher {
+  return async () => {
+    const res = await fetch(
+      `/api/reports/vat-declaration/ruta/${encodeURIComponent(ruta)}/sources?periodType=${periodType}&year=${year}&period=${period}`
+    )
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta verifikat')
+    const lines: ReportSourceLine[] = json.data?.lines || []
+    return { lines, next_cursor: json.data?.next_cursor ?? null }
+  }
+}
+
 function VatRutaRow({
   ruta,
   label,
   amount,
   baseAmount,
   noVat,
+  periodType,
+  year,
+  period,
 }: {
   ruta: string
   label: string
   amount: number
   baseAmount: number
   noVat?: boolean
+  periodType?: VatPeriodType
+  year?: number
+  period?: number
 }) {
+  const canDrill = periodType !== undefined && year !== undefined && period !== undefined
+  const fetcher = React.useMemo(
+    () => (canDrill ? makeVatFetcher(ruta, periodType!, year!, period!) : null),
+    [canDrill, ruta, periodType, year, period]
+  )
+  // Hooks must be called unconditionally — provide a noop fetcher when drill
+  // is disabled. The early-return for zero rows lives below the hooks.
+  const expansion = useReportRowExpansion(
+    fetcher ?? (async () => ({ lines: [], next_cursor: null })),
+    `vat-${ruta}`
+  )
+
   // Don't show rows with zero values
   if (baseAmount === 0 && amount === 0) return null
 
@@ -1439,17 +1655,23 @@ function VatRutaRow({
     <>
       <tr className="border-b">
         <td className="py-2">
+          {canDrill && (
+            <span className="inline-block align-middle mr-1">
+              <expansion.Toggle />
+            </span>
+          )}
           <span className="font-mono text-xs bg-muted px-1 rounded mr-2">{ruta}</span>
           {label}
         </td>
-        <td className="py-2 text-right">{noVat ? `${formatAmount(baseAmount)} kr` : `${formatAmount(amount)} kr`}</td>
+        <td className="py-2 text-right tabular-nums">{noVat ? `${formatAmount(baseAmount)} kr` : `${formatAmount(amount)} kr`}</td>
       </tr>
       {!noVat && baseAmount > 0 && (
         <tr className="text-muted-foreground">
           <td className="py-1 pl-6 text-xs">Underlag</td>
-          <td className="py-1 text-right text-xs">{formatAmount(baseAmount)} kr</td>
+          <td className="py-1 text-right text-xs tabular-nums">{formatAmount(baseAmount)} kr</td>
         </tr>
       )}
+      {canDrill && <expansion.Panel colSpan={2} />}
     </>
   )
 }
@@ -1543,6 +1765,16 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/supplier-ledger/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
+        </Button>
+      </div>
       {/* Summary cards */}
       <div className="grid md:grid-cols-3 gap-4">
         <Card>
@@ -1587,6 +1819,7 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
             <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
+                  <th className="py-2 w-8"></th>
                   <th className="py-2">Leverantör</th>
                   <th className="py-2 text-right">Ej förfallet</th>
                   <th className="py-2 text-right">1-30 dagar</th>
@@ -1598,19 +1831,12 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
               </thead>
               <tbody>
                 {ledger.entries.map((entry) => (
-                  <tr key={entry.supplier_id} className="border-b last:border-0">
-                    <td className="py-2">{entry.supplier_name}</td>
-                    <td className="py-2 text-right">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
-                    <td className="py-2 text-right">{entry.days_1_30 > 0 ? formatAmount(entry.days_1_30) : ''}</td>
-                    <td className="py-2 text-right">{entry.days_31_60 > 0 ? formatAmount(entry.days_31_60) : ''}</td>
-                    <td className="py-2 text-right">{entry.days_61_90 > 0 ? formatAmount(entry.days_61_90) : ''}</td>
-                    <td className="py-2 text-right text-destructive">{entry.days_90_plus > 0 ? formatAmount(entry.days_90_plus) : ''}</td>
-                    <td className="py-2 text-right font-semibold">{formatAmount(entry.total_outstanding)}</td>
-                  </tr>
+                  <SupplierLedgerRow key={entry.supplier_id} entry={entry} />
                 ))}
               </tbody>
               <tfoot>
                 <tr className="font-semibold border-t-2">
+                  <td className="py-2"></td>
                   <td className="py-2">Summa</td>
                   <td className="py-2 text-right">{formatAmount(ledger.entries.reduce((s, e) => s + e.current, 0))}</td>
                   <td className="py-2 text-right">{formatAmount(ledger.entries.reduce((s, e) => s + e.days_1_30, 0))}</td>
@@ -1664,6 +1890,54 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
         </Card>
       )}
     </div>
+  )
+}
+
+function makeSupplierFetcher(supplierId: string): ReportSourceFetcher {
+  return async () => {
+    const res = await fetch(
+      `/api/reports/supplier-ledger/supplier/${encodeURIComponent(supplierId)}/invoices`
+    )
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta leverantörsfakturor')
+    const lines: ReportSourceLine[] = json.data?.lines || []
+    return { lines, next_cursor: json.data?.next_cursor ?? null }
+  }
+}
+
+function SupplierLedgerRow({
+  entry,
+}: {
+  entry: {
+    supplier_id: string
+    supplier_name: string
+    current: number
+    days_1_30: number
+    days_31_60: number
+    days_61_90: number
+    days_90_plus: number
+    total_outstanding: number
+  }
+}) {
+  const fetcher = React.useMemo(
+    () => makeSupplierFetcher(entry.supplier_id),
+    [entry.supplier_id]
+  )
+  const { Toggle, Panel } = useReportRowExpansion(fetcher, `sup-${entry.supplier_id}`)
+  return (
+    <>
+      <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+        <td className="py-2"><Toggle /></td>
+        <td className="py-2">{entry.supplier_name}</td>
+        <td className="py-2 text-right tabular-nums">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
+        <td className="py-2 text-right tabular-nums">{entry.days_1_30 > 0 ? formatAmount(entry.days_1_30) : ''}</td>
+        <td className="py-2 text-right tabular-nums">{entry.days_31_60 > 0 ? formatAmount(entry.days_31_60) : ''}</td>
+        <td className="py-2 text-right tabular-nums">{entry.days_61_90 > 0 ? formatAmount(entry.days_61_90) : ''}</td>
+        <td className="py-2 text-right tabular-nums text-destructive">{entry.days_90_plus > 0 ? formatAmount(entry.days_90_plus) : ''}</td>
+        <td className="py-2 text-right tabular-nums font-semibold">{formatAmount(entry.total_outstanding)}</td>
+      </tr>
+      <Panel colSpan={8} />
+    </>
   )
 }
 
@@ -1766,6 +2040,16 @@ function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId: strin
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/general-ledger/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
+        </Button>
+      </div>
       {/* Account range filter */}
       <Card>
         <CardContent className="pt-6">
@@ -1835,7 +2119,7 @@ function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId: strin
                         href={`/bookkeeping/${line.journal_entry_id}`}
                         className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors"
                       >
-                        {line.voucher_series}{line.voucher_number}
+                        {formatVoucher(line)}
                       </Link>
                     </td>
                     <td className="py-1.5">{line.date}</td>
@@ -1965,6 +2249,16 @@ function JournalRegisterView({ periodId }: { periodId: string }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/journal-register/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
+        </Button>
+      </div>
       {data.period.start && (
         <p className="text-sm text-muted-foreground">
           Period: {data.period.start} — {data.period.end} | {data.total_entries} verifikationer
@@ -2007,7 +2301,7 @@ function JournalRegisterView({ periodId }: { periodId: string }) {
                         )}
                       </td>
                       <td className="py-2 font-mono text-xs">
-                        {entry.voucher_series}{entry.voucher_number}
+                        {formatVoucher(entry)}
                       </td>
                       <td className="py-2">{entry.date}</td>
                       <td className="py-2">
@@ -2094,6 +2388,102 @@ interface ARLedgerData {
   } | null
 }
 
+// Inner expansion row component for AR ledger.
+// Fetches per-customer invoices (with journal_entry_id) and renders each as a
+// link to /bookkeeping/[id] when posted, /invoices/[id] when still draft.
+function ARCustomerInvoiceRows({
+  customerId,
+  invoices,
+}: {
+  customerId: string
+  invoices: {
+    invoice_id: string
+    invoice_number: string
+    invoice_date: string
+    due_date: string
+    total: number
+    paid_amount: number
+    outstanding: number
+    outstanding_sek: number | null
+    days_overdue: number
+    currency: string
+  }[]
+}) {
+  // ARCustomerInvoiceRows is mounted lazily — only when a customer is
+  // expanded, so initial state matches "still loading" and resets on
+  // unmount. No synchronous setState in the effect is needed.
+  const [enriched, setEnriched] = useState<Record<string, { journal_entry_id: string; voucher_series: string; voucher_number: number } | undefined>>({})
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/reports/ar-ledger/customer/${encodeURIComponent(customerId)}/invoices`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return
+        const map: typeof enriched = {}
+        for (const line of json.data?.lines || []) {
+          if (line.invoice_id && line.journal_entry_id) {
+            map[line.invoice_id] = {
+              journal_entry_id: line.journal_entry_id,
+              voucher_series: line.voucher_series,
+              voucher_number: line.voucher_number,
+            }
+          }
+        }
+        setEnriched(map)
+      })
+      .catch(() => { /* fail silently; rows still render without verifikat link */ })
+      .finally(() => { if (!cancelled) setLoaded(true) })
+    return () => { cancelled = true }
+  }, [customerId])
+  const loading = !loaded
+
+  return (
+    <>
+      {invoices.map((inv) => {
+        const entry = enriched[inv.invoice_id]
+        const targetHref = entry?.journal_entry_id
+          ? `/bookkeeping/${entry.journal_entry_id}`
+          : `/invoices/${inv.invoice_id}`
+        return (
+          <tr key={inv.invoice_id} className="bg-muted/30 border-b last:border-0">
+            <td></td>
+            <td className="py-1 text-xs" colSpan={2}>
+              <Link href={targetHref} className="font-mono hover:underline underline-offset-4">
+                {inv.invoice_number || '(utkast)'}
+              </Link>
+              {entry && (
+                <span className="ml-2 text-muted-foreground font-mono">
+                  {formatVoucher(entry)}
+                </span>
+              )}
+              <span className="text-muted-foreground ml-2 tabular-nums">{formatDate(inv.invoice_date)}</span>
+              <span className="text-muted-foreground ml-2 tabular-nums">förfaller {formatDate(inv.due_date)}</span>
+            </td>
+            <td className="py-1 text-right text-xs text-muted-foreground" colSpan={2}>
+              {inv.days_overdue > 0 ? `${inv.days_overdue} dagar förfallen` : 'Ej förfallen'}
+            </td>
+            <td className="py-1 text-right text-xs text-muted-foreground">
+              {inv.paid_amount > 0 ? `Betalt: ${formatAmount(inv.paid_amount)}` : ''}
+            </td>
+            <td></td>
+            <td className="py-1 text-right text-xs font-medium tabular-nums">
+              {formatAmount(inv.outstanding)} {inv.currency}
+            </td>
+          </tr>
+        )
+      })}
+      {loading && (
+        <tr className="bg-muted/30">
+          <td></td>
+          <td colSpan={7} className="py-1 text-[10px] text-muted-foreground">Letar verifikat…</td>
+        </tr>
+      )}
+    </>
+  )
+}
+
 function ARLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<ARLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -2169,6 +2559,16 @@ function ARLedgerView({ periodId }: { periodId: string }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/ar-ledger/xlsx?period_id=${periodId}`, '_blank')}
+        >
+          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          Ladda ner Excel
+        </Button>
+      </div>
       {/* Summary cards */}
       <div className="grid md:grid-cols-3 gap-4">
         <Card>
@@ -2247,26 +2647,12 @@ function ARLedgerView({ periodId }: { periodId: string }) {
                         <td className="py-2 text-right text-destructive">{entry.days_90_plus > 0 ? formatAmount(entry.days_90_plus) : ''}</td>
                         <td className="py-2 text-right font-semibold">{formatAmount(entry.total_outstanding)}</td>
                       </tr>
-                      {isExpanded && entry.invoices.map((inv) => (
-                        <tr key={inv.invoice_id} className="bg-muted/30 border-b last:border-0">
-                          <td></td>
-                          <td className="py-1 text-xs" colSpan={2}>
-                            <span className="font-mono">{inv.invoice_number}</span>
-                            <span className="text-muted-foreground ml-2 tabular-nums">{formatDate(inv.invoice_date)}</span>
-                            <span className="text-muted-foreground ml-2 tabular-nums">förfaller {formatDate(inv.due_date)}</span>
-                          </td>
-                          <td className="py-1 text-right text-xs text-muted-foreground" colSpan={2}>
-                            {inv.days_overdue > 0 ? `${inv.days_overdue} dagar förfallen` : 'Ej förfallen'}
-                          </td>
-                          <td className="py-1 text-right text-xs text-muted-foreground">
-                            {inv.paid_amount > 0 ? `Betalt: ${formatAmount(inv.paid_amount)}` : ''}
-                          </td>
-                          <td></td>
-                          <td className="py-1 text-right text-xs font-medium">
-                            {formatAmount(inv.outstanding)} {inv.currency}
-                          </td>
-                        </tr>
-                      ))}
+                      {isExpanded && (
+                        <ARCustomerInvoiceRows
+                          customerId={entry.customer_id}
+                          invoices={entry.invoices}
+                        />
+                      )}
                     </React.Fragment>
                   )
                 })}

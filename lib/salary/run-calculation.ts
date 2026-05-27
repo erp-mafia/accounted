@@ -31,8 +31,10 @@ import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { loadAndDeriveAbsence } from './derive-absence-line-items'
 import { getLineItemAccount } from './account-mapping'
+import { computePremiumLines } from './shift-premium-engine'
+import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
-import type { SalaryLineItemType } from '@/types'
+import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
 
 /** Item types that the calculator derives from per-day absence records. */
 const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
@@ -42,6 +44,38 @@ const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
   'vab',
   'parental_leave',
 ]
+
+/**
+ * Item types that the calculator derives from shift_premium_rules + worked
+ * days. These are wiped at the start of each per-employee pass and
+ * regenerated so the displayed line items always match the latest rules.
+ */
+const DERIVED_PREMIUM_TYPES: ShiftPremiumItemType[] = [
+  'overtime_50',
+  'overtime_100',
+  'ob_weekday_evening',
+  'ob_weekend',
+  'ob_night',
+  'ob_holiday',
+]
+
+/**
+ * Effective hourly rate used as the base for shift-premium computation.
+ *   - Hourly employees: their stored hourly_rate.
+ *   - Monthly employees: monthly_salary / 173 (common Swedish derivation for
+ *     full-time monthly → hourly, matches the timlön conventions used in
+ *     CBAs). Applied even to part-timers since the engine multiplies by
+ *     actually-worked premium hours.
+ */
+function effectiveHourlyRate(emp: {
+  salary_type: 'monthly' | 'hourly'
+  hourly_rate: number | null
+  monthly_salary: number | null
+}): number {
+  if (emp.salary_type === 'hourly') return emp.hourly_rate || 0
+  const monthly = emp.monthly_salary || 0
+  return monthly > 0 ? Math.round((monthly / 173) * 100) / 100 : 0
+}
 
 /** Benefit-type → line-item-type mapping for the derived benefit rows. */
 const BENEFIT_TYPE_TO_LINE_ITEM: Record<string, SalaryLineItemType> = {
@@ -224,6 +258,19 @@ export async function runSalaryCalculation(
   const periodEndDate = new Date(Date.UTC(periodYear, periodMonth, 0)) // last day of month
   const periodEnd = periodEndDate.toISOString().slice(0, 10)
 
+  // 7b. Load active shift_premium_rules once per run. Filtered by company.
+  // Inactive rules excluded — the engine also re-checks, but this saves
+  // network bytes for companies with many archived rules.
+  const { data: premiumRulesRaw, error: rulesError } = await supabase
+    .from('shift_premium_rules')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+  if (rulesError) {
+    return { ok: false, code: 'DATABASE_ERROR', details: rulesError }
+  }
+  const premiumRules = (premiumRulesRaw ?? []) as ShiftPremiumRule[]
+
   // Per-run aggregates collected during the loop.
   let totalGross = 0
   let totalTax = 0
@@ -254,11 +301,14 @@ export async function runSalaryCalculation(
     })
 
     // 8b. For hourly employees, derive worked hours from the calendar.
+    //     For all employees (when premium rules exist), the same rows feed
+    //     the shift-premium engine in 8z below.
     let derivedHoursWorked: number | null = null
-    if (emp.salary_type === 'hourly') {
+    let workedDayRows: Array<{ work_date: string; hours: number; start_time: string | null; end_time: string | null }> = []
+    if (emp.salary_type === 'hourly' || premiumRules.length > 0) {
       const { data: workedDays, error: workedError } = await supabase
         .from('salary_worked_days')
-        .select('hours')
+        .select('hours, work_date, start_time, end_time')
         .eq('company_id', companyId)
         .eq('employee_id', emp.id)
         .gte('work_date', periodStart)
@@ -266,7 +316,10 @@ export async function runSalaryCalculation(
       if (workedError) {
         return { ok: false, code: 'DATABASE_ERROR', details: workedError }
       }
-      derivedHoursWorked = (workedDays ?? []).reduce(
+      workedDayRows = (workedDays ?? []) as typeof workedDayRows
+    }
+    if (emp.salary_type === 'hourly') {
+      derivedHoursWorked = workedDayRows.reduce(
         (sum, d) => Math.round((sum + Number(d.hours)) * 100) / 100,
         0,
       )
@@ -274,7 +327,7 @@ export async function runSalaryCalculation(
         employeeId: emp.id,
         periodStart,
         periodEnd,
-        rowCount: workedDays?.length ?? 0,
+        rowCount: workedDayRows.length,
         derivedHoursWorked,
       })
 
@@ -395,10 +448,86 @@ export async function runSalaryCalculation(
       }
     }
 
+    // 8d2. Derive shift-premium rows (OB-tillägg, övertid 50/100). The engine
+    //      consumes start_time/end_time when present; rows without explicit
+    //      times fall back to a default 08:00-17:00 shift (no pure-night/
+    //      pure-weekend rules trigger for those days). The premium rate is
+    //      applied to the employee's effectiveHourlyRate so monthly
+    //      employees still get OB by deriving an hourly rate as
+    //      monthly_salary / 173.
+    const { error: delPremiumErr } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('salary_run_employee_id', sre.id)
+      .in('item_type', DERIVED_PREMIUM_TYPES as unknown as string[])
+    if (delPremiumErr) {
+      return { ok: false, code: 'DATABASE_ERROR', details: delPremiumErr }
+    }
+
+    let derivedPremiumRows: Array<{
+      salary_run_employee_id: string
+      company_id: string
+      item_type: ShiftPremiumItemType
+      description: string
+      quantity: number
+      amount: number
+      is_taxable: boolean
+      is_avgift_basis: boolean
+      is_vacation_basis: boolean
+      is_gross_deduction: boolean
+      is_net_deduction: boolean
+      account_number: string
+      sort_order: number
+    }> = []
+
+    if (premiumRules.length > 0 && workedDayRows.length > 0) {
+      const baseHourlyRate = effectiveHourlyRate({
+        salary_type: emp.salary_type,
+        hourly_rate: emp.hourly_rate,
+        monthly_salary: emp.monthly_salary,
+      })
+      const shifts: WorkedDayShift[] = workedDayRows.map((row) => ({
+        work_date: row.work_date,
+        hours: Number(row.hours),
+        start_time: row.start_time,
+        end_time: row.end_time,
+      }))
+      const premiumLines = computePremiumLines({
+        employeeId: emp.id,
+        baseHourlyRate,
+        workedDays: shifts,
+        rules: premiumRules,
+      })
+      derivedPremiumRows = premiumLines.map((line, idx) => ({
+        salary_run_employee_id: sre.id,
+        company_id: companyId,
+        item_type: line.itemType,
+        description: line.description,
+        quantity: line.hours,
+        amount: line.amount,
+        is_taxable: true,
+        is_avgift_basis: true,
+        is_vacation_basis: true,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+        account_number: getLineItemAccount(line.itemType, emp.employment_type),
+        sort_order: 300 + idx,
+      }))
+      if (derivedPremiumRows.length > 0) {
+        const { error: insPremiumErr } = await supabase
+          .from('salary_line_items')
+          .insert(derivedPremiumRows)
+        if (insPremiumErr) {
+          return { ok: false, code: 'DATABASE_ERROR', details: insPremiumErr }
+        }
+      }
+    }
+
     // 8e. Assemble the in-memory line item set fed to calculateSalary.
     const manualLineItems = (sre.line_items || [])
       .filter((li: Record<string, unknown>) => {
         if (DERIVED_ABSENCE_TYPES.includes(li.item_type as SalaryLineItemType)) return false
+        if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
         if (li.source_benefit_id) return false
         if (li.item_type === 'semesterersattning') return false
         return true
@@ -430,7 +559,16 @@ export async function runSalaryCalculation(
       isGrossDeduction: false,
       isNetDeduction: false,
     }))
-    const lineItems = [...manualLineItems, ...derivedLineItems, ...derivedBenefitLineItems]
+    const derivedPremiumLineItems = derivedPremiumRows.map((row) => ({
+      itemType: row.item_type as SalaryLineItemType,
+      amount: row.amount,
+      isTaxable: true,
+      isAvgiftBasis: true,
+      isVacationBasis: true,
+      isGrossDeduction: false,
+      isNetDeduction: false,
+    }))
+    const lineItems = [...manualLineItems, ...derivedLineItems, ...derivedBenefitLineItems, ...derivedPremiumLineItems]
 
     // 8f. Run the engine for this employee.
     const result = calculateSalary(

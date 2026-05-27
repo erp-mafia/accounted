@@ -13,7 +13,10 @@ import {
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { buildDispositionsProposal } from '@/lib/bokslut/dispositions-proposal-builder'
+import {
+  buildDispositionsProposal,
+  buildLatentTaxProposal,
+} from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
 
@@ -45,6 +48,9 @@ const DISPOSITION_ORDER: Record<string, number> = {
   periodiseringsfond_avsattning: 2,
   sarskild_loneskatt: 3,
   bolagsskatt: 4,
+  // K3 only — posts last because it depends on the closing 21xx balance,
+  // which only stabilises once avsättning / återföring have been applied.
+  uppskjuten_skatt: 5,
 }
 
 // ============================================================
@@ -111,6 +117,11 @@ const ItemSchema = z.discriminatedUnion('kind', [
     category: z
       .enum(['machinery_equipment', 'building', 'immaterial', 'group'])
       .optional(),
+  }),
+  // K3 only — uppskjuten skatt provision. Server recomputes the amount from
+  // current 2240 + 21xx state so the client cannot override it.
+  z.object({
+    kind: z.literal('uppskjuten_skatt'),
   }),
 ])
 
@@ -259,6 +270,15 @@ async function computeProposal(
       return proposeOveravskrivningar({
         additionalAmount: item.additionalAmount,
         category: item.category,
+      })
+    case 'uppskjuten_skatt':
+      // Server-only: recompute from current TB (which already reflects any
+      // 21xx postings that committed earlier in this batch). The client
+      // sends no amount — the calculator owns the K3 split.
+      return buildLatentTaxProposal({
+        supabase,
+        companyId,
+        fiscalPeriodId,
       })
   }
 }

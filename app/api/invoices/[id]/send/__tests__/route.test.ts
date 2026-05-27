@@ -40,6 +40,7 @@ vi.mock('@react-pdf/renderer', () => ({
 
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue('mock-pdf-element'),
+  brandingFromCompanySettings: vi.fn().mockReturnValue({}),
 }))
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 

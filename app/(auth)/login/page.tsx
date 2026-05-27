@@ -9,12 +9,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Mail, ArrowLeft, KeyRound } from 'lucide-react'
+import { Loader2, Mail, ArrowLeft, KeyRound, ExternalLink } from 'lucide-react'
 import Image from 'next/image'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
+import { detectWebmailHint } from '@/lib/auth/webmail-search'
 
 const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -249,6 +250,8 @@ function LoginPageContent() {
 
   // Email sent confirmation screen
   if (isEmailSent) {
+    const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
+
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
@@ -279,17 +282,29 @@ function LoginPageContent() {
             </p>
           </div>
 
-          <Button
-            variant="ghost"
-            className="w-full text-muted-foreground"
-            onClick={() => {
-              setIsEmailSent(false)
-              setShowResetPassword(false)
-            }}
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            {tCommon('back')}
-          </Button>
+          <div className="space-y-2">
+            {webmailHint && (
+              <Button className="w-full" asChild>
+                <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
+                  {tAuth(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
+                    provider: webmailHint.name,
+                  })}
+                  <ExternalLink className="ml-2 h-4 w-4" />
+                </a>
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={() => {
+                setIsEmailSent(false)
+                setShowResetPassword(false)
+              }}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              {tCommon('back')}
+            </Button>
+          </div>
         </div>
       </div>
     )

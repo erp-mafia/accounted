@@ -391,6 +391,10 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
           additionalAmount: sel.overrideAmount ?? p.amount,
         })
         break
+      case 'uppskjuten_skatt':
+        // K3 only — server recomputes the amount; client just signals intent.
+        items.push({ kind: 'uppskjuten_skatt' })
+        break
     }
   }
   if (Object.keys(ateforingReturns).length > 0) {

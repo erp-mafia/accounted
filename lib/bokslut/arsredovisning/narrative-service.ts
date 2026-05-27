@@ -8,6 +8,22 @@ export interface NarrativeOverrides {
    *  Populates the fastställelseintyg date blank — without it the PDF
    *  cannot be filed at Bolagsverket without manual pen-and-ink edit. */
   agm_date: string | null
+  /** ÅRL 5:13 § — andel av långfristiga skulder som förfaller senare än
+   *  fem år efter balansdagen. Null/0 → "Inga skulder förfaller efter mer
+   *  än fem år." rendered in the note. */
+  long_term_debt_over_five_years: number | null
+  /** ÅRL 5:14 § — ställda säkerheter (panter, företagsinteckningar). Null
+   *  → "Inga." */
+  securities_pledged: string | null
+  /** ÅRL 5:15 § — eventualförpliktelser (borgensåtaganden, garantier).
+   *  Null → "Inga." */
+  contingent_liabilities: string | null
+  /** BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8 — moderföretagets namn.
+   *  Note is emitted only when this is set; org_number and city are
+   *  optional follow-up details. */
+  parent_company_name: string | null
+  parent_company_org_number: string | null
+  parent_company_city: string | null
 }
 
 /**
@@ -23,6 +39,12 @@ export interface NarrativeRow {
   important_events: string | null
   resultatdisposition: string | null
   agm_date: string | null
+  long_term_debt_over_five_years: number | null
+  securities_pledged: string | null
+  contingent_liabilities: string | null
+  parent_company_name: string | null
+  parent_company_org_number: string | null
+  parent_company_city: string | null
   updated_at: string
 }
 
@@ -32,7 +54,7 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, agm_date, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, updated_at'
 
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
@@ -76,6 +98,12 @@ export async function upsertNarrative(
     important_events: input.important_events ?? null,
     resultatdisposition: input.resultatdisposition ?? null,
     agm_date: input.agm_date ?? null,
+    long_term_debt_over_five_years: input.long_term_debt_over_five_years ?? null,
+    securities_pledged: input.securities_pledged ?? null,
+    contingent_liabilities: input.contingent_liabilities ?? null,
+    parent_company_name: input.parent_company_name ?? null,
+    parent_company_org_number: input.parent_company_org_number ?? null,
+    parent_company_city: input.parent_company_city ?? null,
   }
   const { data, error } = await supabase
     .from(TABLE)

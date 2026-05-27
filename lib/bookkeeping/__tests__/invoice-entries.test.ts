@@ -657,3 +657,253 @@ describe('createInvoicePaymentJournalEntry — exchange rate difference', () => 
     expect(totalDebit).toBe(totalCredit)
   })
 })
+
+describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('single ROT line: 10 000 kr labor → 1513 debit 3 000, 1510 debit 7 000 + 2 500 VAT', async () => {
+    // 10 000 kr labor with 25% VAT = 12 500 total. ROT = 30% of 10 000 = 3 000.
+    // Customer owes (12 500 - 3 000) = 9 500. Skatteverket pays 3 000.
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 25,
+          vat_amount: 2500,
+          deduction_type: 'rot',
+          deduction_amount: 3000,
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    expect(mockedCreateEntry).toHaveBeenCalledOnce()
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // Lines: 1510 (debit 9500) + 1513 (debit 3000) + 3001 (credit 10000) + 2611 (credit 2500)
+    expect(input.lines).toHaveLength(4)
+
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.debit_amount).toBe(9500)
+
+    const debit1513 = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513?.debit_amount).toBe(3000)
+    expect(debit1513?.credit_amount).toBe(0)
+
+    const credit3001 = input.lines.find((l) => l.account_number === '3001')
+    expect(credit3001?.credit_amount).toBe(10000)
+
+    const credit2611 = input.lines.find((l) => l.account_number === '2611')
+    expect(credit2611?.credit_amount).toBe(2500)
+
+    // Balance: 9500 + 3000 = 12500 = 10000 + 2500
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+    expect(totalDebit).toBe(12500)
+  })
+
+  it('mixed invoice: ROT line + non-deduction line — per-item handling', async () => {
+    // ROT line 10 000 (deduction 3 000) + non-deduction materials line 4 000.
+    // Total 14 000 + 25% VAT = 17 500. Customer owes 14 500. Skatteverket 3 000.
+    const invoice = makeInvoice({
+      subtotal: 14000,
+      vat_amount: 3500,
+      total: 17500,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 25,
+          vat_amount: 2500,
+          deduction_type: 'rot',
+          deduction_amount: 3000,
+        }),
+        makeItem({
+          id: 'item-2',
+          quantity: 1,
+          unit_price: 4000,
+          line_total: 4000,
+          vat_rate: 25,
+          vat_amount: 1000,
+          // No deduction
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // Lines: 1510 (debit 14500) + 1513 (debit 3000) + 3001 (credit 14000) + 2611 (credit 3500)
+    expect(input.lines).toHaveLength(4)
+
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.debit_amount).toBe(14500)
+
+    const debit1513 = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513?.debit_amount).toBe(3000)
+
+    // Balance: 14500 + 3000 = 17500
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+    expect(totalDebit).toBe(17500)
+  })
+
+  it('RUT line with 50% rate: 5 000 kr → 1513 debit 2 500', async () => {
+    // 5 000 labor with 25% VAT = 6 250 total. RUT = 50% of 5 000 = 2 500.
+    const invoice = makeInvoice({
+      subtotal: 5000,
+      vat_amount: 1250,
+      total: 6250,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 5000,
+          line_total: 5000,
+          vat_rate: 25,
+          vat_amount: 1250,
+          deduction_type: 'rut',
+          deduction_amount: 2500,
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1513 = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513?.debit_amount).toBe(2500)
+    expect(debit1513?.line_description).toMatch(/RUT/)
+
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.debit_amount).toBe(3750) // 6250 - 2500
+
+    // Balance
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+  })
+
+  it('no deduction_type → no 1513 line, normal AR debit', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      items: [
+        makeItem({ quantity: 1, unit_price: 1000, line_total: 1000, vat_rate: 25, vat_amount: 250 }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((l) => l.account_number === '1513')).toBeUndefined()
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.debit_amount).toBe(1250)
+  })
+
+  it('two ROT lines: per-line 1513 debits sum to invoice deduction total', async () => {
+    // 6 000 + 4 000 labor, both ROT 30% → 1 800 + 1 200 = 3 000 total.
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 6000,
+          line_total: 6000,
+          vat_rate: 25,
+          vat_amount: 1500,
+          deduction_type: 'rot',
+          deduction_amount: 1800,
+        }),
+        makeItem({
+          id: 'item-2',
+          quantity: 1,
+          unit_price: 4000,
+          line_total: 4000,
+          vat_rate: 25,
+          vat_amount: 1000,
+          deduction_type: 'rot',
+          deduction_amount: 1200,
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1513Lines = input.lines.filter((l) => l.account_number === '1513')
+    expect(debit1513Lines).toHaveLength(2)
+    const total1513 = debit1513Lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    expect(total1513).toBe(3000)
+
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.debit_amount).toBe(9500) // 12500 - 3000
+
+    // Balance
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+  })
+})
+
+describe('createInvoiceCashEntry — ROT/RUT-avdrag', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('cash method ROT: 1930 debit reduced by deduction, 1513 carries the rest', async () => {
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 25,
+          vat_amount: 2500,
+          deduction_type: 'rot',
+          deduction_amount: 3000,
+        }),
+      ],
+    })
+
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1930 = input.lines.find((l) => l.account_number === '1930')
+    expect(debit1930?.debit_amount).toBe(9500)
+
+    const debit1513 = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513?.debit_amount).toBe(3000)
+
+    // Balance
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+  })
+})

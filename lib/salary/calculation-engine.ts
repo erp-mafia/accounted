@@ -182,13 +182,21 @@ export function calculateSalary(
   }
 
   // ─── Step 2: Add additions ───
+  // OB-tillägg + tiered overtime are treated as additions to gross salary on
+  // top of the base salary. They were already computed in cash terms by the
+  // shift-premium engine before the calc engine ran, so we just sum them in.
+  const ADDITION_TYPES: SalaryLineItemType[] = [
+    'overtime', 'overtime_50', 'overtime_100',
+    'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
+    'bonus', 'commission',
+  ]
   const additions = input.lineItems.filter(
-    li => ['overtime', 'bonus', 'commission'].includes(li.itemType) && li.amount > 0
+    li => ADDITION_TYPES.includes(li.itemType) && li.amount > 0
   )
   const totalAdditions = r(additions.reduce((sum, li) => sum + li.amount, 0))
   if (totalAdditions > 0) {
     steps.push({
-      label: 'Tillägg (övertid, bonus, provision)',
+      label: 'Tillägg (övertid, OB, bonus, provision)',
       formula: 'summa tillägg',
       input: { count: additions.length },
       output: totalAdditions,

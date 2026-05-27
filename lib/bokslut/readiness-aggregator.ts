@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import type { YearEndValidation } from '@/types'
 
 export type ReminderSeverity = 'info' | 'warning'
@@ -141,12 +142,35 @@ export async function buildBokslutReadinessReport(
   })
 
   if (entityType === 'enskild_firma') {
+    // Pre-compute the EF declaration so the wizard's overview reflects what
+    // the user will see when they reach the dispositions step. Egenavgifter,
+    // räntefördelning, periodiseringsfond-EF and expansionsfond are NOT
+    // booked — they go into the NE-bilaga / INK1. This reminder explains
+    // the BFL distinction.
     reminders.push({
       code: 'ef_skatt_via_ne',
       severity: 'info',
       message:
-        'Egenavgifter, räntefördelning och periodiseringsfond beräknas i NE-bilagan, inte bokförs. Skatten betalas privat av ägaren.',
+        'Egenavgifter, räntefördelning, periodiseringsfond och expansionsfond beräknas i NE-bilagan, inte bokförs. Skatten betalas privat av ägaren.',
     })
+
+    // Surface a soft warning when kapitalunderlag is missing AND the booked
+    // surplus is large enough to make positive räntefördelning meaningful
+    // (> 50 000 kr — the spärrbelopp). This is non-blocking but actionable:
+    // the user should enter their IB equity on the dispositions step.
+    try {
+      const preview = await computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId)
+      if (preview.bookedSurplus > 50_000) {
+        reminders.push({
+          code: 'ef_kapitalunderlag_missing',
+          severity: 'warning',
+          message:
+            'Kapitalunderlag (IB eget kapital) saknas — räntefördelning beräknas inte. Fyll i på dispositionssteget för att utnyttja skattefördelen.',
+        })
+      }
+    } catch {
+      // EF preview is informational — never block readiness on it.
+    }
   }
 
   return {

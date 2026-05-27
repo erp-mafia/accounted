@@ -11,6 +11,14 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   monthly_salary: '7210',
   hourly_salary: '7210',
   overtime: '7210',
+  overtime_50: '7210',
+  overtime_100: '7210',
+  // OB-tillägg — bookat på samma lönekonto som grundlönen; differentieras via
+  // rad-text på verifikatet och lönespecifikationen.
+  ob_weekday_evening: '7210',
+  ob_weekend: '7210',
+  ob_night: '7210',
+  ob_holiday: '7210',
   bonus: '7210',
   commission: '7210',
   // Gross deductions

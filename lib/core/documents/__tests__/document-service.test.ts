@@ -49,6 +49,11 @@ vi.mock('@/lib/auth/api-keys', () => ({
 
 import { uploadDocument, createNewVersion, verifyIntegrity, _resetBucketVerified } from '../document-service'
 
+// A minimal valid PDF byte sequence (header + EOF) — passes magic-byte check.
+function pdfBuffer(payload = 'test'): ArrayBuffer {
+  return new TextEncoder().encode(`%PDF-1.4\n${payload}\n%%EOF\n`).buffer as ArrayBuffer
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
@@ -73,10 +78,9 @@ describe('uploadDocument', () => {
     eventBus.on('document.uploaded', handler)
 
     const supabase = makeClient()
-    const buffer = new TextEncoder().encode('test content').buffer
     const result = await uploadDocument(supabase as never, 'user-1', 'company-1', {
       name: 'test.pdf',
-      buffer: buffer as ArrayBuffer,
+      buffer: pdfBuffer('test content'),
       type: 'application/pdf',
     })
 
@@ -114,10 +118,9 @@ describe('createNewVersion', () => {
     ]
 
     const supabase = makeClient()
-    const buffer = new TextEncoder().encode('new content').buffer
     const result = await createNewVersion(supabase as never, 'user-1', 'doc-1', {
       name: 'test-v2.pdf',
-      buffer: buffer as ArrayBuffer,
+      buffer: pdfBuffer('new content'),
       type: 'application/pdf',
     })
 

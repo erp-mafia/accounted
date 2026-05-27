@@ -120,7 +120,7 @@ export default async function DashboardLayout({
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
     supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
-    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
   ])
 
   if (!companyRow || !memberRow) {

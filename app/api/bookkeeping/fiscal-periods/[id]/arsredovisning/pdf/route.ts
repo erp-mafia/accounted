@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildArsredovisningData } from '@/lib/bokslut/arsredovisning/build-data'
 import { ArsredovisningPDF } from '@/lib/bokslut/arsredovisning/arsredovisning-pdf'
+import { ArsredovisningK3PDF } from '@/lib/bokslut/arsredovisning/arsredovisning-k3-pdf'
 
 export const GET = withRouteContext(
   'period.arsredovisning_pdf',
@@ -14,7 +15,15 @@ export const GET = withRouteContext(
       // inside buildArsredovisningData. The URL stays clean — no narrative
       // text in query params, access logs, or browser history.
       const data = await buildArsredovisningData(supabase, companyId, id)
-      const pdfBuffer = await renderToBuffer(ArsredovisningPDF({ data }))
+      // Dispatch on the framework recorded in the data. K3 documents need
+      // the additional kassaflöde + equity-changes pages + richer noter
+      // that ArsredovisningK3PDF renders. K2 (the default) keeps the
+      // existing template byte-for-byte unchanged.
+      const PdfComponent =
+        data.accounting_framework === 'k3'
+          ? ArsredovisningK3PDF
+          : ArsredovisningPDF
+      const pdfBuffer = await renderToBuffer(PdfComponent({ data }))
       // "-utkast" suffix mirrors the existing PDF routes; the file becomes
       // "fastställd" only after the signature flow records all signatures.
       // Sanitize the dynamic segment so a stray quote / newline in the date

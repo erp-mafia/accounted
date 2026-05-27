@@ -11,6 +11,7 @@ import {
   DataListMetaSeparator,
 } from '@/components/ui/data-list'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AlertCircle, ArrowUpRight, ArrowDownRight, Landmark, Link2, Loader2 } from 'lucide-react'
 import type {
   SkattekontoMatchSuggestion,
@@ -46,7 +47,10 @@ export default function SkattekontoInboxCard({
   const duplicateLabel =
     matchSuggestion?.voucher_series && matchSuggestion?.voucher_number
       ? t('duplicate_title_with_voucher', {
-          label: `${matchSuggestion.voucher_series}${matchSuggestion.voucher_number}`,
+          label: formatVoucher({
+            voucher_series: matchSuggestion.voucher_series,
+            voucher_number: matchSuggestion.voucher_number,
+          }),
         })
       : t('duplicate_title_draft')
 

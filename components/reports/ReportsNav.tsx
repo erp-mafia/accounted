@@ -38,6 +38,8 @@ const CATEGORIES: ReportCategory[] = [
     items: [
       { value: 'income-statement', labelKey: 'name_income_statement' },
       { value: 'balance-sheet', labelKey: 'name_balance_sheet' },
+      { value: 'kassaflodesanalys', labelKey: 'name_kassaflodesanalys' },
+      { value: 'arsredovisning', labelKey: 'name_arsredovisning', entityType: 'aktiebolag' },
     ],
   },
   {

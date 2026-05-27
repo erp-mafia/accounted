@@ -6,6 +6,8 @@ import {
   generateReminderEmailSubject,
   getReminderDaysConfig
 } from '@/lib/email/reminder-templates'
+import { calculateLatePaymentInterest } from '@/lib/invoices/late-payment-interest'
+import { createReminderFeeEntry } from '@/lib/bookkeeping/reminder-fee-entries'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Customer, CompanySettings } from '@/types'
 
@@ -81,13 +83,27 @@ export function calculateDaysOverdue(dueDate: string): number {
 }
 
 /**
+ * Surcharges computed before sending the reminder. These are passed to the
+ * email template and persisted on the invoice_reminders row for audit.
+ */
+export interface ReminderSurcharges {
+  interestAmount: number
+  interestRate: number
+  interestFromDate: string
+  interestDays: number
+  reminderFee: number
+  totalDue: number
+}
+
+/**
  * Send a single reminder email
  */
 export async function sendReminder(
   invoice: Invoice & { customer: Customer },
   company: CompanySettings,
   reminderLevel: 1 | 2 | 3,
-  actionToken: string
+  actionToken: string,
+  surcharges: ReminderSurcharges,
 ): Promise<{ success: boolean; error?: string }> {
   const customer = invoice.customer
 
@@ -107,7 +123,8 @@ export async function sendReminder(
     company,
     reminderLevel,
     daysOverdue,
-    actionUrl
+    actionUrl,
+    ...surcharges,
   }
 
   const result = await getEmailService().sendEmail({
@@ -240,7 +257,53 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       continue
     }
 
-    // Create reminder record first (to get action token)
+    // Compute statutory late-payment interest (Räntelagen §6) using the
+    // company override if set, else Riksbankens referensränta + 8 pp.
+    const asOfDate = new Date().toISOString().split('T')[0]
+    const interest = calculateLatePaymentInterest({
+      overdueAmount: invoice.total,
+      dueDate: invoice.due_date,
+      asOfDate,
+      overrideRate: company.reminder_interest_rate_override,
+    })
+
+    // Determine the lagstadgad påminnelseavgift (Lag 1981:739, max 60 kr).
+    // Clamp at 60 kr — the statute caps the fee even if company_settings
+    // somehow holds a higher value (defense in depth against a stale DB row).
+    const reminderFee = company.reminder_fee_enabled
+      ? Math.min(60, Math.round((company.reminder_fee_amount ?? 60) * 100) / 100)
+      : 0
+
+    // Book the fee as a journal entry. Booked BEFORE creating the
+    // invoice_reminders row so we can persist fee_journal_entry_id.
+    // Failure to book the fee is logged but does not abort the reminder
+    // send — the customer still needs to receive the notification.
+    let feeJournalEntryId: string | null = null
+    if (reminderFee > 0) {
+      try {
+        const feeResult = await createReminderFeeEntry(supabase, {
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoice_number,
+          companyId: invoice.company_id,
+          userId: invoice.user_id,
+          feeAmount: reminderFee,
+          asOfDate,
+        })
+        feeJournalEntryId = feeResult?.journal_entry_id ?? null
+      } catch (feeError) {
+        log.error(
+          `Failed to book reminder fee for invoice ${invoice.invoice_number}:`,
+          feeError as Error,
+        )
+        // Continue — surcharge still appears in the email, but no JE is linked.
+      }
+    }
+
+    const totalDue =
+      Math.round((invoice.total + interest.amount + reminderFee) * 100) / 100
+
+    // Create reminder record first (to get action token), persisting the
+    // computed surcharges so the public action page + audit trail show them.
     const { data: reminderRecord, error: reminderError } = await supabase
       .from('invoice_reminders')
       .insert({
@@ -248,7 +311,13 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         user_id: invoice.user_id,
         company_id: invoice.company_id,
         reminder_level: reminderLevel,
-        email_to: customer.email
+        email_to: customer.email,
+        interest_amount: interest.amount,
+        interest_rate: interest.rate,
+        interest_from_date: interest.fromDate,
+        interest_days: interest.days,
+        reminder_fee: reminderFee,
+        fee_journal_entry_id: feeJournalEntryId,
       })
       .select('action_token')
       .single()
@@ -271,7 +340,15 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       invoice as Invoice & { customer: Customer },
       company as CompanySettings,
       reminderLevel,
-      reminderRecord.action_token
+      reminderRecord.action_token,
+      {
+        interestAmount: interest.amount,
+        interestRate: interest.rate,
+        interestFromDate: interest.fromDate,
+        interestDays: interest.days,
+        reminderFee,
+        totalDue,
+      },
     )
 
     if (sendResult.success) {

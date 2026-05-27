@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -92,7 +93,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         const posted = result.data
         toast({
           title: t('toast_posted_title'),
-          description: t('toast_posted_description', { voucher: `${posted?.voucher_series ?? ''}${posted?.voucher_number ?? ''}` }),
+          description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
         })
         await fetchData()
       } else {
@@ -116,7 +117,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           title: wasDraft ? t('toast_delete_draft_title') : t('toast_delete_entry_title'),
           description: wasDraft
             ? t('toast_delete_draft_description')
-            : t('toast_delete_entry_description', { voucher: `${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''}` }),
+            : t('toast_delete_entry_description', { voucher: formatVoucher(result.data ?? {}) }),
         })
         router.push('/bookkeeping')
       } else {
@@ -201,7 +202,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight font-mono">
-              {entry.voucher_series}{entry.voucher_number}
+              {formatVoucher(entry)}
             </h1>
             <JournalEntryStatusBadge entry={entry} />
           </div>
@@ -290,7 +291,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('field_source_voucher')}</span>
                 <span className="font-mono tabular-nums">
-                  {entry.source_voucher_series}{entry.source_voucher_number}
+                  {formatVoucher({ voucher_series: entry.source_voucher_series, voucher_number: entry.source_voucher_number })}
                 </span>
               </div>
             )}
@@ -587,7 +588,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         warningText={
           entry?.status === 'draft'
             ? t('delete_warning_draft')
-            : t('delete_warning_entry', { voucher: `${entry?.voucher_series ?? ''}${entry?.voucher_number ?? ''}` })
+            : t('delete_warning_entry', { voucher: entry ? formatVoucher(entry) : '' })
         }
         confirmLabel={t('delete_confirm_label')}
       >

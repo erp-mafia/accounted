@@ -5,6 +5,7 @@ import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { ensureInitialized } from '@/lib/init'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
@@ -134,13 +135,16 @@ export async function POST(
       // The DB status flip already happened above, but the in-memory `invoice`
       // is stale and still reads 'draft' — override here so the archived
       // underlag isn't stamped "UTKAST – inte en giltig faktura".
+      const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
+      const { branding } = prepareInvoicePdfRender(settings as CompanySettings)
       const pdfBuffer = await renderToBuffer(
         InvoicePDF({
-          invoice: { ...(invoice as Invoice), status: 'sent' as const },
+          invoice: renderableInvoice,
           customer: invoice.customer as Customer,
           items,
           company: settings as CompanySettings,
           originalInvoiceNumber,
+          branding,
         })
       )
 

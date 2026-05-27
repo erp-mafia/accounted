@@ -379,3 +379,108 @@ describe('RLS — cross-company isolation', () => {
     ).rejects.toThrow(/row-level security|new row violates/i)
   })
 })
+
+// Asset disposal VAT + jämkning constraints (migration 20260526120300).
+// The columns are populated by disposeAsset() after the journal entry posts;
+// these pg tests cover the CHECK constraints directly so future schema changes
+// can't loosen them without us noticing.
+describe('assets — disposal VAT + jämkning constraints', () => {
+  it('accepts a disposed_vat_treatment from the allowed enum', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 100_000,
+    })
+    await getPool().query(
+      `UPDATE public.assets
+         SET disposed_proceeds_vat = 20000, disposed_vat_treatment = 'standard_25'
+       WHERE id = $1`,
+      [assetId],
+    )
+    const { rows } = await getPool().query(
+      `SELECT disposed_proceeds_vat, disposed_vat_treatment FROM public.assets WHERE id = $1`,
+      [assetId],
+    )
+    expect(Number(rows[0]?.disposed_proceeds_vat)).toBe(20_000)
+    expect(rows[0]?.disposed_vat_treatment).toBe('standard_25')
+  })
+
+  it('rejects a disposed_vat_treatment outside the enum', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 100_000,
+    })
+    await expect(
+      getPool().query(
+        `UPDATE public.assets SET disposed_vat_treatment = 'reduced_999' WHERE id = $1`,
+        [assetId],
+      ),
+    ).rejects.toThrow(/check/i)
+  })
+
+  it('rejects disposed_proceeds_vat > 0 without a disposed_vat_treatment', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 100_000,
+    })
+    // Treatment NULL + VAT > 0 must violate the consistency CHECK.
+    await expect(
+      getPool().query(
+        `UPDATE public.assets
+           SET disposed_proceeds_vat = 20000, disposed_vat_treatment = NULL
+         WHERE id = $1`,
+        [assetId],
+      ),
+    ).rejects.toThrow(/check|consistency/i)
+  })
+
+  it('accepts zero VAT with null treatment (legacy / non-VAT disposal)', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 50_000,
+    })
+    // Default values from the migration — should already pass on insert.
+    const { rows } = await getPool().query(
+      `SELECT disposed_proceeds_vat, disposed_vat_treatment FROM public.assets WHERE id = $1`,
+      [assetId],
+    )
+    expect(Number(rows[0]?.disposed_proceeds_vat)).toBe(0)
+    expect(rows[0]?.disposed_vat_treatment).toBeNull()
+  })
+
+  it('persists jämkning audit metadata on the row', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 60_000,
+    })
+    await getPool().query(
+      `UPDATE public.assets
+         SET jamkning_amount = 8000,
+             jamkning_remaining_months = 24,
+             jamkning_total_months = 60,
+             jamkning_original_input_vat = 20000
+       WHERE id = $1`,
+      [assetId],
+    )
+    const { rows } = await getPool().query(
+      `SELECT jamkning_amount, jamkning_remaining_months, jamkning_total_months,
+              jamkning_original_input_vat
+         FROM public.assets
+        WHERE id = $1`,
+      [assetId],
+    )
+    expect(Number(rows[0]?.jamkning_amount)).toBe(8_000)
+    expect(rows[0]?.jamkning_remaining_months).toBe(24)
+    expect(rows[0]?.jamkning_total_months).toBe(60)
+    expect(Number(rows[0]?.jamkning_original_input_vat)).toBe(20_000)
+  })
+})

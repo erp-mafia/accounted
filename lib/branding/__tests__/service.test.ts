@@ -7,6 +7,7 @@ const ENV_KEYS = [
   'BRANDING_SUPPORT_EMAIL',
   'BRANDING_PRIVACY_EMAIL',
   'BRANDING_SECURITY_EMAIL',
+  'NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM',
   'NEXT_PUBLIC_BRANDING_LOGO_PATH',
   'NEXT_PUBLIC_BRANDING_FAVICON_PATH',
   'NEXT_PUBLIC_BRANDING_APPLE_ICON_PATH',
@@ -46,6 +47,7 @@ describe('branding service', () => {
     expect(b.supportEmail).toBe('support@gnubok.se')
     expect(b.privacyEmail).toBe('privacy@gnubok.se')
     expect(b.securityEmail).toBe('security@arcim.io')
+    expect(b.authEmailFrom).toBe('noreply@gnubok.se')
     expect(b.logoPath).toBe('/gnubokiceon-removebg-preview.png')
     expect(b.faviconPath).toBe('/favicon.ico')
     expect(b.appleTouchIconPath).toBe('/icons/icon-192.png')
@@ -104,11 +106,13 @@ describe('branding service', () => {
     process.env.NEXT_PUBLIC_BRANDING_APP_NAME = 'Holdio'
     process.env.BRANDING_SUPPORT_EMAIL = 'hello@holdio.se'
     process.env.NEXT_PUBLIC_BRANDING_LOGO_PATH = '/holdio-logo.svg'
+    process.env.NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM = 'noreply@holdio.se'
     const { getBranding } = await import('../service')
     const b = getBranding()
     expect(b.appName).toBe('Holdio')
     expect(b.supportEmail).toBe('hello@holdio.se')
     expect(b.logoPath).toBe('/holdio-logo.svg')
+    expect(b.authEmailFrom).toBe('noreply@holdio.se')
     expect(b.appDescription).toBe('Ekonomihantering')
   })
 

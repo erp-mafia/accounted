@@ -17,6 +17,30 @@ import { createServiceClient } from '@/lib/supabase/server'
  * (RLS + explicit company_id filter) before the service-role client
  * fetches the file from the non-public `documents` bucket.
  */
+
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+}
+
+/**
+ * Resolve the response Content-Type. Some legacy uploads landed with
+ * `mime_type = null` or `application/octet-stream` (browsers sometimes
+ * report empty File.type for files dragged from certain sources). Combined
+ * with the new `X-Content-Type-Options: nosniff` header on this route,
+ * that broke Chrome's PDF viewer for older rows — the plugin would load
+ * via <object type="application/pdf"> but refuse to parse a response
+ * served as octet-stream. Falling back to the file extension covers every
+ * legacy row without a DB backfill.
+ */
+function resolveContentType(fileName: string, dbMimeType: string | null): string {
+  if (dbMimeType && dbMimeType !== 'application/octet-stream') return dbMimeType
+  const ext = fileName.toLowerCase().split('.').pop() ?? ''
+  return EXTENSION_MIME_MAP[ext] ?? dbMimeType ?? 'application/octet-stream'
+}
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -68,9 +92,14 @@ export async function GET(
   return new NextResponse(blob, {
     status: 200,
     headers: {
-      'Content-Type': doc.mime_type ?? 'application/octet-stream',
+      'Content-Type': resolveContentType(doc.file_name, doc.mime_type),
       'Content-Disposition': `inline; filename="${safeFileName}"`,
       'Cache-Control': 'private, max-age=300',
+      // Block MIME sniffing — Content-Type is derived from DB metadata
+      // (with extension fallback for legacy rows), never from response
+      // content. Without nosniff a tampered file_name extension could
+      // serve a stored document under an attacker-chosen MIME type.
+      'X-Content-Type-Options': 'nosniff',
     },
   })
 }

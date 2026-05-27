@@ -281,6 +281,122 @@ export function proposeManualAccrued(input: ManualAccruedInput): AccrualProposal
   }
 }
 
+export interface RevenueDeferralInput {
+  amount: number
+  /** Revenue account to debit (e.g. 3000 / 3001). The full periodisering
+   *  flow debits revenue and credits 2970 — opposite direction to a prepaid
+   *  expense. */
+  revenueAccount: string
+  /** Target deferred-revenue account. Must be in the 29xx range; the wizard
+   *  defaults this to 2970 specifically (förutbetalda intäkter). */
+  deferredAccount: string
+  description: string
+  closingDate: string
+}
+
+/**
+ * Propose a deferred-revenue entry. Customer has paid (or has been invoiced)
+ * for a service that spans across year-end — the portion attributable to
+ * NEXT year is reclassified out of revenue and into 2970. Reverses on Jan 1.
+ *
+ * Thin wrapper around `proposeManualAccrued` reversed direction-wise: debit
+ * the revenue account, credit 2970. Built on the same engine to keep the
+ * idempotency / period-lock guarantees identical.
+ */
+export function proposeRevenueDeferral(input: RevenueDeferralInput): AccrualProposal | null {
+  if (!/^29\d{2}$/.test(input.deferredAccount)) {
+    throw new Error(`deferredAccount must be in 29xx range, got ${input.deferredAccount}`)
+  }
+  const amount = Math.round(input.amount)
+  if (amount <= 0) return null
+
+  return {
+    kind: 'deferred_revenue',
+    label: `Förutbetald intäkt: ${input.description}`,
+    description: `Debet ${input.revenueAccount}, kredit ${input.deferredAccount}. Vänds vid årsskiftet.`,
+    amount,
+    lines: [
+      {
+        account_number: input.revenueAccount,
+        debit_amount: amount,
+        credit_amount: 0,
+        line_description: `Periodisering intäkt ut: ${input.description}`,
+      },
+      {
+        account_number: input.deferredAccount,
+        debit_amount: 0,
+        credit_amount: amount,
+        line_description: `Förutbetald intäkt: ${input.description}`,
+      },
+    ],
+    reverses_on: nextDayIso(input.closingDate),
+    warnings: [],
+  }
+}
+
+export interface AccruedInterestInput {
+  amount: number
+  /** Interest-expense account, typically 8410 räntekostnader. */
+  expenseAccount: string
+  /** Accrued-interest liability, typically 2940 upplupna sociala avgifter
+   *  is wrong — actual choice is the more general 2940 / 2960 family. The
+   *  wizard defaults to 2960 / 2950; this helper validates 29xx. */
+  accruedAccount: string
+  description: string
+  closingDate: string
+}
+
+/**
+ * Propose accrued interest expense. Same shape as a generic accrued cost,
+ * but emits a clearer label so the user can tell apart from rent/utilities
+ * in the wizard's review step.
+ */
+export function proposeAccruedInterest(input: AccruedInterestInput): AccrualProposal | null {
+  const base = proposeManualAccrued({
+    amount: input.amount,
+    expenseAccount: input.expenseAccount,
+    accruedAccount: input.accruedAccount,
+    description: input.description,
+    closingDate: input.closingDate,
+  })
+  if (!base) return null
+  return {
+    ...base,
+    kind: 'accrued_interest',
+    label: `Upplupen ränta: ${input.description}`,
+  }
+}
+
+export interface AccruedUtilityInput {
+  amount: number
+  /** Utility-expense account (e.g. 5020 el för kontorslokal). */
+  expenseAccount: string
+  /** Accrued liability, typically 2990 övriga upplupna kostnader. */
+  accruedAccount: string
+  description: string
+  closingDate: string
+}
+
+/**
+ * Propose accrued utility cost. Same shape as proposeAccruedInterest with a
+ * different label — helps the wizard group similar accruals visually.
+ */
+export function proposeAccruedUtility(input: AccruedUtilityInput): AccrualProposal | null {
+  const base = proposeManualAccrued({
+    amount: input.amount,
+    expenseAccount: input.expenseAccount,
+    accruedAccount: input.accruedAccount,
+    description: input.description,
+    closingDate: input.closingDate,
+  })
+  if (!base) return null
+  return {
+    ...base,
+    kind: 'accrued_utility',
+    label: `Upplupen förbrukning: ${input.description}`,
+  }
+}
+
 /**
  * Build a snapshot of automatically-detectable accrual proposals for the
  * wizard's preflight. Today this is just the vacation-liability delta;

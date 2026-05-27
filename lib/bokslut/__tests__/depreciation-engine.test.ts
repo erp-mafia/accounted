@@ -17,8 +17,15 @@ function makeAsset(overrides: Partial<Asset> = {}): Asset {
     bas_asset_account: '1220',
     bas_accumulated_account: '1229',
     bas_expense_account: '7832',
+    restvarde_target: null,
     disposed_at: null,
     disposed_proceeds: null,
+    disposed_proceeds_vat: 0,
+    disposed_vat_treatment: null,
+    jamkning_amount: 0,
+    jamkning_remaining_months: null,
+    jamkning_total_months: null,
+    jamkning_original_input_vat: null,
     k3_components: null,
     notes: null,
     created_at: '2025-01-01T00:00:00Z',
@@ -143,5 +150,182 @@ describe('computeAnnualDepreciation', () => {
     // have computed ~1_117 (34 days) — the gap detects the regression.
     expect(result.amount).toBeGreaterThan(950)
     expect(result.amount).toBeLessThan(1_020)
+  })
+})
+
+// ============================================================
+// Declining-balance methods (IL 18 kap 13§ huvudregel + kompletteringsregel)
+// ============================================================
+//
+// Swedish practice: declining methods take the full annual amount regardless
+// of acquisition month (K2 10.23 — "Full annual amount regardless of partial
+// year"). The engine therefore does NOT pro-rate by day-overlap for these
+// methods. Disposal during the period still yields the full year because the
+// disposal entry zeroes out the remaining book value separately.
+
+describe('computeAnnualDepreciation — declining_balance_30 (räkenskapsenlig huvudregel)', () => {
+  it('year 1: 100 000 kr × 30 % = 30 000 kr (no prior accumulated)', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'declining_balance_30',
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(30_000)
+    expect(result.proRated).toBe(false)
+  })
+
+  it('year 2: book value 70 000 × 30 % = 21 000', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'declining_balance_30',
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR, 30_000)
+    expect(result.amount).toBe(21_000)
+  })
+
+  it('year 3: book value 49 000 × 30 % = 14 700', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'declining_balance_30',
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR, 51_000)
+    expect(result.amount).toBe(14_700)
+  })
+
+  it('does NOT pro-rate for mid-year acquisition (full annual amount)', () => {
+    // Acquired July 1 — linear would pro-rate to ~50 %. Declining methods
+    // take the full year amount per K2 10.23 and tax practice.
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      acquisition_date: '2025-07-01',
+      depreciation_method: 'declining_balance_30',
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(30_000)
+    expect(result.proRated).toBe(false)
+  })
+
+  it('returns 0 when book value already at zero (or below)', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'declining_balance_30',
+    })
+    // Prior accumulated ≥ acquisition cost → book value 0.
+    const result = computeAnnualDepreciation(asset, FULL_YEAR, 100_000)
+    expect(result.amount).toBe(0)
+  })
+
+  it('returns 0 when asset disposed before period start', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'declining_balance_30',
+      disposed_at: '2024-12-31',
+      disposed_proceeds: 50_000,
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(0)
+  })
+})
+
+describe('computeAnnualDepreciation — declining_balance_20 (kompletteringsregel, byggnader)', () => {
+  it('year 1: 1 000 000 kr building × 20 % = 200 000', () => {
+    const asset = makeAsset({
+      category: 'building',
+      bas_asset_account: '1110',
+      bas_accumulated_account: '1119',
+      bas_expense_account: '7821',
+      acquisition_cost: 1_000_000,
+      depreciation_method: 'declining_balance_20',
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(200_000)
+    expect(result.proRated).toBe(false)
+  })
+
+  it('year 2: book value 800 000 × 20 % = 160 000', () => {
+    const asset = makeAsset({
+      category: 'building',
+      acquisition_cost: 1_000_000,
+      depreciation_method: 'declining_balance_20',
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR, 200_000)
+    expect(result.amount).toBe(160_000)
+  })
+})
+
+describe('computeAnnualDepreciation — restvardesavskrivning_25 (IL 18 kap 13§ st.3)', () => {
+  it('year 1: (100 000 − 20 000 restvärde) × 25 % = 20 000', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'restvardesavskrivning_25',
+      restvarde_target: 20_000,
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(20_000)
+    expect(result.proRated).toBe(false)
+  })
+
+  it('year 2: book value 80 000, depreciable (80 000 − 20 000) × 25 % = 15 000', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'restvardesavskrivning_25',
+      restvarde_target: 20_000,
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR, 20_000)
+    expect(result.amount).toBe(15_000)
+  })
+
+  it('floors at restvärde — book value already at floor returns 0', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'restvardesavskrivning_25',
+      restvarde_target: 20_000,
+    })
+    // Prior accumulated brings book value to exactly the floor (20 000).
+    const result = computeAnnualDepreciation(asset, FULL_YEAR, 80_000)
+    expect(result.amount).toBe(0)
+  })
+
+  it('multi-year convergence: book value approaches restvärde but never goes below', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'restvardesavskrivning_25',
+      restvarde_target: 20_000,
+    })
+    // Simulate 10 years of compounding to verify the floor.
+    let accumulated = 0
+    for (let year = 0; year < 10; year++) {
+      const { amount } = computeAnnualDepreciation(asset, FULL_YEAR, accumulated)
+      accumulated += amount
+    }
+    const finalBookValue = 100_000 - accumulated
+    expect(finalBookValue).toBeGreaterThanOrEqual(20_000)
+    // Should be tracking toward the floor — within a kr or two after 10 years.
+    expect(finalBookValue).toBeLessThan(26_000)
+  })
+
+  it('does NOT pro-rate for mid-year acquisition (full annual amount)', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      acquisition_date: '2025-07-01',
+      depreciation_method: 'restvardesavskrivning_25',
+      restvarde_target: 20_000,
+    })
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(20_000)
+    expect(result.proRated).toBe(false)
+  })
+
+  it('treats restvarde_target=null as 0 (defensive — DB CHECK should prevent this state)', () => {
+    const asset = makeAsset({
+      acquisition_cost: 100_000,
+      depreciation_method: 'restvardesavskrivning_25',
+      restvarde_target: null,
+    })
+    // (100 000 − 0) × 25 % = 25 000. The DB CHECK forbids method=restvärde
+    // with null target, but the engine should still produce a deterministic
+    // answer rather than crash.
+    const result = computeAnnualDepreciation(asset, FULL_YEAR)
+    expect(result.amount).toBe(25_000)
   })
 })

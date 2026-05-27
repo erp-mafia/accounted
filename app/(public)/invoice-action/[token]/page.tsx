@@ -22,6 +22,14 @@ interface InvoiceData {
   reminderLevel: number
   alreadyResponded: boolean
   previousResponse: 'marked_paid' | 'disputed' | null
+  // Dröjsmålsränta + lagstadgad påminnelseavgift (Räntelagen §6, Lag 1981:739).
+  // Default to 0 for older reminders sent before the surcharge feature shipped.
+  interestAmount: number
+  interestRate: number
+  interestFromDate: string | null
+  interestDays: number | null
+  reminderFee: number
+  totalDue: number
 }
 
 export default function InvoiceActionPage({ params }: { params: Promise<{ token: string }> }) {
@@ -179,13 +187,46 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
               </div>
             </div>
 
-            <div className="bg-destructive/5 border border-destructive/15 rounded-lg p-4">
-              <p className="text-sm text-destructive mb-1">
+            <div className="bg-destructive/5 border border-destructive/15 rounded-lg p-4 space-y-3">
+              <p className="text-sm text-destructive">
                 Förfallen med {daysOverdue} dagar
               </p>
-              <p className="text-2xl font-bold text-destructive">
-                {formatCurrency(invoice.total, invoice.currency)}
+
+              {(invoice.interestAmount > 0 || invoice.reminderFee > 0) && (
+                <div className="space-y-1 text-sm tabular-nums">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Ursprungligt belopp</span>
+                    <span>{formatCurrency(invoice.total, invoice.currency)}</span>
+                  </div>
+                  {invoice.interestAmount > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Dröjsmålsränta
+                        {invoice.interestRate > 0 && invoice.interestDays != null
+                          ? ` (${(invoice.interestRate * 100).toLocaleString('sv-SE', { maximumFractionDigits: 2 })}% per år, ${invoice.interestDays} dagar)`
+                          : ''}
+                      </span>
+                      <span>{formatCurrency(invoice.interestAmount, invoice.currency)}</span>
+                    </div>
+                  )}
+                  {invoice.reminderFee > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Påminnelseavgift</span>
+                      <span>{formatCurrency(invoice.reminderFee, invoice.currency)}</span>
+                    </div>
+                  )}
+                  <div className="border-t border-destructive/20 pt-2 mt-2" />
+                </div>
+              )}
+
+              <p className="text-2xl font-bold text-destructive tabular-nums">
+                {formatCurrency(invoice.totalDue || invoice.total, invoice.currency)}
               </p>
+              {(invoice.interestAmount > 0 || invoice.reminderFee > 0) && (
+                <p className="text-xs text-muted-foreground">
+                  Att betala (inkl. dröjsmålsränta och påminnelseavgift)
+                </p>
+              )}
             </div>
 
             {error && (

@@ -8,6 +8,16 @@ import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import {
+  computeDeduction,
+  computeInvoiceDeductionTotal,
+  validateInvoice as validateRotRut,
+} from '@/lib/invoices/rot-rut-rules'
+import {
+  encryptPersonnummer,
+  extractLast4,
+  validatePersonnummer,
+} from '@/lib/salary/personnummer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
@@ -109,8 +119,22 @@ export const POST = withRouteContext(
       })
     }
 
-    const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
-    const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
+    // A non-VAT-registered seller may not charge output VAT (ML 1 kap. 1§).
+    // We pull vat_registered from company_settings and feed it into the rule
+    // helpers so the allowed-rates set collapses to {0} and any non-zero rate
+    // submitted from the client fails INVOICE_CREATE_VAT_RULE_VIOLATION below.
+    // Default to true when the settings row is absent or the column is NULL
+    // — matches the prior implicit behavior (getVatRules' own default) so a
+    // missing settings row never silently blocks legitimate VAT invoices.
+    const { data: companySettings } = await supabase
+      .from('company_settings')
+      .select('vat_registered')
+      .eq('company_id', companyId!)
+      .single()
+    const vatRegistered = companySettings?.vat_registered ?? true
+
+    const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, vatRegistered)
+    const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated, vatRegistered)
     const allowedRates = new Set(availableRates.map((r) => r.rate))
 
     const subtotal = invoiceInput.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
@@ -134,6 +158,51 @@ export const POST = withRouteContext(
       }
     }
     const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
+
+    // ROT/RUT-avdrag: validate prerequisites and compute the per-item +
+    // invoice-level deduction. Computed server-side (never trusted from
+    // the client) so a tampered request can't expand the 1513 receivable.
+    // Skipped entirely for proformas, delivery notes, and quotes — those
+    // documents don't post journal entries and have no deduction model.
+    let deductionTotal = 0
+    let deductionPersonnummerEncrypted: string | null = null
+    let deductionPersonnummerLast4: string | null = null
+    if (documentType === 'invoice') {
+      const housingProvided = !!invoiceInput.deduction_housing_designation?.trim()
+      const personnummerRaw = invoiceInput.deduction_personnummer?.trim() || ''
+      const personnummerProvided = personnummerRaw.length > 0
+
+      const validateInput = invoiceInput.items.map((item) => ({
+        unit_price: item.unit_price,
+        quantity: item.quantity,
+        deduction_type: item.deduction_type ?? null,
+        labor_hours: item.labor_hours ?? null,
+        housing_designation: item.housing_designation ?? null,
+      }))
+      const validation = validateRotRut(validateInput, personnummerProvided, housingProvided)
+      if (validation.errors.length > 0) {
+        return errorResponseFromCode('INVOICE_CREATE_ROT_RUT_VALIDATION', log, {
+          requestId,
+          details: { errors: validation.errors, warnings: validation.warnings },
+        })
+      }
+
+      // Compute and (when present) encrypt the personnummer. The plaintext
+      // value never touches the DB — only the AES-256-GCM ciphertext + the
+      // last four digits go into invoices columns.
+      deductionTotal = computeInvoiceDeductionTotal(validateInput)
+      if (personnummerProvided) {
+        const pnValid = validatePersonnummer(personnummerRaw)
+        if (!pnValid.valid) {
+          return errorResponseFromCode('INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID', log, {
+            requestId,
+            details: { error: pnValid.error },
+          })
+        }
+        deductionPersonnummerEncrypted = encryptPersonnummer(personnummerRaw)
+        deductionPersonnummerLast4 = extractLast4(personnummerRaw)
+      }
+    }
 
     const uniqueRates = new Set(invoiceInput.items.map((item) => item.vat_rate ?? vatRules.rate))
     const isMixedRate = uniqueRates.size > 1
@@ -182,13 +251,14 @@ export const POST = withRouteContext(
         vat_amount_sek: documentType === 'delivery_note' ? null : vatAmountSek,
         total,
         total_sek: documentType === 'delivery_note' ? null : totalSek,
-        // Initialize remaining_amount to total for real invoices so the open-
-        // invoice queries (InvoicePicker, AR ledger, supplier matching) treat
-        // newly-created invoices as fully unpaid. The DB default is 0 — without
-        // this, brand-new fakturor look settled and disappear from match
-        // candidate lists. Proformas and delivery notes have no payment
-        // obligation, so they keep the 0 default.
-        remaining_amount: documentType === 'invoice' ? total : 0,
+        // Initialize remaining_amount to total - deduction for real invoices
+        // so the open-invoice queries (InvoicePicker, AR ledger, supplier
+        // matching) treat newly-created invoices as fully unpaid for the
+        // CUSTOMER's share — the Skatteverket portion is on 1513 and will be
+        // cleared when the agency pays out, not by the customer payment.
+        // Proformas, delivery notes and quotes have no payment obligation,
+        // so they keep the 0 default.
+        remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
         vat_treatment: vatRules.treatment,
         vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
         moms_ruta: vatRules.momsRuta,
@@ -197,6 +267,9 @@ export const POST = withRouteContext(
         our_reference: invoiceInput.our_reference,
         notes: invoiceInput.notes,
         document_type: documentType,
+        deduction_total: deductionTotal,
+        deduction_personnummer_encrypted: deductionPersonnummerEncrypted,
+        deduction_personnummer_last4: deductionPersonnummerLast4,
       })
       .select()
       .single()
@@ -213,6 +286,18 @@ export const POST = withRouteContext(
       const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
       const lineTotal = item.quantity * item.unit_price
       const itemVat = documentType === 'delivery_note' ? 0 : Math.round(lineTotal * itemRate / 100 * 100) / 100
+      // ROT/RUT deduction is recomputed server-side so a tampered client
+      // can't expand the 1513 receivable beyond the rules. Non-invoice
+      // document types never carry deduction_type (rules above strip them
+      // implicitly because validateRotRut isn't invoked).
+      const deductionType = documentType === 'invoice' ? (item.deduction_type ?? null) : null
+      const deductionAmount = deductionType
+        ? computeDeduction({
+            unit_price: item.unit_price,
+            quantity: item.quantity,
+            deduction_type: deductionType,
+          })
+        : 0
       return {
         invoice_id: invoice.id,
         sort_order: index,
@@ -223,6 +308,12 @@ export const POST = withRouteContext(
         line_total: lineTotal,
         vat_rate: itemRate,
         vat_amount: itemVat,
+        deduction_type: deductionType,
+        deduction_amount: deductionAmount,
+        labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,
+        work_type: documentType === 'invoice' ? (item.work_type ?? null) : null,
+        housing_designation: documentType === 'invoice' ? (item.housing_designation ?? null) : null,
+        apartment_number: documentType === 'invoice' ? (item.apartment_number ?? null) : null,
       }
     })
 
@@ -296,7 +387,7 @@ export const POST = withRouteContext(
       .eq('id', invoice.id)
       .single()
 
-    // Emit event only for real invoices (proformas / delivery notes are informational).
+    // Emit event only for real invoices (proformas / delivery notes / quotes are informational).
     if (completeInvoice && documentType === 'invoice') {
       await eventBus.emit({
         type: 'invoice.created',

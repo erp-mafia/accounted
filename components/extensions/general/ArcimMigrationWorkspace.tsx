@@ -1098,9 +1098,9 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
                 {' · '}{d.skippedVouchers.total} hoppade över
               </span>
             )}
-            {result.replacedPriorImport && result.replacedPriorImport.cancelledEntries > 0 && (
+            {result.replacedPriorImport && result.replacedPriorImport.deletedEntries > 0 && (
               <span>
-                {' · '}ersatte {result.replacedPriorImport.cancelledEntries.toLocaleString('sv-SE')} tidigare importerade verifikationer
+                {' · '}ersatte {result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE')} tidigare importerade verifikationer
               </span>
             )}
           </p>
@@ -1868,7 +1868,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         // Send every file to the engine. The Fortnox endpoint runs in
         // replace-mode, so a year that already has a completed import
         // gets its prior import marked 'replaced' (imported entries
-        // cancelled, user-created entries untouched) before the new
+        // deleted, user-created entries untouched) before the new
         // SIE is loaded. The per-file result reports replacedPriorImport.
         const filesToImport = sieData.rawContent.map((content, i) => ({
           content,

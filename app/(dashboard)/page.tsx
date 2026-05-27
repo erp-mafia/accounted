@@ -95,7 +95,7 @@ export default async function DashboardPage() {
       .eq('journal_entry.company_id', companyId)
       .gte('journal_entry.entry_date', startOfYearStr),
     supabase.from('transactions').select('amount, amount_sek, is_business').eq('company_id', companyId).gte('date', startOfYearStr),
-    supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status').eq('company_id', companyId).in('status', ['sent', 'overdue']),
+    supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status').eq('company_id', companyId).in('status', ['sent', 'overdue']).is('credited_invoice_id', null),
     supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
     supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false)
       .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),

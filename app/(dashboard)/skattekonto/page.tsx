@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   Copy,
   ExternalLink,
@@ -517,7 +518,10 @@ function TransactionTable({
                   <p className="mt-1 text-xs text-warning">
                     Möjlig dublett av{' '}
                     {row.match_suggestion.voucher_series && row.match_suggestion.voucher_number
-                      ? `${row.match_suggestion.voucher_series}${row.match_suggestion.voucher_number}`
+                      ? formatVoucher({
+                          voucher_series: row.match_suggestion.voucher_series,
+                          voucher_number: row.match_suggestion.voucher_number,
+                        })
                       : 'utkast'}{' '}
                     ({row.match_suggestion.entry_date})
                   </p>
@@ -647,9 +651,7 @@ function MatchDialog({
                   <TableRow key={c.journal_entry_id}>
                     <TableCell className="tabular-nums">{c.entry_date}</TableCell>
                     <TableCell className="tabular-nums">
-                      {c.voucher_series && c.voucher_number
-                        ? `${c.voucher_series}${c.voucher_number}`
-                        : '–'}
+                      {formatVoucher(c)}
                     </TableCell>
                     <TableCell className="max-w-[260px] truncate">
                       {c.description}

@@ -299,8 +299,8 @@ export interface ImportResult {
 
   // If this import replaced a prior completed import for the same fiscal year
   // (Fortnox re-sync flow), the prior import's id and the count of journal
-  // entries that were cancelled as a result.
-  replacedPriorImport?: { importId: string; cancelledEntries: number } | null
+  // entries that were deleted as a result.
+  replacedPriorImport?: { importId: string; deletedEntries: number } | null
 }
 
 /**

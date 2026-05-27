@@ -3,6 +3,9 @@ import {
   proposeAuditFee,
   proposeManualPrepaid,
   proposeManualAccrued,
+  proposeRevenueDeferral,
+  proposeAccruedInterest,
+  proposeAccruedUtility,
 } from '../accruals/accrual-detector'
 
 describe('proposeAuditFee', () => {
@@ -84,6 +87,71 @@ describe('proposeManualAccrued', () => {
     expect(r).not.toBeNull()
     expect(r!.lines[0].account_number).toBe('5010')
     expect(r!.lines[1].account_number).toBe('2990')
+    expect(r!.reverses_on).toBe('2026-01-01')
+  })
+})
+
+describe('proposeRevenueDeferral', () => {
+  it('debits the revenue account and credits the 29xx deferred account', () => {
+    const r = proposeRevenueDeferral({
+      amount: 24_000,
+      revenueAccount: '3001',
+      deferredAccount: '2970',
+      description: 'Årsabonnemang 2026',
+      closingDate: '2025-12-31',
+    })
+    expect(r).not.toBeNull()
+    expect(r!.lines[0].account_number).toBe('3001')
+    expect(r!.lines[0].debit_amount).toBe(24_000)
+    expect(r!.lines[1].account_number).toBe('2970')
+    expect(r!.lines[1].credit_amount).toBe(24_000)
+    expect(r!.reverses_on).toBe('2026-01-01')
+    expect(r!.label).toContain('Förutbetald intäkt')
+  })
+
+  it('enforces 29xx range on deferredAccount', () => {
+    expect(() =>
+      proposeRevenueDeferral({
+        amount: 1000,
+        revenueAccount: '3001',
+        deferredAccount: '1710', // wrong range
+        description: 'x',
+        closingDate: '2025-12-31',
+      }),
+    ).toThrow(/29xx/)
+  })
+})
+
+describe('proposeAccruedInterest', () => {
+  it('emits an accrued-interest entry with the right label', () => {
+    const r = proposeAccruedInterest({
+      amount: 4_500,
+      expenseAccount: '8410',
+      accruedAccount: '2960',
+      description: 'Banklån Q4',
+      closingDate: '2025-12-31',
+    })
+    expect(r).not.toBeNull()
+    expect(r!.lines[0].account_number).toBe('8410')
+    expect(r!.lines[1].account_number).toBe('2960')
+    expect(r!.label).toBe('Upplupen ränta: Banklån Q4')
+    expect(r!.reverses_on).toBe('2026-01-01')
+  })
+})
+
+describe('proposeAccruedUtility', () => {
+  it('emits an accrued-utility entry with the right label', () => {
+    const r = proposeAccruedUtility({
+      amount: 2_300,
+      expenseAccount: '5020',
+      accruedAccount: '2990',
+      description: 'El december',
+      closingDate: '2025-12-31',
+    })
+    expect(r).not.toBeNull()
+    expect(r!.lines[0].account_number).toBe('5020')
+    expect(r!.lines[1].account_number).toBe('2990')
+    expect(r!.label).toBe('Upplupen förbrukning: El december')
     expect(r!.reverses_on).toBe('2026-01-01')
   })
 })

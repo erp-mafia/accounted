@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -93,6 +94,7 @@ export const POST = withRouteContext(
     const isFreshAllocation = !invoice.invoice_number
     if (isFreshAllocation) {
       try {
+        const preflight = prepareInvoicePdfRender(company as CompanySettings)
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
@@ -100,6 +102,7 @@ export const POST = withRouteContext(
             items,
             company: company as CompanySettings,
             originalInvoiceNumber,
+            branding: preflight.branding,
           }),
         )
       } catch (err) {
@@ -121,13 +124,16 @@ export const POST = withRouteContext(
     // the in-memory copy: the DB flip happens after email delivery (line
     // ~185), but if we render with the stale 'draft' status the customer
     // receives a PDF stamped "UTKAST – inte en giltig faktura".
+    const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
+    const { branding } = prepareInvoicePdfRender(company as CompanySettings)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
-        invoice: { ...(invoice as Invoice), status: 'sent' as const },
+        invoice: renderableInvoice,
         customer,
         items,
         company: company as CompanySettings,
         originalInvoiceNumber,
+        branding,
       }),
     )
 

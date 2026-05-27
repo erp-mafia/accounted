@@ -25,6 +25,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
+import { formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
@@ -144,13 +145,22 @@ export default function JournalEntryForm({
   useEffect(() => {
     fetchPeriods()
     fetchAccounts()
-    // Fetch default voucher series from company settings
+    // Fetch default voucher series from company settings — prefer the
+    // per-source-type mapping when present; fall back to the legacy
+    // default_voucher_series, then to 'A'.
     if (!embedded) {
       fetch('/api/settings').then(r => r.json()).then(({ data }) => {
-        if (data?.default_voucher_series) setVoucherSeries(data.default_voucher_series)
+        if (!data) return
+        const effectiveSourceType = sourceType ?? 'manual'
+        const perSource = resolveDefaultSeriesForSource(
+          data as { default_voucher_series_per_source_type?: Record<string, string> | null } | null,
+          effectiveSourceType,
+        )
+        const fallback = data.default_voucher_series || 'A'
+        setVoucherSeries(perSource !== 'A' ? perSource : fallback)
       }).catch(() => {/* keep 'A' */})
     }
-  }, [])
+  }, [embedded, sourceType])
 
   // Auto-select period when entry date changes
   useEffect(() => {
@@ -464,7 +474,7 @@ export default function JournalEntryForm({
 
       toast({
         title: t('toast_created_title'),
-        description: t('toast_created_description', { voucher: `${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''}` }),
+        description: t('toast_created_description', { voucher: formatVoucher(result.data ?? {}) }),
       })
       setShowReview(false)
       setDescription('')
@@ -996,7 +1006,7 @@ export default function JournalEntryForm({
         isSubmitting={isSubmitting}
         title={
           !embedded && nextVoucherNumber != null
-            ? t('review_title_with_voucher', { voucher: `${voucherSeries}${nextVoucherNumber}` })
+            ? t('review_title_with_voucher', { voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }) })
             : t('review_title')
         }
         warningText={embedded ? '' : t('review_warning')}

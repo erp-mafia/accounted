@@ -37,6 +37,7 @@ vi.mock('@/lib/reports/income-statement', () => ({
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(),
+  reverseEntry: vi.fn(),
 }))
 
 vi.mock('@/lib/bookkeeping/currency-revaluation', () => ({
@@ -55,11 +56,13 @@ vi.mock('../period-service', () => ({
   lockPeriod: vi.fn(),
   closePeriod: vi.fn(),
   createNextPeriod: vi.fn(),
+  findNextPeriod: vi.fn().mockResolvedValue(null),
 }))
 
 import { validateYearEndReadiness, previewYearEndClosing } from '../year-end-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { findNextPeriod } from '../period-service'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -343,6 +346,55 @@ describe('validateYearEndReadiness', () => {
     expect(result.ready).toBe(true) // warning, not blocking
     expect(result.warnings.some((w: string) => w.includes('Sequence counter ahead'))).toBe(true)
     expect(result.sequenceMismatches).toHaveLength(1)
+  })
+
+  it('warns (not errors) when next period already exists without IB', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+
+    vi.mocked(findNextPeriod).mockResolvedValueOnce({
+      id: 'fp-2',
+      name: 'FY 2025',
+      opening_balance_entry_id: null,
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(true)
+    // Period name intentionally not interpolated into the warning — see
+    // year-end-service for rationale. We assert on the stable English
+    // substring instead.
+    expect(result.warnings.some((w: string) => w.includes('Next fiscal period already exists'))).toBe(true)
+  })
+
+  it('blocks when next period already has opening balances posted', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+
+    vi.mocked(findNextPeriod).mockResolvedValueOnce({
+      id: 'fp-2',
+      name: 'FY 2025',
+      opening_balance_entry_id: 'ib-1',
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    expect(result.errors.some((e: string) => e.includes('already has opening balances'))).toBe(true)
   })
 })
 

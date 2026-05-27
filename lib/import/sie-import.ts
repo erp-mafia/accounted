@@ -131,22 +131,28 @@ export async function checkDuplicatePeriodImport(
 }
 
 /**
- * Replace (cancel) a completed SIE import so the user can re-import corrected
- * data for the same fiscal period.
+ * Replace a completed SIE import so the user can re-import corrected data
+ * for the same fiscal period.
  *
- * Per BFL 5 kap 5§ (rättelse), the original entries are preserved with
- * status='cancelled'. The import record is marked as 'replaced' with a
- * timestamp for audit trail (BFNAR 2013:2 kap 8 behandlingshistorik).
- * Nothing is deleted.
+ * The RPC hard-deletes every source_type='import' entry the original import
+ * created (plus stragglers from any prior soft-replace), detaches user-
+ * attached documents from those entries (PDFs stay in storage as unlinked
+ * documents), clears the fiscal-period opening-balance pointer if it came
+ * from this import, and resets voucher_sequences so the next re-import
+ * restarts the series at 1 (or at MAX of remaining non-import entries).
  *
- * The actual cancellation + status update is atomic via the replace_sie_import
- * DB RPC to prevent inconsistent state.
+ * Audit trail lives in the sie_imports row (status='replaced',
+ * replaced_at, filename, file_hash, transactions_count, fiscal_year_*)
+ * plus per-row audit_log entries written by the write_audit_log trigger
+ * on each journal_entries DELETE (old_state JSONB snapshot).
+ *
+ * The whole cleanup is atomic via the replace_sie_import DB RPC.
  */
 export async function replaceSIEImport(
   supabase: SupabaseClient,
   companyId: string,
   importId: string
-): Promise<{ success: boolean; cancelledEntries: number; error?: string }> {
+): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
   // 1. Fetch and validate the import record
   const { data: importRecord } = await supabase
     .from('sie_imports')
@@ -156,11 +162,11 @@ export async function replaceSIEImport(
     .single()
 
   if (!importRecord) {
-    return { success: false, cancelledEntries: 0, error: 'Import hittades inte' }
+    return { success: false, deletedEntries: 0, error: 'Import hittades inte' }
   }
 
   if (importRecord.status !== 'completed') {
-    return { success: false, cancelledEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})` }
+    return { success: false, deletedEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})` }
   }
 
   // 2. Check that the fiscal period is not closed or locked
@@ -173,21 +179,21 @@ export async function replaceSIEImport(
       .single()
 
     if (period?.is_closed || period?.locked_at) {
-      return { success: false, cancelledEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
+      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
     }
   }
 
-  // 3. Atomically cancel entries and mark import as replaced via DB RPC
-  const { data: cancelledCount, error: rpcError } = await supabase.rpc('replace_sie_import', {
+  // 3. Atomically delete entries and mark import as replaced via DB RPC
+  const { data: deletedCount, error: rpcError } = await supabase.rpc('replace_sie_import', {
     p_company_id: companyId,
     p_import_id: importId,
   })
 
   if (rpcError) {
-    return { success: false, cancelledEntries: 0, error: `Kunde inte ersätta import: ${rpcError.message}` }
+    return { success: false, deletedEntries: 0, error: `Kunde inte ersätta import: ${rpcError.message}` }
   }
 
-  return { success: true, cancelledEntries: cancelledCount as number }
+  return { success: true, deletedEntries: deletedCount as number }
 }
 
 /**
@@ -1600,17 +1606,15 @@ export async function executeSIEImport(
           }
           result.replacedPriorImport = {
             importId: priorPeriodImport.id,
-            cancelledEntries: replaceResult.cancelledEntries,
+            deletedEntries: replaceResult.deletedEntries,
           }
 
-          // The replace_sie_import RPC cancelled the prior import's opening
-          // balance entry, but the fiscal_periods row still flags
-          // opening_balances_set=true and points opening_balance_entry_id at
-          // the now-cancelled row. Without clearing those, the IB import
-          // below would skip ("Ingående balanser finns redan...") and the
-          // new IB would be lost. Only reset when the cleared entry was the
-          // prior import's IB — if the period's IB came from somewhere else
-          // (manual entry, year-end carryover), we must not touch it.
+          // The replace_sie_import RPC clears fiscal_periods
+          // opening_balance_entry_id and opening_balances_set inside its
+          // transaction when the prior import had an OB entry. This client-
+          // side UPDATE is now an idempotent safety net for pre-fix data
+          // (companies whose prior replace ran against the soft-cancel
+          // implementation and left the pointer dangling on the row).
           if (priorPeriodImport.fiscal_period_id && priorPeriodImport.opening_balance_entry_id) {
             await supabase
               .from('fiscal_periods')

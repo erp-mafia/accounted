@@ -1,0 +1,22 @@
+-- No-op placeholder.
+--
+-- Background: this version was originally created on the mcp/entry-bug branch
+-- and was applied to the Supabase preview branch before review. Reviewers
+-- flagged it as a duplicate of 20260527130000_allow_document_supersession.sql
+-- (already in main, byte-identical CREATE OR REPLACE bodies). Because 122059
+-- < 130000, both files ran but the 130000 file always wrote the final state
+-- — the 122059 run was wasted work, not a correctness problem.
+--
+-- We can't delete this file because Supabase's schema_migrations table on the
+-- preview branch already tracks 20260527122059 as applied; removing the file
+-- triggers "Remote migration versions not found in local migrations directory"
+-- on the next `supabase db push`. Repairing the migration record would also
+-- work but is heavier than keeping the file as a documented no-op.
+--
+-- The actual trigger + RPC bodies live in:
+--   20260527130000_allow_document_supersession.sql  (canonical definitions)
+--   20260527160000_fix_supersede_audit_actor.sql    (actor_id attribution fix)
+--
+-- This file intentionally contains no DDL.
+
+SELECT 1;

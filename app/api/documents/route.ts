@@ -62,10 +62,19 @@ export const POST = withRouteContext(
 
       return NextResponse.json({ data: document })
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'unknown'
+      // DB trigger rejects inserts whose journal_entry_id points at an entry
+      // in a closed/locked period. Surface as 400 with the real reason.
+      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
+        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
+          requestId,
+          details: { reason: message },
+        })
+      }
       opLog.error('document upload failed', err as Error)
       return errorResponseFromCode('DOC_UPLOAD_STORAGE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: message },
       })
     }
   },

@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireWritePermission } from '@/lib/auth/require-write'
+import { deleteDocument } from '@/lib/core/documents/document-service'
 import { eventBus } from '@/lib/events'
 
 ensureInitialized()
@@ -65,4 +67,46 @@ export async function GET(
       download_url: signedUrl.signedUrl,
     },
   })
+}
+
+/**
+ * DELETE /api/documents/:id
+ * Remove an uploaded document. Only permitted when the document is not yet
+ * linked to a journal entry — once linked, it is räkenskapsinformation under
+ * BFL 7 kap 2§ and must be retained for 7 years. For linked docs the caller
+ * should use POST /api/documents/:id/versions to supersede via a new version.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const supabase = await createClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const writeCheck = await requireWritePermission(supabase, user.id)
+  if (!writeCheck.ok) return writeCheck.response
+
+  const companyId = await requireCompanyId(supabase, user.id)
+
+  const { id } = await params
+
+  try {
+    const result = await deleteDocument(supabase, companyId, id)
+
+    if (!result.ok) {
+      return NextResponse.json({ error: result.message }, { status: result.status })
+    }
+
+    return NextResponse.json({ data: { id: result.document.id, deleted: true } })
+  } catch (error) {
+    console.error('[documents/DELETE] Failed to delete document:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to delete document' },
+      { status: 500 }
+    )
+  }
 }

@@ -71,6 +71,7 @@ vi.mock('@/lib/email/invoice-templates', () => ({
 
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue({}),
+  brandingFromCompanySettings: vi.fn().mockReturnValue({}),
 }))
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 

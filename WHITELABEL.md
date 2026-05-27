@@ -39,6 +39,7 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 | `BRANDING_SUPPORT_EMAIL` | `supportEmail` | `support@gnubok.se` |
 | `BRANDING_PRIVACY_EMAIL` | `privacyEmail` | `privacy@gnubok.se` |
 | `BRANDING_SECURITY_EMAIL` | `securityEmail` | `security@arcim.io` |
+| `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom` — From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
 | `NEXT_PUBLIC_APP_URL` | `appUrl` | `https://app.gnubok.se` |
 | `NEXT_PUBLIC_BRANDING_LOGO_PATH` | `logoPath` | `/gnubokiceon-removebg-preview.png` |
 | `NEXT_PUBLIC_BRANDING_FAVICON_PATH` | `faviconPath` | `/favicon.ico` |

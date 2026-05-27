@@ -28,6 +28,10 @@ export async function GET(request: Request) {
   const dateFrom = searchParams.get('date_from')
   const dateTo = searchParams.get('date_to')
   const sortDate = searchParams.get('sort_date') // 'asc' | 'desc'
+  // 'series' optional filter — single uppercase letter A–Z. Ignored if any
+  // other value is passed (defense against trivial injection / typos).
+  const seriesRaw = searchParams.get('series')
+  const seriesFilter = seriesRaw && /^[A-Z]$/.test(seriesRaw) ? seriesRaw : null
   // 'date_desc' (default) | 'date_asc' | 'voucher_asc' | 'voucher_desc'
   // sort_by overrides sort_date when present. sort_date is kept for backwards
   // compatibility with older clients.
@@ -69,8 +73,18 @@ export async function GET(request: Request) {
     }
 
     const rows = data ?? []
-    const entries = rows.map((r: { entry: unknown }) => r.entry)
-    const count = rows.length > 0 ? Number((rows[0] as { total_count: number | string }).total_count) : 0
+    let entries = rows.map((r: { entry: unknown }) => r.entry) as Array<{ voucher_series?: string }>
+    let count = rows.length > 0 ? Number((rows[0] as { total_count: number | string }).total_count) : 0
+
+    // The list_fiscal_period_entries_with_related RPC doesn't accept a series
+    // filter, so post-filter here. Recompute count from the filtered set so
+    // the paginator stays consistent; consequence: when a series filter is
+    // applied, the cross-period follow-up surfacing is still on but the
+    // visible total drops to the matching subset.
+    if (seriesFilter) {
+      entries = entries.filter((e) => (e?.voucher_series ?? 'A') === seriesFilter)
+      count = entries.length
+    }
 
     return NextResponse.json({ data: entries, count })
   }
@@ -113,6 +127,10 @@ export async function GET(request: Request) {
 
   if (dateTo) {
     query = query.lte('entry_date', dateTo)
+  }
+
+  if (seriesFilter) {
+    query = query.eq('voucher_series', seriesFilter)
   }
 
   const { data, error, count } = await query

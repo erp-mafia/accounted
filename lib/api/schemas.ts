@@ -26,6 +26,28 @@ const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or
 
 export const EntityTypeSchema = z.enum(['enskild_firma', 'aktiebolag'])
 
+export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
+
+/**
+ * Single K3 component (BFNAR 2012:1 ch.17.4 — komponentavskrivning).
+ *
+ * Used inside AssetCreateSchema / AssetUpdateSchema's `k3_components` array.
+ * The cross-component invariant (sum of `cost` equals asset `acquisition_cost`)
+ * lives in `validateComponents` from `lib/bokslut/assets/k3-components.ts`
+ * and is called by the route-layer refinement — it cannot be expressed in
+ * a single-object schema. Component-level checks (cost > 0, salvage ≤ cost,
+ * positive useful life) are reinforced by `validateComponents` too so any
+ * future caller that uses just the validator gets the same guarantees.
+ *
+ * `salvage_value` is optional; the engine treats omission as 0.
+ */
+export const K3ComponentSchema = z.object({
+  name: z.string().min(1, 'Komponentens namn krävs.'),
+  cost: z.number().positive('Anskaffningsvärdet måste vara större än 0.'),
+  useful_life_months: z.number().int().positive('Nyttjandeperioden måste vara ett positivt heltal månader.'),
+  salvage_value: z.number().nonnegative().optional(),
+})
+
 export const CustomerTypeSchema = z.enum([
   'individual',
   'swedish_business',
@@ -103,6 +125,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'supplier_invoice_privately_paid',
   'supplier_credit_note',
   'currency_revaluation',
+  'reminder_fee',
 ])
 
 export const AccountTypeSchema = z.enum([
@@ -156,6 +179,14 @@ export const CreateInvoiceItemSchema = z.object({
   unit: z.string().min(1, 'Unit is required'),
   unit_price: z.number(),
   vat_rate: z.number().min(0).max(100).optional(),
+  // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
+  // the client schema — the API computes it from rot-rut-rules.ts so a
+  // tampered client can't expand the 1513 receivable beyond the line total.
+  deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
+  labor_hours: z.number().nonnegative().nullable().optional(),
+  work_type: z.string().max(64).nullable().optional(),
+  housing_designation: z.string().max(128).nullable().optional(),
+  apartment_number: z.string().max(32).nullable().optional(),
 })
 
 const optionalIsoDate = isoDate.or(z.literal('')).transform(v => v || undefined).optional()
@@ -170,6 +201,13 @@ export const CreateInvoiceSchema = z.object({
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
   notes: z.string().optional(),
+  // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
+  // encrypted server-side before it ever hits the DB (see encryptPersonnummer
+  // in lib/salary/personnummer.ts). `deduction_housing_designation` is the
+  // fastighetsbeteckning at invoice level — required when any ROT item is
+  // present (enforced via rot-rut-rules.validateInvoice in the API).
+  deduction_personnummer: z.string().max(20).optional(),
+  deduction_housing_designation: z.string().max(128).optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
@@ -515,6 +553,16 @@ export const UpdateSettingsSchema = z.object({
   auto_lock_period_days: z.number().int().positive().nullable().optional(),
   // Voucher series
   default_voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  // Per-source-type voucher series map. Keys are journal_entries.source_type
+  // values; values are single uppercase letters A–Z. Read by the engine
+  // (`createDraftEntry`) when no explicit voucher_series is passed, with a
+  // fallback to 'A' for unknown keys.
+  default_voucher_series_per_source_type: z
+    .record(
+      JournalEntrySourceTypeSchema,
+      z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z'),
+    )
+    .optional(),
   // Invoice PDF settings
   ore_rounding: z.boolean().optional(),
   invoice_show_ocr: z.boolean().optional(),
@@ -526,8 +574,36 @@ export const UpdateSettingsSchema = z.object({
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
+  // Invoice branding — colors enforced as #RRGGBB at the DB level too
+  // (see migration 20260526120200_invoice_branding.sql). The dedicated
+  // /api/settings/invoicing/branding route is the primary path; these
+  // entries let the generic PUT /api/settings also accept the same fields.
+  invoice_primary_color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, 'Ange en giltig hex-färg (#RRGGBB)')
+    .optional(),
+  invoice_accent_color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, 'Ange en giltig hex-färg (#RRGGBB)')
+    .optional(),
+  invoice_font_family: z.enum(['Helvetica', 'Times-Roman', 'Courier']).optional(),
+  invoice_header_text: z.string().max(200).nullable().optional(),
+  invoice_footer_text: z.string().max(500).nullable().optional(),
   // Automation
   send_invoice_reminders: z.boolean().optional(),
+  // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
+  reminder_fee_enabled: z.boolean().optional(),
+  reminder_fee_amount: z
+    .number()
+    .min(0, 'Påminnelseavgift kan inte vara negativ')
+    .max(60, 'Lagstadgad maxgräns för påminnelseavgift är 60 kr (Lag 1981:739)')
+    .optional(),
+  reminder_interest_rate_override: z
+    .number()
+    .min(0, 'Räntesats kan inte vara negativ')
+    .max(0.9999, 'Ange räntesatsen som en decimal mindre än 1 (t.ex. 0.115 för 11,5%)')
+    .nullable()
+    .optional(),
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
   // Salary payment file
@@ -830,11 +906,14 @@ export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln', 'n
 export const SalaryRunStatusSchema = z.enum(['draft', 'review', 'approved', 'paid', 'booked', 'corrected'])
 
 export const SalaryLineItemTypeSchema = z.enum([
-  'monthly_salary', 'hourly_salary', 'overtime', 'bonus', 'commission',
+  'monthly_salary', 'hourly_salary',
+  'overtime', 'overtime_50', 'overtime_100',
+  'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
+  'bonus', 'commission',
   'gross_deduction_pension', 'gross_deduction_other',
   'benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other',
   'sick_karens', 'sick_day2_14', 'sick_day15_plus',
-  'vab', 'parental_leave', 'vacation',
+  'vab', 'parental_leave', 'vacation', 'semesterersattning',
   'traktamente_taxfree', 'traktamente_taxable',
   'mileage_taxfree', 'mileage_taxable',
   'net_deduction_advance', 'net_deduction_union', 'net_deduction_benefit_payment',
@@ -1117,12 +1196,25 @@ export const AbsenceRangeQuerySchema = z.object({
 // same calendar UX, half-day mixing with absence enforced by the 24h cap
 // trigger. The calculator sums these per pay period at calculate time.
 
-export const UpsertWorkedDaySchema = z.object({
-  work_date: isoDate,
-  hours: z.number().positive().max(24).default(8),
-  notes: z.string().max(2000).optional(),
-  salary_run_employee_id: uuid.optional(),
-})
+export const UpsertWorkedDaySchema = z
+  .object({
+    work_date: isoDate,
+    hours: z.number().positive().max(24).default(8),
+    notes: z.string().max(2000).optional(),
+    salary_run_employee_id: uuid.optional(),
+    // Optional shift window. Feeds the shift-premium engine — without explicit
+    // times, the engine assumes a default 08:00–17:00 day shift. Either both
+    // fields are provided or neither.
+    start_time: timeString.optional(),
+    end_time: timeString.optional(),
+  })
+  .refine(
+    (data) => (data.start_time == null && data.end_time == null) || (data.start_time != null && data.end_time != null),
+    {
+      message: 'Ange både start- och sluttid eller låt båda vara tomma',
+      path: ['start_time'],
+    },
+  )
 
 export const WorkedHoursRangeQuerySchema = z.object({
   from: isoDate,
@@ -1132,14 +1224,26 @@ export const WorkedHoursRangeQuerySchema = z.object({
   path: ['from'],
 })
 
-export const BatchUpsertWorkedDaysSchema = z.object({
-  // 100-row sanity cap: typical use is one pay period (~22 weekdays). A larger
-  // value usually indicates the caller is iterating wrong.
-  dates: z.array(isoDate).min(1).max(100),
-  hours: z.number().positive().max(24).default(8),
-  notes: z.string().max(2000).optional(),
-  salary_run_employee_id: uuid.optional(),
-})
+export const BatchUpsertWorkedDaysSchema = z
+  .object({
+    // 100-row sanity cap: typical use is one pay period (~22 weekdays). A larger
+    // value usually indicates the caller is iterating wrong.
+    dates: z.array(isoDate).min(1).max(100),
+    hours: z.number().positive().max(24).default(8),
+    notes: z.string().max(2000).optional(),
+    salary_run_employee_id: uuid.optional(),
+    // Optional shift window applied to every date in the batch. Pair both or
+    // neither; same fallback behaviour as the single-row endpoint.
+    start_time: timeString.optional(),
+    end_time: timeString.optional(),
+  })
+  .refine(
+    (data) => (data.start_time == null && data.end_time == null) || (data.start_time != null && data.end_time != null),
+    {
+      message: 'Ange både start- och sluttid eller låt båda vara tomma',
+      path: ['start_time'],
+    },
+  )
 
 // ============================================================
 // AI agent flow schemas
@@ -1228,3 +1332,69 @@ export const ListProposalsQuerySchema = z.object({
 export const AttachDocumentSchema = z.object({
   document_id: uuid,
 })
+
+// ============================================================
+// Shift-premium rules (OB-tillägg och övertid)
+// ============================================================
+
+export const ShiftPremiumItemTypeSchema = z.enum([
+  'overtime_50',
+  'overtime_100',
+  'ob_weekday_evening',
+  'ob_weekend',
+  'ob_night',
+  'ob_holiday',
+])
+
+const dayOfWeekArray = z
+  .array(z.number().int().min(1).max(7))
+  .min(1, 'Välj minst en veckodag')
+  .max(7, 'Högst sju veckodagar tillåtna')
+
+export const CreateShiftPremiumRuleSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    applies_to_all_employees: z.boolean().default(true),
+    applies_to_employee_ids: z.array(uuid).default([]),
+    day_of_week: dayOfWeekArray,
+    start_time: timeString,
+    end_time: timeString,
+    premium_percent: z.number().min(0).max(500),
+    item_type: ShiftPremiumItemTypeSchema,
+    priority: z.number().int().min(0).max(1000).default(0),
+    is_active: z.boolean().default(true),
+  })
+  .refine(
+    (data) => data.applies_to_all_employees || data.applies_to_employee_ids.length > 0,
+    {
+      message: 'Välj minst en anställd när regeln inte gäller alla',
+      path: ['applies_to_employee_ids'],
+    },
+  )
+
+export const UpdateShiftPremiumRuleSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    applies_to_all_employees: z.boolean().optional(),
+    applies_to_employee_ids: z.array(uuid).optional(),
+    day_of_week: dayOfWeekArray.optional(),
+    start_time: timeString.optional(),
+    end_time: timeString.optional(),
+    premium_percent: z.number().min(0).max(500).optional(),
+    item_type: ShiftPremiumItemTypeSchema.optional(),
+    priority: z.number().int().min(0).max(1000).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.applies_to_all_employees === false && data.applies_to_employee_ids !== undefined) {
+        return data.applies_to_employee_ids.length > 0
+      }
+      return true
+    },
+    {
+      message: 'Välj minst en anställd när regeln inte gäller alla',
+      path: ['applies_to_employee_ids'],
+    },
+  )
+

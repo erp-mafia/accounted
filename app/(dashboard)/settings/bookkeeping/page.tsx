@@ -1,21 +1,34 @@
 'use client'
 
 import Link from 'next/link'
+import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 import { PeriodLockingSettings } from '@/components/settings/PeriodLockingSettings'
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
+import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
+import { PeriodiseringAutoDetectToggle } from '@/components/settings/PeriodiseringAutoDetectToggle'
+import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import { useSettings } from '@/components/settings/useSettings'
+import { useCompany } from '@/contexts/CompanyContext'
 import { Label } from '@/components/ui/label'
 import { ExternalLink } from 'lucide-react'
-import type { CompanySettings } from '@/types'
+import type { AccountingFramework, CompanySettings } from '@/types'
 
 const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export default function BookkeepingSettingsPage() {
   const t = useTranslations('settings_bookkeeping')
   const { settings, isLoading, updateSettings } = useSettings()
+  const { company } = useCompany()
+  // Local mirror of the company-level accounting_framework so the K2/K3
+  // selector can reflect its own saves without waiting for the layout to
+  // re-render through the server. Falls back to k2 (matches the column
+  // default) until the company row is loaded.
+  const [framework, setFramework] = useState<AccountingFramework>(
+    company?.accounting_framework ?? 'k2',
+  )
 
   if (isLoading || !settings) return <SettingsLoadingSkeleton />
 
@@ -39,8 +52,19 @@ export default function BookkeepingSettingsPage() {
     }
   }
 
+  // K2/K3 selector is only meaningful for AB. EF stays on EF rules and never
+  // picks a framework. Use the company row (source of truth) since
+  // company_settings.entity_type can be stale on legacy data.
+  const isAktiebolag = company?.entity_type === 'aktiebolag'
+
   return (
     <div className="space-y-8">
+      {isAktiebolag && (
+        <AccountingFrameworkForm
+          current={framework}
+          onSaved={(next) => setFramework(next)}
+        />
+      )}
       <SettingsFormWrapper onSave={handleSave} className="space-y-8">
         {/* Accounting method */}
         <section className="space-y-4">
@@ -95,9 +119,22 @@ export default function BookkeepingSettingsPage() {
         </div>
       </SettingsFormWrapper>
 
+      {/* Voucher series — per-source-type mapping */}
+      <div className="border-t border-border/8 pt-8">
+        <VoucherSeriesPerSourceTypeForm
+          settings={settings}
+          onSettingsUpdated={updateSettings}
+        />
+      </div>
+
       {/* Voucher series — read-only display */}
       <div className="border-t border-border/8 pt-8">
         <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
+      </div>
+
+      {/* Periodisering auto-detect toggle */}
+      <div className="border-t border-border/8 pt-8">
+        <PeriodiseringAutoDetectToggle />
       </div>
 
       {/* Cross-links */}

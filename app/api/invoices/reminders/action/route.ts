@@ -120,6 +120,11 @@ export async function GET(request: Request) {
       sent_at,
       response_type,
       action_token_used,
+      interest_amount,
+      interest_rate,
+      interest_from_date,
+      interest_days,
+      reminder_fee,
       invoice:invoices(
         id,
         invoice_number,
@@ -159,6 +164,11 @@ export async function GET(request: Request) {
   const customerData = invoice.customer
   const customer = Array.isArray(customerData) ? customerData[0] : customerData
 
+  const interestAmount = Number(reminder.interest_amount ?? 0)
+  const reminderFee = Number(reminder.reminder_fee ?? 0)
+  const totalDue =
+    Math.round((Number(invoice.total) + interestAmount + reminderFee) * 100) / 100
+
   return NextResponse.json({
     invoiceNumber: invoice.invoice_number,
     invoiceDate: invoice.invoice_date,
@@ -168,6 +178,15 @@ export async function GET(request: Request) {
     customerName: customer?.name,
     reminderLevel: reminder.reminder_level,
     alreadyResponded: reminder.action_token_used,
-    previousResponse: reminder.response_type
+    previousResponse: reminder.response_type,
+    // Dröjsmålsränta + lagstadgad påminnelseavgift surfaced to the
+    // customer-facing action page. Numeric defaults preserve back-compat
+    // for old reminders sent before the surcharge feature shipped.
+    interestAmount,
+    interestRate: reminder.interest_rate !== null ? Number(reminder.interest_rate) : 0,
+    interestFromDate: reminder.interest_from_date,
+    interestDays: reminder.interest_days,
+    reminderFee,
+    totalDue,
   })
 }

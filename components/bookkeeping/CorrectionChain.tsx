@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Info } from 'lucide-react'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
 import { formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface Props {
@@ -73,7 +74,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium text-muted-foreground">{role.label}</span>
                   <span className="font-mono text-sm">
-                    {entry.voucher_series}{entry.voucher_number}
+                    {formatVoucher(entry)}
                   </span>
                   <span className="text-sm text-muted-foreground tabular-nums">{formatDate(entry.entry_date)}</span>
                   <JournalEntryStatusBadge entry={entry} showStatus={false} />

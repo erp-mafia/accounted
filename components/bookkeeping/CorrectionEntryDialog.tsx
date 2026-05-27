@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Plus, Trash2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 interface CorrectionLine {
@@ -165,7 +166,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         {/* Original entry (read-only) */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span className="font-mono">{entry.voucher_series}{entry.voucher_number}</span>
+            <span className="font-mono">{formatVoucher(entry)}</span>
             <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
             <Badge variant="outline" className="text-xs">Original</Badge>
           </div>

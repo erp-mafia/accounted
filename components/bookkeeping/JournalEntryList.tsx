@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { ChevronDown, ChevronRight, Paperclip, AlertTriangle, Loader2, BookOpen, X, Copy, Lock } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
@@ -57,6 +58,7 @@ export default function JournalEntryList({ periodId }: Props) {
   const [dateTo, setDateTo] = useState('')
   const [dateFromInput, setDateFromInput] = useState('')
   const [dateToInput, setDateToInput] = useState('')
+  const [seriesFilter, setSeriesFilter] = useState<string>('all')
   const pageSize = 20
 
   const normalizeDate = (v: string): string | null => {
@@ -123,6 +125,7 @@ export default function JournalEntryList({ periodId }: Props) {
     if (periodId) params.set('period_id', periodId)
     if (dateFrom) params.set('date_from', dateFrom)
     if (dateTo) params.set('date_to', dateTo)
+    if (seriesFilter !== 'all') params.set('series', seriesFilter)
 
     const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
     if (!res.ok) {
@@ -142,7 +145,7 @@ export default function JournalEntryList({ periodId }: Props) {
 
   useEffect(() => {
     fetchEntries()
-  }, [periodId, page, sortBy, dateFrom, dateTo])
+  }, [periodId, page, sortBy, dateFrom, dateTo, seriesFilter])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
@@ -161,7 +164,7 @@ export default function JournalEntryList({ periodId }: Props) {
         const posted = result.data
         toast({
           title: t('toast_posted_title'),
-          description: t('toast_posted_description', { voucher: `${posted?.voucher_series ?? ''}${posted?.voucher_number ?? ''}` }),
+          description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
         })
         await fetchEntries()
       } else {
@@ -240,6 +243,22 @@ export default function JournalEntryList({ periodId }: Props) {
             <SelectItem value="date_asc">{t('sort_date_asc')}</SelectItem>
             <SelectItem value="voucher_asc">{t('sort_voucher_asc')}</SelectItem>
             <SelectItem value="voucher_desc">{t('sort_voucher_desc')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={seriesFilter} onValueChange={(v) => { setSeriesFilter(v); setPage(0) }}>
+          <SelectTrigger
+            className="h-8 w-auto gap-1.5 text-xs sm:w-[120px] font-mono"
+            aria-label="Verifikationsserie"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all" className="text-xs">Alla serier</SelectItem>
+            {'ABCDEFG'.split('').map((letter) => (
+              <SelectItem key={letter} value={letter} className="font-mono text-xs">
+                Serie {letter}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <div className="flex items-center gap-1.5">
@@ -326,7 +345,7 @@ export default function JournalEntryList({ periodId }: Props) {
                     className="font-mono text-sm text-primary hover:underline w-16"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {entry.voucher_series}{entry.voucher_number}
+                    {formatVoucher(entry)}
                   </Link>
                   <span className="text-sm text-muted-foreground tabular-nums w-24">
                     {formatDate(entry.entry_date)}
@@ -396,7 +415,7 @@ export default function JournalEntryList({ periodId }: Props) {
                       className="font-mono text-sm text-primary hover:underline"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {entry.voucher_series}{entry.voucher_number}
+                      {formatVoucher(entry)}
                     </Link>
                     <span className="text-sm text-muted-foreground tabular-nums">
                       {formatDate(entry.entry_date)}

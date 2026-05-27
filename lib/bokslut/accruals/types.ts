@@ -6,6 +6,9 @@ export type AccrualKind =
   | 'social_fees_on_accrued_salary'
   | 'manual_prepaid_expense'
   | 'manual_accrued_expense'
+  | 'deferred_revenue'
+  | 'accrued_interest'
+  | 'accrued_utility'
 
 /**
  * A single accrual proposal the wizard renders as one card. Mirrors the

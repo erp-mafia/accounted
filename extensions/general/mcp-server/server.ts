@@ -6852,7 +6852,7 @@ export const tools: McpTool[] = [
         .from('journal_entries')
         .select(
           'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
-          'fiscal_periods!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
+          'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
         .eq('company_id', companyId)
@@ -6986,7 +6986,7 @@ export const tools: McpTool[] = [
         .from('journal_entries')
         .select(
           'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
-          'fiscal_periods!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
+          'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
         .eq('company_id', companyId)

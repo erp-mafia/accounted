@@ -6,8 +6,8 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 /**
  * POST /api/import/sie/[id]/replace
  *
- * Replace a completed SIE import by cancelling its entries, allowing the user
- * to re-import corrected data for the same fiscal period.
+ * Replace a completed SIE import by hard-deleting its entries, allowing the
+ * user to re-import corrected data for the same fiscal period.
  */
 export const POST = withRouteContext(
   'sie_import.replace',
@@ -25,7 +25,7 @@ export const POST = withRouteContext(
       })
     }
 
-    return NextResponse.json({ success: true, cancelledEntries: result.cancelledEntries })
+    return NextResponse.json({ success: true, deletedEntries: result.deletedEntries })
   },
   { requireWrite: true },
 )

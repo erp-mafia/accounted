@@ -17,6 +17,13 @@ const cspDirectives = [
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
+  // object-src must explicitly allow blob: — Chrome's built-in PDF viewer
+  // renders inline PDFs via an internal <embed>, which falls under
+  // object-src. Without this, blob:-URL invoice previews (created via
+  // URL.createObjectURL on /api/invoices/preview-pdf responses) show
+  // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
+  // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
+  "object-src 'self' blob:",
   `frame-src 'self' blob: ${supabaseUrl}${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
   "frame-ancestors 'none'",
 ].join("; ");
@@ -54,11 +61,9 @@ const nextConfig: NextConfig = {
   async headers() {
     // The catch-all excludes /api/documents/:id/inline so the strict
     // X-Frame-Options: DENY + frame-ancestors 'none' don't conflict with
-    // the embeddable override below. Multiple matching header rules in
-    // Next.js can end up sending duplicate header values to the browser
-    // (Chrome/Firefox then fall back to the most restrictive), which was
-    // showing up as "Det här innehållet har blockerats" in the verifikat
-    // document preview Sheet.
+    // the embeddable override below — Next.js applies every matching
+    // header rule, and duplicate X-Frame-Options/CSP values trigger
+    // "Det här innehållet har blockerats" in Chromium browsers.
     return [
       {
         source: "/((?!api/documents/[^/]+/inline$).*)",
@@ -93,6 +98,17 @@ const nextConfig: NextConfig = {
       // iframes (used by the verifikat document preview Sheet). Excluded
       // from the catch-all above so these values aren't shadowed by the
       // stricter defaults.
+      //
+      // CSP is intentionally minimal: only `frame-ancestors 'self'`
+      // prevents cross-origin clickjacking on the user's documents.
+      // Adding `object-src 'none'` (or `default-src 'none'`) here breaks
+      // Chrome's built-in PDF viewer — Chrome renders inline PDFs through
+      // an internal <embed>, which the directive forbids, surfacing as
+      // "Det här innehållet har blockerats" in the document preview Sheet.
+      // Firefox uses PDF.js and Edge uses its own viewer, so neither hits
+      // this. See crbug.com/271452. X-Content-Type-Options: nosniff plus
+      // the explicit Content-Type from the route handler already prevent
+      // MIME-confusion abuse.
       {
         source: "/api/documents/:id/inline",
         headers: [
@@ -118,7 +134,7 @@ const nextConfig: NextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            value: "default-src 'none'; script-src 'none'; object-src 'none'; frame-ancestors 'self'",
+            value: "frame-ancestors 'self'",
           },
         ],
       },

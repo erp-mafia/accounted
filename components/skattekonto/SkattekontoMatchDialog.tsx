@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 
 interface MatchCandidate {
@@ -177,9 +178,7 @@ export function SkattekontoMatchDialog({
                   <TableRow key={c.journal_entry_id}>
                     <TableCell className="tabular-nums">{c.entry_date}</TableCell>
                     <TableCell className="tabular-nums">
-                      {c.voucher_series && c.voucher_number
-                        ? `${c.voucher_series}${c.voucher_number}`
-                        : '–'}
+                      {formatVoucher(c)}
                     </TableCell>
                     <TableCell className="max-w-[260px] truncate">
                       {c.description}

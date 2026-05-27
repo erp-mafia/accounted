@@ -233,7 +233,7 @@ describe('validateBalanceContinuity', () => {
     expect(result.discrepancies[0].current_ib_net).toBe(5000)
   })
 
-  it('treats differences within 0.01 SEK tolerance as valid', async () => {
+  it('treats sub-öre float drift as valid (ORE_TOLERANCE = 0.005 SEK)', async () => {
     mockResults = {
       fiscal_periods: [
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-1' } },
@@ -243,7 +243,7 @@ describe('validateBalanceContinuity', () => {
       journal_entry_lines: [
         {
           data: [
-            { account_number: '1930', debit_amount: 50000.005, credit_amount: 0 },
+            { account_number: '1930', debit_amount: 50000.001, credit_amount: 0 },
           ],
         },
         {

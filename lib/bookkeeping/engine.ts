@@ -11,11 +11,13 @@ import {
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
+import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntry,
   JournalEntryLine,
+  JournalEntrySourceType,
 } from '@/types'
 
 const log = createLogger('bookkeeping.engine')
@@ -108,6 +110,37 @@ async function resolveAccountIds(
   }
 
   return map
+}
+
+/**
+ * Resolve the default voucher_series for a given source_type from
+ * company_settings.default_voucher_series_per_source_type. Falls back to 'A'
+ * silently when the column isn't present (e.g. older DB snapshot in a test),
+ * the lookup fails, or the configured value is invalid.
+ *
+ * Only called when the caller of createDraftEntry omitted voucher_series.
+ * Explicit voucher_series in the input always wins.
+ */
+async function resolveSeriesFromSettings(
+  supabase: SupabaseClient,
+  companyId: string,
+  sourceType: JournalEntrySourceType,
+): Promise<string> {
+  try {
+    const { data, error } = await supabase
+      .from('company_settings')
+      .select('default_voucher_series_per_source_type')
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (error) return 'A'
+    return resolveDefaultSeriesForSource(
+      data as { default_voucher_series_per_source_type?: Record<string, string> | null } | null,
+      sourceType,
+    )
+  } catch {
+    return 'A'
+  }
 }
 
 /**
@@ -211,6 +244,12 @@ export async function createDraftEntry(
     throw new AccountsNotInChartError(missingAccounts)
   }
 
+  // Resolve voucher_series: explicit input wins; otherwise look up the
+  // per-source-type default from company_settings (falls back to 'A').
+  const resolvedSeries = input.voucher_series
+    ? input.voucher_series
+    : await resolveSeriesFromSettings(supabase, companyId, input.source_type)
+
   // Insert journal entry header as draft (voucher_number = 0, will be assigned on commit)
   const { data: entry, error: entryError } = await supabase
     .from('journal_entries')
@@ -219,7 +258,7 @@ export async function createDraftEntry(
       user_id: userId,
       fiscal_period_id: input.fiscal_period_id,
       voucher_number: 0,
-      voucher_series: input.voucher_series || 'A',
+      voucher_series: resolvedSeries,
       entry_date: input.entry_date,
       description: input.description,
       source_type: input.source_type,

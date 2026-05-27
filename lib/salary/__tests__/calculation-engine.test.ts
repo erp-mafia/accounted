@@ -1005,3 +1005,63 @@ describe('calculateSalary — youth cap', () => {
     expect(result.avgifterCategory).toBe('youth')
   })
 })
+
+describe('calculateSalary — shift premiums (OB-tillägg och övertid)', () => {
+  it('treats ob_weekend as an addition to gross salary', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 40000,
+        lineItems: [
+          baseLineItem(40000),
+          lineItem({
+            itemType: 'ob_weekend',
+            amount: 660,
+            isTaxable: true,
+            isAvgiftBasis: true,
+            isVacationBasis: true,
+          }),
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    // Gross = base 40000 + 660 OB
+    expect(result.grossSalary).toBe(40660)
+    // Avgifter basis includes the OB amount
+    expect(result.avgifterBasis).toBe(40660)
+  })
+
+  it('overtime_50 + ob_night flow into additions step', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 40000,
+        lineItems: [
+          baseLineItem(40000),
+          lineItem({
+            itemType: 'overtime_50',
+            amount: 1500,
+            isTaxable: true,
+            isAvgiftBasis: true,
+            isVacationBasis: true,
+          }),
+          lineItem({
+            itemType: 'ob_night',
+            amount: 900,
+            isTaxable: true,
+            isAvgiftBasis: true,
+            isVacationBasis: true,
+          }),
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    // Gross = 40000 + 1500 + 900 = 42400
+    expect(result.grossSalary).toBe(42400)
+    expect(result.avgifterBasis).toBe(42400)
+    // Should label step as additions including OB
+    const additionStep = result.steps.find((s) => s.label.includes('Tillägg'))
+    expect(additionStep).toBeDefined()
+    expect(additionStep?.output).toBe(2400)
+  })
+})

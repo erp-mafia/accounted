@@ -24,6 +24,7 @@ import {
   throwOnStructuredError,
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { BASAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
@@ -341,7 +342,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       toast({
         title: 'Bokfört',
         description: voucher
-          ? `Verifikation ${voucher.voucher_series}${voucher.voucher_number} skapad.`
+          ? `Verifikation ${formatVoucher(voucher)} skapad.`
           : 'Verifikation skapad.',
       })
       await onSuccess()

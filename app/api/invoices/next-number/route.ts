@@ -9,7 +9,7 @@ export const GET = withRouteContext(
 
     const url = new URL(request.url)
     const documentType = url.searchParams.get('document_type') ?? 'invoice'
-    if (!['invoice', 'proforma', 'delivery_note'].includes(documentType)) {
+    if (!['invoice', 'proforma', 'delivery_note', 'quote'].includes(documentType)) {
       return NextResponse.json(
         { error: 'invalid document_type', requestId },
         { status: 400 },

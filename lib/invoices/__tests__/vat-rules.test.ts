@@ -66,6 +66,29 @@ describe('getAvailableVatRates', () => {
     const rates = getAvailableVatRates('eu_business')
     expect(rates).toHaveLength(4)
   })
+
+  it('collapses to 0%/exempt for non-registered sellers regardless of customer type', () => {
+    // ML 1 kap. 1§ — only a skattskyldig may charge output VAT. The picker
+    // must never offer non-zero rates when vat_registered=false; the API
+    // route (route.ts) and preview-pdf route enforce the same gate so a
+    // client bypassing the UI also gets rejected.
+    for (const customerType of ['individual', 'swedish_business', 'eu_business', 'non_eu_business'] as const) {
+      const rates = getAvailableVatRates(customerType, false, false)
+      expect(rates).toHaveLength(1)
+      expect(rates[0]).toEqual({
+        rate: 0,
+        label: '0% (ej momsregistrerad)',
+        treatment: 'exempt',
+      })
+    }
+  })
+
+  it('defaults vatRegistered to true (legitimate VAT path)', () => {
+    // Explicit default-arg pin so a future signature change doesn't silently
+    // flip the default and strip VAT from invoices for registered sellers.
+    const rates = getAvailableVatRates('swedish_business', false)
+    expect(rates).toHaveLength(4)
+  })
 })
 
 // ============================================================
@@ -154,6 +177,28 @@ describe('getVatRules', () => {
       rate: 25,
       momsRuta: '05',
     })
+  })
+
+  it('short-circuits to exempt / rate 0 / empty momsRuta for non-registered sellers', () => {
+    // ML 1 kap. 1§ — non-skattskyldig cannot charge output VAT. momsRuta is
+    // intentionally empty so a downstream momsdeklaration generator never
+    // mis-files a non-registered seller's revenue into ruta 05.
+    for (const customerType of ['individual', 'swedish_business', 'eu_business', 'non_eu_business'] as const) {
+      const rules = getVatRules(customerType, false, false)
+      expect(rules).toEqual({
+        treatment: 'exempt',
+        rate: 0,
+        momsRuta: '',
+      })
+    }
+  })
+
+  it('defaults vatRegistered to true (legitimate VAT path)', () => {
+    // Explicit default-arg pin (see corresponding getAvailableVatRates test).
+    const rules = getVatRules('swedish_business', false)
+    expect(rules.rate).toBe(25)
+    expect(rules.treatment).toBe('standard_25')
+    expect(rules.momsRuta).toBe('05')
   })
 })
 

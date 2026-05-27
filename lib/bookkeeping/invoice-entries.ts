@@ -2,6 +2,7 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -148,6 +149,64 @@ function generatePerRateLines(
 }
 
 /**
+ * Generate ROT/RUT-avdrag debit lines from invoice items.
+ *
+ * For each item flagged with `deduction_type`, produces a debit on BAS 1513
+ * (Övriga kortfristiga fordringar — Skatteverket) for the computed
+ * deduction amount. The caller must REDUCE the 1510 debit (kundfordringar)
+ * by the same total — the customer only owes the post-deduction amount;
+ * Skatteverket pays the rest via Husavdragstjänsten. Returns both the
+ * lines and the total so callers can apply both adjustments atomically.
+ *
+ * Foreign-currency invoices: ROT/RUT-avdrag is a Sweden-only rule, so
+ * receivables on 1513 are always recorded in SEK. We use the same SEK
+ * conversion as the rest of the entry (toSek closure logic on the caller
+ * side reproduced here for parity with generatePerRateLines).
+ */
+function generateRotRutLines(
+  items: InvoiceItem[],
+  invoiceTagText: string,
+  currency?: string | null,
+  exchangeRate?: number | null,
+): { lines: CreateJournalEntryLineInput[]; totalSek: number } {
+  const lines: CreateJournalEntryLineInput[] = []
+  const isForeign = currency != null && currency !== 'SEK'
+
+  const toSek = (amount: number): number => {
+    if (!isForeign) return amount
+    if (exchangeRate != null && exchangeRate > 0) {
+      return Math.round(amount * exchangeRate * 100) / 100
+    }
+    return amount
+  }
+
+  let totalSek = 0
+
+  for (const item of items) {
+    if (!item.deduction_type) continue
+    // Recompute server-side to defend against tampered client values.
+    const amount = computeDeduction({
+      unit_price: item.unit_price,
+      quantity: item.quantity,
+      deduction_type: item.deduction_type,
+    })
+    if (amount <= 0) continue
+    const amountSek = Math.round(toSek(amount) * 100) / 100
+    if (amountSek <= 0) continue
+    totalSek += amountSek
+    const kind = item.deduction_type === 'rot' ? 'ROT' : 'RUT'
+    lines.push({
+      account_number: '1513',
+      debit_amount: amountSek,
+      credit_amount: 0,
+      line_description: `${kind}-avdrag faktura ${invoiceTagText}`,
+    })
+  }
+
+  return { lines, totalSek: Math.round(totalSek * 100) / 100 }
+}
+
+/**
  * Create journal entry when an invoice is created (status != draft)
  *
  * Supports mixed VAT rates per line item. Groups items by vat_rate
@@ -225,20 +284,31 @@ export async function createInvoiceJournalEntry(
     }
   }
 
-  // Debit: Kundfordringar — balance guarantee: debit = sum of all credit lines
+  // ROT/RUT-avdrag debit lines (1513 Skatteverket). When present, they
+  // reduce the 1510 debit by the same total so the verifikation stays
+  // balanced (debits 1510 + 1513 = credits revenue + VAT). The customer
+  // only owes the post-deduction amount; Skatteverket pays the rest.
+  const rotRut = invoice.items && invoice.items.length > 0
+    ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate)
+    : { lines: [], totalSek: 0 }
+
+  // Debit: Kundfordringar — balance guarantee: debit = sum of all credit
+  // lines MINUS the ROT/RUT total which goes to 1513 instead.
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+  const arAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
 
   lines.push({
     account_number: '1510',
-    debit_amount: debitAmount,
+    debit_amount: arAmount,
     credit_amount: 0,
     line_description: `Faktura ${tag}`,
     ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
   })
 
+  lines.push(...rotRut.lines)
   lines.push(...creditLines)
 
   const input: CreateJournalEntryInput = {
@@ -519,15 +589,29 @@ export async function createInvoiceCashEntry(
     }
   }
 
+  // ROT/RUT-avdrag debit lines (1513 Skatteverket). On cash method the
+  // bank account (1930) receives only the post-deduction amount in real
+  // life; the rest comes from Skatteverket later. We model that by
+  // splitting the debit: 1930 = total - deduction, 1513 = deduction.
+  const rotRut = invoice.items && invoice.items.length > 0
+    ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate)
+    : { lines: [], totalSek: 0 }
+
   // Debit: Företagskonto — balance guarantee: debit = sum of credit lines
+  // minus the ROT/RUT total which goes to 1513 instead.
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
+  const cashDebit = isForeign
+    ? Math.round(totalCredits * 100) / 100
+    : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+  const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
   lines.push({
     account_number: '1930',
-    debit_amount: isForeign ? Math.round(totalCredits * 100) / 100 : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate),
+    debit_amount: bankAmount,
     credit_amount: 0,
     line_description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
   })
 
+  lines.push(...rotRut.lines)
   lines.push(...creditLines)
 
   const input: CreateJournalEntryInput = {

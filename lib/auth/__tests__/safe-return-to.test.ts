@@ -39,4 +39,9 @@ describe('safeReturnTo', () => {
     expect(safeReturnTo('settings', '/')).toBe('/')
     expect(safeReturnTo('javascript:alert(1)', '/')).toBe('/')
   })
+
+  it('rejects data: URIs', () => {
+    expect(safeReturnTo('data:text/html,<script>alert(1)</script>', '/')).toBe('/')
+    expect(safeReturnTo('data:,', '/')).toBe('/')
+  })
 })

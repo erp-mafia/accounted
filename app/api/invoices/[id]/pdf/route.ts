@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { requireCompanyId } from '@/lib/company/context'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 
@@ -66,6 +67,7 @@ export async function GET(
 
   try {
     // Generate PDF
+    const { branding } = prepareInvoicePdfRender(company as CompanySettings)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: invoice as Invoice,
@@ -73,6 +75,7 @@ export async function GET(
         items,
         company: company as CompanySettings,
         originalInvoiceNumber,
+        branding,
       })
     )
 

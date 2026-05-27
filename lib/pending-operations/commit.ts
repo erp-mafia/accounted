@@ -52,6 +52,7 @@ import {
 import { uploadDocument, linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -732,13 +733,16 @@ async function commitSendInvoice(
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens
   // after email delivery (line ~625); rendering with the stale 'draft' status
   // would stamp the customer's PDF with "UTKAST – inte en giltig faktura".
+  const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
+  const { branding } = prepareInvoicePdfRender(company as CompanySettings)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
-      invoice: { ...(invoice as Invoice), status: 'sent' as const },
+      invoice: renderableInvoice,
       customer,
       items,
       company: company as CompanySettings,
       originalInvoiceNumber,
+      branding,
     })
   )
 
@@ -2293,7 +2297,7 @@ async function commitCorrectEntry(
   // commit-time gate matches the staging-time signal.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed, locked_at)')
+    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(is_closed, locked_at)')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -2376,7 +2380,7 @@ async function commitReverseEntry(
   // via resolvePeriodStatusForDate, matching the staging-time signal.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed, locked_at)')
+    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(is_closed, locked_at)')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -2639,3 +2643,4 @@ export async function commitPendingOperation(
     data: result.data,
   }
 }
+

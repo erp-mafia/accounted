@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
 import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
 
 function formatAmount(amount: number): string {
@@ -411,7 +412,7 @@ export function BankReconciliationView() {
                     <td className="py-2 text-right font-mono">{formatAmount(m.transaction_amount)}</td>
                     <td className="py-2 text-center text-muted-foreground">&harr;</td>
                     <td className="py-2">
-                      <span className="font-mono text-xs">{m.voucher_series}{m.voucher_number}</span>
+                      <span className="font-mono text-xs">{formatVoucher(m)}</span>
                       <span className="ml-2 text-muted-foreground truncate">{m.entry_description}</span>
                     </td>
                     <td className="py-2 tabular-nums">{formatDate(m.entry_date)}</td>
@@ -478,7 +479,7 @@ export function BankReconciliationView() {
                           const lineAmount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
                           return (
                             <option key={line.line_id} value={line.journal_entry_id}>
-                              {line.voucher_series}{line.voucher_number} | {formatDate(line.entry_date)} | {formatCurrency(lineAmount)} | {line.entry_description}
+                              {formatVoucher(line)} | {formatDate(line.entry_date)} | {formatCurrency(lineAmount)} | {line.entry_description}
                             </option>
                           )
                         })}
@@ -528,7 +529,7 @@ export function BankReconciliationView() {
                   return (
                     <tr key={line.line_id} className="border-b last:border-0">
                       <td className="py-2 font-mono text-xs">
-                        {line.voucher_series}{line.voucher_number}
+                        {formatVoucher(line)}
                       </td>
                       <td className="py-2 tabular-nums">{formatDate(line.entry_date)}</td>
                       <td className="py-2 truncate max-w-[300px]">

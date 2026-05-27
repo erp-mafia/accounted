@@ -1,6 +1,12 @@
 // Entity types
 export type EntityType = 'enskild_firma' | 'aktiebolag'
 
+// Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
+// ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
+// required for medium-to-large AB and permitted voluntarily for smaller ones.
+// Only meaningful for entity_type='aktiebolag'.
+export type AccountingFramework = 'k2' | 'k3'
+
 // Company role for multi-tenant access
 export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
 
@@ -23,6 +29,7 @@ export interface Company {
   name: string
   org_number: string | null
   entity_type: EntityType
+  accounting_framework: AccountingFramework
   created_by: string
   team_id: string | null
   archived_at: string | null
@@ -240,6 +247,14 @@ export interface CompanySettings {
 
   // Voucher series
   default_voucher_series: string
+  /**
+   * Per-source-type default voucher series map. Keys are
+   * JournalEntrySourceType values; values are single uppercase letters A–Z.
+   * Resolved by `lib/bookkeeping/voucher-series-resolver.ts`. Defaults to
+   * all "A" entries; users can override per source via the bookkeeping
+   * settings UI.
+   */
+  default_voucher_series_per_source_type: Partial<Record<JournalEntrySourceType, string>>
 
   // Invoice PDF settings
   ore_rounding: boolean
@@ -253,8 +268,22 @@ export interface CompanySettings {
   invoice_late_fee_text: string | null
   invoice_credit_terms_text: string | null
 
+  // Invoice branding (per-company colors, font, optional header/footer text).
+  // Defaults preserve the legacy hardcoded palette so unbranded companies
+  // render identically to the pre-branding template.
+  invoice_primary_color: string  // hex #RRGGBB, default '#1a1a1a'
+  invoice_accent_color: string   // hex #RRGGBB, default '#666666'
+  invoice_font_family: 'Helvetica' | 'Times-Roman' | 'Courier'
+  invoice_header_text: string | null
+  invoice_footer_text: string | null
+
   // Automation
   send_invoice_reminders: boolean
+
+  // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
+  reminder_fee_enabled: boolean
+  reminder_fee_amount: number
+  reminder_interest_rate_override: number | null
 
   // Logo
   logo_url: string | null
@@ -701,7 +730,7 @@ export interface Invoice {
   // Credit note reference
   credited_invoice_id: string | null
 
-  // Document type (invoice, proforma, delivery_note)
+  // Document type (invoice, proforma, delivery_note, quote)
   document_type: InvoiceDocumentType
 
   // Conversion tracking (proforma -> invoice)
@@ -711,6 +740,16 @@ export interface Invoice {
   paid_at: string | null
   paid_amount: number | null
   remaining_amount: number
+
+  // ROT/RUT-avdrag claim info. `deduction_total` is the sum of the per-item
+  // deduction_amount and equals the 1513 debit on the verifikation. The
+  // personnummer is stored only as AES-256-GCM ciphertext + the last four
+  // digits (PII isolation). All three fields are null/0 on invoices with
+  // no ROT/RUT lines. Optional in TypeScript to keep legacy fixtures
+  // (pre-migration) valid — treat undefined the same as 0/null.
+  deduction_total?: number
+  deduction_personnummer_encrypted?: string | null
+  deduction_personnummer_last4?: string | null
 
   created_at: string
   updated_at: string
@@ -745,6 +784,27 @@ export interface InvoiceItem {
   // Per-line VAT
   vat_rate: number
   vat_amount: number
+
+  // ROT/RUT-avdrag (Sweden's tax deduction for household services / home
+  // renovation). When `deduction_type` is set, the system computes
+  // `deduction_amount` from the rules in lib/invoices/rot-rut-rules.ts
+  // and posts the receivable to BAS 1513 (Skatteverket). v1 deducts on
+  // the full line total; future work can use `labor_hours` to honour the
+  // labor-only restriction.
+  //
+  // All fields are optional in TypeScript even though Postgres has
+  // defaults — legacy rows pulled before the schema change carry
+  // `undefined` in JS land, and many existing test fixtures predate the
+  // ROT/RUT migration. Treat undefined the same as null/0 throughout.
+  deduction_type?: 'rot' | 'rut' | null
+  deduction_amount?: number
+  labor_hours?: number | null
+  /** Skatteverket arbetstypskod (e.g. 'BYGG', 'STAD'). See ROT_WORK_TYPES / RUT_WORK_TYPES. */
+  work_type?: string | null
+  /** Fastighetsbeteckning. Required for ROT, optional for RUT. */
+  housing_designation?: string | null
+  /** Lägenhetsnummer. Optional, used for ROT in flerbostadshus. */
+  apartment_number?: string | null
 
   created_at: string
 }
@@ -897,6 +957,10 @@ export interface CreateInvoiceInput {
   your_reference?: string
   our_reference?: string
   notes?: string
+  /** Plaintext personnummer — encrypted server-side before storage. */
+  deduction_personnummer?: string
+  /** Fastighetsbeteckning. Required when any item carries deduction_type === 'rot'. */
+  deduction_housing_designation?: string
   items: CreateInvoiceItemInput[]
 }
 
@@ -906,6 +970,12 @@ export interface CreateInvoiceItemInput {
   unit: string
   unit_price: number
   vat_rate?: number
+  /** ROT/RUT toggle. null/undefined = no deduction. */
+  deduction_type?: 'rot' | 'rut' | null
+  labor_hours?: number | null
+  work_type?: string | null
+  housing_designation?: string | null
+  apartment_number?: string | null
 }
 
 export interface CreateTransactionInput {
@@ -1031,6 +1101,7 @@ export type JournalEntrySourceType =
   | 'supplier_invoice_privately_paid'
   | 'supplier_credit_note'
   | 'currency_revaluation'
+  | 'reminder_fee'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -2334,7 +2405,6 @@ export interface AuditLogEntry {
 
 export interface CostCenter {
   id: string
-  user_id: string
   company_id: string
   code: string
   name: string
@@ -2345,7 +2415,6 @@ export interface CostCenter {
 
 export interface Project {
   id: string
-  user_id: string
   company_id: string
   code: string
   name: string
@@ -2414,6 +2483,13 @@ export interface YearEndResult {
   nextPeriod: FiscalPeriod
   openingBalanceEntry: JournalEntry
   revaluationEntry: JournalEntry | null
+  /**
+   * IB/UB reconciliation per balance sheet account, computed after the
+   * opening balances are posted. Surfaced to the UI's ResultStep so the
+   * user can verify continuity before navigating away. Always within
+   * ORE_TOLERANCE — otherwise executeYearEndClosing would have thrown.
+   */
+  continuity?: ContinuityCheckResult
 }
 
 // ============================================================
@@ -2434,6 +2510,32 @@ export type DepreciationMethod =
   | 'linear'
   | 'declining_balance_30'
   | 'declining_balance_20'
+  | 'restvardesavskrivning_25'
+
+/**
+ * K3 component (BFNAR 2012:1 ch 17.4 — komponentavskrivning). When a
+ * substantial asset (typically real estate) has significant components with
+ * materially different useful lives, K3 reporting requires each component to
+ * be depreciated on its own life rather than treating the asset as a single
+ * unit. Components are stored as an array on `Asset.k3_components`; when
+ * non-null, the depreciation engine routes through `computeComponentDepreciation`
+ * and sums per-component linear depreciation (with the same pro-ration logic
+ * as the asset-level linear method).
+ *
+ * Validation (enforced in `lib/bokslut/assets/k3-components.ts`):
+ *   - sum(components.cost) === asset.acquisition_cost (±1 kr tolerance)
+ *   - every component: cost > 0, useful_life_months > 0
+ *   - salvage_value (if present) ≤ component cost
+ *   - non-empty array when set to non-null
+ *
+ * Salvage_value defaults to 0 when omitted.
+ */
+export interface K3Component {
+  name: string
+  cost: number
+  useful_life_months: number
+  salvage_value?: number
+}
 
 export interface Asset {
   id: string
@@ -2449,11 +2551,37 @@ export interface Asset {
   bas_asset_account: string
   bas_accumulated_account: string
   bas_expense_account: string
+  /** Book-value floor for restvärdeavskrivning (IL 18 kap 13§ st.3). Required
+   *  iff depreciation_method = 'restvardesavskrivning_25'; null otherwise. */
+  restvarde_target: number | null
   disposed_at: string | null
   disposed_proceeds: number | null
-  /** Reserved for K3 component depreciation (BFNAR 2012:1 ch.17.4). Empty
-   *  / null for K2 — Phase 5 will fill this when K3 ships. */
-  k3_components: unknown | null
+  /** Output VAT on disposal proceeds (ML 3 kap 3 § / 7 kap 3 §). Defaults to
+   *  0 — only nonzero when the sale was momspliktig. The VAT account
+   *  (2611/2621/2631) is derived from disposed_vat_treatment. */
+  disposed_proceeds_vat: number
+  /** VAT treatment applied to disposal proceeds. Null for legacy disposals
+   *  without VAT data. Constrained by DB CHECK to the same enum as
+   *  VatTreatment. */
+  disposed_vat_treatment: VatTreatment | null
+  /** Jämkning amount per ML 8a kap 7 § — input VAT paid back on disposal
+   *  inside the correction period. Defaults to 0; positive number = debt
+   *  to the state booked on 2641 credit. */
+  jamkning_amount: number
+  /** Remaining months in the korrigeringstid at disposal date. Audit
+   *  metadata only — the booking sits on the journal entry. */
+  jamkning_remaining_months: number | null
+  /** Total korrigeringstid in months: 60 (lös egendom) or 120 (fastighet /
+   *  markanläggning). Audit metadata. */
+  jamkning_total_months: number | null
+  /** Original input VAT that was deducted at acquisition. Audit metadata
+   *  the user supplies (or the system derives from the supplier invoice). */
+  jamkning_original_input_vat: number | null
+  /** K3 component depreciation (BFNAR 2012:1 ch.17.4). When non-null, the
+   *  depreciation engine sums per-component linear depreciation instead of
+   *  applying `depreciation_method` to the asset as a whole. Null for K2
+   *  companies (the API rejects writes for accounting_framework='k2'). */
+  k3_components: K3Component[] | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -2553,6 +2681,13 @@ export interface InvoiceReminder {
   action_token: string
   action_token_used: boolean
   created_at: string
+  // Dröjsmålsränta + lagstadgad påminnelseavgift (Räntelagen §6, Lag 1981:739)
+  interest_amount: number
+  interest_rate: number | null
+  interest_from_date: string | null
+  interest_days: number | null
+  reminder_fee: number
+  fee_journal_entry_id: string | null
 }
 
 // Swedish labels for reminder levels
@@ -2720,7 +2855,10 @@ export type AGIStatus =
   | 'rejected'          // reserved (kontrollresultat DONE_REJECTED could land here)
 
 export type SalaryLineItemType =
-  | 'monthly_salary' | 'hourly_salary' | 'overtime' | 'bonus' | 'commission'
+  | 'monthly_salary' | 'hourly_salary'
+  | 'overtime' | 'overtime_50' | 'overtime_100'
+  | 'ob_weekday_evening' | 'ob_weekend' | 'ob_night' | 'ob_holiday'
+  | 'bonus' | 'commission'
   | 'gross_deduction_pension' | 'gross_deduction_other'
   | 'benefit_car' | 'benefit_housing' | 'benefit_meals' | 'benefit_wellness' | 'benefit_bike' | 'benefit_other'
   | 'sick_karens' | 'sick_day2_14' | 'sick_day15_plus'
@@ -2730,6 +2868,31 @@ export type SalaryLineItemType =
   | 'net_deduction_advance' | 'net_deduction_union' | 'net_deduction_benefit_payment'
   | 'net_deduction_other'
   | 'correction' | 'other'
+
+export type ShiftPremiumItemType =
+  | 'overtime_50' | 'overtime_100'
+  | 'ob_weekday_evening' | 'ob_weekend' | 'ob_night' | 'ob_holiday'
+
+export interface ShiftPremiumRule {
+  id: string
+  company_id: string
+  name: string
+  applies_to_all_employees: boolean
+  applies_to_employee_ids: string[]
+  /** ISO weekday array: 1 = Monday … 7 = Sunday. */
+  day_of_week: number[]
+  /** 'HH:MM' or 'HH:MM:SS' (PostgreSQL TIME). */
+  start_time: string
+  /** 'HH:MM' or 'HH:MM:SS'. End values <= start mean the window wraps midnight. */
+  end_time: string
+  premium_percent: number
+  item_type: ShiftPremiumItemType
+  priority: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
 
 export interface Employee {
   id: string

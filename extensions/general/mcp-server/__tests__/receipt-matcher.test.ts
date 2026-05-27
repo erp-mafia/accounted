@@ -121,6 +121,7 @@ vi.mock('@react-pdf/renderer', () => ({
 
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn(),
+  brandingFromCompanySettings: vi.fn().mockReturnValue({}),
 }))
 
 vi.mock('@/lib/email/service', () => ({

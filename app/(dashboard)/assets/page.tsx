@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 
 import { Card, CardContent } from '@/components/ui/card'
@@ -116,6 +117,7 @@ export default function AssetsPage() {
                   <TableHead className="text-right">{t('th_acquisition_cost')}</TableHead>
                   <TableHead>{t('th_useful_life')}</TableHead>
                   <TableHead>{t('th_status')}</TableHead>
+                  <TableHead className="text-right">{t('th_actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -136,9 +138,23 @@ export default function AssetsPage() {
                       </TableCell>
                       <TableCell>
                         {asset.disposed_at ? (
-                          <Badge variant="secondary">{t('status_disposed')}</Badge>
+                          <div className="flex flex-col gap-1">
+                            <Badge variant="secondary">{t('status_disposed')}</Badge>
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                              {formatDate(asset.disposed_at)}
+                            </span>
+                          </div>
                         ) : (
                           <Badge variant="success">{t('status_active')}</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {!asset.disposed_at && (
+                          <Link href={`/assets/${asset.id}/dispose`}>
+                            <Button variant="ghost" size="sm">
+                              {t('action_dispose')}
+                            </Button>
+                          </Link>
                         )}
                       </TableCell>
                     </TableRow>

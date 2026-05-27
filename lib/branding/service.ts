@@ -25,6 +25,11 @@ export interface BrandingConfig {
   privacyEmail: string
   securityEmail: string
 
+  // Address Supabase Auth sends verification / reset emails from. Used to build
+  // the `from:` query on the "check your email" screen's Gmail deep link.
+  // Must match the From in your Supabase Auth SMTP config.
+  authEmailFrom: string
+
   // URLs
   appUrl: string
 
@@ -59,6 +64,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   supportEmail: 'support@gnubok.se',
   privacyEmail: 'privacy@gnubok.se',
   securityEmail: 'security@arcim.io',
+  authEmailFrom: 'noreply@gnubok.se',
   appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se',
   logoPath: '/gnubokiceon-removebg-preview.png',
   faviconPath: '/favicon.ico',
@@ -94,6 +100,7 @@ function readEnvOverrides(): Partial<BrandingConfig> {
   if (env.BRANDING_SUPPORT_EMAIL) o.supportEmail = env.BRANDING_SUPPORT_EMAIL
   if (env.BRANDING_PRIVACY_EMAIL) o.privacyEmail = env.BRANDING_PRIVACY_EMAIL
   if (env.BRANDING_SECURITY_EMAIL) o.securityEmail = env.BRANDING_SECURITY_EMAIL
+  if (env.NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM) o.authEmailFrom = env.NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM
   if (env.NEXT_PUBLIC_APP_URL) o.appUrl = env.NEXT_PUBLIC_APP_URL
   if (env.NEXT_PUBLIC_BRANDING_LOGO_PATH) o.logoPath = env.NEXT_PUBLIC_BRANDING_LOGO_PATH
   if (env.NEXT_PUBLIC_BRANDING_FAVICON_PATH) o.faviconPath = env.NEXT_PUBLIC_BRANDING_FAVICON_PATH

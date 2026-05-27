@@ -88,6 +88,15 @@ export function SecuritySettings() {
 
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
+        // Supabase rejects updateUser({password}) with this exact message when
+        // the user has a TOTP factor enrolled but is at AAL1. Send them through
+        // /mfa/verify to step up; on return they land back here and can retry.
+        if (body.error?.includes('AAL2')) {
+          router.push(
+            `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
+          )
+          return
+        }
         toast({
           title: t('toast_update_failed_title'),
           description: body.error || t('toast_update_failed_description'),
@@ -122,6 +131,14 @@ export function SecuritySettings() {
       const { error } = await supabase.auth.mfa.unenroll({ factorId: mfaFactorId })
 
       if (error) {
+        // mfa.unenroll requires AAL2 — for BankID-linked users at AAL1 (the
+        // shouldEnforceMfa skip path), this is the only way to step up.
+        if (error.message?.includes('AAL2')) {
+          router.push(
+            `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
+          )
+          return
+        }
         toast({
           title: t('toast_unenroll_failed_title'),
           description: error.message,

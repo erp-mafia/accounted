@@ -513,6 +513,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Momssatsen är inte tillåten för denna kundtyp.',
     message_en: 'The VAT rate is not allowed for this customer type.',
   },
+  INVOICE_CREATE_ROT_RUT_VALIDATION: {
+    httpStatus: 400,
+    message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',
+    message_en: 'ROT/RUT deduction failed validation. Check personnummer and housing designation.',
+  },
+  INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Personnumret för ROT/RUT-avdraget är ogiltigt.',
+    message_en: 'The personnummer provided for the ROT/RUT deduction is invalid.',
+  },
   INVOICE_CREATE_INSERT_FAILED: {
     httpStatus: 500,
     message_sv: 'Fakturan kunde inte sparas.',
@@ -662,6 +672,37 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan ändrades samtidigt och kunde inte makuleras. Ladda om och försök igen.',
     message_en: 'Invoice was modified concurrently and could not be cancelled. Reload and retry.',
   },
+  // Quotes / Offerter
+  QUOTE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Offerten kunde inte hittas.',
+    message_en: 'Quote not found.',
+  },
+  QUOTE_INVALID_STATE: {
+    httpStatus: 400,
+    message_sv: 'Offerten är inte i en status som tillåter denna åtgärd.',
+    message_en: 'Quote is not in a state that allows this action.',
+  },
+  QUOTE_TOKEN_INVALID: {
+    httpStatus: 404,
+    message_sv: 'Länken är ogiltig eller har gått ut.',
+    message_en: 'The link is invalid or has expired.',
+  },
+  QUOTE_NUMBER_ASSIGN_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte tilldela offertnummer.',
+    message_en: 'Failed to assign quote number.',
+  },
+  QUOTE_CONVERSION_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Offerten kunde inte konverteras till faktura.',
+    message_en: 'Failed to convert quote to invoice.',
+  },
+  QUOTE_NOT_QUOTE: {
+    httpStatus: 400,
+    message_sv: 'Detta dokument är inte en offert.',
+    message_en: 'This document is not a quote.',
+  },
 }
 
 const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
@@ -679,6 +720,25 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kunde inte godkänna leverantörsfakturan.',
     message_en: 'Failed to update supplier invoice status to approved.',
+  },
+  PO_THREE_WAY_MATCH_FAILED: {
+    httpStatus: 422,
+    message_sv:
+      'Trevägs-matchning misslyckades: leverantörsfakturan stämmer inte med inköpsordern eller godsmottagningen.',
+    message_en:
+      'Three-way match failed: the supplier invoice does not reconcile with the purchase order / goods receipt.',
+  },
+  PO_LINK_REQUIRED: {
+    httpStatus: 422,
+    message_sv:
+      'Inställningarna kräver att varje leverantörsfaktura kopplas till en inköpsorder.',
+    message_en:
+      'Company settings require every supplier invoice to be linked to a purchase order.',
+  },
+  PO_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inköpsordern kunde inte hittas.',
+    message_en: 'Purchase order not found.',
   },
 }
 
@@ -729,6 +789,11 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Resultaträkningens debet och kredit balanserar inte. Granska verifikationerna innan bokslut.',
     message_en: 'Trial balance does not balance.',
+  },
+  YEAR_END_NEXT_PERIOD_HAS_IB: {
+    httpStatus: 400,
+    message_sv: 'Nästa räkenskapsperiod har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.',
+    message_en: 'Next fiscal period already has opening balances posted; reverse them before re-running year-end.',
   },
 }
 
@@ -1186,6 +1251,11 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Filen kunde inte sparas.',
     message_en: 'Document storage failed.',
+  },
+  DOC_UPLOAD_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv: 'Det går inte att bifoga underlag till verifikationer i en låst eller stängd period.',
+    message_en: 'Cannot attach documents to entries in a locked or closed fiscal period.',
   },
   DOC_DOWNLOAD_FAILED: {
     httpStatus: 500,

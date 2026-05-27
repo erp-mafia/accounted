@@ -43,6 +43,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -264,6 +265,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
+        const preflight = prepareInvoicePdfRender(settings)
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
@@ -271,6 +273,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             items,
             company: settings,
             originalInvoiceNumber,
+            branding: preflight.branding,
           }),
         )
       } catch (err) {
@@ -352,6 +355,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let pdfBuffer: Buffer
     try {
+      const { branding } = prepareInvoicePdfRender(settings)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -359,6 +363,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           items,
           company: settings,
           originalInvoiceNumber,
+          branding,
         }),
       )
     } catch (err) {

@@ -100,6 +100,14 @@ export interface InvoiceEmailData {
   company: CompanySettings
 }
 
+// Minimal hex validator — guards against branding values that bypass the
+// settings UI and could inject CSS via crafted strings. Anything malformed
+// falls back to the legacy default.
+function safeBrandingColor(value: string | null | undefined, fallback: string): string {
+  if (!value) return fallback
+  return /^#[0-9A-Fa-f]{6}$/.test(value) ? value : fallback
+}
+
 /**
  * Generate HTML email for sending an invoice
  */
@@ -116,6 +124,13 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   const hidePayment = isCreditNote || isDeliveryNote || isProforma
   const firstName = customer.name ? customer.name.split(' ')[0] : ''
 
+  // Primary color drives the heading accent and the highlighted total. The
+  // accent is sanitized to a strict hex pattern — anything else falls back
+  // to the legacy dark neutral. Credit notes intentionally use the success
+  // green for the total regardless of branding, because the customer's brain
+  // is wired to expect "money coming back = green".
+  const primaryColor = safeBrandingColor(company.invoice_primary_color, '#111111')
+
   return `
 <!DOCTYPE html>
 <html lang="${L.htmlLang}">
@@ -127,8 +142,8 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
     <!-- Header -->
-    <div style="margin-bottom: 30px;">
-      <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: #111;">
+    <div style="margin-bottom: 30px; border-bottom: 2px solid ${primaryColor}; padding-bottom: 16px;">
+      <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: ${primaryColor};">
         ${L.documentFrom(documentType, getCompanyPrimaryName(company))}
       </h1>
       <p style="margin: 0; color: #666; font-size: 14px;">
@@ -146,7 +161,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </p>
     </div>
 
-    <!-- Invoice Summary Box -->
+    <!-- Summary Box -->
     <div style="background: #f8f9fa; border-radius: 8px; padding: 25px; margin-bottom: 30px;">
       <table style="width: 100%; border-collapse: collapse;">
         <tr>
@@ -168,7 +183,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         </tr>
         <tr>
           <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">${L.toPay}</td>
-          <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: ${isCreditNote ? '#059669' : '#111'};">
+          <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: ${isCreditNote ? '#059669' : primaryColor};">
             ${formatCurrencyForCustomer(invoice.total, invoice.currency, lang)}
           </td>
         </tr>
@@ -178,7 +193,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Payment Details -->
     ${!hidePayment ? `
     <div style="margin-bottom: 30px;">
-      <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: #111;">
+      <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: ${primaryColor};">
         ${L.paymentHeading}
       </h2>
       <table style="width: 100%; border-collapse: collapse;">
@@ -221,7 +236,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </p>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${L.sincerely}<br>
-        <strong>${getCompanyPrimaryName(company)}</strong>
+        <strong style="color: ${primaryColor};">${getCompanyPrimaryName(company)}</strong>
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">

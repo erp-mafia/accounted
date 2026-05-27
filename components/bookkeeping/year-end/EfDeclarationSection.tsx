@@ -1,101 +1,211 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { FileDown, Info } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
+import { AlertTriangle, FileDown, Info } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { calculateEgenavgifter, type EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
-import { calculateRantefordelning } from '@/lib/bokslut/enskild-firma/rantefordelning-calculator'
-import { proposeEfPfondAvsattning } from '@/lib/bokslut/enskild-firma/periodiseringsfond-ef'
-import { calculateExpansionsfondChange } from '@/lib/bokslut/enskild-firma/expansionsfond-calculator'
+import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
 import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
 
 interface EfDeclarationSectionProps {
   fiscalPeriodId: string
-  /** Bokfört resultat (income statement net_result) — used as the default
-   *  surplus base for the calculators. */
+  /** Bokfört resultat (income statement net_result) — shown as the surplus
+   *  base in the wizard header. Server recomputes from the trial balance. */
   bookedSurplus: number
   /** Closing year of the fiscal period (for periodiseringsfond cohort). */
   fiscalYear: number
 }
 
+interface EfOverrideInputs {
+  category: EgenavgiftCategory
+  kapitalunderlag: string
+  priorSchablon: string
+  priorActual: string
+  pfondDesired: string
+  expansionsfondBalance: string
+  expansionsfondChange: string
+}
+
+interface EfPreviewResponse {
+  fiscalPeriod: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+  }
+  bookedSurplus: number
+  items: EfDeclarationItem[]
+  postedEntryCount: number
+  inputWarnings: string[]
+}
+
+const DEFAULT_OVERRIDES: EfOverrideInputs = {
+  category: 'full',
+  kapitalunderlag: '',
+  priorSchablon: '',
+  priorActual: '',
+  pfondDesired: '',
+  expansionsfondBalance: '',
+  expansionsfondChange: '',
+}
+
 /**
- * Read-only EF declaration computation. All values are skattemässiga
- * justeringar that are filed in NE-bilaga / INK1 — never booked. The card
- * runs calculators in the browser as the user adjusts inputs and shows the
- * NE-bilaga ruta where each number lands.
+ * EF declaration step — fetches the four calculator outputs (egenavgifter,
+ * räntefördelning, periodiseringsfond-EF, expansionsfond) from the server
+ * so the same source-of-truth (computeEfDeclarationPreview) is used by
+ * wizard, MCP tool and NE-bilaga.
+ *
+ * EF tax mechanisms are declaration-only — they NEVER produce journal
+ * entries. The banner makes that BFL distinction visible.
+ *
+ * Override inputs persist to localStorage scoped by fiscal period id, so
+ * re-entering the wizard recalls them without round-tripping a write.
  */
 export function EfDeclarationSection({
   fiscalPeriodId,
   bookedSurplus,
   fiscalYear,
 }: EfDeclarationSectionProps) {
-  const [category, setCategory] = useState<EgenavgiftCategory>('full')
-  const [priorSchablon, setPriorSchablon] = useState('')
-  const [priorActual, setPriorActual] = useState('')
-  const [kapitalunderlag, setKapitalunderlag] = useState('')
-  const [pfondDesired, setPfondDesired] = useState('')
-  const [expansionsfondBalance, setExpansionsfondBalance] = useState('')
-  const [expansionsfondChange, setExpansionsfondChange] = useState('')
+  const storageKey = `ef-declaration-overrides:${fiscalPeriodId}`
 
-  const items: EfDeclarationItem[] = useMemo(() => {
-    const list: EfDeclarationItem[] = []
-    const eg = calculateEgenavgifter({
-      surplusBeforeEgenavgifter: bookedSurplus,
-      category,
-      priorYearSchablonavdrag: parseFloat(priorSchablon) || 0,
-      priorYearActualCharged: parseFloat(priorActual) || 0,
-    })
-    list.push(eg)
+  const [overrides, setOverrides] = useState<EfOverrideInputs>(DEFAULT_OVERRIDES)
+  const [preview, setPreview] = useState<EfPreviewResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-    const kap = parseFloat(kapitalunderlag) || 0
-    const r = calculateRantefordelning({ kapitalunderlag: kap })
-    if (r) list.push(r)
-
-    const surplusAfterEg = bookedSurplus - eg.amount
-    const pfond = proposeEfPfondAvsattning({
-      surplus: surplusAfterEg,
-      fiscalYear,
-      desiredAmount: pfondDesired === '' ? undefined : parseFloat(pfondDesired),
-    })
-    if (pfond) list.push(pfond)
-
-    const expChange = parseFloat(expansionsfondChange) || 0
-    if (expChange !== 0) {
-      const exp = calculateExpansionsfondChange({
-        kapitalunderlag: kap,
-        existingBalance: parseFloat(expansionsfondBalance) || 0,
-        desiredChange: expChange,
-      })
-      if (exp) list.push(exp)
+  // Restore overrides from localStorage on mount.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(storageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
+        setOverrides({ ...DEFAULT_OVERRIDES, ...parsed })
+      }
+    } catch {
+      // Ignore — start with defaults.
     }
-    return list
-  }, [
-    bookedSurplus,
-    category,
-    priorSchablon,
-    priorActual,
-    kapitalunderlag,
-    pfondDesired,
-    expansionsfondBalance,
-    expansionsfondChange,
-    fiscalYear,
-  ])
+  }, [storageKey])
+
+  // Persist overrides on change.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(overrides))
+    } catch {
+      // Quota exceeded or disabled — non-fatal.
+    }
+  }, [storageKey, overrides])
+
+  const queryString = useMemo(() => {
+    const params = new URLSearchParams()
+    params.set('category', overrides.category)
+    const kap = parseFloat(overrides.kapitalunderlag)
+    if (Number.isFinite(kap)) params.set('kapitalunderlag', String(kap))
+    const ps = parseFloat(overrides.priorSchablon)
+    if (Number.isFinite(ps)) params.set('priorYearSchablonavdrag', String(ps))
+    const pa = parseFloat(overrides.priorActual)
+    if (Number.isFinite(pa)) params.set('priorYearActualCharged', String(pa))
+    const pf = parseFloat(overrides.pfondDesired)
+    if (Number.isFinite(pf)) params.set('pfondDesiredAmount', String(pf))
+    const eb = parseFloat(overrides.expansionsfondBalance)
+    if (Number.isFinite(eb)) params.set('expansionsfondExistingBalance', String(eb))
+    const ec = parseFloat(overrides.expansionsfondChange)
+    if (Number.isFinite(ec) && ec !== 0) params.set('expansionsfondDesiredChange', String(ec))
+    return params.toString()
+  }, [overrides])
+
+  const loadPreview = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods/${fiscalPeriodId}/ef-declaration?${queryString}`,
+      )
+      const body = await res.json()
+      if (!res.ok) {
+        setError(body?.error?.message ?? 'Kunde inte ladda EF-deklaration')
+        setPreview(null)
+        return
+      }
+      setPreview(body.data as EfPreviewResponse)
+    } catch {
+      setError('Kunde inte ladda EF-deklaration')
+      setPreview(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [fiscalPeriodId, queryString])
+
+  // Debounce refetch so each keystroke doesn't slam the API. 350 ms feels
+  // responsive without being noisy.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      void loadPreview()
+    }, 350)
+    return () => clearTimeout(handle)
+  }, [loadPreview])
+
+  const update = useCallback(
+    <K extends keyof EfOverrideInputs>(field: K, value: EfOverrideInputs[K]) => {
+      setOverrides((prev) => ({ ...prev, [field]: value }))
+    },
+    [],
+  )
+
+  const items = preview?.items ?? []
+  const inputWarnings = preview?.inputWarnings ?? []
+  const noPostedEntries = preview ? preview.postedEntryCount === 0 : false
 
   return (
     <div className="space-y-6">
+      {/* BFL distinction banner — EF values are declaration-only, never booked. */}
+      <Card className="border-border bg-secondary/40">
+        <CardContent className="p-4 flex items-start gap-3">
+          <Info className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">
+              Skattemässiga justeringar — NE-bilaga
+            </span>
+            <br />
+            För enskild firma bokförs varken skatt, egenavgifter, fonder eller räntefördelning.
+            Värdena nedan visar vad du fyller i på NE-bilagan när du deklarerar. Inga verifikat skapas.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* "No journal entries posted" banner — surfaced when the period has
+          zero posted vouchers, so the user knows the surplus is 0 because
+          nothing's booked yet, not because the calculators failed. */}
+      {noPostedEntries && (
+        <Card className="border-border">
+          <CardContent className="p-4 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground shrink-0" />
+            <p className="text-sm">
+              <span className="font-medium">Inga verifikat bokförda i perioden.</span>{' '}
+              Värdena nedan baseras enbart på NE-bilagans räkenskapsschema (intäkter och
+              kostnader hittills). Bokför löpande verifikat först för att få ett realistiskt
+              överskott.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Input form */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Skattemässiga justeringar — NE-bilaga</CardTitle>
+          <CardTitle className="text-base">Indata</CardTitle>
           <p className="text-sm text-muted-foreground">
-            För enskild firma bokförs inte skatt, egenavgifter, fonder eller
-            räntefördelning. Beräkningarna nedan visar vad du fyller i på NE-bilagan
-            när du deklarerar.
+            Bokfört överskott:{' '}
+            <span className="tabular-nums font-medium text-foreground">
+              {formatCurrency(preview?.bookedSurplus ?? bookedSurplus)}
+            </span>
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -104,8 +214,8 @@ export function EfDeclarationSection({
               <Label className="text-xs">Egenavgifter — kategori</Label>
               <select
                 className="border border-border rounded-md h-9 text-sm px-2 w-full bg-background"
-                value={category}
-                onChange={(e) => setCategory(e.target.value as EgenavgiftCategory)}
+                value={overrides.category}
+                onChange={(e) => update('category', e.target.value as EgenavgiftCategory)}
               >
                 <option value="full">Aktiv, full sats (28,97 %)</option>
                 <option value="pensioner">Pensionär (10,21 %)</option>
@@ -117,8 +227,8 @@ export function EfDeclarationSection({
               <Input
                 type="number"
                 step="1"
-                value={kapitalunderlag}
-                onChange={(e) => setKapitalunderlag(e.target.value)}
+                value={overrides.kapitalunderlag}
+                onChange={(e) => update('kapitalunderlag', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -128,8 +238,8 @@ export function EfDeclarationSection({
               <Input
                 type="number"
                 step="1"
-                value={priorSchablon}
-                onChange={(e) => setPriorSchablon(e.target.value)}
+                value={overrides.priorSchablon}
+                onChange={(e) => update('priorSchablon', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -139,8 +249,8 @@ export function EfDeclarationSection({
               <Input
                 type="number"
                 step="1"
-                value={priorActual}
-                onChange={(e) => setPriorActual(e.target.value)}
+                value={overrides.priorActual}
+                onChange={(e) => update('priorActual', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -150,8 +260,8 @@ export function EfDeclarationSection({
               <Input
                 type="number"
                 step="1"
-                value={pfondDesired}
-                onChange={(e) => setPfondDesired(e.target.value)}
+                value={overrides.pfondDesired}
+                onChange={(e) => update('pfondDesired', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -161,8 +271,8 @@ export function EfDeclarationSection({
               <Input
                 type="number"
                 step="1"
-                value={expansionsfondBalance}
-                onChange={(e) => setExpansionsfondBalance(e.target.value)}
+                value={overrides.expansionsfondBalance}
+                onChange={(e) => update('expansionsfondBalance', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -174,8 +284,8 @@ export function EfDeclarationSection({
               <Input
                 type="number"
                 step="1"
-                value={expansionsfondChange}
-                onChange={(e) => setExpansionsfondChange(e.target.value)}
+                value={overrides.expansionsfondChange}
+                onChange={(e) => update('expansionsfondChange', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -183,6 +293,32 @@ export function EfDeclarationSection({
           </div>
         </CardContent>
       </Card>
+
+      {/* Top-level input warnings (e.g. missing kapitalunderlag) */}
+      {inputWarnings.map((w, i) => (
+        <Card key={i} className="border-border">
+          <CardContent className="p-4 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground shrink-0" />
+            <p className="text-sm">{w}</p>
+          </CardContent>
+        </Card>
+      ))}
+
+      {/* Loading / error / items */}
+      {error && (
+        <Card>
+          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
+        </Card>
+      )}
+
+      {loading && !preview && (
+        <Card>
+          <CardContent className="p-6 space-y-3">
+            <Skeleton className="h-6 w-1/3" />
+            <Skeleton className="h-20 w-full" />
+          </CardContent>
+        </Card>
+      )}
 
       {items.map((item) => (
         <Card key={item.kind}>
@@ -210,6 +346,7 @@ export function EfDeclarationSection({
         </Card>
       ))}
 
+      {/* NE-bilaga download */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -217,8 +354,8 @@ export function EfDeclarationSection({
             NE-bilaga räkenskapsschema (R1–R11)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Räkenskapsschema-delen genereras automatiskt från bokföringen. Ladda ner
-            SRU-filen och ladda upp den i Skatteverkets e-tjänst för Inkomstdeklaration 1.
+            Räkenskapsschema-delen genereras automatiskt från bokföringen för räkenskapsåret {fiscalYear}.
+            Ladda ner SRU-filen och ladda upp den i Skatteverkets e-tjänst för Inkomstdeklaration 1.
           </p>
         </CardHeader>
         <CardContent>

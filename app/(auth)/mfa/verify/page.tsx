@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, useRef, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -10,8 +10,17 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, LogOut } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export default function MfaVerifyPage() {
+  return (
+    <Suspense>
+      <MfaVerifyContent />
+    </Suspense>
+  )
+}
+
+function MfaVerifyContent() {
   const t = useTranslations('mfa')
   const tCommon = useTranslations('common')
   const [code, setCode] = useState('')
@@ -23,7 +32,14 @@ export default function MfaVerifyPage() {
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const supabase = createClient()
+
+  // Step-up landing target. Set by callers that need AAL2 to do something
+  // sensitive (set/change password, unenroll MFA, etc.) — /api/account/password
+  // and SecuritySettings redirect here when GoTrue rejects with "AAL2 session
+  // is required". Falls back to the dashboard for direct visits.
+  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
 
   useEffect(() => {
     async function loadFactor() {
@@ -122,7 +138,7 @@ export default function MfaVerifyPage() {
         document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
       }
 
-      router.push('/')
+      router.push(returnTo)
       router.refresh()
     } catch {
       toast({

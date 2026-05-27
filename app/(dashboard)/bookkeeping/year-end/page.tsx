@@ -172,6 +172,9 @@ export default function YearEndPage() {
       })
       const body = await res.json()
       if (!res.ok) {
+        // body.error.message is the localized Swedish message picked by
+        // the structured-error registry. Do NOT interpolate raw details
+        // here — they can contain DB-sourced strings (V2.3 finding).
         setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
         return
       }
