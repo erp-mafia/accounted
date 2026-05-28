@@ -10,7 +10,7 @@ const log = createLogger('agent.composer.tic-fetch')
 // without requiring the user to have visited the TIC workspace beforehand.
 //
 // Why HTTP self-fetch rather than a direct import: core-build CI forbids
-// `from '@/extensions/` imports in lib/agent/*. Going through the extension's
+// imports from @/extensions/ in lib/agent/*. Going through the extension's
 // public HTTP surface keeps the boundary intact and works the same in dev
 // and on Vercel. The TIC handler already accepts cookie-auth, so we just
 // forward the user's session cookie.
