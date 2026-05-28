@@ -12,6 +12,9 @@ interface ReviewLineItem {
   amount: number
   account_number: string
   vat_rate: number
+  // When set, the user typed the deductible VAT explicitly (manual override).
+  // Used for bilförmån 50%, representation tak, FX-rundningar etc.
+  vat_amount?: number
 }
 
 interface SupplierInvoiceReviewContentProps {
@@ -80,20 +83,28 @@ function buildJournalPreview(
     })
   }
 
+  // Per-line effective VAT — manual override wins over computed amount × rate.
+  // The engine reads stored vat_amount; the preview must reflect the same.
+  const itemVat = (item: ReviewLineItem) =>
+    item.vat_amount != null
+      ? Math.round(item.vat_amount * 100) / 100
+      : Math.round(item.amount * item.vat_rate * 100) / 100
+
   if (reverseCharge) {
-    // Reverse charge: fiktiv moms per VAT rate (matches engine groupVatByRate logic)
+    // Reverse charge: fiktiv moms is always statutory base × rate, regardless
+    // of any manual override on the items themselves (matches engine).
     const isDomesticRC = supplierType === 'swedish_business'
     const inputAccount = isDomesticRC ? '2647' : '2645'
 
-    const vatByRate = new Map<number, number>()
+    const baseByRate = new Map<number, number>()
     for (const item of items) {
       if (item.vat_rate > 0) {
-        const current = vatByRate.get(item.vat_rate) || 0
-        vatByRate.set(item.vat_rate, current + toSek(item.amount))
+        const current = baseByRate.get(item.vat_rate) || 0
+        baseByRate.set(item.vat_rate, current + toSek(item.amount))
       }
     }
 
-    for (const [rate, netAmount] of vatByRate) {
+    for (const [rate, netAmount] of baseByRate) {
       const fiktivVat = Math.round(netAmount * rate * 100) / 100
       const outputAccount = getOutputVatAccount(rate)
       lines.push({
@@ -119,12 +130,23 @@ function buildJournalPreview(
     })
   } else {
     if (totalVat > 0) {
-      lines.push({
-        account_number: '2641',
-        description: 'Ingående moms',
-        debit: toSek(totalVat),
-        credit: 0,
-      })
+      // Sum per-rate using effective (manual-or-computed) VAT, so the preview
+      // matches what groupVatByRate will write to 2641 server-side.
+      const vatByRate = new Map<number, number>()
+      for (const item of items) {
+        const v = itemVat(item)
+        if (v > 0) {
+          vatByRate.set(item.vat_rate, (vatByRate.get(item.vat_rate) || 0) + v)
+        }
+      }
+      for (const [, vat] of vatByRate) {
+        lines.push({
+          account_number: '2641',
+          description: 'Ingående moms',
+          debit: toSek(vat),
+          credit: 0,
+        })
+      }
     }
     // Credit: 2440 at total incl. VAT
     lines.push({
@@ -226,7 +248,9 @@ export function SupplierInvoiceReviewContent({
           </thead>
           <tbody>
             {items.map((item, index) => {
-              const vatAmount = Math.round(item.amount * item.vat_rate * 100) / 100
+              const vatAmount = item.vat_amount != null
+                ? Math.round(item.vat_amount * 100) / 100
+                : Math.round(item.amount * item.vat_rate * 100) / 100
               return (
                 <tr key={index} className="border-b last:border-0">
                   <td className="py-2">
@@ -244,7 +268,9 @@ export function SupplierInvoiceReviewContent({
       </div>
       <div className="sm:hidden space-y-2">
         {items.map((item, index) => {
-          const vatAmount = Math.round(item.amount * item.vat_rate * 100) / 100
+          const vatAmount = item.vat_amount != null
+            ? Math.round(item.vat_amount * 100) / 100
+            : Math.round(item.amount * item.vat_rate * 100) / 100
           return (
             <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
               <div className="flex items-center justify-between">

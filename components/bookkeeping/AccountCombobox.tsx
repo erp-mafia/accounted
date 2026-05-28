@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import type { BASAccount } from '@/types'
@@ -9,11 +10,18 @@ interface AccountComboboxProps {
   value: string
   accounts: BASAccount[]
   onChange: (accountNumber: string) => void
+  // When provided, an inline "Skapa nytt konto" affordance appears in the
+  // dropdown's empty state. The current search string is passed so the caller
+  // can prefill the create dialog.
+  onCreateAccount?: (prefill: string) => void
+  // Extra classes merged into the trigger Input — callers pass `h-8` for dense
+  // table rows, omit it to use the default Input height.
+  className?: string
 }
 
 const MAX_RESULTS = 50
 
-export default function AccountCombobox({ value, accounts, onChange }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCreateAccount, className }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -179,7 +187,7 @@ export default function AccountCombobox({ value, accounts, onChange }: AccountCo
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         placeholder="Sök konto…"
-        className="font-mono"
+        className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
       />
 
@@ -236,6 +244,20 @@ export default function AccountCombobox({ value, accounts, onChange }: AccountCo
             <p className="text-xs text-muted-foreground mt-1">
               Kontot kan behöva aktiveras i din kontoplan.
             </p>
+          )}
+          {onCreateAccount && (
+            <button
+              type="button"
+              className="mt-2 flex w-full items-center gap-2 rounded-md border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                setIsOpen(false)
+                onCreateAccount(search.trim())
+              }}
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Skapa konto &quot;{search.trim()}&quot;</span>
+            </button>
           )}
         </div>
       )}

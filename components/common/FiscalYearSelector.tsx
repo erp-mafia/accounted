@@ -23,7 +23,12 @@ interface Props {
    * Current selection. `null` means "all years" — no filter applied.
    */
   value: string | null
-  onChange: (periodId: string | null) => void
+  /**
+   * Called with the selected period id (or null for "all years"). The second
+   * arg is the matching FiscalPeriod object so callers can read period_start
+   * / period_end without an extra fetch.
+   */
+  onChange: (periodId: string | null, period?: FiscalPeriod | null) => void
   /**
    * If true, include an "Alla räkenskapsår" option that clears the filter.
    * Pages that require a specific period (e.g. Reports) should pass false.
@@ -107,12 +112,12 @@ export function FiscalYearSelector({
       if (value === null && typeof window !== 'undefined') {
         const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
         if (stored === ALL_YEARS_VALUE) {
-          if (includeAllOption) onChange(null)
-          else if (fetched.length > 0) onChange(fetched[0].id)
+          if (includeAllOption) onChange(null, null)
+          else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
         } else if (stored && fetched.some((p) => p.id === stored)) {
-          onChange(stored)
+          onChange(stored, fetched.find((p) => p.id === stored) ?? null)
         } else if (!includeAllOption && fetched.length > 0) {
-          onChange(fetched[0].id)
+          onChange(fetched[0].id, fetched[0])
         }
       }
 
@@ -134,7 +139,8 @@ export function FiscalYearSelector({
         nextPeriodId ?? ALL_YEARS_VALUE,
       )
     }
-    onChange(nextPeriodId)
+    const nextPeriod = nextPeriodId ? periods.find((p) => p.id === nextPeriodId) ?? null : null
+    onChange(nextPeriodId, nextPeriod)
   }
 
   const selectValue = value ?? (includeAllOption ? ALL_YEARS_VALUE : '')

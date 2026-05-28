@@ -7,7 +7,6 @@ import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
 import CommandPalette from '@/components/common/CommandPalette'
-import { RecaptIdentify } from '@/components/RecaptIdentify'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
@@ -260,13 +259,6 @@ export default async function DashboardLayout({
           </main>
           <AgentTrigger />
           <CommandPalette />
-          {!isSandbox && (
-            <RecaptIdentify
-              userId={user.id}
-              email={user.email}
-              displayName={settings?.company_name || undefined}
-            />
-          )}
         </div>
       </AgentSheetProvider>
     </CompanyProvider>

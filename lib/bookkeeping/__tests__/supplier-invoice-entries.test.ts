@@ -87,6 +87,13 @@ const {
 } = await import('../supplier-invoice-entries')
 
 function makeItem(overrides: Partial<SupplierInvoiceItem> = {}): SupplierInvoiceItem {
+  // Mirror the API: vat_amount derives from line_total × vat_rate unless the
+  // test overrides it explicitly (manual-override cases). This keeps multi-
+  // item and mixed-rate fixtures self-consistent with the engine, which now
+  // reads stored vat_amount directly rather than recomputing from line_total.
+  const lineTotal = overrides.line_total ?? 8000
+  const vatRate = overrides.vat_rate ?? 0.25
+  const vatAmount = overrides.vat_amount ?? Math.round(lineTotal * vatRate * 100) / 100
   return {
     id: 'si-item-1',
     supplier_invoice_id: 'si-1',
@@ -94,12 +101,12 @@ function makeItem(overrides: Partial<SupplierInvoiceItem> = {}): SupplierInvoice
     description: 'Consulting services',
     quantity: 1,
     unit: 'st',
-    unit_price: 8000,
-    line_total: 8000,
+    unit_price: lineTotal,
+    line_total: lineTotal,
     account_number: '6200',
     vat_code: null,
-    vat_rate: 0.25,
-    vat_amount: 2000,
+    vat_rate: vatRate,
+    vat_amount: vatAmount,
     created_at: '2024-06-01T00:00:00Z',
     ...overrides,
   }
@@ -167,6 +174,128 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(credit2440).toHaveLength(1)
     expect(credit2440[0].credit_amount).toBe(10000) // 8000 + 2000
 
+    assertBalanced(input)
+  })
+
+  it('books manual VAT override (bilförmån 50%) instead of recomputing from rate', async () => {
+    // Personbilsleasing: leverantören fakturerar 25% moms (2 500 kr), men
+    // endast 50% (1 250 kr) är avdragsgill enligt ML 8 kap 16§. Användaren
+    // anger 1 250 kr manuellt. Det resterande beloppet förblir på
+    // kostnadskontot (10 000 + 1 250 ej avdragsgill moms = 11 250 brutto-
+    // kostnad om användaren även justerar line_total; här testar vi enbart
+    // att momsöverskridningen genererar rätt 2641-belopp).
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 1250,
+      total: 11250,
+    })
+    const items = [
+      makeItem({
+        line_total: 10000,
+        account_number: '5615', // Leasing av personbilar
+        vat_rate: 0.25,
+        vat_amount: 1250, // manual override (50% av 2 500)
+      }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit5615 = findByAccount(input.lines, '5615')
+    expect(debit5615[0].debit_amount).toBe(10000)
+
+    const debit2641 = findByAccount(input.lines, '2641')
+    expect(debit2641).toHaveLength(1)
+    // Avgörande: 1 250 (manual) — INTE 2 500 (10 000 × 0.25).
+    expect(debit2641[0].debit_amount).toBe(1250)
+
+    const credit2440 = findByAccount(input.lines, '2440')
+    expect(credit2440[0].credit_amount).toBe(11250)
+
+    assertBalanced(input)
+  })
+
+  it('recomputes 2641 from line_total × rate when stored vat_amount is 0 (legacy/import path)', async () => {
+    // Schema default is vat_amount=0; SIE imports and demo seeders sometimes
+    // leave it that way. Silently posting 0 to 2641 would understate ruta 48
+    // in the momsdeklaration. The engine recovers by recomputing from the
+    // base when the stored amount is missing.
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+    })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '5410', vat_rate: 0.25, vat_amount: 0 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const debit2641 = findByAccount(input.lines, '2641')
+    expect(debit2641).toHaveLength(1)
+    expect(debit2641[0].debit_amount).toBe(2500)
+    assertBalanced(input)
+  })
+
+  it('aggregates manual VAT overrides per rate group on mixed-rate invoice', async () => {
+    // Restaurangkvitto med två olika momsöverskridningar pga representation-
+    // tak och egen avrundning. 25%-raden får manuell 100 kr, 12%-raden får
+    // manuell 50 kr.
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000,
+      vat_amount: 150,
+      total: 1150,
+    })
+    const items = [
+      makeItem({ id: 'item-1', line_total: 400, account_number: '6071', vat_rate: 0.25, vat_amount: 100 }),
+      makeItem({ id: 'item-2', line_total: 600, account_number: '6071', vat_rate: 0.12, vat_amount: 50 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const vat2641 = findByAccount(input.lines, '2641')
+    expect(vat2641).toHaveLength(2)
+    expect(vat2641.find((l) => l.line_description?.includes('25%'))?.debit_amount).toBe(100)
+    expect(vat2641.find((l) => l.line_description?.includes('12%'))?.debit_amount).toBe(50)
+
+    assertBalanced(input)
+  })
+
+  it('reverse charge ignores manual vat_amount and uses statutory base × rate', async () => {
+    // RC: fiktiv moms beräknas alltid på basbeloppet med lagstadgad sats —
+    // ett manuellt vat_amount på posten är meningslöst (köparen redovisar
+    // själv) och får inte påverka 2645/2614.
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      reverse_charge: true,
+    })
+    const items = [
+      makeItem({
+        line_total: 10000,
+        account_number: '6540',
+        vat_rate: 0.25,
+        vat_amount: 999, // ska ignoreras
+      }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(2500)
     assertBalanced(input)
   })
 

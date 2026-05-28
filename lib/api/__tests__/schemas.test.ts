@@ -682,6 +682,57 @@ describe('CreateSupplierInvoiceItemSchema', () => {
       expect(result.success).toBe(true)
     }
   })
+
+  it('accepts vat_amount up to line_total * vat_rate', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ amount: 5000, vat_rate: 0.25, vat_amount: 1250 })
+    )
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts partial-deduction vat_amount (bilförmån 50%)', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ amount: 5000, vat_rate: 0.25, vat_amount: 625 })
+    )
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects vat_amount above line_total * vat_rate', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ amount: 5000, vat_rate: 0.25, vat_amount: 2000 })
+    )
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts vat_amount with 1-öre rounding tolerance', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ amount: 100.04, vat_rate: 0.25, vat_amount: 25.02 })
+    )
+    expect(result.success).toBe(true)
+  })
+
+  it('works with quantity * unit_price line total', () => {
+    const overByABit = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({
+        amount: undefined,
+        quantity: 4,
+        unit_price: 100,
+        vat_rate: 0.25,
+        vat_amount: 200,
+      })
+    )
+    expect(overByABit.success).toBe(false)
+    const exact = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({
+        amount: undefined,
+        quantity: 4,
+        unit_price: 100,
+        vat_rate: 0.25,
+        vat_amount: 100,
+      })
+    )
+    expect(exact.success).toBe(true)
+  })
 })
 
 describe('MarkSupplierInvoicePaidSchema', () => {

@@ -31,7 +31,8 @@ const CLASS_LABELS: Record<number, string> = {
 export async function generateResultatrapport(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options?: { fromDate?: string; toDate?: string }
 ): Promise<ResultatrapportReport> {
   const { data: period } = await supabase
     .from('fiscal_periods')
@@ -44,12 +45,23 @@ export async function generateResultatrapport(
     throw new Error('Fiscal period not found')
   }
 
-  const currentTb = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const effectiveFromDate = options?.fromDate ?? period.period_start
+  const effectiveToDate = options?.toDate ?? period.period_end
+
+  const currentTb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    fromDate: options?.fromDate,
+    toDate: options?.toDate,
+  })
   const currentRows = filterPnl(currentTb.rows)
 
+  // Prior-period comparison stays full-year. A narrower current window
+  // compared against a full prior year would be misleading; until we ship a
+  // proper "same window, prior year" comparison the cleanest move is to
+  // drop the prior column entirely when the user narrows the range.
   let priorRows: TrialBalanceRow[] = []
   let priorPeriodInfo: { start: string; end: string } | null = null
-  if (period.previous_period_id) {
+  const isFullPeriod = !options?.fromDate && !options?.toDate
+  if (isFullPeriod && period.previous_period_id) {
     const { data: prior } = await supabase
       .from('fiscal_periods')
       .select('period_start, period_end')
@@ -76,7 +88,7 @@ export async function generateResultatrapport(
     groups,
     net_result_current: round2(netResultCurrent),
     net_result_prior: round2(netResultPrior),
-    period: { start: period.period_start, end: period.period_end },
+    period: { start: effectiveFromDate, end: effectiveToDate },
     prior_period: priorPeriodInfo,
   }
 }

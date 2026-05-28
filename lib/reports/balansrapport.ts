@@ -27,7 +27,8 @@ const CLASS_LABELS: Record<number, string> = {
 export async function generateBalansrapport(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options?: { fromDate?: string; toDate?: string }
 ): Promise<BalansrapportReport> {
   const { data: period } = await supabase
     .from('fiscal_periods')
@@ -40,7 +41,13 @@ export async function generateBalansrapport(
     throw new Error('Fiscal period not found')
   }
 
-  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const effectiveFromDate = options?.fromDate ?? period.period_start
+  const effectiveToDate = options?.toDate ?? period.period_end
+
+  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    fromDate: options?.fromDate,
+    toDate: options?.toDate,
+  })
   const balanceRows = trialBalance.rows.filter((r) => r.account_class === 1 || r.account_class === 2)
 
   const groups: BalansrapportGroup[] = []
@@ -95,7 +102,7 @@ export async function generateBalansrapport(
     total_equity_liabilities_ub: totalEquityLiabilitiesUb,
     beraknat_resultat: beraknatResultat,
     is_balanced: trialBalance.isBalanced,
-    period: { start: period.period_start, end: period.period_end },
+    period: { start: effectiveFromDate, end: effectiveToDate },
   }
 }
 

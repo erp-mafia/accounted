@@ -14,7 +14,8 @@ import type { IncomeStatementReport, IncomeStatementSection, TrialBalanceRow } f
 export async function generateIncomeStatement(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options?: { fromDate?: string; toDate?: string }
 ): Promise<IncomeStatementReport> {
   // Exclude year-end closing entries: after closing, P&L accounts (3-8) are
   // zeroed by the closing verifikat (8999 → 2099). Including them collapses
@@ -22,6 +23,8 @@ export async function generateIncomeStatement(
   // pre-closing activity for the year.
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     excludeYearEndClosing: true,
+    fromDate: options?.fromDate,
+    toDate: options?.toDate,
   })
 
   // Filter to income/expense accounts (class 3-8)

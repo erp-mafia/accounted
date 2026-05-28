@@ -13,7 +13,50 @@ import {
   EntryAlreadyReversedError,
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
+  MeaninglessCorrectionError,
 } from '@/lib/bookkeeping/errors'
+
+/**
+ * Round to 2dp using cents-integer math to avoid 0.1+0.2 drift.
+ */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+/**
+ * True when every account's (debit − credit) sum across the proposed lines is
+ * zero. Such a rättelse describes no real affärshändelse and would erase the
+ * original posting without representing anything in its place — disallowed by
+ * BFL 5 kap. 5 § / BFNAR 2013:2.
+ */
+function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
+  const nets = new Map<string, number>()
+  for (const line of lines) {
+    const delta = round2(line.debit_amount || 0) - round2(line.credit_amount || 0)
+    nets.set(line.account_number, (nets.get(line.account_number) || 0) + delta)
+  }
+  return Array.from(nets.values()).every((n) => Math.abs(n) < 0.005)
+}
+
+/**
+ * True when proposed lines are the same multiset as the original lines
+ * (account_number + debit + credit). A rättelse must actually change something.
+ */
+function isIdenticalToOriginal(
+  proposed: CreateJournalEntryLineInput[],
+  original: JournalEntryLine[]
+): boolean {
+  if (proposed.length !== original.length) return false
+  const key = (acc: string, d: number, c: number) =>
+    `${acc}|${round2(d).toFixed(2)}|${round2(c).toFixed(2)}`
+  const proposedKeys = proposed
+    .map((l) => key(l.account_number, l.debit_amount || 0, l.credit_amount || 0))
+    .sort()
+  const originalKeys = original
+    .map((l) => key(l.account_number, Number(l.debit_amount) || 0, Number(l.credit_amount) || 0))
+    .sort()
+  return proposedKeys.every((k, i) => k === originalKeys[i])
+}
 
 /**
  * Storno Service - 3-step correction flow per Bokföringslagen
@@ -65,6 +108,13 @@ export async function correctEntry(
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'correction')
   }
 
+  // Reject a rättelse with no economic effect (e.g. 1930 debit 100 / 1930
+  // credit 100). Such an entry would erase the original posting without
+  // representing any affärshändelse — disallowed by BFL 5 kap. 5 §.
+  if (netsToZeroPerAccount(correctedLines)) {
+    throw new MeaninglessCorrectionError('net_zero_per_account')
+  }
+
   // Fetch original entry with lines
   const { data: original, error: fetchError } = await supabase
     .from('journal_entries')
@@ -82,6 +132,12 @@ export async function correctEntry(
   }
 
   const originalLines = (original.lines as JournalEntryLine[]) || []
+
+  // Reject when the proposed lines are identical to the original entry —
+  // a rättelse must actually change something.
+  if (isIdenticalToOriginal(correctedLines, originalLines)) {
+    throw new MeaninglessCorrectionError('identical_to_original')
+  }
 
   // ===== Step 1: Create storno (reversal) entry =====
   const reversalVoucherNumber = await getNextVoucherNumber(

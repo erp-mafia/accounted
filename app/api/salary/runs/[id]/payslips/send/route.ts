@@ -18,7 +18,17 @@ ensureInitialized()
  * Per BFL 7 kap: Delivery confirmation retained as part of audit trail.
  */
 export async function POST(
-  request: Request,
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  await params
+  return NextResponse.json({ error: 'Funktionen är inaktiverad' }, { status: 503 })
+}
+
+// Implementation preserved but unreachable — feature disabled at the export above.
+// To re-enable, replace the POST export above with this function body.
+async function _sendPayslipsImpl(
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params

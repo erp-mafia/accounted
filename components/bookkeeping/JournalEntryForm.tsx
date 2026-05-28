@@ -18,6 +18,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
+import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useSubmitWithAccountActivation,
@@ -107,6 +108,10 @@ export default function JournalEntryForm({
   // Per-account saldo as of entryDate, keyed by account_number.
   // undefined = not fetched, null = fetch in flight.
   const [accountBalances, setAccountBalances] = useState<Record<string, number | null>>({})
+  // Inline account-creation: which line triggered the dialog, and what the
+  // user typed in the combobox so we can prefill the dialog.
+  const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
+  const [createAccountPrefill, setCreateAccountPrefill] = useState<string>('')
 
   const isForeign = entryCurrency !== 'SEK'
 
@@ -380,6 +385,23 @@ export default function JournalEntryForm({
   const handleTemplateApply = (templateLines: FormLine[], templateDescription: string) => {
     setLines(templateLines)
     if (!description) setDescription(templateDescription)
+  }
+
+  const handleOpenCreateAccount = (lineIndex: number, prefill: string) => {
+    setCreatingAccountForLine(lineIndex)
+    setCreateAccountPrefill(prefill)
+  }
+
+  // After a new account is created, refresh the chart, auto-select it on the
+  // line that initiated the create, and close the dialog. All other form
+  // state is preserved — we never navigate away from the form.
+  const handleAccountCreated = async (account: BASAccount) => {
+    await fetchAccounts()
+    if (creatingAccountForLine != null) {
+      updateLine(creatingAccountForLine, 'account_number', account.account_number)
+    }
+    setCreatingAccountForLine(null)
+    setCreateAccountPrefill('')
   }
 
   const handleReview = () => {
@@ -730,6 +752,7 @@ export default function JournalEntryForm({
                   value={line.account_number}
                   accounts={accounts}
                   onChange={(num) => updateLine(index, 'account_number', num)}
+                  onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
                 />
               </div>
               <Button
@@ -840,6 +863,8 @@ export default function JournalEntryForm({
                     value={line.account_number}
                     accounts={accounts}
                     onChange={(num) => updateLine(index, 'account_number', num)}
+                    onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
+                    className="h-8"
                   />
                 </td>
                 <td className="py-1.5 px-1">
@@ -997,6 +1022,25 @@ export default function JournalEntryForm({
         accountNumbers={activationDialog.accountNumbers}
         onConfirm={confirmActivation}
         onCancel={cancelActivation}
+        onCreateUnknown={(num) => {
+          cancelActivation()
+          const lineIndex = lines.findIndex((l) => l.account_number === num)
+          setCreatingAccountForLine(lineIndex >= 0 ? lineIndex : null)
+          setCreateAccountPrefill(num)
+        }}
+      />
+
+      <AddAccountDialog
+        open={creatingAccountForLine != null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setCreatingAccountForLine(null)
+            setCreateAccountPrefill('')
+          }
+        }}
+        initialAccountNumber={/^\d{1,4}$/.test(createAccountPrefill) ? createAccountPrefill : undefined}
+        initialAccountName={/^\d{1,4}$/.test(createAccountPrefill) ? undefined : createAccountPrefill}
+        onCreated={handleAccountCreated}
       />
 
       <ConfirmationDialog

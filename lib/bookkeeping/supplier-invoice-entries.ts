@@ -125,12 +125,16 @@ export async function createSupplierInvoiceRegistrationEntry(
     // went to NON-basis accounts. Mixed invoices (4535 + 6540 at 25%) used to
     // skip basis lines entirely under a per-invoice flag, leaving ruta 30
     // larger than ruta 21 by the 6540 portion — the exact FK004 pattern.
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    //
+    // Drive iteration off the basis (line_total per rate), not stored
+    // vat_amount — fiktiv moms is always statutory base × rate. This keeps
+    // RC immune to per-line manual VAT overrides (which only make sense for
+    // domestic deductible-VAT adjustments).
+    const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
     const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    for (const [rate, amount] of vatByRate) {
-      if (rate > 0 && amount > 0) {
-        const baseAmount = amount / rate
+    for (const [rate, baseAmount] of baseByRate) {
+      if (rate > 0 && baseAmount > 0) {
         const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
         lines.push(...rcLines)
         const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
@@ -335,12 +339,13 @@ export async function createSupplierInvoiceCashEntry(
     // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
     // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
     // Per-rate bucketing: see registration entry above for the FK004 rationale.
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    // Drive iteration off the basis (line_total per rate) — fiktiv moms is
+    // always statutory base × rate; manual vat_amount overrides don't apply.
+    const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
     const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    for (const [rate, amount] of vatByRate) {
-      if (rate > 0 && amount > 0) {
-        const baseAmount = amount / rate
+    for (const [rate, baseAmount] of baseByRate) {
+      if (rate > 0 && baseAmount > 0) {
         const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
         lines.push(...rcLines)
         const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
@@ -523,16 +528,18 @@ export async function createSupplierCreditNoteEntry(
   if (isReverseCharge) {
     // Reverse the fiktiv moms per rate group (swap debit/credit from registration)
     // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
+    // Drive iteration off the basis — fiktiv moms is always statutory base × rate.
     const inputAccount = isDomesticRC ? '2647' : '2645'
-    const vatByRate = groupVatByRate(items, creditNote.currency, creditNote.exchange_rate, true)
+    const baseByRate = groupBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
     const nonBasisBaseByRate = groupNonBasisBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     // Only reverse basbeloppsraderna for the portion the registration would
     // have emitted them — namely the non-basis-account base per rate. Items
     // booked directly to 44xx/45xx had no parallel basis lines in registration
     // and so are reversed only via the expense credit line above.
-    for (const [rate, amount] of vatByRate) {
-      if (rate > 0 && amount > 0) {
+    for (const [rate, baseAmount] of baseByRate) {
+      if (rate > 0 && baseAmount > 0) {
+        const fiktivVat = Math.round(baseAmount * rate * 100) / 100
         // Determine the output account for this rate
         let outputAccount: string
         switch (rate) {
@@ -543,12 +550,12 @@ export async function createSupplierCreditNoteEntry(
         creditLines.push({
           account_number: inputAccount,
           debit_amount: 0,
-          credit_amount: amount,
+          credit_amount: fiktivVat,
           line_description: `Omvänd fiktiv ingående moms ${Math.round(rate * 100)}% ${desc}`,
         })
         lines.push({
           account_number: outputAccount,
-          debit_amount: amount,
+          debit_amount: fiktivVat,
           credit_amount: 0,
           line_description: `Omvänd fiktiv utgående moms ${Math.round(rate * 100)}% ${desc}`,
         })
@@ -613,8 +620,21 @@ export async function createSupplierCreditNoteEntry(
 }
 
 /**
- * Group items by VAT rate and sum the VAT amount per rate.
- * Returns a Map<rate, totalVatAmount> for generating per-rate journal lines.
+ * Group items by VAT rate and sum the stored VAT amount per rate.
+ * Returns a Map<rate, totalVatAmount> in SEK for per-rate 2641 journal lines.
+ *
+ * Reads `item.vat_amount` directly — set by the API from the line's manual
+ * override when present, else computed line_total × rate. This is the path
+ * for partial-deductible cases (bilförmån 50%, representation 300 kr-tak),
+ * foreign-currency rounding, and supplier POS rounding.
+ *
+ * Fallback to line_total × rate when vat_amount is null/0 but rate > 0 —
+ * legacy import paths (SIE, CSV, demo seed) sometimes leave vat_amount at
+ * the column DEFAULT of 0. Silently dropping input VAT to 2641 would
+ * understate ruta 48 in the momsdeklaration.
+ *
+ * Reverse-charge fiktiv moms doesn't use this — see groupBaseByRate, which
+ * derives the basis directly so fiktiv VAT is always base × statutory rate.
  */
 function groupVatByRate(
   items: SupplierInvoiceItem[],
@@ -625,12 +645,37 @@ function groupVatByRate(
   const vatByRate = new Map<number, number>()
   for (const item of items) {
     const rate = item.vat_rate ?? 0.25
-    let itemSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
-    if (useAbsoluteValues) itemSek = Math.abs(itemSek)
-    const itemVat = Math.round(itemSek * rate * 100) / 100
-    vatByRate.set(rate, (vatByRate.get(rate) || 0) + itemVat)
+    const storedVat = item.vat_amount ?? 0
+    const computedVat = rate > 0
+      ? Math.round((item.line_total ?? 0) * rate * 100) / 100
+      : 0
+    const sourceVat = storedVat > 0 ? storedVat : computedVat
+    let vatSek = resolveSekAmount(sourceVat, null, currency, exchangeRate)
+    if (useAbsoluteValues) vatSek = Math.abs(vatSek)
+    vatByRate.set(rate, (vatByRate.get(rate) || 0) + vatSek)
   }
   return vatByRate
+}
+
+/**
+ * Group items by VAT rate and sum the base (line_total) per rate.
+ * Used by reverse-charge paths to compute fiktiv moms from the basis,
+ * decoupled from any manual VAT override on the items themselves.
+ */
+function groupBaseByRate(
+  items: SupplierInvoiceItem[],
+  currency: string,
+  exchangeRate: number | null,
+  useAbsoluteValues = false
+): Map<number, number> {
+  const baseByRate = new Map<number, number>()
+  for (const item of items) {
+    const rate = item.vat_rate ?? 0.25
+    let baseSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
+    if (useAbsoluteValues) baseSek = Math.abs(baseSek)
+    baseByRate.set(rate, (baseByRate.get(rate) || 0) + baseSek)
+  }
+  return baseByRate
 }
 
 /**

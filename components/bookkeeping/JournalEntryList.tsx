@@ -10,13 +10,14 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { ChevronDown, ChevronRight, Paperclip, AlertTriangle, Loader2, BookOpen, X, Copy, Lock } from 'lucide-react'
+import { ChevronDown, ChevronRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
+import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
@@ -50,6 +51,7 @@ export default function JournalEntryList({ periodId }: Props) {
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
+  const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
@@ -114,6 +116,25 @@ export default function JournalEntryList({ periodId }: Props) {
       // Non-critical — silently ignore
     }
   }, [])
+
+  const fetchNoDocRequired = useCallback(async () => {
+    try {
+      const res = await fetch('/api/bookkeeping/no-doc-required')
+      if (!res.ok) return
+      const { data } = await res.json()
+      const map = new Map<string, string | null>()
+      for (const row of (data || []) as { journal_entry_id: string; reason: string | null }[]) {
+        map.set(row.journal_entry_id, row.reason)
+      }
+      setNoDocRequired(map)
+    } catch {
+      // Non-critical — silently ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchNoDocRequired()
+  }, [fetchNoDocRequired])
 
   async function fetchEntries() {
     setLoading(true)
@@ -209,7 +230,8 @@ export default function JournalEntryList({ periodId }: Props) {
         (e) =>
           NEEDS_ATTACHMENT.has(e.source_type) &&
           !attachmentCounts[e.id] &&
-          e.status === 'posted'
+          e.status === 'posted' &&
+          !noDocRequired.has(e.id)
       )
     : entries
 
@@ -396,9 +418,15 @@ export default function JournalEntryList({ periodId }: Props) {
                     </Button>
                   ) : (
                     NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                      <span className="mr-1" title={t('missing_attachment_tooltip')}>
-                        <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                      </span>
+                      noDocRequired.has(entry.id) ? (
+                        <span className="mr-1" title={t('no_doc_required_indicator_tooltip')}>
+                          <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                        </span>
+                      ) : (
+                        <span className="mr-1" title={t('missing_attachment_tooltip')}>
+                          <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
+                        </span>
+                      )
                     )
                   )}
                 </div>
@@ -466,9 +494,15 @@ export default function JournalEntryList({ periodId }: Props) {
                         </Button>
                       ) : (
                         NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                          <span title={t('missing_attachment_tooltip')}>
-                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                          </span>
+                          noDocRequired.has(entry.id) ? (
+                            <span title={t('no_doc_required_indicator_tooltip')}>
+                              <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                            </span>
+                          ) : (
+                            <span title={t('missing_attachment_tooltip')}>
+                              <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
+                            </span>
+                          )
                         )
                       )}
                     </span>
@@ -544,6 +578,23 @@ export default function JournalEntryList({ periodId }: Props) {
                     journalEntryId={entry.id}
                     onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
                   />
+
+                  {entry.status === 'posted' && NEEDS_ATTACHMENT.has(entry.source_type) && (
+                    <NoDocRequiredToggle
+                      entryId={entry.id}
+                      initialExempt={noDocRequired.has(entry.id)}
+                      initialReason={noDocRequired.get(entry.id) ?? null}
+                      canWrite={canWrite}
+                      onChange={(exempted, reason) => {
+                        setNoDocRequired((prev) => {
+                          const next = new Map(prev)
+                          if (exempted) next.set(entry.id, reason ?? null)
+                          else next.delete(entry.id)
+                          return next
+                        })
+                      }}
+                    />
+                  )}
 
                   <div className="mt-4 pt-3 border-t flex flex-col sm:flex-row gap-2">
                     {entry.status === 'draft' && (

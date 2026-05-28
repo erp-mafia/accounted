@@ -2388,6 +2388,7 @@
     "col_vat": "VAT",
     "col_debit": "Debit",
     "col_credit": "Credit",
+    "vat_rate_presets_aria": "Pick VAT rate from list",
     "description_placeholder": "Description",
     "row_label": "Row {index}",
     "remove_row_aria": "Remove row {index}",
@@ -2687,7 +2688,19 @@
     "toast_posted_description": "Journal entry {voucher} has been posted.",
     "toast_post_failed": "Could not post",
     "toast_post_failed_generic": "Could not post journal entry",
-    "view_attachments": "View attachments"
+    "view_attachments": "View attachments",
+    "no_doc_required_toggle": "No supporting document required",
+    "no_doc_required_indicator_tooltip": "Marked as not requiring a supporting document",
+    "no_doc_required_reason_label": "Reason",
+    "no_doc_required_reason_add": "Add reason (optional)",
+    "no_doc_required_reason_placeholder": "E.g. bank fee, interest, internal transfer",
+    "no_doc_required_save_reason": "Save",
+    "no_doc_required_save_failed": "Could not save",
+    "no_doc_required_suggestion_bank_fee": "Bank fee",
+    "no_doc_required_suggestion_interest": "Interest",
+    "no_doc_required_suggestion_internal_transfer": "Internal transfer",
+    "no_doc_required_suggestion_tax_payment": "Tax payment",
+    "no_doc_required_suggestion_salary": "Salary"
   },
   "attachment_preview_sheet": {
     "title": "Attachments",
@@ -3465,7 +3478,16 @@
     "name_grundbok": "Journal register",
     "name_kundreskontra": "Accounts receivable ledger",
     "name_supplier_ledger": "Accounts payable ledger",
-    "name_bank_reconciliation": "Bank reconciliation"
+    "name_bank_reconciliation": "Bank reconciliation",
+    "date_range_label": "Period",
+    "date_range_preset_full_year": "Full year",
+    "date_range_preset_ytd": "Year to date",
+    "date_range_preset_this_month": "This month",
+    "date_range_preset_last_month": "Last month",
+    "date_range_preset_this_quarter": "This quarter",
+    "date_range_preset_custom": "Custom",
+    "date_range_from": "From",
+    "date_range_to": "To"
   },
   "salary": {
     "title": "Payroll",

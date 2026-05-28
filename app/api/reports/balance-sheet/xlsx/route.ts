@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -52,8 +53,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Räkenskapsperioden kunde inte läsas.' }, { status: 400 })
   }
 
+  const parsedRange = parseReportDateRange(searchParams, period)
+  if (!parsedRange.ok) {
+    return NextResponse.json({ error: parsedRange.error }, { status: 400 })
+  }
+  const range = parsedRange.range
+  const effectiveEnd = range.toDate ?? period.period_end
+
   try {
-    const report = await generateBalanceSheet(supabase, companyId, periodId)
+    const report = await generateBalanceSheet(supabase, companyId, periodId, range)
 
     // Flatten nested sections into a single tabular view, mirroring how the
     // PDF lays them out: each section's rows followed by a subtotal line, with
@@ -137,7 +145,7 @@ export async function GET(request: Request) {
       },
     ])
 
-    const filename = xlsxFilename('balansrakning', companyRow?.company_name ?? '', period.period_end)
+    const filename = xlsxFilename('balansrakning', companyRow?.company_name ?? '', effectiveEnd)
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

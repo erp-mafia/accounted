@@ -6,7 +6,6 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
-import { RecaptHideWidget } from "@/components/RecaptHideWidget";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
 import "./globals.css";
@@ -68,13 +67,6 @@ export default async function RootLayout({
     <html lang={locale} suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable}`}>
       <head>
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
-        <script
-          src="https://cdn.recapt.app/browser/glimt.js"
-          async
-          data-public-key="pk_8de220ce34c81413de154d10ff681a9eb3a5a9c12d28bd6c7bc2613c9f5acfbb"
-          data-persist
-          data-enable-user-comments
-        />
       </head>
       <body
         className="antialiased"
@@ -88,7 +80,6 @@ export default async function RootLayout({
           >
             {children}
             <Toaster />
-            <RecaptHideWidget />
           </ThemeProvider>
         </NextIntlClientProvider>
         <Script src="/sw-register.js" strategy="afterInteractive" />

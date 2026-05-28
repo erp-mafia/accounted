@@ -48,7 +48,6 @@ import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
-import { clearRecaptIdentity } from '@/lib/recapt'
 import type { EntityType } from '@/types'
 
 void _ENABLED_EXTENSION_IDS
@@ -213,7 +212,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   }
 
   const handleLogout = async () => {
-    clearRecaptIdentity()
     await supabase.auth.signOut()
     router.push(isSandbox ? '/sandbox' : '/login')
   }

@@ -255,10 +255,21 @@ export async function sendMissingUnderlagNotifications(
     (attachments || []).map((a) => a.journal_entry_id)
   )
 
+  // Entries the user has explicitly flagged as "no underlag required" (bank
+  // fees, interest, internal transfers, salary, tax payments). Treated as
+  // satisfied so we don't nag the user about them.
+  const { data: exempted } = await supabase
+    .from('journal_entry_no_doc_required')
+    .select('journal_entry_id')
+
+  const exemptedEntries = new Set(
+    (exempted || []).map((e) => e.journal_entry_id)
+  )
+
   // Group missing counts by user
   const userMissingCounts = new Map<string, number>()
   for (const entry of entries) {
-    if (!entriesWithDocs.has(entry.id)) {
+    if (!entriesWithDocs.has(entry.id) && !exemptedEntries.has(entry.id)) {
       userMissingCounts.set(
         entry.user_id,
         (userMissingCounts.get(entry.user_id) || 0) + 1

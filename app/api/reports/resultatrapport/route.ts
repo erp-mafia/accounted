@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateResultatrapport } from '@/lib/reports/resultatrapport'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -20,8 +21,24 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
   }
 
+  const { data: period } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('id', periodId)
+    .eq('company_id', companyId)
+    .single()
+
+  let range: { fromDate?: string; toDate?: string } = {}
+  if (period) {
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    range = parsed.range
+  }
+
   try {
-    const result = await generateResultatrapport(supabase, companyId, periodId)
+    const result = await generateResultatrapport(supabase, companyId, periodId, range)
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(

@@ -124,12 +124,6 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4">USA</td>
                     <td className="py-2">SCCs (standardavtalsklausuler)</td>
                   </tr>
-                  <tr className="border-b">
-                    <td className="py-2 pr-4 font-medium">Recapt</td>
-                    <td className="py-2 pr-4">Produktanalys och användarfeedback</td>
-                    <td className="py-2 pr-4">EU</td>
-                    <td className="py-2">EU-baserad</td>
-                  </tr>
                 </tbody>
               </table>
             </div>

@@ -2388,6 +2388,7 @@
     "col_vat": "Moms",
     "col_debit": "Debet",
     "col_credit": "Kredit",
+    "vat_rate_presets_aria": "Välj momssats från lista",
     "description_placeholder": "Beskrivning",
     "row_label": "Rad {index}",
     "remove_row_aria": "Ta bort rad {index}",
@@ -2687,7 +2688,19 @@
     "toast_posted_description": "Verifikat {voucher} har bokförts.",
     "toast_post_failed": "Kunde inte bokföra",
     "toast_post_failed_generic": "Kunde inte bokföra verifikat",
-    "view_attachments": "Visa bilagor"
+    "view_attachments": "Visa bilagor",
+    "no_doc_required_toggle": "Inget underlag krävs",
+    "no_doc_required_indicator_tooltip": "Markerad som att underlag inte krävs",
+    "no_doc_required_reason_label": "Skäl",
+    "no_doc_required_reason_add": "Lägg till skäl (frivilligt)",
+    "no_doc_required_reason_placeholder": "T.ex. bankavgift, ränta, intern överföring",
+    "no_doc_required_save_reason": "Spara",
+    "no_doc_required_save_failed": "Kunde inte spara",
+    "no_doc_required_suggestion_bank_fee": "Bankavgift",
+    "no_doc_required_suggestion_interest": "Ränta",
+    "no_doc_required_suggestion_internal_transfer": "Intern överföring",
+    "no_doc_required_suggestion_tax_payment": "Skatteinbetalning",
+    "no_doc_required_suggestion_salary": "Lön"
   },
   "attachment_preview_sheet": {
     "title": "Bilagor",
@@ -3465,7 +3478,16 @@
     "name_grundbok": "Grundbok",
     "name_kundreskontra": "Kundreskontra",
     "name_supplier_ledger": "Leverantörsreskontra",
-    "name_bank_reconciliation": "Bankavstämning"
+    "name_bank_reconciliation": "Bankavstämning",
+    "date_range_label": "Period",
+    "date_range_preset_full_year": "Hela året",
+    "date_range_preset_ytd": "Hittills i år",
+    "date_range_preset_this_month": "Denna månad",
+    "date_range_preset_last_month": "Förra månaden",
+    "date_range_preset_this_quarter": "Detta kvartal",
+    "date_range_preset_custom": "Anpassat",
+    "date_range_from": "Från",
+    "date_range_to": "Till"
   },
   "salary": {
     "title": "Löner",

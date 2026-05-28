@@ -11,7 +11,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {
@@ -388,5 +388,187 @@ describe('generateTrialBalance', () => {
     expect(result.totalDebit).toBe(5000)
     expect(result.totalCredit).toBe(5000)
     expect(result.isBalanced).toBe(true)
+  })
+
+  // ── Date-range tests ─────────────────────────────────────────────
+  // The 4 reports (resultatrapport/balansrapport/income-statement/balance-
+  // sheet) thread an optional { fromDate, toDate } through to the trial
+  // balance. The engine must (a) skip the roll-forward query when fromDate
+  // equals period_start, (b) roll prior in-period lines into IB when
+  // fromDate is later, and (c) clamp period activity to the window.
+
+  it('treats omitted range as parity with the full period', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Bank', account_class: 1 },
+            { account_number: '3001', account_name: 'Revenue', account_class: 3 },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+
+    // Same as the existing "balanced two-account" case — no roll-forward query
+    // is consumed because no range is requested.
+    expect(result.rows).toHaveLength(2)
+    expect(result.totalDebit).toBe(1000)
+    expect(result.totalCredit).toBe(1000)
+    expect(result.isBalanced).toBe(true)
+  })
+
+  it('skips the roll-forward query when fromDate equals period_start', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // Only the period query — no roll-forward fetch should be triggered.
+        {
+          data: [
+            { account_number: '1930', debit_amount: 500, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 500 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Bank', account_class: 1 },
+            { account_number: '3001', account_name: 'Revenue', account_class: 3 },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      fromDate: '2024-01-01',
+      toDate: '2024-06-30',
+    })
+
+    expect(result.rows[0].opening_debit).toBe(0)
+    expect(result.rows[0].closing_debit).toBe(500)
+  })
+
+  it('rolls prior in-period lines into IB when fromDate is after period_start', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // 1st consumption — roll-forward query for [2024-01-01, 2024-04-01).
+        {
+          data: [
+            { account_number: '1930', debit_amount: 2000, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 2000 },
+          ],
+          error: null,
+        },
+        // 2nd consumption — period activity for [2024-04-01, 2024-06-30].
+        {
+          data: [
+            { account_number: '1930', debit_amount: 500, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 500 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Bank', account_class: 1 },
+            { account_number: '3001', account_name: 'Revenue', account_class: 3 },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      fromDate: '2024-04-01',
+      toDate: '2024-06-30',
+    })
+
+    // 1930: IB carries 2000 from Q1, period adds 500 → UB 2500
+    const acc1930 = result.rows.find((r) => r.account_number === '1930')!
+    expect(acc1930.opening_debit).toBe(2000)
+    expect(acc1930.period_debit).toBe(500)
+    expect(acc1930.closing_debit).toBe(2500)
+
+    // 3001: IB carries 2000 from Q1, period adds 500 → UB 2500
+    const acc3001 = result.rows.find((r) => r.account_number === '3001')!
+    expect(acc3001.opening_credit).toBe(2000)
+    expect(acc3001.period_credit).toBe(500)
+    expect(acc3001.closing_credit).toBe(2500)
+
+    expect(result.isBalanced).toBe(true)
+  })
+
+  it('returns empty period activity when the range matches no lines', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // Roll-forward query — has prior activity
+        {
+          data: [
+            { account_number: '1930', debit_amount: 750, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 750 },
+          ],
+          error: null,
+        },
+        // Period query — no lines inside [2024-11-01, 2024-11-30]
+        { data: [], error: null },
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Bank', account_class: 1 },
+            { account_number: '3001', account_name: 'Revenue', account_class: 3 },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      fromDate: '2024-11-01',
+      toDate: '2024-11-30',
+    })
+
+    const acc1930 = result.rows.find((r) => r.account_number === '1930')!
+    expect(acc1930.opening_debit).toBe(750)
+    expect(acc1930.period_debit).toBe(0)
+    expect(acc1930.closing_debit).toBe(750)
   })
 })

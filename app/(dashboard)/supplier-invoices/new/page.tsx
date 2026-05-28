@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -89,6 +90,97 @@ function vatRateFromAi(rate: number | null | undefined): number {
   if (rate === 12) return 0.12
   if (rate === 6) return 0.06
   return 0
+}
+
+function rateToPctString(rate: number): string {
+  const pct = Math.round(rate * 10000) / 100
+  return Number.isFinite(pct) ? String(pct) : ''
+}
+
+const VAT_RATE_PRESETS = [0.25, 0.12, 0.06, 0]
+
+function VatRateCell({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const t = useTranslations('supplier_invoice_editor')
+  const inputRef = useRef<HTMLInputElement>(null)
+  // Local draft so the user can type "12," or "12." mid-keystroke without the
+  // controlled input snapping back to a parsed integer.
+  const [draft, setDraft] = useState(() => rateToPctString(value))
+
+  // Re-sync from form value only when the field isn't focused — keeps AI
+  // prefill / supplier defaults / dropdown picks flowing in without clobbering
+  // active typing.
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) {
+      setDraft(rateToPctString(value))
+    }
+  }, [value])
+
+  return (
+    <div className="flex items-center gap-1">
+      <div className="relative flex-1">
+        <Input
+          ref={inputRef}
+          type="text"
+          inputMode="decimal"
+          value={draft}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={() => setDraft(rateToPctString(value))}
+          onChange={(e) => {
+            const raw = e.target.value
+            // Strict whitelist: digits with at most one decimal separator.
+            // Blocks "2-22", "100-2", "1.2.3", letters, signs — the keystroke
+            // is dropped before reaching the draft.
+            if (raw !== '' && !/^\d*[.,]?\d*$/.test(raw)) return
+            const normalized = raw.replace(',', '.')
+            if (normalized === '' || normalized === '.') {
+              setDraft(raw)
+              onChange(0)
+              return
+            }
+            const parsed = parseFloat(normalized)
+            if (!Number.isFinite(parsed)) {
+              setDraft(raw)
+              return
+            }
+            const clamped = Math.min(100, Math.max(0, parsed))
+            // Snap the draft back when the parsed value falls outside [0, 100]
+            // so the input can never display a rate the form won't apply.
+            setDraft(clamped === parsed ? raw : String(clamped))
+            onChange(clamped / 100)
+          }}
+          className="text-right tabular-nums pr-6"
+          aria-label={t('col_vat_rate')}
+        />
+        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+          %
+        </span>
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            aria-label={t('vat_rate_presets_aria')}
+          >
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[6rem]">
+          {VAT_RATE_PRESETS.map((preset) => (
+            <DropdownMenuItem
+              key={preset}
+              onSelect={() => onChange(preset)}
+              className="justify-end tabular-nums"
+            >
+              {Math.round(preset * 100)} %
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
 }
 
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
@@ -430,7 +522,6 @@ export default function NewSupplierInvoicePage() {
     }
   }
 
-  // Calculate totals
   const itemTotals = (watchedItems || []).map((item) => {
     const lineTotal = Math.round((item.amount || 0) * 100) / 100
     const vatAmount = Math.round(lineTotal * (item.vat_rate || 0) * 100) / 100
@@ -1136,7 +1227,7 @@ export default function NewSupplierInvoicePage() {
                     <th className="pb-2 w-28">{t('col_account')}</th>
                     <th className="pb-2">{t('col_description')}</th>
                     <th className="pb-2 w-32">{t('col_amount_excl')}</th>
-                    <th className="pb-2 w-24">{t('col_vat_rate')}</th>
+                    <th className="pb-2 w-36">{t('col_vat_rate')}</th>
                     <th className="pb-2 w-24 text-right">{t('col_vat')}</th>
                     <th className="pb-2 w-8"></th>
                   </tr>
@@ -1194,22 +1285,12 @@ export default function NewSupplierInvoicePage() {
                           name={`items.${index}.vat_rate`}
                           control={control}
                           render={({ field: f }) => (
-                            <Select value={String(f.value)} onValueChange={(v) => f.onChange(parseFloat(v))}>
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="0.25">25%</SelectItem>
-                                <SelectItem value="0.12">12%</SelectItem>
-                                <SelectItem value="0.06">6%</SelectItem>
-                                <SelectItem value="0">0%</SelectItem>
-                              </SelectContent>
-                            </Select>
+                            <VatRateCell value={f.value} onChange={f.onChange} />
                           )}
                         />
                       </td>
-                      <td className="py-2 pr-2 text-right font-mono pt-4">
-                        {formatAmount(itemTotals[index]?.vatAmount || 0)}
+                      <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                        {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
                       </td>
                       <td className="py-2 pt-3">
                         {fields.length > 1 && (
@@ -1287,24 +1368,16 @@ export default function NewSupplierInvoicePage() {
                         name={`items.${index}.vat_rate`}
                         control={control}
                         render={({ field: f }) => (
-                          <Select value={String(f.value)} onValueChange={(v) => f.onChange(parseFloat(v))}>
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="0.25">25%</SelectItem>
-                              <SelectItem value="0.12">12%</SelectItem>
-                              <SelectItem value="0.06">6%</SelectItem>
-                              <SelectItem value="0">0%</SelectItem>
-                            </SelectContent>
-                          </Select>
+                          <VatRateCell value={f.value} onChange={f.onChange} />
                         )}
                       />
                     </div>
                   </div>
-                  <div className="flex justify-between items-center pt-1 border-t">
+                  <div className="pt-1 border-t flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">{t('col_vat')}</span>
-                    <span className="font-mono text-sm">{formatCurrency(itemTotals[index]?.vatAmount || 0, watchedCurrency)}</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                    </span>
                   </div>
                 </div>
               ))}

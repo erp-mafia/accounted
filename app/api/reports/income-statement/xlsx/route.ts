@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -84,8 +85,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Räkenskapsperioden kunde inte läsas.' }, { status: 400 })
   }
 
+  const parsedRange = parseReportDateRange(searchParams, period)
+  if (!parsedRange.ok) {
+    return NextResponse.json({ error: parsedRange.error }, { status: 400 })
+  }
+  const range = parsedRange.range
+  const effectiveEnd = range.toDate ?? period.period_end
+
   try {
-    const report = await generateIncomeStatement(supabase, companyId, periodId)
+    const report = await generateIncomeStatement(supabase, companyId, periodId, range)
 
     const revenueRows = flatten(
       report.revenue_sections,
@@ -139,7 +147,7 @@ export async function GET(request: Request) {
     const filename = xlsxFilename(
       'resultatrakning',
       companyRow?.company_name ?? '',
-      period.period_end,
+      effectiveEnd,
     )
     return new NextResponse(new Uint8Array(buffer), {
       headers: {

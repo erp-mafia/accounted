@@ -4,6 +4,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { FinancialStatementPDF, type FinancialStatementGroup, type FinancialStatementSection, type FinancialStatementSummaryRow } from '@/lib/reports/financial-statement-pdf-template'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
@@ -71,9 +72,17 @@ export async function GET(request: Request) {
     )
   }
 
+  const parsedRange = parseReportDateRange(searchParams, period)
+  if (!parsedRange.ok) {
+    return NextResponse.json({ error: parsedRange.error }, { status: 400 })
+  }
+  const range = parsedRange.range
+  const effectiveStart = range.fromDate ?? period.period_start
+  const effectiveEnd = range.toDate ?? period.period_end
+
   try {
-    const report = await generateIncomeStatement(supabase, companyId, periodId)
-    report.period = { start: period.period_start, end: period.period_end }
+    const report = await generateIncomeStatement(supabase, companyId, periodId, range)
+    report.period = { start: effectiveStart, end: effectiveEnd }
 
     const operatingResult = Math.round((report.total_revenue - report.total_expenses) * 100) / 100
 
@@ -198,7 +207,7 @@ export async function GET(request: Request) {
 
     // "-utkast" suffix keeps the draft status visible even after the file
     // leaves the browser — complements the in-document ÅRL 2:7 disclaimer.
-    const filename = `resultatrakning-${report.period.start}-utkast.pdf`
+    const filename = `resultatrakning-${report.period.start}--${report.period.end}-utkast.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {

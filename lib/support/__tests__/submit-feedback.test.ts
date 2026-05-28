@@ -11,30 +11,19 @@ describe('submitFeedback', () => {
     vi.unstubAllGlobals()
   })
 
-  function stubRecapt(impl: (...args: unknown[]) => void) {
-    vi.stubGlobal('window', { recapt: impl })
-  }
-
-  function stubNoRecapt() {
-    vi.stubGlobal('window', {})
-  }
-
   function stubFetchOk() {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
     vi.stubGlobal('fetch', fetchSpy)
     return fetchSpy
   }
 
-  it('sends to both Recapt and email when SDK is present', async () => {
-    const recapt = vi.fn()
-    stubRecapt(recapt)
+  it('posts subject and message to the contact endpoint', async () => {
     const fetchSpy = stubFetchOk()
 
     const result = await submitFeedback({ subject: 'Hjälpsida', message: 'Hjälp tack' })
 
     expect(result.ok).toBe(true)
-    expect(result.channels.sort()).toEqual(['email', 'recapt'])
-    expect(recapt).toHaveBeenCalledWith('feedback', { message: '[Hjälpsida]\n\nHjälp tack' })
+    expect(result.channels).toEqual(['email'])
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/support/contact',
       expect.objectContaining({
@@ -44,57 +33,21 @@ describe('submitFeedback', () => {
     )
   })
 
-  it('omits subject prefix in Recapt payload when subject not provided', async () => {
-    const recapt = vi.fn()
-    stubRecapt(recapt)
-    stubFetchOk()
-
-    await submitFeedback({ message: 'plain' })
-
-    expect(recapt).toHaveBeenCalledWith('feedback', { message: 'plain' })
-  })
-
-  it('still reports success via email when Recapt throws', async () => {
-    stubRecapt(() => {
-      throw new Error('boom')
-    })
-    stubFetchOk()
-
-    const result = await submitFeedback({ subject: 'X', message: 'msg' })
-
-    expect(result.ok).toBe(true)
-    expect(result.channels).toEqual(['email'])
-  })
-
-  it('uses email only when Recapt SDK is absent', async () => {
-    stubNoRecapt()
+  it('omits subject when not provided', async () => {
     const fetchSpy = stubFetchOk()
 
-    const result = await submitFeedback({ message: 'msg' })
+    const result = await submitFeedback({ message: 'plain' })
 
     expect(result.ok).toBe(true)
-    expect(result.channels).toEqual(['email'])
-    expect(fetchSpy).toHaveBeenCalledOnce()
-  })
-
-  it('reports success when Recapt succeeds even if email fails', async () => {
-    const recapt = vi.fn()
-    stubRecapt(recapt)
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'down' }) })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/support/contact',
+      expect.objectContaining({
+        body: JSON.stringify({ message: 'plain' }),
+      })
     )
-
-    const result = await submitFeedback({ message: 'msg' })
-
-    expect(result.ok).toBe(true)
-    expect(result.channels).toEqual(['recapt'])
   })
 
-  it('returns failure with email error when both channels fail', async () => {
-    stubRecapt(() => {
-      throw new Error('boom')
-    })
+  it('returns failure with server error message when the endpoint rejects', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -110,8 +63,7 @@ describe('submitFeedback', () => {
     expect(result.error).toBe('Mailtjänsten är inte konfigurerad')
   })
 
-  it('returns failure when fetch itself throws and Recapt is absent', async () => {
-    stubNoRecapt()
+  it('returns failure when fetch itself throws', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network down')))
 
     const result = await submitFeedback({ message: 'msg' })

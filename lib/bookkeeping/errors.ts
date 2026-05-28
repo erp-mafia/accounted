@@ -15,6 +15,7 @@ export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
+export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
 
 // ============================================================================
 // AccountsNotInChartError — kept for back-compat (many existing call sites)
@@ -138,6 +139,20 @@ export class CurrencyRevaluationAlreadyExistsError extends Error {
   }
 }
 
+export type MeaninglessCorrectionReason = 'net_zero_per_account' | 'identical_to_original'
+
+export class MeaninglessCorrectionError extends Error {
+  readonly code = MEANINGLESS_CORRECTION
+  constructor(public readonly reason: MeaninglessCorrectionReason) {
+    super(
+      reason === 'net_zero_per_account'
+        ? 'Correction lines net to zero on every account — no economic event represented (BFL 5 kap. 5 §).'
+        : 'Correction lines are identical to the original entry — nothing to correct.'
+    )
+    this.name = 'MeaninglessCorrectionError'
+  }
+}
+
 export class InvalidMappingResultError extends Error {
   readonly code = INVALID_MAPPING_RESULT
   constructor(
@@ -206,7 +221,8 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof EntryAlreadyReversedError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
-    err instanceof BookkeepingDatabaseError
+    err instanceof BookkeepingDatabaseError ||
+    err instanceof MeaninglessCorrectionError
   )
 }
 
@@ -350,6 +366,19 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
             debitAccount: err.debitAccount,
             creditAccount: err.creditAccount,
           },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof MeaninglessCorrectionError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { reason: err.reason },
         },
       },
       { status: 400 }

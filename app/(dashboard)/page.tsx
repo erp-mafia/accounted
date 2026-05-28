@@ -83,6 +83,7 @@ export default async function DashboardPage() {
     { count: uncategorizedCount },
     { count: skatteverketTokenCount },
     { data: agentProfile },
+    { data: noDocRequiredEntries },
   ] = await Promise.all([
     supabase.from('company_settings').select('*').eq('company_id', companyId).single(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -113,6 +114,7 @@ export default async function DashboardPage() {
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
     supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
+    supabase.from('journal_entry_no_doc_required').select('journal_entry_id').eq('company_id', companyId),
   ])
 
   // If onboarding is not complete, redirect to onboarding
@@ -244,11 +246,21 @@ export default async function DashboardPage() {
       ),
     }))
 
-  const uniqueEntriesWithDocs = new Set(
+  const entriesWithDocsSet = new Set(
     (entriesWithDocs || []).map((d) => d.journal_entry_id)
-  ).size
+  )
 
-  const missingUnderlagCount = Math.max(0, (postedEntriesCount || 0) - uniqueEntriesWithDocs)
+  // Exempted entries that *also* have a doc are already excluded by entriesWithDocsSet,
+  // so subtracting only the exempt-without-doc set avoids double-counting.
+  let exemptedWithoutDoc = 0
+  for (const row of (noDocRequiredEntries || []) as { journal_entry_id: string }[]) {
+    if (!entriesWithDocsSet.has(row.journal_entry_id)) exemptedWithoutDoc++
+  }
+
+  const missingUnderlagCount = Math.max(
+    0,
+    (postedEntriesCount || 0) - entriesWithDocsSet.size - exemptedWithoutDoc
+  )
 
   let streakCount = 0
   if (recentReceiptActivity && recentReceiptActivity.length > 0) {

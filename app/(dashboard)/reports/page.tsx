@@ -16,6 +16,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { ReportsNav } from '@/components/reports/ReportsNav'
 import { NEDeclarationView } from '@/components/reports/NEDeclarationView'
 import { PeriodiskSammanstallningView } from '@/components/reports/PeriodiskSammanstallningView'
@@ -45,6 +46,18 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+/**
+ * Build a report API query string with the period and optional date range.
+ * Omitting from/to lets the API fall back to full-period behaviour, which
+ * keeps URLs (and the matching caches) identical for the "Hela året" preset.
+ */
+function reportQuery(periodId: string, range?: DateRangeValue): string {
+  const params = new URLSearchParams({ period_id: periodId })
+  if (range?.fromDate) params.set('from_date', range.fromDate)
+  if (range?.toDate) params.set('to_date', range.toDate)
+  return params.toString()
+}
+
 // Breadcrumb trail for drill-down navigation
 interface DrillDownStep {
   tab: string
@@ -61,9 +74,18 @@ const TAB_LABEL_KEYS: Record<string, string> = {
   'huvudbok': 'name_huvudbok',
 }
 
+const DATE_RANGE_TABS = new Set([
+  'resultatrapport',
+  'balansrapport',
+  'income-statement',
+  'balance-sheet',
+])
+
 export default function ReportsPage() {
   const router = useRouter()
   const [selectedPeriod, setSelectedPeriod] = useState('')
+  const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(null)
+  const [dateRange, setDateRange] = useState<DateRangeValue>({})
   const [activeTab, setActiveTab] = useState('resultatrapport')
   const [isLoadingInit, setIsLoadingInit] = useState(true)
   const { company } = useCompany()
@@ -124,14 +146,30 @@ export default function ReportsPage() {
         <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
       </div>
 
-      <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-6">
         <FiscalYearSelector
           value={selectedPeriod || null}
-          onChange={(id) => setSelectedPeriod(id || '')}
+          onChange={(id, period) => {
+            setSelectedPeriod(id || '')
+            setSelectedPeriodBounds(
+              period ? { start: period.period_start, end: period.period_end } : null,
+            )
+            // Reset the range so the new period's stored preset re-resolves
+            // against the new bounds (avoids stale dates from the prior year).
+            setDateRange({})
+          }}
           includeAllOption={false}
           hideFuturePeriods
           onReady={() => setIsLoadingInit(false)}
         />
+        {DATE_RANGE_TABS.has(activeTab) && selectedPeriodBounds && (
+          <ReportDateRange
+            periodStart={selectedPeriodBounds.start}
+            periodEnd={selectedPeriodBounds.end}
+            value={dateRange}
+            onChange={setDateRange}
+          />
+        )}
       </div>
       <p className="text-sm text-muted-foreground">
         {t('sie_moved_hint')}{' '}
@@ -195,19 +233,19 @@ export default function ReportsPage() {
           />
           <div className="flex-1 min-w-0">
             {activeTab === 'resultatrapport' && (
-              <ResultatrapportView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+              <ResultatrapportView periodId={selectedPeriod} dateRange={dateRange} onNavigateToAccount={navigateToAccount} />
             )}
             {activeTab === 'balansrapport' && (
-              <BalansrapportView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+              <BalansrapportView periodId={selectedPeriod} dateRange={dateRange} onNavigateToAccount={navigateToAccount} />
             )}
             {activeTab === 'trial-balance' && (
               <TrialBalanceView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
             )}
             {activeTab === 'income-statement' && (
-              <IncomeStatementView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+              <IncomeStatementView periodId={selectedPeriod} dateRange={dateRange} onNavigateToAccount={navigateToAccount} />
             )}
             {activeTab === 'balance-sheet' && (
-              <BalanceSheetView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+              <BalanceSheetView periodId={selectedPeriod} dateRange={dateRange} onNavigateToAccount={navigateToAccount} />
             )}
             {activeTab === 'vat-declaration' && <VatDeclarationView />}
             {activeTab === 'periodisk-sammanstallning' && <PeriodiskSammanstallningView />}
@@ -568,20 +606,21 @@ function TrialBalanceDetailedRow({
     </>
   )
 }
-function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+function IncomeStatementView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
   const t = useTranslations('reports')
   const [data, setData] = useState<IncomeStatementReport | null>(null)
   const [monthlyData, setMonthlyData] = useState<MonthlyDataPoint[]>([])
   const [monthlyLoading, setMonthlyLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
     setLoading(true)
     setError(null)
     setMonthlyLoading(true)
 
-    fetch(`/api/reports/income-statement?period_id=${periodId}`)
+    fetch(`/api/reports/income-statement?${reportQs}`)
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
@@ -596,6 +635,8 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
         setLoading(false)
       })
 
+    // Monthly breakdown is full-period by design (it IS the per-month view),
+    // so the date range only affects the headline numbers above the chart.
     fetch(`/api/reports/monthly-breakdown?period_id=${periodId}`)
       .then((res) => res.json())
       .then((result) => {
@@ -607,7 +648,7 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
       .catch(() => {
         setMonthlyLoading(false)
       })
-  }, [periodId])
+  }, [periodId, reportQs])
 
   if (loading) {
     return (
@@ -646,7 +687,7 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/income-statement/pdf?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/income-statement/pdf?${reportQs}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
@@ -654,7 +695,7 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/income-statement/xlsx?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/income-statement/xlsx?${reportQs}`, '_blank')}
         >
           <FileSpreadsheet className="h-4 w-4 mr-2" />
           Ladda ner Excel
@@ -736,16 +777,17 @@ function IncomeStatementView({ periodId, onNavigateToAccount }: { periodId: stri
   )
 }
 
-function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
   const t = useTranslations('reports')
   const [data, setData] = useState<BalanceSheetReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch(`/api/reports/balance-sheet?period_id=${periodId}`)
+    fetch(`/api/reports/balance-sheet?${reportQs}`)
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
@@ -759,7 +801,7 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
         setError('Kunde inte hämta balansräkning')
         setLoading(false)
       })
-  }, [periodId])
+  }, [periodId, reportQs])
 
   if (loading) {
     return (
@@ -800,7 +842,7 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/balance-sheet/pdf?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/balance-sheet/pdf?${reportQs}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
@@ -808,7 +850,7 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/balance-sheet/xlsx?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/balance-sheet/xlsx?${reportQs}`, '_blank')}
         >
           <FileSpreadsheet className="h-4 w-4 mr-2" />
           Ladda ner Excel
@@ -869,16 +911,17 @@ function BalanceSheetView({ periodId, onNavigateToAccount }: { periodId: string;
   )
 }
 
-function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
   const t = useTranslations('reports')
   const [data, setData] = useState<ResultatrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch(`/api/reports/resultatrapport?period_id=${periodId}`)
+    fetch(`/api/reports/resultatrapport?${reportQs}`)
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
@@ -892,7 +935,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
         setError('Kunde inte hämta resultatrapport')
         setLoading(false)
       })
-  }, [periodId])
+  }, [periodId, reportQs])
 
   if (loading) {
     return (
@@ -934,7 +977,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/resultatrapport/pdf?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/resultatrapport/pdf?${reportQs}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
@@ -942,7 +985,7 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/resultatrapport/xlsx?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/resultatrapport/xlsx?${reportQs}`, '_blank')}
         >
           <FileSpreadsheet className="h-4 w-4 mr-2" />
           Ladda ner Excel
@@ -1019,16 +1062,17 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
   )
 }
 
-function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
   const t = useTranslations('reports')
   const [data, setData] = useState<BalansrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch(`/api/reports/balansrapport?period_id=${periodId}`)
+    fetch(`/api/reports/balansrapport?${reportQs}`)
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
@@ -1042,7 +1086,7 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
         setError('Kunde inte hämta balansrapport')
         setLoading(false)
       })
-  }, [periodId])
+  }, [periodId, reportQs])
 
   if (loading) {
     return (
@@ -1081,7 +1125,7 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/balansrapport/pdf?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/balansrapport/pdf?${reportQs}`, '_blank')}
         >
           <Download className="h-4 w-4 mr-2" />
           {t('download_pdf')}
@@ -1089,7 +1133,7 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
         <Button
           variant="outline"
           size="sm"
-          onClick={() => window.open(`/api/reports/balansrapport/xlsx?period_id=${periodId}`, '_blank')}
+          onClick={() => window.open(`/api/reports/balansrapport/xlsx?${reportQs}`, '_blank')}
         >
           <FileSpreadsheet className="h-4 w-4 mr-2" />
           Ladda ner Excel

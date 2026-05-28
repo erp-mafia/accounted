@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -16,11 +16,14 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, AlertTriangle } from 'lucide-react'
 import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
+import type { BASAccount } from '@/types'
 
 interface AddAccountDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: () => void
+  onCreated: (account: BASAccount) => void
+  initialAccountNumber?: string
+  initialAccountName?: string
 }
 
 function deriveAccountType(accountNumber: string): { type: string; balance: string } {
@@ -44,7 +47,13 @@ function deriveAccountType(accountNumber: string): { type: string; balance: stri
   }
 }
 
-export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDialogProps) {
+export function AddAccountDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  initialAccountNumber,
+  initialAccountName,
+}: AddAccountDialogProps) {
   const [accountNumber, setAccountNumber] = useState('')
   const [accountName, setAccountName] = useState('')
   const [description, setDescription] = useState('')
@@ -53,6 +62,20 @@ export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDi
   const [normalBalance, setNormalBalance] = useState<'debit' | 'credit'>('debit')
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // Apply prefill values whenever the dialog opens. Resetting on close happens
+  // implicitly after a successful create; here we only need to seed inputs so
+  // the user doesn't retype what the combobox already captured.
+  useEffect(() => {
+    if (!open) return
+    const num = (initialAccountNumber ?? '').replace(/\D/g, '').slice(0, 4)
+    setAccountNumber(num)
+    setAccountName(initialAccountName ?? '')
+    setError('')
+    if (num.length === 4) {
+      setNormalBalance(deriveAccountType(num).balance as 'debit' | 'credit')
+    }
+  }, [open, initialAccountNumber, initialAccountName])
 
   const isBASMatch = accountNumber.length === 4 && isStandardBASAccount(accountNumber)
   const derived = accountNumber.length === 4 ? deriveAccountType(accountNumber) : null
@@ -91,13 +114,15 @@ export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDi
         throw new Error(data.error || 'Kunde inte skapa kontot')
       }
 
+      const { data: createdAccount } = await response.json() as { data: BASAccount }
+
       // Reset form
       setAccountNumber('')
       setAccountName('')
       setDescription('')
       setDefaultVatCode('')
       setSruCode('')
-      onCreated()
+      onCreated(createdAccount)
       onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Något gick fel')

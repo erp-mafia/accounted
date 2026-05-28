@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 
 export const GET = withRouteContext(
   'report.balance_sheet',
@@ -24,13 +25,22 @@ export const GET = withRouteContext(
       .eq('company_id', companyId)
       .single()
 
+    let range: { fromDate?: string; toDate?: string } = {}
+    if (period) {
+      const parsed = parseReportDateRange(searchParams, period)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      range = parsed.range
+    }
+
     try {
-      const result = await generateBalanceSheet(supabase, companyId!, periodId)
+      const result = await generateBalanceSheet(supabase, companyId!, periodId, range)
 
       if (period) {
         result.period = {
-          start: period.period_start,
-          end: period.period_end,
+          start: range.fromDate ?? period.period_start,
+          end: range.toDate ?? period.period_end,
         }
       }
 

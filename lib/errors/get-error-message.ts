@@ -324,6 +324,14 @@ export function getErrorMessage(
         return 'Kontering saknas för transaktionen. Kontrollera bokföringsreglerna.'
       }
 
+      if (structured.code === 'MEANINGLESS_CORRECTION') {
+        const details = structured.details as { reason?: string } | undefined
+        if (details?.reason === 'identical_to_original') {
+          return 'Rättelsen är identisk med originalverifikationen — inget har ändrats.'
+        }
+        return 'Rättelsen saknar ekonomisk innebörd: varje konto netto till noll. En rättelse måste beskriva en faktisk affärshändelse (BFL 5 kap. 5 §).'
+      }
+
       if (structured.code === 'BOOKKEEPING_DATABASE_ERROR') {
         // A DB-layer error may carry a user-relevant cause (e.g. period lock
         // trigger). Try the known-pattern map before falling back to the

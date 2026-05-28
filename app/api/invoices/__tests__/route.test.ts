@@ -188,9 +188,6 @@ describe('POST /api/invoices (create invoice)', () => {
 
     // Fetch customer
     enqueue({ data: customer, error: null })
-    // Fetch company_settings.vat_registered — feeds the helpers so the
-    // allowed-rates set is correct for non-VAT-registered sellers.
-    enqueue({ data: { vat_registered: true }, error: null })
     // Insert invoice (number is null on insert; allocated immediately after items)
     enqueue({ data: createdInvoice, error: null })
     // Insert items
@@ -241,8 +238,6 @@ describe('POST /api/invoices (create invoice)', () => {
     ])
 
     enqueue({ data: customer, error: null })
-    // Fetch company_settings.vat_registered
-    enqueue({ data: { vat_registered: true }, error: null })
     enqueue({ data: createdInvoice, error: null })
     // Items insertion fails
     enqueue({ data: null, error: { message: 'Items insert failed' } })
@@ -285,8 +280,6 @@ describe('POST /api/invoices (create invoice)', () => {
     ])
 
     enqueue({ data: customer, error: null })
-    // Fetch company_settings.vat_registered
-    enqueue({ data: { vat_registered: true }, error: null })
     enqueue({ data: createdInvoice, error: null })
     // Items insertion succeeds
     enqueue({ data: null, error: null })

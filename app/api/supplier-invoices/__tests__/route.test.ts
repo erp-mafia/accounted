@@ -560,6 +560,94 @@ describe('POST /api/supplier-invoices', () => {
     expect(call[5]).toBe('enskild_firma')
   })
 
+  it('persists manual vat_amount override on items and forwards it to the engine', async () => {
+    // Bilförmån-fallet: leverantören tar 25% moms men endast 50% är
+    // avdragsgill. Användaren skriver 1 250 kr i momsrutan i stället för
+    // den beräknade 2 500 kr.
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
+
+    enqueue({ data: supplier, error: null })
+    enqueue({ data: 7 })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LEAS-001',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          {
+            description: 'Leasing personbil',
+            amount: 10000,
+            account_number: '5615',
+            vat_rate: 0.25,
+            vat_amount: 1250,
+          },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockCreateSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
+    const items = mockCreateSupplierInvoiceRegistrationEntry.mock.calls[0][4] as Array<{
+      vat_amount: number
+      vat_rate: number
+      line_total: number
+    }>
+    expect(items).toHaveLength(1)
+    expect(items[0].vat_amount).toBe(1250)
+    expect(items[0].vat_rate).toBe(0.25)
+    expect(items[0].line_total).toBe(10000)
+  })
+
+  it('falls back to line_total × rate when vat_amount is omitted', async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
+
+    enqueue({ data: supplier, error: null })
+    enqueue({ data: 8 })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-001',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          {
+            description: 'Material',
+            amount: 10000,
+            account_number: '4010',
+            vat_rate: 0.25,
+          },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const items = mockCreateSupplierInvoiceRegistrationEntry.mock.calls[0][4] as Array<{
+      vat_amount: number
+    }>
+    expect(items[0].vat_amount).toBe(2500)
+  })
+
   it('rejects paid_with_private_funds combined with reverse_charge', async () => {
     const request = createMockRequest('/api/supplier-invoices', {
       method: 'POST',

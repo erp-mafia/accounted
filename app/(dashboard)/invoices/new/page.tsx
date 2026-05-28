@@ -262,11 +262,10 @@ export default function NewInvoicePage() {
         )
       }
 
-      // When customer forces a single rate (reverse charge/export), or the
-      // seller isn't VAT-registered, update all lines so the picker can't
-      // leave stale 25% values behind.
+      // When the customer forces a single rate (reverse charge/export),
+      // update all lines so the picker can't leave stale 25% values behind.
       if (customer) {
-        const rates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated, vatRegistered)
+        const rates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
         if (rates.length === 1) {
           const forcedRate = rates[0].rate
           watchItems.forEach((_, i) => {
@@ -275,7 +274,7 @@ export default function NewInvoicePage() {
         }
       }
     }
-  }, [watchCustomerId, customers, setValue, vatRegistered])
+  }, [watchCustomerId, customers, setValue])
 
   async function fetchCustomers() {
     if (!company?.id) return
@@ -332,13 +331,19 @@ export default function NewInvoicePage() {
   }, 0)
 
   const vatRules = selectedCustomer
-    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, vatRegistered)
+    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
     : null
 
   const availableRates = selectedCustomer
-    ? getAvailableVatRates(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, vatRegistered)
+    ? getAvailableVatRates(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
     : []
   const isRateLocked = availableRates.length === 1
+  // Show a warning when a non-registered seller has picked any non-zero VAT
+  // rate. ML 16 kap. 23 § (faktureringsmoms): stated VAT is owed to
+  // Skatteverket regardless of registration, but the buyer cannot deduct it
+  // as input VAT — so we surface the consequence rather than block the input.
+  const hasNonZeroVat = watchItems.some((item) => (item?.vat_rate ?? 0) > 0)
+  const showNotRegisteredVatWarning = !vatRegistered && hasNonZeroVat
 
   // Calculate per-item VAT
   const vatByRate = new Map<number, { base: number; vat: number }>()
@@ -676,6 +681,18 @@ export default function NewInvoicePage() {
               <CardDescription>{t('items_card_description')}</CardDescription>
             </CardHeader>
             <CardContent>
+              {showNotRegisteredVatWarning && (
+                <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-secondary/60 px-4 py-3 text-sm">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+                  <p className="text-muted-foreground">
+                    Du är inte momsregistrerad. Om du ändå tar ut moms är du
+                    enligt ML 16 kap. 23 § skyldig att betala in den till
+                    Skatteverket, men din kund får inte dra av den som ingående
+                    moms. Om du har börjat bedriva momspliktig verksamhet bör
+                    du först registrera dig för moms.
+                  </p>
+                </div>
+              )}
               <div className="space-y-4">
                 {fields.map((field, index) => {
                   const lineTotal = (watchItems[index]?.quantity || 0) * (watchItems[index]?.unit_price || 0)

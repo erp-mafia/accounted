@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { makeJournalEntry, makeJournalEntryLine } from '@/tests/helpers'
-import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { BookkeepingDatabaseError, MeaninglessCorrectionError } from '@/lib/bookkeeping/errors'
 
 // ============================================================
 // Mock — separate client (no .then) from query builder (thenable)
@@ -210,6 +210,70 @@ describe('correctEntry', () => {
     expect(journalEntryInserts).toHaveLength(2)
     expect(journalEntryInserts[0]).toMatchObject({ source_type: 'storno', entry_date: '2024-06-15' })
     expect(journalEntryInserts[1]).toMatchObject({ source_type: 'correction', entry_date: '2024-06-15' })
+  })
+
+  it('rejects rättelse where every account nets to zero (1930 → 1930)', async () => {
+    const supabase = makeClient()
+    const noOpLines = [
+      { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+    ]
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', noOpLines)
+    ).rejects.toBeInstanceOf(MeaninglessCorrectionError)
+
+    // Guard runs before any DB call — original must not be fetched.
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('rejects rättelse where multiple accounts each net to zero', async () => {
+    const supabase = makeClient()
+    const noOpLines = [
+      { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+      { account_number: '5410', debit_amount: 50, credit_amount: 0 },
+      { account_number: '5410', debit_amount: 0, credit_amount: 50 },
+    ]
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', noOpLines)
+    ).rejects.toMatchObject({
+      code: 'MEANINGLESS_CORRECTION',
+      reason: 'net_zero_per_account',
+    })
+  })
+
+  it('rejects rättelse identical to the original entry', async () => {
+    const supabase = makeClient()
+    // Only the fetch-original result is needed — guard runs right after.
+    results = [{ data: originalEntry, error: null }]
+
+    const identicalLines = [
+      { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', identicalLines)
+    ).rejects.toMatchObject({
+      code: 'MEANINGLESS_CORRECTION',
+      reason: 'identical_to_original',
+    })
+  })
+
+  it('allows rättelse that shifts amounts between different accounts', async () => {
+    setupResults()
+    const supabase = makeClient()
+    // correctedLines moves expense from 5410 → 5420 — net effect per account
+    // is non-zero (5420 +1200, 5410 0 since absent, 1930 -1200), and the lines
+    // differ from the original, so both guards must pass.
+    const result = await correctEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'orig-1',
+      correctedLines
+    )
+    expect(result.corrected).toBeDefined()
   })
 
   it('emits journal_entry.corrected event', async () => {

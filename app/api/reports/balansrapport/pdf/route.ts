@@ -4,6 +4,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { generateBalansrapport } from '@/lib/reports/balansrapport'
 import { BalansrapportPDF } from '@/lib/reports/operational-report-pdf-template'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 
 export async function GET(request: Request) {
@@ -47,8 +48,13 @@ export async function GET(request: Request) {
     )
   }
 
+  const parsedRange = parseReportDateRange(searchParams, period)
+  if (!parsedRange.ok) {
+    return NextResponse.json({ error: parsedRange.error }, { status: 400 })
+  }
+
   try {
-    const report = await generateBalansrapport(supabase, companyId, periodId)
+    const report = await generateBalansrapport(supabase, companyId, periodId, parsedRange.range)
 
     const pdfBuffer = await renderToBuffer(
       BalansrapportPDF({
@@ -62,7 +68,7 @@ export async function GET(request: Request) {
     // report PDF route in this repo (resultatrapport, balance-sheet,
     // income-statement). A balansrapport is a snapshot at period end, but
     // consistent filenames let users sort and script-rename predictably.
-    const filename = `balansrapport-${report.period.start}.pdf`
+    const filename = `balansrapport-${report.period.start}--${report.period.end}.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {

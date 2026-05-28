@@ -4,11 +4,18 @@ import { getOpeningBalances } from './opening-balances'
 import type { TrialBalanceRow } from '@/types'
 
 /**
- * Generate trial balance (Saldobalans) for a fiscal period.
+ * Generate trial balance (Saldobalans) for a fiscal period or a date range
+ * inside one.
  *
  * Computes IB (ingående balans), period movements, and UB (utgående balans)
  * per BFNAR 2013:2 requirements. Uses the opening_balance_entry set by
  * year-end closing when available; falls back to summing prior-period entries.
+ *
+ * When `fromDate`/`toDate` are passed, they must lie inside the fiscal
+ * period. The function rolls the IB forward from `period_start` to
+ * `fromDate − 1` (so "opening" reflects the state at `fromDate`) and limits
+ * period activity to `[fromDate, toDate]`. Defaults equal `period_start` and
+ * `period_end` — identical to the no-options behaviour.
  *
  * Uses joined queries with pagination to handle any number of entries.
  * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
@@ -17,7 +24,11 @@ export async function generateTrialBalance(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options?: { excludeYearEndClosing?: boolean }
+  options?: {
+    excludeYearEndClosing?: boolean
+    fromDate?: string
+    toDate?: string
+  }
 ): Promise<{
   rows: TrialBalanceRow[]
   totalDebit: number
@@ -28,15 +39,58 @@ export async function generateTrialBalance(
   // Fetch period for opening balance computation
   const { data: period } = await supabase
     .from('fiscal_periods')
-    .select('period_start, opening_balance_entry_id')
+    .select('period_start, period_end, opening_balance_entry_id')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
 
-  // ── Opening balances (IB) ──────────────────────────────────────
+  // ── Opening balances (IB) at period_start ──────────────────────
   const { balances: openingBalances, obEntryId } = await getOpeningBalances(
     supabase, companyId, period
   )
+
+  // ── Roll IB forward from period_start up to fromDate ───────────
+  // When the caller requests a sub-range starting after period_start, the
+  // "opening" of that window must include all activity since the period
+  // started. We additively fold those lines into openingBalances so the
+  // downstream IB/period split stays correct without changing call sites.
+  if (
+    options?.fromDate &&
+    period?.period_start &&
+    options.fromDate > period.period_start
+  ) {
+    const priorLines = await fetchAllRows<{
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+    }>(({ from, to }) => {
+      let query = supabase
+        .from('journal_entry_lines')
+        .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
+        .eq('journal_entries.company_id', companyId)
+        .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
+        .in('journal_entries.status', ['posted', 'reversed'])
+        .gte('journal_entries.entry_date', period.period_start)
+        .lt('journal_entries.entry_date', options.fromDate)
+
+      if (obEntryId) {
+        query = query.neq('journal_entry_id', obEntryId)
+      }
+
+      if (options?.excludeYearEndClosing) {
+        query = query.neq('journal_entries.source_type', 'year_end')
+      }
+
+      return query.range(from, to)
+    })
+
+    for (const line of priorLines) {
+      const existing = openingBalances.get(line.account_number) || { debit: 0, credit: 0 }
+      existing.debit += Number(line.debit_amount) || 0
+      existing.credit += Number(line.credit_amount) || 0
+      openingBalances.set(line.account_number, existing)
+    }
+  }
 
   // ── Period lines (excluding opening balance entry) ─────────────
   // If year-end closing set an OB entry, exclude it from period lines so
@@ -52,10 +106,23 @@ export async function generateTrialBalance(
   }>(({ from, to }) => {
     let query = supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type)')
+      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
       .in('journal_entries.status', ['posted', 'reversed'])
+
+    // Date filters are only applied when the caller explicitly asks. The
+    // period itself is already enforced via the fiscal_period_id join, so
+    // adding redundant entry_date bounds for the default case would just
+    // increase query complexity (and break older mocks that don't stub gte
+    // /lte). The fiscal_period_id constraint plus a CHECK on entry_date in
+    // the engine keep activity inside the period.
+    if (options?.fromDate) {
+      query = query.gte('journal_entries.entry_date', options.fromDate)
+    }
+    if (options?.toDate) {
+      query = query.lte('journal_entries.entry_date', options.toDate)
+    }
 
     if (obEntryId) {
       query = query.neq('journal_entry_id', obEntryId)

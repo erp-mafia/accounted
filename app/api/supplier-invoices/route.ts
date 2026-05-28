@@ -115,7 +115,12 @@ export const POST = withRouteContext(
       const lineTotal = item.amount != null
         ? Math.round(item.amount * 100) / 100
         : Math.round((item.quantity ?? 1) * (item.unit_price ?? 0) * 100) / 100
-      const vatAmount = Math.round(lineTotal * vatRate * 100) / 100
+      // Honor a manual VAT override (partial-deduction cases, foreign-currency
+      // rounding, supplier-side POS rounding). Falls back to line_total × rate
+      // when the caller didn't supply one.
+      const vatAmount = item.vat_amount != null
+        ? Math.round(item.vat_amount * 100) / 100
+        : Math.round(lineTotal * vatRate * 100) / 100
       return {
         sort_order: index,
         description: item.description,

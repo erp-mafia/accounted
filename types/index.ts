@@ -941,6 +941,8 @@ export interface CreateSupplierInvoiceItemInput {
   amount: number
   account_number: string
   vat_rate?: number
+  // Manual override. See CreateSupplierInvoiceItemSchema for rationale.
+  vat_amount?: number
   vat_code?: string
   // Legacy fields (backward compat, ignored when amount is set)
   quantity?: number

@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateResultatrapport } from '@/lib/reports/resultatrapport'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -34,14 +35,31 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
   }
 
-  const { data: companyRow } = await supabase
-    .from('company_settings')
-    .select('company_name')
-    .eq('company_id', companyId)
-    .single()
+  const [{ data: companyRow }, { data: period }] = await Promise.all([
+    supabase
+      .from('company_settings')
+      .select('company_name')
+      .eq('company_id', companyId)
+      .single(),
+    supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end')
+      .eq('id', periodId)
+      .eq('company_id', companyId)
+      .single(),
+  ])
+
+  let range: { fromDate?: string; toDate?: string } = {}
+  if (period) {
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    range = parsed.range
+  }
 
   try {
-    const report = await generateResultatrapport(supabase, companyId, periodId)
+    const report = await generateResultatrapport(supabase, companyId, periodId, range)
 
     const rows: FlatRow[] = []
     for (const g of report.groups) {

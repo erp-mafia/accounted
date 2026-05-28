@@ -11,9 +11,9 @@ const activepiecesUrl = process.env.ACTIVEPIECES_URL ?? "";
 
 const cspDirectives = [
   "default-src 'self'",
-  `connect-src 'self' ${supabaseUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com https://*.recapt.app`,
+  `connect-src 'self' ${supabaseUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
   `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com https://cdn.recapt.app`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com`,
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",

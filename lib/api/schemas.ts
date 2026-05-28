@@ -349,11 +349,33 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   amount: z.number().optional(),
   account_number: accountNumber,
   vat_rate: z.number().min(0).max(100).optional(),
+  // Manual VAT override. When provided, the engine books this exact amount to
+  // 2641/2645 instead of recomputing line_total × vat_rate. Use for partial-
+  // deductible cases (bilförmån 50%, representation 300 kr-tak), foreign-
+  // currency rounding, or POS receipts where supplier-side rounding makes the
+  // VAT off by öre.
+  vat_amount: z.number().min(0).optional(),
   vat_code: z.string().optional(),
   quantity: z.number().optional(),
   unit: z.string().optional(),
   unit_price: z.number().optional(),
-})
+}).refine(
+  (item) => {
+    if (item.vat_amount == null) return true
+    const lineTotal = item.amount != null
+      ? item.amount
+      : (item.quantity ?? 1) * (item.unit_price ?? 0)
+    const vatRate = item.vat_rate ?? 0.25
+    const maxVat = Math.round(lineTotal * vatRate * 100) / 100
+    // 1-öre tolerance covers POS rounding; anything beyond is an upstream bug
+    // or a client trying to inflate 2641 debit beyond the statutory ceiling.
+    return item.vat_amount <= maxVat + 0.01
+  },
+  {
+    message: 'vat_amount cannot exceed line_total × vat_rate',
+    path: ['vat_amount'],
+  },
+)
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,
