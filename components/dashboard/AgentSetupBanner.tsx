@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { MessageCircle, ArrowRight } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 
 interface Props {
   companyName: string
@@ -22,7 +23,10 @@ export default function AgentSetupBanner({ companyName }: Props) {
           <MessageCircle className="h-4 w-4" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-display text-lg tracking-tight">Bygg din bokföringsassistent</p>
+          <div className="flex items-center gap-2">
+            <p className="font-display text-lg tracking-tight">Bygg din bokföringsassistent</p>
+            <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
+          </div>
           <p className="text-sm text-muted-foreground mt-1">
             Skräddarsy en hjälp som kan ditt företag — laddas på under en halv minut för {companyName}.
           </p>

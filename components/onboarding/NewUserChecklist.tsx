@@ -12,6 +12,7 @@ import {
   MessageCircle,
   ShieldCheck,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getBranding } from '@/lib/branding/service'
@@ -310,9 +311,12 @@ export default function NewUserChecklist({
                     <MessageCircle className="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground group-hover:text-primary transition-colors" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
-                      Bygg din bokföringsassistent
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
+                        Bygg din bokföringsassistent
+                      </p>
+                      <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
+                    </div>
                     <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5 leading-relaxed">
                       Några frågor om din verksamhet kalibrerar tonalitet, signatur och vad assistenten kan. Ju mer du delar, desto bättre förstår den dig.
                     </p>

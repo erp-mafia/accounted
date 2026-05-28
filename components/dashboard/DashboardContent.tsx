@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { cn, formatCurrency } from '@/lib/utils'
 import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
 import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
@@ -306,9 +307,12 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
                   <MessageCircle className="h-5 w-5" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-display text-xl leading-tight">Bygg din bokföringsassistent</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-display text-xl leading-tight">Bygg din bokföringsassistent</p>
+                    <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
+                  </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig. Gratis i 30 dagar.
+                    Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.
                   </p>
                 </div>
                 <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
