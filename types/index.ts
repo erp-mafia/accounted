@@ -1543,6 +1543,9 @@ export type PendingOperationType =
   | 'reverse_entry'
   // Bokslut: planenlig avskrivning (one journal entry per asset)
   | 'post_annual_depreciation'
+  // Payroll: salary run creation + AGI declaration
+  | 'create_salary_run'
+  | 'generate_agi'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'

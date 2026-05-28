@@ -9,7 +9,7 @@ import {
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
- * Covers migration 20260527170000_journal_entry_no_doc_required:
+ * Covers migration 20260527170100_journal_entry_no_doc_required:
  *   - Sidecar table accepts inserts via PostgREST (user context)
  *   - RLS isolates exemptions across companies
  *   - FK cascade removes the exemption when the parent journal_entry is deleted
