@@ -77,7 +77,7 @@
     "@types/sharp": "^0.31.1",
     "@types/web-push": "^3.6.4",
     "dotenv": "^17.2.3",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "16.1.5",
     "pg": "^8.20.0",
     "tailwindcss": "^4",
