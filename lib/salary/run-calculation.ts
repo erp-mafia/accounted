@@ -358,7 +358,12 @@ export async function runSalaryCalculation(
         ) / 100
       // Hand the same figure to the engine so gross/tax/avgifter match the
       // hourly_salary line item exactly (instead of recomputing rate × hours).
-      hourlyBaseAmount = baseAmount
+      // Only when there are calendar rows: an empty reduce yields 0, and
+      // `0 ?? undefined` is 0, which would override the engine base to 0 and
+      // wipe out the manual sre.hours_worked fallback path.
+      if (workedDayRows.length > 0) {
+        hourlyBaseAmount = baseAmount
+      }
       if (derivedHoursWorked > 0 && baseAmount > 0) {
         await supabase
           .from('salary_line_items')

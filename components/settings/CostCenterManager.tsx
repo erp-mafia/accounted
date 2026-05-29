@@ -71,7 +71,9 @@ export function CostCenterManager() {
     }
   }
 
-  const patch = async (id: string, body: Record<string, unknown>) => {
+  // Returns true on success so callers (e.g. inline rename) can decide whether
+  // to close their edit UI — errors are surfaced via state, not re-thrown.
+  const patch = async (id: string, body: Record<string, unknown>): Promise<boolean> => {
     setBusyId(id)
     setError(null)
     try {
@@ -83,8 +85,10 @@ export function CostCenterManager() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || t('save_error'))
       await load()
+      return true
     } catch (e) {
       setError(e instanceof Error ? e.message : t('save_error'))
+      return false
     } finally {
       setBusyId(null)
     }
@@ -116,8 +120,10 @@ export function CostCenterManager() {
   const saveEdit = async (id: string) => {
     const name = editName.trim()
     if (!name) return
-    await patch(id, { name })
-    setEditingId(null)
+    // Keep the edit field open if the save failed so the user can retry
+    // without losing their in-progress name change.
+    const ok = await patch(id, { name })
+    if (ok) setEditingId(null)
   }
 
   return (
