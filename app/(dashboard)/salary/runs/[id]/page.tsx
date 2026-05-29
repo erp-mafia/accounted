@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ArrowLeft, Calculator, Eye, Check, CreditCard, BookOpen,
-  ArrowLeftCircle, Loader2, Download,
+  ArrowLeftCircle, Loader2, Download, Clock, ChevronDown,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -71,6 +71,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
   } | null>(null)
+  const [showBreakdown, setShowBreakdown] = useState(false)
 
   async function loadRun() {
     const res = await fetch(`/api/salary/runs/${id}`)
@@ -273,24 +274,33 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Anställda ({employees.length})</CardTitle>
-          {run.status === 'draft' && canWrite && notAdded.length > 0 && (
-            <Select
-              key={addEmployeeKey}
-              onValueChange={(value) => {
-                handleAddEmployee(value)
-                setAddEmployeeKey(k => k + 1)
-              }}
-            >
-              <SelectTrigger className="w-[200px] h-8 text-sm">
-                <SelectValue placeholder="Lägg till anställd..." />
-              </SelectTrigger>
-              <SelectContent>
-                {notAdded.map(emp => (
-                  <SelectItem key={emp.id} value={emp.id}>{emp.first_name} {emp.last_name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <div className="flex items-center gap-2">
+            {employees.length > 0 && canWrite && (run.status === 'draft' || run.status === 'review') && (
+              <Button asChild variant="outline" size="sm" className="h-8">
+                <Link href={`/salary/runs/${id}/time-entry`}>
+                  <Clock className="mr-1 h-3.5 w-3.5" /> Registrera tid
+                </Link>
+              </Button>
+            )}
+            {run.status === 'draft' && canWrite && notAdded.length > 0 && (
+              <Select
+                key={addEmployeeKey}
+                onValueChange={(value) => {
+                  handleAddEmployee(value)
+                  setAddEmployeeKey(k => k + 1)
+                }}
+              >
+                <SelectTrigger className="w-[200px] h-8 text-sm">
+                  <SelectValue placeholder="Lägg till anställd..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {notAdded.map(emp => (
+                    <SelectItem key={emp.id} value={emp.id}>{emp.first_name} {emp.last_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {employees.length === 0 ? (
@@ -351,8 +361,19 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
       {employees.some(e => e.calculation_breakdown) && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Beräkningsdetaljer</CardTitle>
+            <button
+              type="button"
+              onClick={() => setShowBreakdown(v => !v)}
+              aria-expanded={showBreakdown}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <CardTitle className="text-base">Beräkningsdetaljer</CardTitle>
+              <ChevronDown
+                className={`h-4 w-4 text-muted-foreground transition-transform ${showBreakdown ? 'rotate-180' : ''}`}
+              />
+            </button>
           </CardHeader>
+          {showBreakdown && (
           <CardContent className="space-y-4">
             <TaxTableStatus year={run.period_year} compact />
             {employees.filter(e => e.calculation_breakdown).map(sre => {
@@ -380,6 +401,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
               )
             })}
           </CardContent>
+          )}
         </Card>
       )}
 
