@@ -4,6 +4,7 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { BulkTimeEntryTable, type RunEmployeeOption, type ExistingTimeEntry } from '@/components/salary/BulkTimeEntryTable'
@@ -100,8 +101,8 @@ export default function SalaryRunTimeEntryPage({ params }: { params: Promise<{ i
     })
   }, [run])
 
-  // Tid kan bara registreras medan körningen är redigerbar. Efter godkännande
-  // är raderna låsta (samma regel som kalendervyn per anställd).
+  // Time can only be registered while the run is editable. After approval the
+  // rows are locked (same rule as the per-employee calendar view).
   const readOnly = !canWrite || (run != null && run.status !== 'draft' && run.status !== 'review')
 
   if (loading) {
@@ -129,16 +130,13 @@ export default function SalaryRunTimeEntryPage({ params }: { params: Promise<{ i
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <Link href={`/salary/runs/${id}`} className="inline-flex items-center text-sm text-muted-foreground hover:underline">
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Tillbaka till lönekörning
-        </Link>
-        <h1 className="font-display text-3xl tracking-tight md:text-4xl">Registrera tid</h1>
-        <p className="text-sm text-muted-foreground">
-          Lägg till arbetade timmar och frånvaro för perioden {periodLabel} i en tabell — ett alternativ
-          till kalendern per anställd. Varje rad sparas mot vald anställd i den här lönekörningen.
-        </p>
-      </div>
+      <Link href={`/salary/runs/${id}`} className="inline-flex items-center text-sm text-muted-foreground hover:underline">
+        <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Tillbaka till lönekörning
+      </Link>
+      <PageHeader
+        title="Registrera tid"
+        description={`Lägg till arbetade timmar och frånvaro för perioden ${periodLabel} i en tabell — ett alternativ till kalendern per anställd. Varje rad sparas mot vald anställd i den här lönekörningen.`}
+      />
 
       {readOnly && (
         <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
