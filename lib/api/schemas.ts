@@ -1224,6 +1224,13 @@ export const UpsertWorkedDaySchema = z
     hours: z.number().positive().max(24).default(8),
     notes: z.string().max(2000).optional(),
     salary_run_employee_id: uuid.optional(),
+    // Optional cost-center tag. Stored on the day record for reporting; does
+    // not yet flow into line items or the booked journal entry.
+    cost_center_id: uuid.optional(),
+    // Optional per-day hourly wage override. When set, the payroll calculator
+    // pays these hours at this rate instead of the employee's default
+    // hourly_rate; when omitted, it falls back to the employee rate.
+    hourly_rate: nonNegativeAmount.optional(),
     // Optional shift window. Feeds the shift-premium engine — without explicit
     // times, the engine assumes a default 08:00–17:00 day shift. Either both
     // fields are provided or neither.
@@ -1254,6 +1261,12 @@ export const BatchUpsertWorkedDaysSchema = z
     hours: z.number().positive().max(24).default(8),
     notes: z.string().max(2000).optional(),
     salary_run_employee_id: uuid.optional(),
+    // Optional cost-center tag applied to every date in the batch. Stored on
+    // the day record for reporting only.
+    cost_center_id: uuid.optional(),
+    // Optional per-day hourly wage override applied to every date in the batch.
+    // Same fallback behaviour as the single-row endpoint.
+    hourly_rate: nonNegativeAmount.optional(),
     // Optional shift window applied to every date in the batch. Pair both or
     // neither; same fallback behaviour as the single-row endpoint.
     start_time: timeString.optional(),
@@ -1266,6 +1279,24 @@ export const BatchUpsertWorkedDaysSchema = z
       path: ['start_time'],
     },
   )
+
+// ============================================================
+// Cost centers (kostnadsställen) — company dimension
+// ============================================================
+
+export const CreateCostCenterSchema = z.object({
+  code: z.string().trim().min(1).max(20),
+  name: z.string().trim().min(1).max(100),
+})
+
+export const UpdateCostCenterSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .refine((d) => d.name !== undefined || d.is_active !== undefined, {
+    message: 'Ange minst ett fält att uppdatera',
+  })
 
 // ============================================================
 // AI agent flow schemas

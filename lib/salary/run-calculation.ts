@@ -304,11 +304,16 @@ export async function runSalaryCalculation(
     //     For all employees (when premium rules exist), the same rows feed
     //     the shift-premium engine in 8z below.
     let derivedHoursWorked: number | null = null
-    let workedDayRows: Array<{ work_date: string; hours: number; start_time: string | null; end_time: string | null }> = []
+    // Weighted base pay (Σ hours × per-day-or-employee rate) for hourly
+    // employees whose hours come from the calendar. Null when hours fall back
+    // to the manual sre.hours_worked snapshot, so the engine keeps its
+    // rate × hours derivation in that legacy path.
+    let hourlyBaseAmount: number | null = null
+    let workedDayRows: Array<{ work_date: string; hours: number; hourly_rate: number | null; start_time: string | null; end_time: string | null }> = []
     if (emp.salary_type === 'hourly' || premiumRules.length > 0) {
       const { data: workedDays, error: workedError } = await supabase
         .from('salary_worked_days')
-        .select('hours, work_date, start_time, end_time')
+        .select('hours, hourly_rate, work_date, start_time, end_time')
         .eq('company_id', companyId)
         .eq('employee_id', emp.id)
         .gte('work_date', periodStart)
@@ -333,9 +338,28 @@ export async function runSalaryCalculation(
 
       // Refresh the hourly_salary line item so the displayed Lönerader table
       // matches what the engine actually calculated.
-      if (derivedHoursWorked > 0 && (emp.hourly_rate || 0) > 0) {
-        const baseAmount =
-          Math.round((emp.hourly_rate as number) * derivedHoursWorked * 100) / 100
+      //
+      // Each day is paid at its own hourly_rate override when set, otherwise
+      // the employee's default rate. We sum per-day pay so mixed rates stay
+      // exact; the line keeps total hours as quantity and the weighted sum as
+      // amount. With no overrides this reduces to rate × Σ hours — identical to
+      // the previous behaviour. (Shift premiums still use the employee base
+      // rate; per-day overrides only affect base hourly pay.)
+      const fallbackRate = emp.hourly_rate || 0
+      const baseAmount =
+        Math.round(
+          workedDayRows.reduce(
+            (sum, d) =>
+              sum +
+              Number(d.hours) *
+                (d.hourly_rate != null ? Number(d.hourly_rate) : fallbackRate),
+            0,
+          ) * 100,
+        ) / 100
+      // Hand the same figure to the engine so gross/tax/avgifter match the
+      // hourly_salary line item exactly (instead of recomputing rate × hours).
+      hourlyBaseAmount = baseAmount
+      if (derivedHoursWorked > 0 && baseAmount > 0) {
         await supabase
           .from('salary_line_items')
           .delete()
@@ -581,6 +605,7 @@ export async function runSalaryCalculation(
           derivedHoursWorked !== null && derivedHoursWorked > 0
             ? derivedHoursWorked
             : sre.hours_worked || undefined,
+        hourlyBaseOverride: hourlyBaseAmount ?? undefined,
         employmentDegree: emp.employment_degree,
         taxTableNumber: emp.tax_table_number,
         taxColumn: emp.tax_column || 1,

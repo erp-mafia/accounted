@@ -132,6 +132,43 @@ describe('calculateSalary', () => {
     expect(result.grossSalary).toBe(40000) // 250 * 160
   })
 
+  it('uses hourlyBaseOverride for the base instead of rate × hours', () => {
+    // Per-day rate overrides: the caller pre-sums base pay across worked days
+    // (e.g. 80h @ 250 + 80h @ 300 = 44000) and passes it as the override. The
+    // engine must use that figure, not hourlyRate × hoursWorked (which would
+    // give the wrong 250 × 160 = 40000).
+    const result = calculateSalary(
+      makeBasicInput({
+        salaryType: 'hourly',
+        monthlySalary: 0,
+        hourlyRate: 250,
+        hoursWorked: 160,
+        hourlyBaseOverride: 44000,
+      }),
+      config2026,
+      emptyTaxRates
+    )
+
+    expect(result.grossSalary).toBe(44000)
+    expect(result.taxWithheld).toBe(13200) // 30% of 44000
+    expect(result.avgifterAmount).toBe(Math.round(44000 * 0.3142 * 100) / 100)
+  })
+
+  it('falls back to rate × hours when hourlyBaseOverride is omitted', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        salaryType: 'hourly',
+        monthlySalary: 0,
+        hourlyRate: 250,
+        hoursWorked: 160,
+      }),
+      config2026,
+      emptyTaxRates
+    )
+
+    expect(result.grossSalary).toBe(40000) // 250 * 160, unchanged behaviour
+  })
+
   it('applies sidoinkomst flat 30%', () => {
     const result = calculateSalary(
       makeBasicInput({ isSidoinkomst: true }),

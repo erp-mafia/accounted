@@ -1230,6 +1230,26 @@
     "latest_number": "Senaste nr",
     "footnote": "Nya serier skapas automatiskt första gången de används vid bokföring."
   },
+  "settings_cost_centers": {
+    "heading": "Kostnadsställen",
+    "description": "Återanvändbara kostnadsställen för att fördela t.ex. arbetad tid. Aktiva kostnadsställen kan väljas i lönekalendern.",
+    "code_label": "Kod",
+    "code_placeholder": "t.ex. 100",
+    "name_label": "Namn",
+    "name_placeholder": "t.ex. Försäljning",
+    "add": "Lägg till",
+    "empty_state": "Inga kostnadsställen ännu. Lägg till ett ovan för att kunna välja det i lönekalendern.",
+    "inactive_badge": "inaktivt",
+    "rename": "Byt namn",
+    "deactivate": "Inaktivera",
+    "activate": "Aktivera",
+    "delete": "Ta bort",
+    "save": "Spara",
+    "cancel": "Avbryt",
+    "delete_confirm": "Ta bort kostnadsstället {code} · {name}? Befintliga registreringar behåller sin historik men förlorar kopplingen.",
+    "load_error": "Kunde inte ladda kostnadsställen",
+    "save_error": "Kunde inte spara"
+  },
   "settings_team_panel": {
     "role_owner": "Ägare",
     "role_admin": "Admin",

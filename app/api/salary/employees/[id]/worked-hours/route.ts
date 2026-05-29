@@ -49,7 +49,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from('salary_worked_days')
-    .select('id, work_date, hours, notes, salary_run_employee_id, created_at, updated_at')
+    .select('id, work_date, hours, hourly_rate, notes, salary_run_employee_id, cost_center_id, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('employee_id', employeeId)
     .gte('work_date', query.data.from)
@@ -112,8 +112,10 @@ export async function POST(
       employee_id: employeeId,
       work_date: body.work_date,
       hours: body.hours,
+      hourly_rate: body.hourly_rate ?? null,
       notes: body.notes ?? null,
       salary_run_employee_id: body.salary_run_employee_id ?? null,
+      cost_center_id: body.cost_center_id ?? null,
     })
     .select()
     .single()
