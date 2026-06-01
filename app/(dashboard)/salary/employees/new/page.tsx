@@ -8,6 +8,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { SsykCombobox } from '@/components/salary/SsykCombobox'
+import { ARBETSTIDSART_OPTIONS } from '@/lib/salary/arbetstidsart'
 import { ArrowLeft, Save } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -25,6 +28,9 @@ export default function NewEmployeePage() {
   const [fSkattStatus, setFSkattStatus] = useState('a_skatt')
   const [isSidoinkomst, setIsSidoinkomst] = useState(false)
   const [vacationRule, setVacationRule] = useState('procentregeln')
+  const [workerCategory, setWorkerCategory] = useState('tjansteman')
+  const [anstallningsform, setAnstallningsform] = useState('')
+  const [arbetstidsart, setArbetstidsart] = useState('')
 
   const requiresTaxTable = fSkattStatus === 'a_skatt' && !isSidoinkomst
 
@@ -38,6 +44,11 @@ export default function NewEmployeePage() {
       last_name: form.get('last_name') as string,
       personnummer: (form.get('personnummer') as string).replace(/\D/g, ''),
       employment_type: employmentType,
+      worker_category: workerCategory,
+      ssyk_code: (form.get('ssyk_code') as string)?.trim() || undefined,
+      cfar_number: (form.get('cfar_number') as string)?.trim() || undefined,
+      arbetstidsart: arbetstidsart || undefined,
+      anstallningsform: anstallningsform || undefined,
       employment_start: form.get('employment_start') as string,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
       salary_type: salaryType,
@@ -152,6 +163,11 @@ export default function NewEmployeePage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Anställning</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Personalkategori, yrkeskod, CFAR-nummer, arbetstidsart och anställningsform används för den
+              lagstadgade lönestatistiken till SCB och Svenskt Näringsliv (SLP och KLP). Fälten är frivilliga
+              här men krävs för att statistikfilerna ska bli kompletta — saknade värden nollfylls.
+            </p>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -165,6 +181,68 @@ export default function NewEmployeePage() {
                     <SelectItem value="employee">Anställd</SelectItem>
                     <SelectItem value="company_owner">Företagsledare</SelectItem>
                     <SelectItem value="board_member">Styrelseledamot</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="worker_category">Personalkategori</Label>
+                  <InfoTooltip content="Anger om den anställda är arbetare (kollektivanställd) eller tjänsteman. Styr indelningen i lönestatistiken till SCB (SLP) och Svenskt Näringsliv samt aggregeringen i konjunkturlönestatistiken (KLP)." />
+                </div>
+                <Select value={workerCategory} onValueChange={(v) => setWorkerCategory(v as 'arbetare' | 'tjansteman')}>
+                  <SelectTrigger id="worker_category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tjansteman">Tjänsteman</SelectItem>
+                    <SelectItem value="arbetare">Arbetare</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="ssyk_code">Yrkeskod (SSYK 2012)</Label>
+                  <InfoTooltip content="Fyrställig kod enligt Standard för svensk yrkesklassificering (SSYK 2012) för den anställdas yrke. Sök på kod eller yrkestitel — alla 426 koder finns i listan. Krävs i lönestrukturstatistiken (SLP)." />
+                </div>
+                <SsykCombobox id="ssyk_code" />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="cfar_number">CFAR-nummer</Label>
+                  <InfoTooltip content="Arbetsställets identitet i SCB:s företagsregister (CFAR), åtta siffror. Identifierar det arbetsställe där personen arbetar. Hittas på SCB:s uppgiftslämnarsida eller i registerutdraget." />
+                </div>
+                <Input id="cfar_number" name="cfar_number" maxLength={8} inputMode="numeric" placeholder="Arbetsställe" />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="arbetstidsart">Arbetstidsart</Label>
+                  <InfoTooltip content="Skiftform enligt SCB. Redovisas endast för arbetsställen inom gruv- och tillverkningsindustrin — er blankett anger om fältet ska fyllas i. Lämna tomt om det inte är aktuellt." />
+                </div>
+                <input type="hidden" name="arbetstidsart" value={arbetstidsart} />
+                <Select value={arbetstidsart} onValueChange={(v) => setArbetstidsart(v === '__none__' ? '' : v)}>
+                  <SelectTrigger id="arbetstidsart">
+                    <SelectValue placeholder="Ej aktuellt" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Ej aktuellt</SelectItem>
+                    {ARBETSTIDSART_OPTIONS.map((o) => (
+                      <SelectItem key={o.code} value={o.code}>{o.code} – {o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="anstallningsform">Anställningsform</Label>
+                  <InfoTooltip content="Om anställningen är tillsvidare eller tidsbegränsad (visstid). Redovisas i lönestrukturstatistiken (SLP)." />
+                </div>
+                <Select value={anstallningsform} onValueChange={setAnstallningsform}>
+                  <SelectTrigger id="anstallningsform">
+                    <SelectValue placeholder="Välj" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">Tillsvidare</SelectItem>
+                    <SelectItem value="2">Visstid</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -90,6 +90,7 @@ type NavLabelKey =
   | 'import'
   | 'salary'
   | 'employees'
+  | 'salaryStatistics'
   | 'help'
   | 'settings'
 
@@ -139,6 +140,7 @@ const navItems: NavItem[] = [
   // Personal — "Beta" badge while we validate the end-to-end salary + AGI flow.
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
   { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
+  { href: '/salary/statistics', labelKey: 'salaryStatistics', icon: BarChart3, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.

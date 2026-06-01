@@ -84,6 +84,7 @@
     "import": "Importera/Exportera",
     "salary": "Löner",
     "employees": "Anställda",
+    "salaryStatistics": "Statistik",
     "time_tracking": "Tidrapportering",
     "expenses": "Utlägg",
     "receipts": "Kvitton",

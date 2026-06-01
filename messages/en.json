@@ -84,6 +84,7 @@
     "import": "Import/Export",
     "salary": "Payroll",
     "employees": "Employees",
+    "salaryStatistics": "Statistics",
     "time_tracking": "Time tracking",
     "expenses": "Expenses",
     "receipts": "Receipts",

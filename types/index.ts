@@ -2912,6 +2912,11 @@ export interface Employee {
   employment_end: string | null
   employment_degree: number
   salary_type: SalaryType
+  worker_category: 'arbetare' | 'tjansteman' | null
+  ssyk_code: string | null
+  cfar_number: string | null
+  arbetstidsart: string | null
+  anstallningsform: '1' | '2' | null
   monthly_salary: number | null
   hourly_rate: number | null
   tax_table_number: number | null
