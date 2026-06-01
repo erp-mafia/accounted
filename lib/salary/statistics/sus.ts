@@ -41,6 +41,13 @@ export interface SusCase {
 
 export interface SusMeta {
   orgNumber: string | null
+  /** Used to pick the correct PeOrgNr form (orgnr vs personnummer). */
+  entityType?: string | null
+  /**
+   * Reference year for century inference when an enskild firma's identifier is
+   * a 10-digit personnummer. Pass the statistics year — the owner was alive then.
+   */
+  referenceYear?: number
 }
 
 const MS_PER_DAY = 86_400_000
@@ -135,9 +142,45 @@ function digits(value: string | null | undefined): string {
   return String(value ?? '').replace(/\D/g, '')
 }
 
-/** "16" + 10-digit organisationsnummer. */
-export function formatPeOrgNr(orgNumber: string | null): string {
-  return '16' + digits(orgNumber).slice(-10).padStart(10, '0')
+/**
+ * A Swedish identifier is a personnummer (not an organisationsnummer) when its
+ * "month" field is 01–12. Real org numbers use ≥ 20 in that position, so this
+ * cleanly distinguishes an enskild firma identified by personnummer from one
+ * (or an AB) that holds a real orgnr.
+ */
+function isPersonnummerLike(d: string): boolean {
+  if (d.length !== 10 && d.length !== 12) return false
+  const monthStart = d.length === 12 ? 4 : 2
+  const month = Number(d.slice(monthStart, monthStart + 2))
+  return month >= 1 && month <= 12
+}
+
+/** Prepend the century (sekelskiftessiffra) to a 10-digit personnummer. */
+function to12DigitPersonnummer(d: string, referenceYear?: number): string {
+  if (d.length === 12) return d
+  const yy = Number(d.slice(0, 2))
+  // Pick the latest century that isn't in the future relative to the reference
+  // year (the owner was alive then). Wrong only for 100+-year-olds, who can't
+  // run an active enskild firma.
+  const ref = referenceYear ?? 2000 + yy
+  const century = 2000 + yy <= ref ? '20' : '19'
+  return century + d
+}
+
+/**
+ * PeOrgNr: "16" + 10-digit organisationsnummer for orgnr holders (AB, or an
+ * enskild firma with a special orgnr); for an enskild firma identified by the
+ * owner's personnummer, the century digits + personnummer (a 12-digit pnr).
+ */
+export function formatPeOrgNr(
+  orgNumber: string | null,
+  opts: { entityType?: string | null; referenceYear?: number } = {},
+): string {
+  const d = digits(orgNumber)
+  if (opts.entityType === 'enskild_firma' && isPersonnummerLike(d)) {
+    return to12DigitPersonnummer(d, opts.referenceYear)
+  }
+  return '16' + d.slice(-10).padStart(10, '0')
 }
 
 const ymd = (isoDate: string) => isoDate.replace(/-/g, '')
@@ -148,7 +191,8 @@ export function buildSusRecord(meta: SusMeta, c: SusCase): string {
   const from = ymd(c.sjukFrom)
   const tom = ymd(c.sjukTom)
   const ers = String(Math.min(14, Math.max(0, Math.round(c.ersDays)))).padStart(2, '0')
-  return formatPeOrgNr(meta.orgNumber) + personNr + from + tom + ers
+  const peOrgNr = formatPeOrgNr(meta.orgNumber, { entityType: meta.entityType, referenceYear: meta.referenceYear })
+  return peOrgNr + personNr + from + tom + ers
 }
 
 export interface SusResult {
@@ -159,7 +203,8 @@ export interface SusResult {
 export function buildSusFile(meta: SusMeta, cases: SusCase[]): SusResult {
   if (cases.length === 0) {
     // SCB requires a non-empty file: just the organisationsnummer.
-    return { content: formatPeOrgNr(meta.orgNumber), recordCount: 0 }
+    const peOrgNr = formatPeOrgNr(meta.orgNumber, { entityType: meta.entityType, referenceYear: meta.referenceYear })
+    return { content: peOrgNr, recordCount: 0 }
   }
   return {
     content: cases.map(c => buildSusRecord(meta, c)).join('\n'),

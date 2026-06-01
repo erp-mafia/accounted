@@ -105,4 +105,14 @@ describe('GET /api/salary/statistics/sus', () => {
 
     expect(body.data.content).toBe('160000000000')
   })
+
+  it('uses the personnummer PeOrgNr form for an enskild firma', async () => {
+    // EF identified by a 10-digit personnummer → century + pnr, not the 16-prefix.
+    enqueue({ data: { org_number: '7710030000', entity_type: 'enskild_firma' } }) // companies
+
+    const res = await GET(createMockRequest(url, { searchParams: { year: '2024', month: '1', format: 'json' } }))
+    const { body } = await parseJsonResponse<{ data: { content: string } }>(res)
+
+    expect(body.data.content).toBe('197710030000') // 19 (century) + 7710030000
+  })
 })

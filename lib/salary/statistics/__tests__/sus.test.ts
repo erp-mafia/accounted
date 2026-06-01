@@ -4,9 +4,30 @@ import { groupSickCases, buildSusRecord, buildSusFile, formatPeOrgNr, type SusSi
 const days = (pnr: string, ...dates: string[]): SusSickDay[] => dates.map(date => ({ personnummer: pnr, date }))
 
 describe('formatPeOrgNr', () => {
-  it('prefixes 16 and keeps 10 org digits', () => {
+  it('prefixes 16 and keeps 10 org digits for orgnr holders (AB)', () => {
     expect(formatPeOrgNr('556500-0000')).toBe('165565000000')
     expect(formatPeOrgNr('5565000000')).toBe('165565000000')
+  })
+
+  it('treats an aktiebolag identifier as an orgnr even when entityType is set', () => {
+    // Real orgnr — month field (positions 3–4) is ≥ 20, so never a personnummer.
+    expect(formatPeOrgNr('556500-0000', { entityType: 'aktiebolag' })).toBe('165565000000')
+  })
+
+  it('uses century + personnummer for an enskild firma identified by a 12-digit pnr', () => {
+    expect(formatPeOrgNr('19771003-0000', { entityType: 'enskild_firma' })).toBe('197710030000')
+  })
+
+  it('infers the century for an enskild firma 10-digit personnummer', () => {
+    // yy=77 → 2077 is after the 2024 reference, so 19xx.
+    expect(formatPeOrgNr('7710030000', { entityType: 'enskild_firma', referenceYear: 2024 })).toBe('197710030000')
+    // yy=05 → 2005 ≤ 2024, so 20xx.
+    expect(formatPeOrgNr('0510030000', { entityType: 'enskild_firma', referenceYear: 2024 })).toBe('200510030000')
+  })
+
+  it('still uses the 16-prefix for an enskild firma that holds a special orgnr', () => {
+    // Special orgnr (month field ≥ 20) is not a personnummer → orgnr path.
+    expect(formatPeOrgNr('969500-0000', { entityType: 'enskild_firma' })).toBe('169695000000')
   })
 })
 

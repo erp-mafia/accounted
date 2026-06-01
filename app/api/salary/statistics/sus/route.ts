@@ -32,11 +32,18 @@ export async function GET(request: Request) {
 
   const { data: company } = await supabase
     .from('companies')
-    .select('org_number')
+    .select('org_number, entity_type')
     .eq('id', companyId)
     .maybeSingle()
 
-  const result = buildSusFile({ orgNumber: company?.org_number ?? null }, cases)
+  const result = buildSusFile(
+    {
+      orgNumber: company?.org_number ?? null,
+      entityType: company?.entity_type ?? null,
+      referenceYear: year,
+    },
+    cases,
+  )
 
   if (format === 'json') {
     return NextResponse.json({ data: result })
