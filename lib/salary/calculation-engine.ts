@@ -15,6 +15,13 @@ export interface SalaryCalculationInput {
   monthlySalary: number
   hourlyRate?: number
   hoursWorked?: number
+  /**
+   * Precomputed base pay for hourly employees, summed per worked day so that
+   * per-day hourly_rate overrides are honoured (Σ hours × effective rate).
+   * When provided, it replaces the `hourlyRate × hoursWorked` derivation. When
+   * omitted, the engine falls back to that product (unchanged behaviour).
+   */
+  hourlyBaseOverride?: number
   employmentDegree: number // 1-100
 
   /** Tax */
@@ -287,13 +294,25 @@ export function calculateSalary(
   } else {
     const hours = input.hoursWorked || 0
     const rate = input.hourlyRate || 0
-    baseSalary = r(rate * hours)
-    steps.push({
-      label: 'Grundlön (timavlönad)',
-      formula: 'timlön × arbetade timmar',
-      input: { hourly_rate: rate, hours_worked: hours },
-      output: baseSalary,
-    })
+    if (input.hourlyBaseOverride != null) {
+      // Per-day rate overrides: base was already summed per worked day, so a
+      // single timlön × timmar product would be wrong when rates differ.
+      baseSalary = r(input.hourlyBaseOverride)
+      steps.push({
+        label: 'Grundlön (timavlönad)',
+        formula: 'summa per dag (timlön × timmar)',
+        input: { hours_worked: hours },
+        output: baseSalary,
+      })
+    } else {
+      baseSalary = r(rate * hours)
+      steps.push({
+        label: 'Grundlön (timavlönad)',
+        formula: 'timlön × arbetade timmar',
+        input: { hourly_rate: rate, hours_worked: hours },
+        output: baseSalary,
+      })
+    }
   }
 
   // ─── Step 2: Add additions ───

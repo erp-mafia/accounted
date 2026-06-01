@@ -1230,6 +1230,26 @@
     "latest_number": "Latest no.",
     "footnote": "New series are created automatically the first time they are used in bookkeeping."
   },
+  "settings_cost_centers": {
+    "heading": "Cost centers",
+    "description": "Reusable cost centers for allocating e.g. worked hours. Active cost centers can be selected in the salary calendar.",
+    "code_label": "Code",
+    "code_placeholder": "e.g. 100",
+    "name_label": "Name",
+    "name_placeholder": "e.g. Sales",
+    "add": "Add",
+    "empty_state": "No cost centers yet. Add one above to be able to select it in the salary calendar.",
+    "inactive_badge": "inactive",
+    "rename": "Rename",
+    "deactivate": "Deactivate",
+    "activate": "Activate",
+    "delete": "Delete",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete_confirm": "Delete cost center {code} · {name}? Existing entries keep their history but lose the link.",
+    "load_error": "Could not load cost centers",
+    "save_error": "Could not save"
+  },
   "settings_team_panel": {
     "role_owner": "Owner",
     "role_admin": "Admin",

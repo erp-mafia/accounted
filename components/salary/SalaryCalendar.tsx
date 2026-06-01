@@ -37,7 +37,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { cn } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import type { SalaryType } from '@/types'
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -64,7 +64,15 @@ interface WorkedDay {
   id: string
   work_date: string
   hours: number
+  hourly_rate: number | null
   notes: string | null
+  cost_center_id: string | null
+}
+
+interface CostCenterOption {
+  id: string
+  code: string
+  name: string
 }
 
 interface AbsenceTypeMeta {
@@ -126,6 +134,7 @@ export function SalaryCalendar({
   const [visibleMonth, setVisibleMonth] = useState<Date>(() => startOfMonth(periodStartDate))
   const [absences, setAbsences] = useState<AbsenceDay[]>([])
   const [worked, setWorked] = useState<WorkedDay[]>([])
+  const [costCenters, setCostCenters] = useState<CostCenterOption[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -169,6 +178,24 @@ export function SalaryCalendar({
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId, salaryType, visibleMonth.getFullYear(), visibleMonth.getMonth()])
+
+  // Cost centers are a company-level dimension — load once. Only hourly
+  // employees use the worked-hours dialog where the picker appears.
+  useEffect(() => {
+    if (!isHourly) return
+    let cancelled = false
+    fetch('/api/cost-centers')
+      .then(res => (res.ok ? res.json() : { data: [] }))
+      .then(json => { if (!cancelled) setCostCenters(json.data ?? []) })
+      .catch(() => { /* picker degrades to "Inget kostnadsställe" only */ })
+    return () => { cancelled = true }
+  }, [isHourly])
+
+  const costCenterMap = useMemo(() => {
+    const m = new Map<string, CostCenterOption>()
+    for (const c of costCenters) m.set(c.id, c)
+    return m
+  }, [costCenters])
 
   const absenceMap = useMemo(() => {
     const m = new Map<string, AbsenceDay[]>()
@@ -513,6 +540,7 @@ export function SalaryCalendar({
           employeeId={employeeId}
           dates={Array.from(selected).sort()}
           salaryRunEmployeeId={salaryRunEmployeeId}
+          costCenters={costCenters}
           onClose={() => setBulkMode(null)}
           onSaved={(conflicts) => {
             setBulkMode(null)
@@ -547,6 +575,7 @@ export function SalaryCalendar({
           worked={workedMap.get(inspecting)}
           absences={absenceMap.get(inspecting) ?? []}
           isHourly={isHourly}
+          costCenterMap={costCenterMap}
           onClose={() => setInspecting(null)}
           onChanged={() => {
             load()
@@ -566,25 +595,34 @@ interface BulkWorkedDialogProps {
   employeeId: string
   dates: string[]
   salaryRunEmployeeId?: string
+  costCenters: CostCenterOption[]
   onClose: () => void
   onSaved: (conflicts: BulkConflict[]) => void
 }
+
+// Sentinel for the "no cost center" option — Radix Select can't use "" as a value.
+const NO_COST_CENTER = '__none__'
 
 function BulkWorkedDialog({
   employeeId,
   dates,
   salaryRunEmployeeId,
+  costCenters,
   onClose,
   onSaved,
 }: BulkWorkedDialogProps) {
   const [hours, setHours] = useState<string>('8')
+  const [hourlyRate, setHourlyRate] = useState<string>('')
   const [notes, setNotes] = useState<string>('')
+  const [costCenterId, setCostCenterId] = useState<string>(NO_COST_CENTER)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [conflicts, setConflicts] = useState<BulkConflict[]>([])
 
   const hoursNum = parseFloat(hours)
   const isClear = isFinite(hoursNum) && hoursNum === 0
+  const rateNum = parseFloat(hourlyRate)
+  const hasRate = hourlyRate.trim() !== '' && isFinite(rateNum)
 
   const handleSave = async () => {
     setSubmitting(true)
@@ -593,6 +631,9 @@ function BulkWorkedDialog({
     try {
       if (!isFinite(hoursNum) || hoursNum < 0 || hoursNum > 24) {
         throw new Error('Timmar måste vara mellan 0 och 24')
+      }
+      if (hourlyRate.trim() !== '' && (!isFinite(rateNum) || rateNum < 0)) {
+        throw new Error('Timlön måste vara 0 eller mer')
       }
       // 0 hours = "no worked time on these days" → delete any existing rows.
       // Avoids tripping the DB CHECK (hours > 0) and matches user intent.
@@ -616,8 +657,10 @@ function BulkWorkedDialog({
         body: JSON.stringify({
           dates,
           hours: hoursNum,
+          hourly_rate: hasRate ? rateNum : undefined,
           notes: notes.trim() || undefined,
           salary_run_employee_id: salaryRunEmployeeId,
+          cost_center_id: costCenterId === NO_COST_CENTER ? undefined : costCenterId,
         }),
       })
       const json = await res.json()
@@ -664,6 +707,41 @@ function BulkWorkedDialog({
               Sätt till 0 för att ta bort arbetad tid på de valda dagarna.
             </p>
           </div>
+
+          {!isClear && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium" htmlFor="bulk-w-rate">Timlön (valfritt)</label>
+              <input
+                id="bulk-w-rate"
+                type="number"
+                min={0}
+                step={0.01}
+                inputMode="decimal"
+                value={hourlyRate}
+                onChange={(e) => setHourlyRate(e.target.value)}
+                placeholder="Använd anställds timlön"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm tabular-nums shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Lämna tomt för att använda den anställdas ordinarie timlön. Anges per timme i SEK.
+              </p>
+            </div>
+          )}
+
+          {!isClear && costCenters.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Kostnadsställe (valfritt)</label>
+              <Select value={costCenterId} onValueChange={setCostCenterId}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_COST_CENTER}>Inget kostnadsställe</SelectItem>
+                  {costCenters.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.code} · {c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-w-notes">Anteckning (valfri)</label>
@@ -869,6 +947,7 @@ interface DayInspectorDialogProps {
   worked?: WorkedDay
   absences: AbsenceDay[]
   isHourly: boolean
+  costCenterMap: Map<string, CostCenterOption>
   onClose: () => void
   onChanged: () => void
 }
@@ -879,6 +958,7 @@ function DayInspectorDialog({
   worked,
   absences,
   isHourly,
+  costCenterMap,
   onClose,
   onChanged,
 }: DayInspectorDialogProps) {
@@ -946,6 +1026,16 @@ function DayInspectorDialog({
                 <div>
                   <div className="font-medium">Arbetad tid</div>
                   <div className="text-xs text-muted-foreground tabular-nums">{worked.hours} timmar</div>
+                  {worked.hourly_rate != null && (
+                    <div className="text-xs text-muted-foreground tabular-nums">
+                      {formatCurrency(Number(worked.hourly_rate))}/tim
+                    </div>
+                  )}
+                  {worked.cost_center_id && costCenterMap.has(worked.cost_center_id) && (
+                    <div className="text-xs text-muted-foreground">
+                      {costCenterMap.get(worked.cost_center_id)!.code} · {costCenterMap.get(worked.cost_center_id)!.name}
+                    </div>
+                  )}
                   {worked.notes && <div className="text-xs text-muted-foreground italic">{worked.notes}</div>}
                 </div>
               </div>

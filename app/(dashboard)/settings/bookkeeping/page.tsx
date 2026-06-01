@@ -9,6 +9,7 @@ import { PeriodLockingSettings } from '@/components/settings/PeriodLockingSettin
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
 import { PeriodiseringAutoDetectToggle } from '@/components/settings/PeriodiseringAutoDetectToggle'
+import { CostCenterManager } from '@/components/settings/CostCenterManager'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -135,6 +136,11 @@ export default function BookkeepingSettingsPage() {
       {/* Periodisering auto-detect toggle */}
       <div className="border-t border-border/8 pt-8">
         <PeriodiseringAutoDetectToggle />
+      </div>
+
+      {/* Cost centers (kostnadsställen) */}
+      <div className="border-t border-border/8 pt-8">
+        <CostCenterManager />
       </div>
 
       {/* Cross-links */}

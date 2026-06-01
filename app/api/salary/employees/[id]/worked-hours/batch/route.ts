@@ -72,8 +72,10 @@ export async function POST(
         employee_id: employeeId,
         work_date: date,
         hours: body.hours,
+        hourly_rate: body.hourly_rate ?? null,
         notes: body.notes ?? null,
         salary_run_employee_id: body.salary_run_employee_id ?? null,
+        cost_center_id: body.cost_center_id ?? null,
       })
     if (error) {
       // 24h cap trigger uses ERRCODE check_violation (23514) and a Swedish
