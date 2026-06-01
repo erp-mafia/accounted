@@ -93,13 +93,15 @@ describe('GET /api/salary/statistics/sn', () => {
     enqueue({ data: { org_number: '5560633517' } }) // companies
 
     const res = await GET(createMockRequest(url, {
-      searchParams: { year: '2026', delagarnummer: '1234567', forbundsnummer: '12', avtalskod: '001' },
+      searchParams: { year: '2026', delagarnummer: '1234567', arbetsplatsnummer: '1', forbundsnummer: '12', avtalskod: '001' },
     }))
     const text = await res.text()
 
     // Positions 1–4 = year, 5–11 = delägarnummer (7 digits).
     expect(text.slice(0, 4)).toBe('2026')
     expect(text.slice(4, 11)).toBe('1234567')
+    // Positions 12–14 = arbetsplatsnummer (3 digits, zero-padded).
+    expect(text.slice(11, 14)).toBe('001')
     // Positions 25–26 = förbundsnummer, 27–29 = avtalskod.
     expect(text.slice(24, 26)).toBe('12')
     expect(text.slice(26, 29)).toBe('001')

@@ -54,6 +54,7 @@ export default function SalaryStatisticsPage() {
   const [slpYear, setSlpYear] = useState(String(NOW_YEAR))
   const [snYear, setSnYear] = useState(String(NOW_YEAR))
   const [snDelagar, setSnDelagar] = useState('')
+  const [snArbetsplats, setSnArbetsplats] = useState('')
   const [snForbund, setSnForbund] = useState('')
   const [snAvtal, setSnAvtal] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -169,15 +170,19 @@ export default function SalaryStatisticsPage() {
                   <>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:flex-wrap">
                       <PeriodSelect label="År" value={snYear} onChange={setSnYear} options={yearOptions} />
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         <Label className="text-xs font-medium">Delägarnummer</Label>
                         <Input value={snDelagar} onChange={e => setSnDelagar(e.target.value)} className="w-36" placeholder="t.ex. 1234567" />
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium">Arbetsplatsnummer</Label>
+                        <Input value={snArbetsplats} onChange={e => setSnArbetsplats(e.target.value)} className="w-28" placeholder="t.ex. 1" />
+                      </div>
+                      <div className="space-y-2">
                         <Label className="text-xs font-medium">Förbundsnummer</Label>
                         <Input value={snForbund} onChange={e => setSnForbund(e.target.value)} className="w-28" placeholder="t.ex. 12" />
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         <Label className="text-xs font-medium">Avtalskod</Label>
                         <Input value={snAvtal} onChange={e => setSnAvtal(e.target.value)} className="w-28" placeholder="t.ex. 001" />
                       </div>
@@ -185,6 +190,7 @@ export default function SalaryStatisticsPage() {
                         onClick={() => {
                           const qs = new URLSearchParams({ year: snYear, format: 'txt' })
                           if (snDelagar) qs.set('delagarnummer', snDelagar)
+                          if (snArbetsplats) qs.set('arbetsplatsnummer', snArbetsplats)
                           if (snForbund) qs.set('forbundsnummer', snForbund)
                           if (snAvtal) qs.set('avtalskod', snAvtal)
                           run('sn', `/api/salary/statistics/sn?${qs.toString()}`, `SN_lonestatistik_${snYear}.txt`)
@@ -196,8 +202,8 @@ export default function SalaryStatisticsPage() {
                       </Button>
                     </div>
                     <p className="mt-3 text-[11px] text-muted-foreground">
-                      Samma postbeskrivning som SLP. Medlemskoderna (delägar-, förbundsnummer, avtalskod) finns
-                      i ditt informationsbrev från Svenskt Näringsliv.
+                      Samma postbeskrivning som SLP. Medlemskoderna (delägar-, arbetsplats-, förbundsnummer,
+                      avtalskod) finns i ditt informationsbrev från Svenskt Näringsliv.
                     </p>
                   </>
                 )}
@@ -252,7 +258,7 @@ function StatNav({
                         onClick={() => onChange(id)}
                         aria-current={isActive ? 'page' : undefined}
                         className={cn(
-                          'w-full text-left px-3 py-1.5 rounded-md text-[13px] transition-colors',
+                          'w-full text-left px-3 py-2 rounded-md text-[13px] transition-colors',
                           isActive
                             ? 'bg-primary/10 text-foreground font-medium'
                             : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
@@ -281,7 +287,7 @@ function PeriodSelect({
   options: { value: string; label: string }[]
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <Label className="text-xs font-medium">{label}</Label>
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>

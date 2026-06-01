@@ -143,7 +143,7 @@ export function SsykCombobox({ name = 'ssyk_code', defaultValue = '', disabled, 
                 role="option"
                 aria-selected={highlightedIndex === i}
                 className={cn(
-                  'flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer transition-colors',
+                  'flex items-center gap-3 px-3 py-2 text-sm cursor-pointer transition-colors',
                   highlightedIndex === i && 'bg-accent text-accent-foreground',
                 )}
                 onMouseEnter={() => setHighlightedIndex(i)}

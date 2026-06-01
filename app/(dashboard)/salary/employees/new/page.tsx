@@ -185,7 +185,7 @@ export default function NewEmployeePage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <Label htmlFor="worker_category">Personalkategori</Label>
                   <InfoTooltip content="Anger om den anställda är arbetare (kollektivanställd) eller tjänsteman. Styr indelningen i lönestatistiken till SCB (SLP) och Svenskt Näringsliv samt aggregeringen i konjunkturlönestatistiken (KLP)." />
                 </div>
@@ -200,21 +200,21 @@ export default function NewEmployeePage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <Label htmlFor="ssyk_code">Yrkeskod (SSYK 2012)</Label>
                   <InfoTooltip content="Fyrställig kod enligt Standard för svensk yrkesklassificering (SSYK 2012) för den anställdas yrke. Sök på kod eller yrkestitel — alla 426 koder finns i listan. Krävs i lönestrukturstatistiken (SLP)." />
                 </div>
                 <SsykCombobox id="ssyk_code" />
               </div>
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <Label htmlFor="cfar_number">CFAR-nummer</Label>
                   <InfoTooltip content="Arbetsställets identitet i SCB:s företagsregister (CFAR), åtta siffror. Identifierar det arbetsställe där personen arbetar. Hittas på SCB:s uppgiftslämnarsida eller i registerutdraget." />
                 </div>
                 <Input id="cfar_number" name="cfar_number" maxLength={8} inputMode="numeric" placeholder="Arbetsställe" />
               </div>
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <Label htmlFor="arbetstidsart">Arbetstidsart</Label>
                   <InfoTooltip content="Skiftform enligt SCB. Redovisas endast för arbetsställen inom gruv- och tillverkningsindustrin — er blankett anger om fältet ska fyllas i. Lämna tomt om det inte är aktuellt." />
                 </div>
@@ -232,7 +232,7 @@ export default function NewEmployeePage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <Label htmlFor="anstallningsform">Anställningsform</Label>
                   <InfoTooltip content="Om anställningen är tillsvidare eller tidsbegränsad (visstid). Redovisas i lönestrukturstatistiken (SLP)." />
                 </div>

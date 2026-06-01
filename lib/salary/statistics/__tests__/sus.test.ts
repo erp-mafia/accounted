@@ -47,10 +47,58 @@ describe('groupSickCases', () => {
     expect(cases).toHaveLength(0)
   })
 
-  it('caps AntErsDagar at 14', () => {
+  it('caps SjukTom and AntErsDagar to the 14-day sjuklöneperiod (same month)', () => {
+    // Illness Jan 1–20: the sjuklöneperiod ends 14 days after onset (Jan 14),
+    // so SjukTom must be Jan 14, not the last recorded day (Jan 20).
     const longRun = Array.from({ length: 20 }, (_, i) => `2024-01-${String(i + 1).padStart(2, '0')}`)
     const cases = groupSickCases(days('1', ...longRun), '2024-01-01', '2024-01-31')
+    expect(cases[0].sjukFrom).toBe('2024-01-01')
+    expect(cases[0].sjukTom).toBe('2024-01-14')
     expect(cases[0].ersDays).toBe(14)
+  })
+
+  it('expires SjukTom mid-month when the sjuklöneperiod ran out in the lookback', () => {
+    // Illness starts Dec 25 2023 and continues; querying January 2024 with a
+    // lookback. The 14-day period ends Jan 7 (Dec 25 + 13 days), so SjukTom must
+    // be Jan 7 and ersDays 7 — not Jan 20 / 14 from the raw in-month tail.
+    const dec = Array.from({ length: 7 }, (_, i) => `2023-12-${25 + i}`)
+    const jan = Array.from({ length: 20 }, (_, i) => `2024-01-${String(i + 1).padStart(2, '0')}`)
+    const cases = groupSickCases(days('1', ...dec, ...jan), '2024-01-01', '2024-01-31')
+    expect(cases).toHaveLength(1)
+    expect(cases[0]).toMatchObject({ sjukFrom: '2024-01-01', sjukTom: '2024-01-07', ersDays: 7 })
+  })
+
+})
+
+// SCB's own worked example (datafilbeskrivning, p.4): Kalle is sick 23 Jan – 2
+// Feb 2024, hourly, NOT scheduled Fri–Sun. The case is split across two monthly
+// files. Paid (scheduled) sick days are Mon–Thu; weekends are not paid.
+describe('groupSickCases — SCB cross-month worked example', () => {
+  const PNR = '197788888888'
+  const janPaid = ['2024-01-23', '2024-01-24', '2024-01-25', '2024-01-26', '2024-01-30', '2024-01-31']
+  const febPaid = ['2024-02-01', '2024-02-02']
+
+  it('January file → SjukFrom 23 Jan, SjukTom 31 Jan (month end), AntErsDagar 06', () => {
+    // collectSusCases(jan) queries [Dec 25 … Jan 31]; only the Jan paid days match.
+    const [c] = groupSickCases(days(PNR, ...janPaid), '2024-01-01', '2024-01-31')
+    expect(c).toMatchObject({ sjukFrom: '2024-01-23', sjukTom: '2024-01-31', ersDays: 6 })
+  })
+
+  it('February file → SjukFrom 01 Feb (clamped), SjukTom 02 Feb, AntErsDagar 02', () => {
+    // collectSusCases(feb) queries [Jan 25 … Feb 29]; the 7-day lookback ties the
+    // late-January tail to the February portion of the same sjukfall.
+    const lookback = ['2024-01-25', '2024-01-26', '2024-01-30', '2024-01-31']
+    const [c] = groupSickCases(days(PNR, ...lookback, ...febPaid), '2024-02-01', '2024-02-29')
+    expect(c).toMatchObject({ sjukFrom: '2024-02-01', sjukTom: '2024-02-02', ersDays: 2 })
+  })
+
+  it('AntErsDagar counts paid days, which may be fewer than the SjukFrom–SjukTom span', () => {
+    // Spec example: span 23→31 Jan = 9 calendar days, but only 6 paid days.
+    const [c] = groupSickCases(days(PNR, ...janPaid), '2024-01-01', '2024-01-31')
+    const span = (Date.UTC(2024, 0, 31) - Date.UTC(2024, 0, 23)) / 86_400_000 + 1
+    expect(span).toBe(9)
+    expect(c.ersDays).toBe(6)
+    expect(c.ersDays).toBeLessThanOrEqual(14)
   })
 })
 

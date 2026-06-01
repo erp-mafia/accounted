@@ -45,9 +45,16 @@ export interface SusMeta {
 
 const MS_PER_DAY = 86_400_000
 
+/** Sjuklöneperioden spans at most 14 calendar days from illness onset. */
+const SJUKLONEPERIOD_DAYS = 14
+
 function dayNumber(isoDate: string): number {
   const [y, m, d] = isoDate.split('-').map(Number)
   return Math.floor(Date.UTC(y, m - 1, d) / MS_PER_DAY)
+}
+
+function isoFromDayNumber(n: number): string {
+  return new Date(n * MS_PER_DAY).toISOString().slice(0, 10)
 }
 
 /**
@@ -78,19 +85,26 @@ export function groupSickCases(
 
     const flush = () => {
       if (group.length === 0) return
-      const inMonth = group.filter(d => {
-        const n = dayNumber(d)
-        return n >= startNum && n <= endNum
-      })
-      if (inMonth.length === 0) { group = []; return }
       const caseStartNum = dayNumber(group[0])
+      // The sjuklöneperiod ends 14 calendar days after onset; days beyond it are
+      // not part of this period (they belong to sjukpenning, not sjuklön).
+      const periodEndNum = caseStartNum + SJUKLONEPERIOD_DAYS - 1
+      // Days that fall within BOTH the collection month and the 14-day period.
+      const periodDays = group.filter(d => {
+        const n = dayNumber(d)
+        return n >= startNum && n <= endNum && n <= periodEndNum
+      })
+      if (periodDays.length === 0) { group = []; return }
+      const caseEndNum = dayNumber(group[group.length - 1])
       const sjukFrom = caseStartNum < startNum ? monthStart : group[0]
-      const sjukTom = inMonth[inMonth.length - 1]
+      // SjukTom = sjuklöneperiodens sista dag: the period ends when the illness
+      // ends or after 14 days, whichever comes first, clamped to the month.
+      const sjukTomNum = Math.min(caseEndNum, periodEndNum, endNum)
       cases.push({
         personnummer,
         sjukFrom,
-        sjukTom,
-        ersDays: Math.min(14, inMonth.length),
+        sjukTom: isoFromDayNumber(sjukTomNum),
+        ersDays: Math.min(SJUKLONEPERIOD_DAYS, periodDays.length),
       })
       group = []
     }
