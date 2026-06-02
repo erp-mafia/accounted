@@ -8,17 +8,9 @@ RETURNS uuid
 LANGUAGE sql
 VOLATILE
 PARALLEL SAFE
+SET search_path = ''
 AS $$
   SELECT extensions.uuid_generate_v4();
-$$;
-
-CREATE OR REPLACE FUNCTION public.gen_random_uuid()
-RETURNS uuid
-LANGUAGE sql
-VOLATILE
-PARALLEL SAFE
-AS $$
-  SELECT extensions.gen_random_uuid();
 $$;
 
 CREATE OR REPLACE FUNCTION public.gen_random_bytes(size integer)
@@ -26,6 +18,7 @@ RETURNS bytea
 LANGUAGE sql
 VOLATILE
 PARALLEL SAFE
+SET search_path = ''
 AS $$
   SELECT extensions.gen_random_bytes(size);
 $$;
