@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   // endpoint, which is likewise lenient for '1930'.
   const { data: cashAccount } = await supabase
     .from('cash_accounts')
-    .select('id, currency')
+    .select('id, currency, is_primary')
     .eq('company_id', companyId)
     .eq('ledger_account', accountNumber)
     .maybeSingle()
@@ -55,6 +55,9 @@ export async function POST(request: Request) {
     accountNumber,
     currency,
     cashAccountId: cashAccount?.id as string | undefined,
+    // Only the primary account claims unassigned (NULL cash_account_id) rows —
+    // a secondary same-currency account must scope strictly to its own id.
+    includeUnassigned: Boolean(cashAccount?.is_primary),
     dryRun: dry_run ?? false,
   })
 

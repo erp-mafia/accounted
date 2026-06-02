@@ -355,6 +355,16 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   // currency rounding, or POS receipts where supplier-side rounding makes the
   // VAT off by öre.
   vat_amount: z.number().min(0).optional(),
+  // Self-assessed VAT rate for omvänd skattskyldighet (reverse charge). The
+  // supplier charges no VAT (vat_rate stays 0); this is the Swedish statutory
+  // rate the buyer self-assesses at — 25% huvudregel default, 12%/6% for
+  // reduced-rated services (ML 6 kap 34 §). Must be a statutory rate.
+  reverse_charge_rate: z
+    .number()
+    .refine((r) => r === 0.06 || r === 0.12 || r === 0.25, {
+      message: 'reverse_charge_rate must be 0.06, 0.12, or 0.25',
+    })
+    .optional(),
   vat_code: z.string().optional(),
   quantity: z.number().optional(),
   unit: z.string().optional(),

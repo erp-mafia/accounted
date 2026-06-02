@@ -30,6 +30,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // entry is created or modified. Sits next to match_transaction_invoice
   // semantically — both attach an existing booking to an invoice.
   link_invoice_voucher: 'medium',
+  // Supplier-side mirror of link_invoice_voucher: link an existing posted
+  // verifikat (Dr 2440) as payment for a leverantörsfaktura. Reversible by
+  // deleting the supplier_invoice_payments row and reverting status; no journal
+  // entry is created or modified.
+  link_supplier_invoice_voucher: 'medium',
   create_invoice: 'medium', // creates as draft; sending is a separate op
   create_transaction: 'medium', // ingests an uncategorized row; reversible by delete
   // Supplier master data carries payment-routing fields (IBAN, BIC, bankgiro,

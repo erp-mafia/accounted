@@ -19,6 +19,10 @@ export interface UnlinkedGLLine {
   voucher_series: string
   entry_description: string
   source_type: string
+  /** How many bank transactions already point at this entry. Present only on
+   *  rows from get_account_gl_lines_for_matching (the N:1 candidate fetch);
+   *  undefined on the unmatched-only path, where it is always implicitly 0. */
+  linked_transaction_count?: number
 }
 
 export interface ReconciliationMatch {
@@ -90,31 +94,46 @@ export interface ReconciliationOptions {
    * currency-only behaviour.
    */
   cashAccountId?: string
+  /**
+   * Whether this account claims rows with a NULL cash_account_id (legacy /
+   * unassigned). Only the company's primary cash account should — see
+   * scopeTransactionsToAccount. Defaults to true for back-compat with the
+   * currency-only callers (where cashAccountId is omitted and this is moot).
+   */
+  includeUnassigned?: boolean
 }
 
 /**
  * Scope a transactions query builder to a single cash account, tolerating
- * legacy rows that predate the cash_account_id backfill. A bound row shows only
- * on its own account; an unbound (NULL) row falls back to currency so nothing
- * disappears mid-backfill. When cashAccountId is omitted we keep the pure
- * currency filter (back-compat).
+ * legacy rows that predate the cash_account_id backfill.
  *
- * The applied filter is:
- *   currency = cur  AND  (cash_account_id = X  OR  cash_account_id IS NULL)
+ * The applied filter is one of:
+ *   includeUnassigned=true:   currency = cur AND (cash_account_id = X OR cash_account_id IS NULL)
+ *   includeUnassigned=false:  currency = cur AND cash_account_id = X
+ *   no cashAccountId:         currency = cur                       (legacy currency-only path)
  *
- * Earlier this used a single nested `or(cash_account_id.eq.X,and(cash_account_id.is.null,currency.eq.cur))`.
- * That nested `and()` form is fragile — it silently returned ZERO rows for
- * companies whose transactions were NULL/mis-assigned mid-backfill (issue: bank
- * transactions vanished from Bankavstämning while the 1930 GL movement still
- * showed). A cash account has exactly one currency (the `cash_accounts`
- * (company_id, ledger_account) uniqueness assumption), so constraining the bound
- * branch to that currency too loses nothing and lets us use the flat, reliable
- * two-term `or` instead.
+ * Why `includeUnassigned` exists: a NULL cash_account_id row belongs to exactly
+ * ONE account, but the query can't tell which — these are unbooked rows in
+ * companies with ≥2 same-currency accounts (the backfill refuses to guess
+ * between checking + savings) and booked own-account transfers the backfill
+ * deliberately skips (>1 bank-class line). Attributing them to EVERY
+ * same-currency account double-counts them: a 1931 savings account would pull in
+ * 1930's unassigned rows, so Bankavstämning reported a large bogus difference
+ * for 1931 while 1930 itself still reconciled. The fix: only the company's
+ * PRIMARY cash account (cash_accounts.is_primary — exactly one per company)
+ * claims NULL rows; every other account scopes strictly to its own id. Callers
+ * pass `includeUnassigned = <this account is_primary>`. When cashAccountId is
+ * omitted (single-account companies with no row, the '1930' fallback) the pure
+ * currency filter is used and includeUnassigned is moot.
+ *
+ * The earlier nested `or(cash_account_id.eq.X,and(cash_account_id.is.null,currency.eq.cur))`
+ * form is intentionally avoided — it silently returned ZERO rows mid-backfill.
+ * A cash account has exactly one currency, so the flat two-term `or` is reliable.
  */
 export function scopeTransactionsToAccount<Q extends {
   or(filters: string): Q
   eq(column: string, value: string): Q
-}>(query: Q, cashAccountId: string | undefined, currency: string): Q {
+}>(query: Q, cashAccountId: string | undefined, currency: string, includeUnassigned = true): Q {
   // Both values are interpolated into a raw PostgREST filter string below. They
   // are DB-derived in every caller (cash_accounts.id / .currency, or the 'SEK'
   // default), never raw user input — but assert their shape anyway so a future
@@ -126,9 +145,13 @@ export function scopeTransactionsToAccount<Q extends {
     if (!/^[0-9a-fA-F-]{36}$/.test(cashAccountId)) {
       throw new Error('scopeTransactionsToAccount: invalid cashAccountId (expected UUID)')
     }
-    return query
-      .eq('currency', currency)
-      .or(`cash_account_id.eq.${cashAccountId},cash_account_id.is.null`)
+    if (includeUnassigned) {
+      return query
+        .eq('currency', currency)
+        .or(`cash_account_id.eq.${cashAccountId},cash_account_id.is.null`)
+    }
+    // Non-primary account: strict — never claim the company's unassigned NULL rows.
+    return query.eq('currency', currency).eq('cash_account_id', cashAccountId)
   }
   return query.eq('currency', currency)
 }
@@ -226,6 +249,7 @@ export async function runReconciliation(
     accountNumber = '1930',
     currency = 'SEK',
     cashAccountId,
+    includeUnassigned = true,
   } = options
 
   // Fetch unlinked GL lines via RPC
@@ -238,7 +262,7 @@ export async function runReconciliation(
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
     .eq('is_ignored', false)
-  query = scopeTransactionsToAccount(query, cashAccountId, currency)
+  query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
 
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)
@@ -320,6 +344,7 @@ export async function getReconciliationStatus(
   bankAccount = '1930',
   currency: string = 'SEK',
   cashAccountId?: string,
+  includeUnassigned: boolean = true,
 ): Promise<ReconciliationStatus> {
   // Get all transactions in range, scoped to the selected cash account. Ignored
   // rows are pulled too so the totals card still reflects what the bank
@@ -331,7 +356,7 @@ export async function getReconciliationStatus(
     .from('transactions')
     .select('amount, journal_entry_id, reconciliation_method, is_ignored')
     .eq('company_id', companyId)
-  txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency)
+  txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
 
   if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
   if (dateTo) txQuery = txQuery.lte('date', dateTo)
@@ -518,17 +543,16 @@ export async function manualLink(
     return { success: false, error: `Verifikationen saknar rad på ${accountNumber}` }
   }
 
-  // Check that no other transaction is already linked to this entry
-  const { data: existingLink } = await supabase
-    .from('transactions')
-    .select('id')
-    .eq('journal_entry_id', journalEntryId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (existingLink) {
-    return { success: false, error: 'En annan transaktion är redan kopplad till den här verifikationen.' }
-  }
+  // N:1 is intentionally allowed: several bank transactions may settle ONE
+  // verifikat (a salary run paid out in multiple transfers, a supplier invoice
+  // paid in instalments). The voucher's bank line is counted once in the period
+  // movement while each transaction sums on the bank side, so correctly-summing
+  // links net to zero and any mis-link surfaces as a non-zero difference on the
+  // status card — there's no need to forbid a second link here. (A given
+  // transaction still can't be double-linked: the tx.journal_entry_id guard
+  // above already blocks that.) The candidate list only surfaces an
+  // already-matched voucher when the user opts in via "Visa även matchade
+  // verifikationer", so this can't happen by accident.
 
   // Apply link
   const { error: updateError } = await supabase
@@ -642,6 +666,44 @@ export async function fetchUnlinkedGLLines(
 
   if (error || !data) return []
   return data as UnlinkedGLLine[]
+}
+
+/** A match candidate that carries how many transactions already point at it. */
+export interface GLLineForMatching extends UnlinkedGLLine {
+  linked_transaction_count: number
+}
+
+/**
+ * Fetch GL lines on a settlement account as match candidates. With
+ * `includeMatched=false` this is parity with fetchUnlinkedGLLines (unmatched
+ * only); with `includeMatched=true` it also returns already-matched vouchers,
+ * each carrying `linked_transaction_count`, so a second/third bank transaction
+ * can be attached to the same verifikat (N:1 — a salary run paid in several
+ * transfers, a supplier invoice paid in instalments). Server-only: like the rest
+ * of this module it must never reach the client bundle.
+ */
+export async function fetchGLLinesForMatching(
+  supabase: SupabaseClient,
+  companyId: string,
+  accountNumber: string = '1930',
+  dateFrom?: string,
+  dateTo?: string,
+  includeMatched: boolean = false,
+): Promise<GLLineForMatching[]> {
+  const { data, error } = await supabase.rpc('get_account_gl_lines_for_matching', {
+    p_company_id: companyId,
+    p_account_number: accountNumber,
+    p_date_from: dateFrom || null,
+    p_date_to: dateTo || null,
+    p_include_matched: includeMatched,
+  })
+
+  if (error || !data) return []
+  // count(*) can arrive as a bigint string over the wire — coerce defensively.
+  return (data as GLLineForMatching[]).map((line) => ({
+    ...line,
+    linked_transaction_count: Number(line.linked_transaction_count) || 0,
+  }))
 }
 
 /** Get the net amount from a GL line (positive for debit, negative for credit) */

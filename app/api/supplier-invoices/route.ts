@@ -132,6 +132,10 @@ export const POST = withRouteContext(
         vat_code: item.vat_code || null,
         vat_rate: vatRate,
         vat_amount: vatAmount,
+        // Self-assessed RC rate (0.06/0.12/0.25) or null. For reverse charge the
+        // supplier charges no VAT (vat_rate stays 0); the engine self-assesses
+        // at this rate, defaulting to 25% huvudregeln when null.
+        reverse_charge_rate: body.reverse_charge ? (item.reverse_charge_rate ?? null) : null,
       }
     })
 

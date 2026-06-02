@@ -184,7 +184,7 @@ describe('syncAccountTransactions', () => {
 
   it('passes raw transactions to ingest function', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
-      transactions: [{ transaction_amount: { amount: '500', currency: 'SEK' } }],
+      transactions: [{ transaction_amount: { amount: '500', currency: 'SEK' }, booking_date: '2024-06-15' }],
       rawPages: ['{}'],
     })
 
@@ -220,6 +220,83 @@ describe('syncAccountTransactions', () => {
     // Deliberately NOT keyed off the bank's (unstable) tx id.
     expect(rawTxns[0].external_id).toBe('eb_acc-uid-1_2024-06-15_-50000_0')
     expect(rawTxns[0].import_source).toBe('enable_banking')
+  })
+
+  it('skips pending entries (no booking_date) and ingests only booked ones', async () => {
+    // A pending PSD2 entry has no booking_date — only a value_date. Importing it
+    // is what produced the production duplicates: its date (hence its dedup id)
+    // differs from the same transaction's booked representation. Pending entries
+    // must be skipped; booked ones import as usual, keyed on booking_date.
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date?: string, value_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date || tx.value_date,
+      booking_date: tx.booking_date || tx.value_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { transaction_amount: { amount: '50', currency: 'SEK' }, value_date: '2026-02-15' },   // pending → skipped
+        { transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-03-01' }, // booked → kept
+      ],
+      rawPages: ['{}'],
+    })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    const batch = mockIngest.mock.calls[0][3]
+    expect(batch).toHaveLength(1)
+    expect(batch[0].date).toBe('2026-03-01')
+    expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-03-01_-7500_0')
+  })
+
+  it('does not re-import a booked transaction when a later sync returns it pending (no booking_date)', async () => {
+    // Regression for the 45→90 duplication. The same transaction is returned
+    // booked in sync 1 (booking_date 2026-04-21) and pending in sync 2 (only
+    // value_date 2026-02-15). Previously sync 2 ingested the pending copy with a
+    // value_date-derived id (different date → new id → duplicate). It must now
+    // be skipped, so sync 2 ingests nothing for it.
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date?: string, value_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date || tx.value_date,
+      booking_date: tx.booking_date || tx.value_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'AVI ÖVERDRAG',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    // Sync 1 — booked
+    mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-21', value_date: '2026-02-15' }],
+      rawPages: ['{}'],
+    })
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+    const firstBatch = mockIngest.mock.calls[0][3]
+    expect(firstBatch).toHaveLength(1)
+    expect(firstBatch[0].date).toBe('2026-04-21')
+    expect(firstBatch[0].external_id).toBe('eb_acc-uid-1_2026-04-21_-10000_0')
+
+    // Sync 2 — same transaction now returned pending (booking_date dropped)
+    mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, value_date: '2026-02-15' }],
+      rawPages: ['{}'],
+    })
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+    const secondBatch = mockIngest.mock.calls[1][3]
+    expect(secondBatch).toHaveLength(0)
   })
 
   it('gives identical same-day same-amount transactions distinct, stable external_ids', async () => {

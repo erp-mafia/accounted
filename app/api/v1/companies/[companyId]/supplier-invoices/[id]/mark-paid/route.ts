@@ -169,7 +169,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
         is_credit_note, credited_invoice_id, payment_journal_entry_id,
         supplier:suppliers(id, name, supplier_type),
-        items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount)
+        items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate)
       `)
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)

@@ -65,6 +65,13 @@ export interface MigrationResults {
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
   salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
   supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
+  /**
+   * Auto-reconciliation of imported supplier invoices to the GL payment
+   * vouchers that the separate SIE import already posted. `autoLinked` invoices
+   * are now marked paid; `ambiguous` need manual review; `unmatched` had no
+   * candidate voucher.
+   */
+  reconciliation?: { scanned: number; autoLinked: number; ambiguous: number; unmatched: number }
 }
 
 // ── Consent flow ────────────────────────────────────────────────────

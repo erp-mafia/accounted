@@ -657,6 +657,10 @@ export interface SupplierInvoiceItem {
   vat_code: string | null
   vat_rate: number
   vat_amount: number
+  // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25), null
+  // for non-RC lines. The supplier charges no VAT so vat_rate stays 0; this
+  // rate drives the fiktiv-moms + basbelopp booking. See the booking engine.
+  reverse_charge_rate: number | null
 
   created_at: string
 }
@@ -965,6 +969,9 @@ export interface CreateSupplierInvoiceItemInput {
   vat_rate?: number
   // Manual override. See CreateSupplierInvoiceItemSchema for rationale.
   vat_amount?: number
+  // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25). When
+  // set, the engine books fiktiv moms at this rate while vat_rate stays 0.
+  reverse_charge_rate?: number
   vat_code?: string
   // Legacy fields (backward compat, ignored when amount is set)
   quantity?: number
@@ -1573,6 +1580,9 @@ export type PendingOperationType =
   | 'generate_agi'
   // Mark invoice paid by linking an existing posted verifikat (no new JE)
   | 'link_invoice_voucher'
+  // Supplier-side mirror: mark a leverantörsfaktura paid by linking an existing
+  // posted verifikat that debits 2440 (no new JE)
+  | 'link_supplier_invoice_voucher'
   // PR #603/#607: allocate 1 bank tx across N customer or supplier invoices
   | 'match_batch_allocate'
   // PR #606/#610: bulk-book N bank txs into 1 combined verifikat

@@ -40,6 +40,7 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
@@ -1038,6 +1039,48 @@ async function commitLinkInvoiceVoucher(
   }
 }
 
+async function commitLinkSupplierInvoiceVoucher(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const supplierInvoiceId = params.supplier_invoice_id as string | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const notes = (params.notes as string | undefined) ?? undefined
+
+  if (!supplierInvoiceId || !journalEntryId) {
+    return { error: 'supplier_invoice_id and journal_entry_id are required', status: 400 }
+  }
+
+  const outcome = await linkSupplierInvoiceToVoucher(supabase, userId, companyId, {
+    supplierInvoiceId,
+    journalEntryId,
+    notes,
+  })
+
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    // 404/409 are auto-rejected by the dispatcher (the user can re-stage with
+    // adjusted inputs); 400 surfaces as a normal failure so the UI can explain.
+    return {
+      error: entry?.message_en ?? outcome.code,
+      status: entry?.httpStatus ?? 500,
+    }
+  }
+
+  return {
+    data: {
+      invoice_status: outcome.result.invoiceStatus,
+      paid_amount: outcome.result.paidAmount,
+      remaining_amount: outcome.result.remainingAmount,
+      payment_amount: outcome.result.paymentAmount,
+      payment_id: outcome.result.paymentId,
+      journal_entry_id: outcome.result.journalEntryId,
+    },
+  }
+}
+
 // ── Stream 1 Phase 1 + follow-up executors ───────────────────────
 
 async function commitClosePeriod(
@@ -1614,6 +1657,11 @@ async function commitCreateSupplierInvoiceFromInbox(
       vat_code: null,
       vat_rate: vatRate,
       vat_amount: vatAmt,
+      // For reverse charge the buyer self-assesses VAT; carry an explicit
+      // statutory rate when staged, else null (engine defaults to 25%).
+      reverse_charge_rate: reverseCharge
+        ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
+        : null,
     }
   })
 
@@ -2908,6 +2956,9 @@ export async function commitPendingOperation(
         break
       case 'link_invoice_voucher':
         result = await commitLinkInvoiceVoucher(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'link_supplier_invoice_voucher':
+        result = await commitLinkSupplierInvoiceVoucher(supabase, userId, companyId, pendingOp.params)
         break
       case 'close_period':
         result = await commitClosePeriod(supabase, userId, companyId, pendingOp.params)

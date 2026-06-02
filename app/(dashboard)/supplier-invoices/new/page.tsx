@@ -24,8 +24,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
-import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, CalendarPlus, MessageCircle, Link2 } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, MessageCircle, Link2 } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
 
 interface LineItem {
@@ -33,6 +32,9 @@ interface LineItem {
   amount: number
   account_number: string
   vat_rate: number
+  // Self-assessed VAT rate for omvänd skattskyldighet (0.25/0.12/0.06). Only
+  // meaningful when reverse_charge is on; the line's vat_rate is then 0.
+  reverse_charge_rate?: number
 }
 
 interface FormData {
@@ -184,6 +186,26 @@ function VatRateCell({ value, onChange }: { value: number; onChange: (v: number)
   )
 }
 
+// Self-assessment rate picker shown in place of the Momssats cell when an
+// invoice is reverse charge. The supplier charges no VAT (the line vat_rate is
+// 0); this is the Swedish statutory rate the buyer self-assesses at — 25%
+// huvudregeln for EU services, 12%/6% for reduced-rated services (ML 6 kap 34 §).
+function RcRateSelect({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const t = useTranslations('supplier_invoice_editor')
+  return (
+    <Select value={String(value ?? 0.25)} onValueChange={(v) => onChange(parseFloat(v))}>
+      <SelectTrigger className="h-9 tabular-nums" aria-label={t('col_rc_vat_rate')}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="0.25" className="tabular-nums">25 %</SelectItem>
+        <SelectItem value="0.12" className="tabular-nums">12 %</SelectItem>
+        <SelectItem value="0.06" className="tabular-nums">6 %</SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   name: '',
   supplier_type: 'swedish_business',
@@ -221,7 +243,6 @@ export default function NewSupplierInvoicePage() {
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [periodsLoaded, setPeriodsLoaded] = useState(false)
-  const [showCreatePeriod, setShowCreatePeriod] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showReview, setShowReview] = useState(false)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
@@ -268,7 +289,7 @@ export default function NewSupplierInvoicePage() {
       payment_reference: '',
       notes: '',
       paid_with_private_funds: false,
-      items: [{ description: '', amount: 0, account_number: '5010', vat_rate: 0.25 }],
+      items: [{ description: '', amount: 0, account_number: '5010', vat_rate: 0.25, reverse_charge_rate: 0.25 }],
     },
   })
 
@@ -559,7 +580,10 @@ export default function NewSupplierInvoicePage() {
 
   const itemTotals = (watchedItems || []).map((item) => {
     const lineTotal = Math.round((item.amount || 0) * 100) / 100
-    const vatAmount = Math.round(lineTotal * (item.vat_rate || 0) * 100) / 100
+    // Reverse charge: VAT is self-assessed at reverse_charge_rate (25% default),
+    // not the line's vat_rate (which is 0 — the supplier charged nothing).
+    const effectiveRate = watchedReverseCharge ? (item.reverse_charge_rate ?? 0.25) : (item.vat_rate || 0)
+    const vatAmount = Math.round(lineTotal * effectiveRate * 100) / 100
     return { lineTotal, vatAmount }
   })
   const subtotal = itemTotals.reduce((sum, t) => sum + t.lineTotal, 0)
@@ -660,7 +684,10 @@ export default function NewSupplierInvoicePage() {
         description: item.description,
         amount: item.amount,
         account_number: item.account_number,
-        vat_rate: item.vat_rate,
+        // Reverse charge: the supplier charges no VAT, so the line rate is 0 and
+        // the self-assessed rate travels on reverse_charge_rate (25% default).
+        vat_rate: data.reverse_charge ? 0 : item.vat_rate,
+        reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
       })),
     }
   }
@@ -731,6 +758,20 @@ export default function NewSupplierInvoicePage() {
   }
 
   function onSubmit(data: FormData) {
+    // Hard block: under faktureringsmetoden (and for privately-paid kvitton) a
+    // verifikation is posted at registration, and BFL 5 kap kräver att
+    // verifikationsnumret ligger i en obruten serie inom ett räkenskapsår. No
+    // räkenskapsår for the invoice date → no compliant voucher can exist, so we
+    // refuse rather than register an unbooked invoice. Kontantmetoden books at
+    // payment, so it is intentionally not blocked here (see showNoPeriodWarning).
+    if (showNoPeriodWarning) {
+      toast({
+        title: t('warning_title'),
+        description: t('no_period_warning', { date: data.invoice_date }),
+        variant: 'destructive',
+      })
+      return
+    }
     if (!data.supplier_id) {
       toast({ title: t('supplier_missing_title'), description: t('supplier_missing_description'), variant: 'destructive' })
       return
@@ -1166,22 +1207,15 @@ export default function NewSupplierInvoicePage() {
             </div>
 
             {showNoPeriodWarning && (
-              <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-                <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-                <div className="flex-1 text-sm text-warning-foreground">
+              <div
+                role="alert"
+                className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+              >
+                <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                <div className="flex-1 text-sm text-destructive">
                   <p className="font-medium">{t('no_period_warning', { date: watchedInvoiceDate })}</p>
                   <p className="mt-0.5">{t('no_period_help')}</p>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowCreatePeriod(true)}
-                  className="shrink-0"
-                >
-                  <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
-                  {t('create_period')}
-                </Button>
               </div>
             )}
           </CardContent>
@@ -1197,7 +1231,7 @@ export default function NewSupplierInvoicePage() {
               size="sm"
               className="w-full sm:w-auto"
               onClick={() =>
-                append({ description: '', amount: 0, account_number: '', vat_rate: 0.25 })
+                append({ description: '', amount: 0, account_number: '', vat_rate: 0.25, reverse_charge_rate: 0.25 })
               }
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -1282,8 +1316,8 @@ export default function NewSupplierInvoicePage() {
                     <th className="pb-2 w-28">{t('col_account')}</th>
                     <th className="pb-2">{t('col_description')}</th>
                     <th className="pb-2 w-32">{t('col_amount_excl')}</th>
-                    <th className="pb-2 w-36">{t('col_vat_rate')}</th>
-                    <th className="pb-2 w-24 text-right">{t('col_vat')}</th>
+                    <th className="pb-2 w-36">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</th>
+                    <th className="pb-2 w-24 text-right">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</th>
                     <th className="pb-2 w-8"></th>
                   </tr>
                 </thead>
@@ -1336,13 +1370,23 @@ export default function NewSupplierInvoicePage() {
                         />
                       </td>
                       <td className="py-2 pr-2">
-                        <Controller
-                          name={`items.${index}.vat_rate`}
-                          control={control}
-                          render={({ field: f }) => (
-                            <VatRateCell value={f.value} onChange={f.onChange} />
-                          )}
-                        />
+                        {watchedReverseCharge ? (
+                          <Controller
+                            name={`items.${index}.reverse_charge_rate`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                            )}
+                          />
+                        ) : (
+                          <Controller
+                            name={`items.${index}.vat_rate`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <VatRateCell value={f.value} onChange={f.onChange} />
+                            )}
+                          />
+                        )}
                       </td>
                       <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
                         {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
@@ -1418,18 +1462,28 @@ export default function NewSupplierInvoicePage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">{t('col_vat_rate')}</Label>
-                      <Controller
-                        name={`items.${index}.vat_rate`}
-                        control={control}
-                        render={({ field: f }) => (
-                          <VatRateCell value={f.value} onChange={f.onChange} />
-                        )}
-                      />
+                      <Label className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</Label>
+                      {watchedReverseCharge ? (
+                        <Controller
+                          name={`items.${index}.reverse_charge_rate`}
+                          control={control}
+                          render={({ field: f }) => (
+                            <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                          )}
+                        />
+                      ) : (
+                        <Controller
+                          name={`items.${index}.vat_rate`}
+                          control={control}
+                          render={({ field: f }) => (
+                            <VatRateCell value={f.value} onChange={f.onChange} />
+                          )}
+                        />
+                      )}
                     </div>
                   </div>
                   <div className="pt-1 border-t flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">{t('col_vat')}</span>
+                    <span className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</span>
                     <span className="tabular-nums text-muted-foreground">
                       {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
                     </span>
@@ -1515,7 +1569,7 @@ export default function NewSupplierInvoicePage() {
               type="submit"
               variant="outline"
               className="w-full sm:w-auto"
-              disabled={isSubmitting || !canWrite}
+              disabled={isSubmitting || !canWrite || showNoPeriodWarning}
               onClick={() => { submitModeRef.current = 'register_and_match' }}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
@@ -1525,7 +1579,7 @@ export default function NewSupplierInvoicePage() {
           )}
           <Button
             type="submit"
-            disabled={isSubmitting || !canWrite}
+            disabled={isSubmitting || !canWrite || showNoPeriodWarning}
             className="w-full sm:w-auto"
             onClick={() => { submitModeRef.current = 'register' }}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1733,14 +1787,6 @@ export default function NewSupplierInvoicePage() {
           </div>
         </DialogContent>
       </Dialog>
-
-      <CreatePeriodDialog
-        open={showCreatePeriod}
-        onOpenChange={setShowCreatePeriod}
-        entryDate={watchedInvoiceDate}
-        periods={periods}
-        onCreated={fetchPeriods}
-      />
     </div>
   )
 }

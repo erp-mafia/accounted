@@ -82,6 +82,9 @@ export const POST = withRouteContext(
       vat_code: item.vat_code,
       vat_rate: item.vat_rate,
       vat_amount: item.vat_amount,
+      // Preserve the self-assessed RC rate so the credit-note verifikat
+      // reverses fiktiv moms at the same rate the original was booked at.
+      reverse_charge_rate: item.reverse_charge_rate,
     }))
 
     await supabase.from('supplier_invoice_items').insert(creditItems)

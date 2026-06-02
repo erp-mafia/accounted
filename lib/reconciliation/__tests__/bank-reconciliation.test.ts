@@ -79,6 +79,25 @@ describe('scopeTransactionsToAccount', () => {
     expect(String(orCall?.args[0])).not.toContain('and(')
   })
 
+  it('scopes strictly to the account (no NULL fallback) when includeUnassigned is false', () => {
+    const { self, calls } = makeQueryStub()
+    const id = '22222222-2222-2222-2222-222222222222'
+
+    // includeUnassigned=false is the non-primary account case: a secondary
+    // same-currency account (e.g. a 1931 savings account) must NOT pull in the
+    // company's unassigned NULL rows — those belong to the primary account.
+    // Double-counting them inflated the secondary account's bank total and
+    // showed a large bogus difference ("1930 works, the other accounts go wonky").
+    scopeTransactionsToAccount(self as never, id, 'SEK', false)
+
+    expect(calls).toEqual([
+      { method: 'eq', args: ['currency', 'SEK'] },
+      { method: 'eq', args: ['cash_account_id', id] },
+    ])
+    // No OR — the IS NULL fallback must not appear for a non-primary account.
+    expect(calls.find((c) => c.method === 'or')).toBeUndefined()
+  })
+
   it('falls back to a pure currency filter when no cash account id is given', () => {
     const { self, calls } = makeQueryStub()
 
@@ -550,8 +569,6 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Line exists on the selected account
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // No existing link
-    enqueue({ data: null, error: null })
     // Update succeeds
     enqueue({ data: null, error: null })
 
@@ -574,12 +591,30 @@ describe('manualLink', () => {
     enqueue({ data: { ledger_account: '1930' } })
     // Line exists on 1930
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // No existing link
-    enqueue({ data: null, error: null })
     // Update succeeds
     enqueue({ data: null, error: null })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
+  })
+
+  it('allows N:1 — does not reject when the verifikat already has a linked transaction', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // This transaction is itself unlinked; the TARGET entry already has another
+    // transaction pointing at it. manualLink no longer queries for / rejects
+    // that — several bank transactions may settle one verifikat (a salary run
+    // paid in multiple transfers). The only per-transaction guard is that THIS
+    // transaction isn't already linked (tx.journal_entry_id), still enforced.
+    const tx = makeTransaction({ id: 'tx-2', journal_entry_id: null })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    // Update succeeds — note there is NO existing-link lookup in the sequence.
+    enqueue({ data: null, error: null })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
   })

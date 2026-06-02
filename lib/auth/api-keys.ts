@@ -13,8 +13,8 @@ export const API_KEY_SCOPES = {
   'customers:write':    { label: 'Kunder — skriv',       description: 'Skapa kunder (1 verktyg)' },
   'invoices:read':      { label: 'Fakturor — läs',       description: 'Lista fakturor (1 verktyg)' },
   'invoices:write':     { label: 'Fakturor — skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
-  'suppliers:read':     { label: 'Leverantörer — läs',   description: 'Lista leverantörer och leverantörsfakturor (2 verktyg)' },
-  'suppliers:write':    { label: 'Leverantörer — skriv', description: 'Godkänn och kreditera leverantörsfakturor (2 verktyg)' },
+  'suppliers:read':     { label: 'Leverantörer — läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater (3 verktyg)' },
+  'suppliers:write':    { label: 'Leverantörer — skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor (6 verktyg)' },
   'reports:read':       { label: 'Rapporter — läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
   'bookkeeping:write':  { label: 'Bokföring — skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar' },
   'payroll:read':       { label: 'Löner — läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
@@ -212,6 +212,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_credit_supplier_invoice:         'suppliers:write',
   gnubok_create_supplier_invoice_from_inbox: 'suppliers:write',
   gnubok_set_inbox_extracted_data:        'suppliers:write',
+  // Supplier invoice payment via existing verifikat (no new bokföring)
+  gnubok_find_voucher_candidates_for_supplier_invoice: 'suppliers:read',
+  gnubok_link_supplier_invoice_to_voucher: 'suppliers:write',
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',

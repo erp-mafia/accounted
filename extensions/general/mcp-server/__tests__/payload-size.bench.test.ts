@@ -31,9 +31,16 @@ describe('tools/list payload size guard', () => {
     //     closes the MCP parity gap with the existing REST endpoint so agents
     //     can attach a bank tx to an already-posted verifikat without creating
     //     duplicate bookkeeping. Description trimmed to ~180 chars.
+    //   * 31.5K → 32K when gnubok_find_voucher_candidates_for_supplier_invoice +
+    //     gnubok_link_supplier_invoice_to_voucher landed — the supplier-side
+    //     mirror of the customer find/link voucher tools. The link tool inlines
+    //     the shared STAGED_OPERATION_SCHEMA. Lets agents mark a leverantörs-
+    //     faktura paid against an already-posted verifikat (no new bokföring),
+    //     which is exactly the fix for invoices imported from Fortnox as open
+    //     payables while their payment already exists in the SIE-imported GL.
     // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(31_500)
+    expect(approxTokens).toBeLessThan(32_000)
   })
 })

@@ -8,6 +8,7 @@ import { RecaptIdentify } from '@/components/RecaptIdentify'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
 import CommandPalette from '@/components/common/CommandPalette'
+import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
@@ -25,8 +26,12 @@ const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
 
 export default async function DashboardLayout({
   children,
+  settingsModal,
 }: {
   children: React.ReactNode
+  // `@settingsModal` parallel slot — renders the routed settings modal over the
+  // current page on in-app navigation to /settings/*; null otherwise.
+  settingsModal: React.ReactNode
 }) {
   const supabase = await createClient()
 
@@ -109,6 +114,8 @@ export default async function DashboardLayout({
                 {children}
               </div>
             </main>
+            {settingsModal}
+            <SettingsHotkey />
           </div>
         </AgentSheetProvider>
       </CompanyProvider>
@@ -159,6 +166,8 @@ export default async function DashboardLayout({
                 {children}
               </div>
             </main>
+            {settingsModal}
+            <SettingsHotkey />
           </div>
         </AgentSheetProvider>
       </CompanyProvider>
@@ -278,6 +287,8 @@ export default async function DashboardLayout({
           </main>
           <AgentTrigger />
           <CommandPalette />
+          <SettingsHotkey />
+          {settingsModal}
         </div>
         {!isSandbox && (
           <RecaptIdentify

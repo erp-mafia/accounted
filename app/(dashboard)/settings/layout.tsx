@@ -1,10 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { SettingsNav } from '@/components/settings/SettingsSidebar'
-import { useCompany } from '@/contexts/CompanyContext'
-import { createClient } from '@/lib/supabase/client'
+import { useTranslations } from 'next-intl'
+import { SettingsShell } from '@/components/settings/SettingsShell'
 
 const TAB_TO_ROUTE: Record<string, string> = {
   company: '/settings/company',
@@ -23,22 +22,7 @@ const TAB_TO_ROUTE: Record<string, string> = {
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const { company } = useCompany()
-  const [isSandbox, setIsSandbox] = useState(false)
-
-  // Fetch sandbox status
-  useEffect(() => {
-    if (!company?.id) return
-    const supabase = createClient()
-    supabase
-      .from('company_settings')
-      .select('is_sandbox')
-      .eq('company_id', company.id)
-      .single()
-      .then(({ data }) => {
-        if (data?.is_sandbox) setIsSandbox(true)
-      })
-  }, [company?.id])
+  const t = useTranslations('settings_nav')
 
   // Handle legacy ?tab= URLs
   useEffect(() => {
@@ -49,17 +33,9 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   }, [searchParams, router])
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Inställningar</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Hantera ditt företag och konto
-        </p>
-      </div>
-
-      <SettingsNav isSandbox={isSandbox} />
-
-      <div>{children}</div>
+    <div className="space-y-8">
+      <h1 className="font-display text-2xl tracking-tight md:text-3xl">{t('aria_label')}</h1>
+      <SettingsShell variant="page">{children}</SettingsShell>
     </div>
   )
 }

@@ -186,6 +186,44 @@ function round(value: number): number {
 }
 
 /**
+ * Resolve the start/end dates for a VAT period.
+ *
+ * Monthly and quarterly VAT periods are always calendar months/quarters
+ * (kalendermånad / kalenderkvartal per SFL 26 kap), so they use the plain
+ * calendar calculation.
+ *
+ * Annual VAT (helårsmoms), however, is reported per *räkenskapsår* — the
+ * beskattningsår — not per calendar year (SFL 26 kap 10–11 §§). A räkenskapsår
+ * can be extended or shortened (up to 18 months for a first/changed year per
+ * BFL 3 kap 3 §), so a calendar Jan–Dec span would silently drop part of an
+ * extended year (e.g. a first year 2025-07-03 → 2026-12-31). When the caller
+ * supplies the fiscal period we therefore use its actual bounds. If the period
+ * can't be resolved we fall back to the calendar span so behaviour degrades
+ * gracefully instead of erroring.
+ */
+async function resolvePeriodDates(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  fiscalPeriodId?: string
+): Promise<{ start: string; end: string }> {
+  if (periodType === 'yearly' && fiscalPeriodId) {
+    const { data: fp } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (fp?.period_start && fp?.period_end) {
+      return { start: fp.period_start, end: fp.period_end }
+    }
+  }
+  return calculatePeriodDates(periodType, year, period)
+}
+
+/**
  * Calculate VAT declaration from the general ledger.
  *
  * Sums posted journal entry lines on the BAS accounts in ACCOUNT_RUTA per the
@@ -203,9 +241,14 @@ export async function calculateVatDeclaration(
   periodType: VatPeriodType,
   year: number,
   period: number,
-  _accountingMethod: AccountingMethod = 'accrual'
+  _accountingMethod: AccountingMethod = 'accrual',
+  options: { fiscalPeriodId?: string } = {}
 ): Promise<VatDeclaration> {
-  const { start, end } = calculatePeriodDates(periodType, year, period)
+  // For yearly VAT this resolves to the räkenskapsår bounds (when a fiscal
+  // period is supplied), not the calendar year — see resolvePeriodDates.
+  const { start, end } = await resolvePeriodDates(
+    supabase, companyId, periodType, year, period, options.fiscalPeriodId
+  )
 
   // Fetch all posted journal entry lines on VAT-relevant accounts for the period
   const lines = await fetchAllRows<{

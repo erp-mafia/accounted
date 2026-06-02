@@ -52,6 +52,10 @@ import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
 } from '@/lib/invoices/voucher-matching'
+import {
+  findMatchingVouchersForSupplierInvoice,
+  validateVoucherForSupplierInvoiceLink,
+} from '@/lib/invoices/supplier-voucher-matching'
 import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { closePeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
@@ -5082,6 +5086,157 @@ export const tools: McpTool[] = [
         {
           description: 'After approval the invoice transitions to paid (or partially_paid). No new verifikat is created — the existing voucher is the payment posting.',
           tool: 'gnubok_get_ar_ledger',
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_find_voucher_candidates_for_supplier_invoice',
+    description: 'List posted verifikat that debit leverantörsskuld (2440) and could be the payment for this supplier invoice. Use before gnubok_link_supplier_invoice_to_voucher when marking a leverantörsfaktura paid against an existing verifikation (no new bokföring).',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string', description: 'UUID of the supplier invoice to find candidates for' },
+        limit: { type: 'number', description: 'Max candidates to return (default 10, max 50)' },
+      },
+      required: ['supplier_invoice_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string' },
+        invoice_status: { type: 'string' },
+        candidates: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['supplier_invoice_id', 'candidates'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const supplierInvoiceId = args.supplier_invoice_id as string
+      if (!supplierInvoiceId) throw new Error('supplier_invoice_id is required')
+      const limit = Math.min(Math.max(1, Number(args.limit) || 10), 50)
+
+      const { data: invoice, error } = await supabase
+        .from('supplier_invoices')
+        .select(
+          'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)'
+        )
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .single()
+      if (error || !invoice) throw new Error('Supplier invoice not found')
+
+      if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+        return {
+          supplier_invoice_id: supplierInvoiceId,
+          invoice_status: invoice.status,
+          candidates: [],
+        }
+      }
+
+      const candidates = await findMatchingVouchersForSupplierInvoice(
+        supabase,
+        companyId,
+        invoice as never,
+        { limit },
+      )
+      return {
+        supplier_invoice_id: supplierInvoiceId,
+        invoice_status: invoice.status,
+        candidates,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_link_supplier_invoice_to_voucher',
+    description: 'Markera en leverantörsfaktura som betald genom att länka till en befintlig verifikation som redan debiterar leverantörsskuld (2440). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_supplier_invoice först.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string', description: 'UUID of the supplier invoice to mark paid' },
+        journal_entry_id: { type: 'string', description: 'UUID of the existing posted verifikat to link' },
+        notes: { type: 'string', description: 'Optional note stored on the supplier_invoice_payments row' },
+      },
+      required: ['supplier_invoice_id', 'journal_entry_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const supplierInvoiceId = args.supplier_invoice_id as string
+      const journalEntryId = args.journal_entry_id as string
+      const notes = (args.notes as string | undefined) ?? undefined
+      if (!supplierInvoiceId || !journalEntryId) {
+        throw new Error('supplier_invoice_id and journal_entry_id are required')
+      }
+
+      const { data: invoice, error: invErr } = await supabase
+        .from('supplier_invoices')
+        .select(
+          'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)'
+        )
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .single()
+      if (invErr || !invoice) throw new Error('Supplier invoice not found')
+      if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+        throw new Error('Supplier invoice is not in a matchable state (must be registered, approved, overdue, or partially_paid)')
+      }
+
+      const validation = await validateVoucherForSupplierInvoiceLink(
+        supabase,
+        companyId,
+        invoice as never,
+        journalEntryId,
+      )
+      if (!validation.ok) {
+        throw new Error(
+          `${validation.code}${validation.details ? `: ${JSON.stringify(validation.details)}` : ''}`,
+        )
+      }
+
+      const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
+        ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
+        : journalEntryId.slice(0, 8)
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'link_supplier_invoice_voucher',
+        `Länka verifikat ${voucherLabel} → leverantörsfaktura ${invoice.supplier_invoice_number ?? supplierInvoiceId.slice(0, 8)}`,
+        { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes },
+        {
+          supplier_invoice_number: invoice.supplier_invoice_number,
+          invoice_currency: invoice.currency,
+          invoice_remaining: invoice.remaining_amount,
+          voucher_label: voucherLabel,
+          voucher_date: validation.voucher.entry_date,
+          voucher_description: validation.voucher.description,
+          ap_debit_amount: validation.apDebitAmount,
+          payment_amount: validation.paymentAmount,
+          will_be_fully_paid: validation.isFullyPaid,
+          remaining_after: validation.remainingAfter,
+          supplier_name: (invoice.supplier as unknown as { name?: string } | null)?.name ?? null,
+        },
+        actor,
+        {
+          description: 'After approval the supplier invoice transitions to paid (or partially_paid). No new verifikat is created — the existing voucher is the payment posting.',
+          tool: 'gnubok_get_supplier_ledger',
         },
       )
     },

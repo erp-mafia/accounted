@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import {
   MatchVerifikationPicker,
   type UnlinkedGLLine,
@@ -74,9 +75,13 @@ export function MatchVoucherDialog({
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [wideRange, setWideRange] = useState(false)
+  // Opt-in: also surface vouchers already matched to another bank transaction,
+  // so several transactions can settle one verifikat (N:1 — a salary run paid in
+  // multiple transfers, an invoice paid in instalments).
+  const [includeMatched, setIncludeMatched] = useState(false)
 
   const loadCandidates = useCallback(
-    async (tx: TransactionWithInvoice, wide: boolean) => {
+    async (tx: TransactionWithInvoice, wide: boolean, matched: boolean) => {
       setLoading(true)
       try {
         // Resolve the settlement account from the company's cash accounts.
@@ -98,6 +103,7 @@ export function MatchVoucherDialog({
         const params = new URLSearchParams()
         params.set('account_number', account)
         params.set('transaction_id', tx.id)
+        if (matched) params.set('include_matched', 'true')
         if (!wide) {
           params.set('date_from', shiftDate(tx.date, -WINDOW_DAYS))
           params.set('date_to', shiftDate(tx.date, WINDOW_DAYS))
@@ -112,9 +118,15 @@ export function MatchVoucherDialog({
         // Auto-select a strong match only when nothing is chosen yet. Toggling
         // "Visa alla datum" reloads with a wider set — it must NOT discard a
         // voucher the user already picked. (selected resets to '' on close.)
+        // Never auto-select an already-matched voucher — N:1 must be a
+        // deliberate choice, not the default when "visa matchade" is on.
         const top = lines[0]
         setSelected((prev) =>
-          prev ? prev : top && (top.confidence ?? 0) >= 0.85 ? top.journal_entry_id : '',
+          prev
+            ? prev
+            : top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
+              ? top.journal_entry_id
+              : '',
         )
       } finally {
         setLoading(false)
@@ -123,11 +135,12 @@ export function MatchVoucherDialog({
     [],
   )
 
-  // (Re)load whenever the dialog opens for a transaction, or the range widens.
+  // (Re)load whenever the dialog opens for a transaction, the range widens, or
+  // the user toggles already-matched vouchers in/out.
   useEffect(() => {
     if (!open || !transaction) return
-    void loadCandidates(transaction, wideRange)
-  }, [open, transaction, wideRange, loadCandidates])
+    void loadCandidates(transaction, wideRange, includeMatched)
+  }, [open, transaction, wideRange, includeMatched, loadCandidates])
 
   // Reset transient state when the dialog closes so the next open starts clean.
   useEffect(() => {
@@ -135,6 +148,7 @@ export function MatchVoucherDialog({
     setGlLines([])
     setSelected('')
     setWideRange(false)
+    setIncludeMatched(false)
     setAccountFallback(false)
   }, [open])
 
@@ -223,35 +237,52 @@ export function MatchVoucherDialog({
             </div>
           ) : glLines.length === 0 ? (
             <div className="rounded-lg border border-border px-3 py-6 text-center text-sm text-muted-foreground">
-              <p>Inga omatchade verifikationer på {accountNumber} i perioden.</p>
-              {!wideRange && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => setWideRange(true)}
-                >
-                  Visa alla datum
-                </Button>
-              )}
+              <p>
+                {includeMatched
+                  ? `Inga verifikationer på ${accountNumber} i perioden.`
+                  : `Inga omatchade verifikationer på ${accountNumber} i perioden.`}
+              </p>
             </div>
           ) : (
             <>
-              {selectedLine && (selectedLine.confidence ?? 0) >= 0.85 && (
-                <Badge variant="success" className="mb-1">Föreslagen träff</Badge>
-              )}
-              <MatchVerifikationPicker glLines={glLines} value={selected} onChange={setSelected} />
-              {!wideRange && (
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                  onClick={() => setWideRange(true)}
-                >
-                  Hittar du inte verifikationen? Visa alla datum
-                </button>
+              {selectedLine &&
+                (selectedLine.confidence ?? 0) >= 0.85 &&
+                !(selectedLine.linked_transaction_count ?? 0) && (
+                  <Badge variant="success" className="mb-1">Föreslagen träff</Badge>
+                )}
+              <MatchVerifikationPicker glLines={glLines} value={selected} onChange={setSelected} inline />
+              {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Verifikationen är redan matchad mot {selectedLine?.linked_transaction_count}{' '}
+                  transaktion{(selectedLine?.linked_transaction_count ?? 0) === 1 ? '' : 'er'}.
+                  Kopplingen lägger till den här transaktionen också — t.ex. en lön utbetald i
+                  flera överföringar.
+                </p>
               )}
             </>
           )}
+
+          {/* Discovery affordances — widen the date window, and surface vouchers
+              already matched so another transaction can be attached (N:1). */}
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-1">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+              <Switch
+                checked={includeMatched}
+                onCheckedChange={setIncludeMatched}
+                aria-label="Visa även matchade verifikationer"
+              />
+              Visa även matchade verifikationer
+            </label>
+            {!wideRange && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                onClick={() => setWideRange(true)}
+              >
+                Visa alla datum
+              </button>
+            )}
+          </div>
         </div>
 
         <DialogFooter>

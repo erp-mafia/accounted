@@ -13,6 +13,7 @@ function makeBuilder() {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
+  b.maybeSingle = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
 }
@@ -1048,5 +1049,67 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
     expect(result.rutor.ruta10).toBe(9768)
     expect(result.rutor.ruta48).toBe(7048.45)
     expect(result.rutor.ruta49).toBe(2719.55) // 9768 − 7048.45, owed (was −7048.45 pre-fix)
+  })
+})
+
+describe('calculateVatDeclaration — annual VAT spans the räkenskapsår', () => {
+  it('uses the fiscal period bounds for yearly when a fiscalPeriodId is given', async () => {
+    // Förlängt räkenskapsår (extended first year, 18 months) — annual VAT
+    // (helårsmoms) must cover the whole period, not the calendar year that
+    // period_start falls in. The first queued result feeds the fiscal_periods
+    // lookup, the second the journal lines, the third the entry counts.
+    results = [
+      { data: { period_start: '2025-07-03', period_end: '2026-12-31' }, error: null },
+      {
+        data: [
+          { account_number: '3001', debit_amount: 0, credit_amount: 21600 },
+          { account_number: '2610', debit_amount: 0, credit_amount: 9768 },
+          { account_number: '2641', debit_amount: 7048.45, credit_amount: 0 },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const result = await calculateVatDeclaration(
+      supabase, 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'fp-1' },
+    )
+
+    expect(result.period.start).toBe('2025-07-03')
+    expect(result.period.end).toBe('2026-12-31')
+    expect(result.rutor.ruta05).toBe(21600)
+    expect(result.rutor.ruta10).toBe(9768)
+    expect(result.rutor.ruta48).toBe(7048.45)
+  })
+
+  it('falls back to the calendar year when the fiscal period cannot be resolved', async () => {
+    results = [
+      { data: null, error: null }, // fiscal_periods lookup → not found
+      { data: [], error: null },   // journal lines
+      { data: [], error: null },   // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(
+      supabase, 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'missing' },
+    )
+
+    expect(result.period.start).toBe('2026-01-01')
+    expect(result.period.end).toBe('2026-12-31')
+  })
+
+  it('ignores fiscalPeriodId for monthly periods (calendar month, no lookup)', async () => {
+    // No fiscal_periods lookup is made for monthly, so the first queued result
+    // is the journal lines — proving the räkenskapsår path is yearly-only.
+    results = [
+      { data: [], error: null }, // journal lines
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(
+      supabase, 'company-1', 'monthly', 2026, 3, 'accrual', { fiscalPeriodId: 'fp-1' },
+    )
+
+    expect(result.period.start).toBe('2026-03-01')
+    expect(result.period.end).toBe('2026-03-31')
   })
 })

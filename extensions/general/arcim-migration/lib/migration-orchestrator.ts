@@ -30,6 +30,7 @@ import {
   fetchSupplierInvoicesDirect,
 } from '@/lib/providers/provider-data-fetcher'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import {
   mapCustomer,
   mapSupplier,
@@ -49,6 +50,8 @@ export interface MigrationOptions {
   importSuppliers?: boolean
   importSalesInvoices?: boolean
   importSupplierInvoices?: boolean
+  /** Auto-link imported supplier invoices to GL payment vouchers. Default true. */
+  reconcileVouchers?: boolean
   onProgress?: (progress: MigrationProgress) => void
 }
 
@@ -663,6 +666,30 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
+      }
+    }
+
+    // ── Step 6: Reconcile supplier invoices to GL payment vouchers ────
+    // The GL (incl. the Dr 2440 / Cr 1930 bank-payment vouchers) is imported
+    // separately via SIE. Supplier invoices arrive (via ?filter=unpaid) as open
+    // payables with no link to those vouchers, so settled invoices would surface
+    // as overdue. Auto-link the unambiguous matches. Best-effort: a failure here
+    // must never fail the migration — the imported data is already persisted.
+    if (options.reconcileVouchers !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Stämmer av betalningar mot verifikationer...', progress: 95 })
+      try {
+        const recon = await reconcileSupplierInvoiceVouchers({ supabase, companyId, userId })
+        results.reconciliation = {
+          scanned: recon.scanned,
+          autoLinked: recon.autoLinked,
+          ambiguous: recon.ambiguous,
+          unmatched: recon.unmatched,
+        }
+        console.log(
+          `[migration] Reconcile: ${recon.autoLinked} auto-linked, ${recon.ambiguous} need review, ${recon.unmatched} unmatched (${recon.scanned} scanned)`,
+        )
+      } catch (err) {
+        console.error('Failed to reconcile supplier invoice payments:', err)
       }
     }
 

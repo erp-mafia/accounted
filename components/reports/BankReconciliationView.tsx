@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { AccountNumber } from '@/components/ui/account-number'
 import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -154,6 +155,13 @@ export function BankReconciliationView() {
   const [unlinkLoading, setUnlinkLoading] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
+  // Opt-in: also surface vouchers already matched to a bank transaction as
+  // candidates, so a second/third transaction can be attached to the same
+  // verifikat (N:1 — e.g. a salary run paid out in several transfers). Only
+  // affects the per-row picker candidates; the "Omatchade verifikationer" table
+  // below stays unmatched-only (it lists vouchers that still need a transaction).
+  const [includeMatched, setIncludeMatched] = useState(false)
+
   const [showMatched, setShowMatched] = useState(false)
   // Default expanded so users discover the undo path. The card itself only
   // renders when ignoredTx.length > 0 — collapsing it by default hid the
@@ -177,6 +185,12 @@ export function BankReconciliationView() {
   // rows for users on 1932 EUR (or any other non-SEK cash account).
   const accountCurrency =
     cashAccounts.find((a) => a.ledger_account === accountNumber)?.currency ?? 'SEK'
+
+  // glLines feeds the per-row picker (which may include already-matched vouchers
+  // when includeMatched is on). The "Omatchade verifikationer" table below must
+  // stay unmatched-only — a voucher with a linked transaction isn't something
+  // that still needs one.
+  const unmatchedGlLines = glLines.filter((l) => !(l.linked_transaction_count ?? 0))
 
   useEffect(() => {
     let cancelled = false
@@ -213,6 +227,13 @@ export function BankReconciliationView() {
       params.set('account_number', accountNumber)
       const qs = `?${params}`
 
+      // The candidate-lines fetch optionally includes already-matched vouchers
+      // (for N:1); the status endpoint must NOT — its movement/diff is computed
+      // independently — so it keeps the plain qs.
+      const glParams = new URLSearchParams(params)
+      if (includeMatched) glParams.set('include_matched', 'true')
+      const glQs = `?${glParams}`
+
       const txParams = new URLSearchParams()
       txParams.set('currency', accountCurrency)
       txParams.set('account_number', accountNumber)
@@ -223,7 +244,7 @@ export function BankReconciliationView() {
 
       const [statusRes, glRes, unmatchedRes, matchedRes] = await Promise.all([
         fetch(`/api/reconciliation/bank/status${qs}`, { signal }),
-        fetch(`/api/reconciliation/bank/unmatched-entries${qs}`, { signal }),
+        fetch(`/api/reconciliation/bank/unmatched-entries${glQs}`, { signal }),
         fetch(`/api/transactions${unmatchedQs}`, { signal }),
         fetch(`/api/transactions${reconciledQs}`, { signal }),
       ])
@@ -269,9 +290,10 @@ export function BankReconciliationView() {
       if (!signal.aborted) setLoading(false)
     }
     // Deliberately excludes dateFrom/dateTo: editing a date must NOT auto-fetch
-    // (it read from refs above). Re-runs only on account / currency change and
-    // mount; the "Filtrera" button calls fetchAll() explicitly for date changes.
-  }, [accountNumber, accountCurrency])
+    // (it read from refs above). Re-runs on account / currency change, on the
+    // matched-toggle flip (which changes the candidate set), and on mount; the
+    // "Filtrera" button calls fetchAll() explicitly for date changes.
+  }, [accountNumber, accountCurrency, includeMatched])
 
   useEffect(() => {
     fetchAll()
@@ -682,15 +704,25 @@ export function BankReconciliationView() {
       {/* Unmatched Transactions */}
       {unmatchedTx.length > 0 && (
         <section className="space-y-3">
-          <div className="flex items-baseline justify-between">
+          <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
               Omatchade transaktioner ({unmatchedTx.length})
             </h2>
-            {glLines.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {glLines.length} verifikation{glLines.length === 1 ? '' : 'er'} att matcha mot
-              </p>
-            )}
+            <div className="flex items-center gap-3">
+              {unmatchedGlLines.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {unmatchedGlLines.length} verifikation{unmatchedGlLines.length === 1 ? '' : 'er'} att matcha mot
+                </p>
+              )}
+              <label className="flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
+                <Switch
+                  checked={includeMatched}
+                  onCheckedChange={setIncludeMatched}
+                  aria-label="Visa även matchade verifikationer"
+                />
+                Visa matchade
+              </label>
+            </div>
           </div>
           {unmatchedTruncated && (
             <p className="text-xs text-muted-foreground">
@@ -843,11 +875,11 @@ export function BankReconciliationView() {
       )}
 
       {/* Unmatched GL Lines */}
-      {glLines.length > 0 && (
+      {unmatchedGlLines.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">
-              Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({glLines.length})
+              Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({unmatchedGlLines.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -862,7 +894,7 @@ export function BankReconciliationView() {
                 </tr>
               </thead>
               <tbody>
-                {glLines.map((line) => {
+                {unmatchedGlLines.map((line) => {
                   const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
                   return (
                     <tr key={line.line_id} className="border-b last:border-0">

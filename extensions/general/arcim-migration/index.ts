@@ -15,6 +15,7 @@ import {
 } from './lib/provider-client'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
+import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -1001,6 +1002,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers = true,
           importSalesInvoices = true,
           importSupplierInvoices = true,
+          reconcileVouchers = true,
         } = await request.json() as {
           consentId: string
           importCompanyInfo?: boolean
@@ -1008,6 +1010,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers?: boolean
           importSalesInvoices?: boolean
           importSupplierInvoices?: boolean
+          reconcileVouchers?: boolean
         }
 
         if (!consentId) {
@@ -1034,6 +1037,7 @@ export const arcimMigrationExtension: Extension = {
             importSuppliers,
             importSalesInvoices,
             importSupplierInvoices,
+            reconcileVouchers,
           })
 
           log.info('Migration completed:', results)
@@ -1050,6 +1054,60 @@ export const arcimMigrationExtension: Extension = {
               reason: error instanceof Error ? error.message : 'unknown',
               classified: classified ?? 'unclassified',
             },
+          })
+        }
+      },
+    },
+
+    // ── Reconcile supplier invoices to GL payment vouchers ────────
+    // Re-runnable maintenance endpoint. The migration runs this automatically as
+    // its final step, but SIE (the GL) and entity import are two separate HTTP
+    // requests whose order is UI-driven — so if the GL lands after the entity
+    // import, or a company was migrated before this feature existed, call this to
+    // auto-link settled supplier invoices to their existing vouchers. Pass
+    // { dryRun: true } to preview the plan (incl. items needing manual review)
+    // without writing.
+    {
+      method: 'POST',
+      path: '/reconcile',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        const log = ctx?.log ?? console
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const companyId = ctx?.companyId ?? user.id
+
+        let dryRun = false
+        try {
+          const body = (await request.json()) as { dryRun?: boolean }
+          dryRun = body?.dryRun === true
+        } catch {
+          // empty body is fine — default to a real run
+        }
+
+        try {
+          const result = await reconcileSupplierInvoiceVouchers({
+            supabase,
+            companyId,
+            userId: user.id,
+            dryRun,
+          })
+          log.info('arcim reconcile completed', {
+            companyId,
+            dryRun,
+            autoLinked: result.autoLinked,
+            ambiguous: result.ambiguous,
+            unmatched: result.unmatched,
+          })
+          return NextResponse.json({ success: true, dryRun, result })
+        } catch (error) {
+          log.error('arcim reconcile failed', error as Error)
+          return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
+            details: { reason: error instanceof Error ? error.message : 'unknown' },
           })
         }
       },

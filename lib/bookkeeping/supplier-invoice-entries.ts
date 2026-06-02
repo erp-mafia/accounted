@@ -1,6 +1,11 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
-import { generateReverseChargeLines, generateReverseChargeBasisLines } from './vat-entries'
+import {
+  generateReverseChargeLines,
+  generateReverseChargeBasisLines,
+  isReverseChargeBasisAccount,
+  resolveReverseChargeRate,
+} from './vat-entries'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -12,29 +17,6 @@ import type {
 } from '@/types'
 
 const log = createLogger('supplier-invoice-entries')
-
-/**
- * Accounts that already populate momsdeklaration ruta 20-24 directly when
- * debited. If the user picked one of these as the expense account on an RC
- * invoice item, the engine must NOT add the parallel basbeloppsrader (those
- * would double-count the basis).
- */
-const RC_BASIS_ACCOUNTS = new Set([
-  // ruta 20 — EU goods
-  '4515', '4516', '4517',
-  // ruta 21 — EU services
-  '4535', '4536', '4537',
-  // ruta 22 — non-EU services
-  '4531', '4532', '4533',
-  // ruta 23 — domestic goods RC
-  '4415', '4416', '4417',
-  // ruta 24 — domestic services RC
-  '4425', '4426', '4427',
-])
-
-function isBasisAccount(account: string): boolean {
-  return RC_BASIS_ACCOUNTS.has(account)
-}
 
 /**
  * Build a BFL-compliant verifikation description with event type, counterparty, and suffix.
@@ -662,9 +644,15 @@ function groupVatByRate(
 }
 
 /**
- * Group items by VAT rate and sum the base (line_total) per rate.
- * Used by reverse-charge paths to compute fiktiv moms from the basis,
- * decoupled from any manual VAT override on the items themselves.
+ * Group items by their self-assessed reverse-charge rate and sum the base
+ * (line_total) per rate. Used by reverse-charge paths to compute fiktiv moms
+ * from the basis, decoupled from any manual VAT override on the items.
+ *
+ * The grouping key is the *self-assessed* rate (resolveReverseChargeRate), not
+ * the line's vat_rate: under omvänd skattskyldighet the supplier charges 0%, so
+ * the line vat_rate is 0, but the buyer self-assesses at 25% (huvudregeln) or
+ * the explicit per-item reverse_charge_rate. Without this a 0%-rate RC line
+ * would key on rate 0 and the `rate > 0` guard below would skip its VAT lines.
  */
 function groupBaseByRate(
   items: SupplierInvoiceItem[],
@@ -674,7 +662,7 @@ function groupBaseByRate(
 ): Map<number, number> {
   const baseByRate = new Map<number, number>()
   for (const item of items) {
-    const rate = item.vat_rate ?? 0.25
+    const rate = resolveReverseChargeRate(item)
     let baseSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
     if (useAbsoluteValues) baseSek = Math.abs(baseSek)
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + baseSek)
@@ -696,8 +684,8 @@ function groupNonBasisBaseByRate(
 ): Map<number, number> {
   const baseByRate = new Map<number, number>()
   for (const item of items) {
-    if (isBasisAccount(item.account_number)) continue
-    const rate = item.vat_rate ?? 0.25
+    if (isReverseChargeBasisAccount(item.account_number)) continue
+    const rate = resolveReverseChargeRate(item)
     let itemSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
     if (useAbsoluteValues) itemSek = Math.abs(itemSek)
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + itemSek)

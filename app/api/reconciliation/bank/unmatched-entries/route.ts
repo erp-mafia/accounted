@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { fetchUnlinkedGLLines, tryReconcileTransaction } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchGLLinesForMatching, tryReconcileTransaction } from '@/lib/reconciliation/bank-reconciliation'
 import { requireCompanyId } from '@/lib/company/context'
 import type { Transaction } from '@/types'
 
@@ -24,6 +24,11 @@ export async function GET(request: Request) {
   // lib/reconciliation/bank-reconciliation pulls in server-only deps (event
   // bus, match-log) and must never reach the client bundle.
   const transactionId = searchParams.get('transaction_id') || undefined
+  // When true, also return vouchers already matched to a bank transaction (each
+  // carries linked_transaction_count) so the user can attach a second/third
+  // transaction to the same verifikat — the N:1 "lägga på flera" case. Default
+  // false keeps the list to unmatched candidates only.
+  const includeMatched = searchParams.get('include_matched') === 'true'
 
   // Defense-in-depth: only allow account numbers that the company has actually
   // registered as a cash account. Without this, a curious caller could probe
@@ -45,7 +50,7 @@ export async function GET(request: Request) {
     )
   }
 
-  const lines = await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)
+  const lines = await fetchGLLinesForMatching(supabase, companyId, accountNumber, dateFrom, dateTo, includeMatched)
 
   if (transactionId) {
     // company-scoped fetch (defense-in-depth). A malformed/foreign id yields no

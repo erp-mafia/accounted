@@ -264,7 +264,7 @@ const SI_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at'
 
 const SI_ITEMS_RESPONSE_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount'
+  'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate'
 
 const SupplierInvoiceCreated = z.object({
   id: z.string().uuid(),
@@ -345,6 +345,7 @@ interface ComputedItem {
   vat_code: string | null
   vat_rate: number
   vat_amount: number
+  reverse_charge_rate: number | null
 }
 
 // Swedish VAT rates per ML 2 kap 1 § + Skatteverket's 2026 satser. Allow
@@ -385,6 +386,10 @@ function computeItemsAndTotals(input: z.infer<typeof CreateSupplierInvoiceSchema
       vat_code: item.vat_code || null,
       vat_rate: vatRate,
       vat_amount: vatAmount,
+      // Self-assessed RC rate (0.06/0.12/0.25) or null. For reverse charge the
+      // line vat_rate is 0 (validated below); the engine self-assesses at this
+      // rate, defaulting to 25% huvudregeln when null.
+      reverse_charge_rate: item.reverse_charge_rate ?? null,
     })
   }
   const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)

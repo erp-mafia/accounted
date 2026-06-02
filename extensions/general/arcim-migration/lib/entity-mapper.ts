@@ -357,6 +357,38 @@ export function mapSupplierInvoice(
 
   const isCreditNote = dto.invoiceTypeCode === '381'
 
+  // Payment-derived amounts. Treat Balance numerically (never strict === 0) so
+  // floating drift or a residual öre resolves cleanly to paid/unpaid.
+  const balance = round2(dto.paymentStatus.balance.value)
+  const paidAmount = dto.paymentStatus.paid ? total : round2(total - balance)
+
+  // Status MUST stay consistent with the payment amounts. The provider's
+  // lifecycle status (dto.status) and its payment status are computed
+  // independently upstream and can contradict each other (e.g. a Fortnox
+  // invoice that is "booked" but fully paid). Payment state wins:
+  //   fully paid           -> 'paid'
+  //   0 < paid < total     -> 'partially_paid'
+  //   otherwise            -> the mapped lifecycle status
+  const mappedStatus = statusMap[dto.status] || 'registered'
+  let resolvedStatus: string
+  if (isCreditNote) {
+    // A kreditfaktura is never an open or "paid" payable. Force a credit-note
+    // terminal status regardless of the provider's lifecycle status — the
+    // arcim gateway is the only source of invoiceTypeCode and is NOT guaranteed
+    // to also send status='credited', so trusting dto.status here could persist
+    // a credit note as 'registered'/'paid' (contradicting its amounts).
+    resolvedStatus = mappedStatus === 'reversed' ? 'reversed' : 'credited'
+  } else if (mappedStatus === 'credited' || mappedStatus === 'reversed') {
+    // Terminal states from the provider: never flipped by payment.
+    resolvedStatus = mappedStatus
+  } else if (dto.paymentStatus.paid || balance <= 0) {
+    resolvedStatus = 'paid'
+  } else if (paidAmount > 0 && paidAmount < total) {
+    resolvedStatus = 'partially_paid'
+  } else {
+    resolvedStatus = mappedStatus
+  }
+
   const invoice: Record<string, unknown> = {
     user_id: userId,
     company_id: companyId,
@@ -366,7 +398,7 @@ export function mapSupplierInvoice(
     due_date: dto.dueDate || dto.issueDate,
     received_date: dto.issueDate,
     delivery_date: dto.deliveryDate || null,
-    status: statusMap[dto.status] || 'registered',
+    status: resolvedStatus,
     currency: dto.currencyCode || 'SEK',
     exchange_rate: dto.currencyCode === 'SEK' ? null : null,
     subtotal,
@@ -378,9 +410,11 @@ export function mapSupplierInvoice(
     vat_treatment: vatTreatment,
     reverse_charge: vatTreatment === 'reverse_charge',
     payment_reference: dto.ocrNumber || null,
-    paid_at: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || dto.issueDate : null,
-    paid_amount: dto.paymentStatus.paid ? total : round2(total - dto.paymentStatus.balance.value),
-    remaining_amount: round2(dto.paymentStatus.balance.value),
+    paid_at: resolvedStatus === 'paid' || resolvedStatus === 'partially_paid'
+      ? dto.paymentStatus.lastPaymentDate || dto.issueDate
+      : null,
+    paid_amount: resolvedStatus === 'paid' ? total : Math.max(0, paidAmount),
+    remaining_amount: resolvedStatus === 'paid' ? 0 : Math.max(0, balance),
     is_credit_note: isCreditNote,
     notes: dto.note || null,
   }

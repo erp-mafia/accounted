@@ -38,6 +38,8 @@ export async function GET(request: Request) {
   const periodType = searchParams.get('periodType') as VatPeriodType | null
   const yearStr = searchParams.get('year')
   const periodStr = searchParams.get('period')
+  // Yearly = räkenskapsår (see main route); ignored for monthly/quarterly.
+  const fiscalPeriodId = searchParams.get('fiscal_period_id') ?? undefined
 
   if (!periodType || !yearStr || !periodStr) {
     return NextResponse.json(
@@ -73,6 +75,7 @@ export async function GET(request: Request) {
   try {
     const declaration = await calculateVatDeclaration(
       supabase, companyId, periodType, year, period, accountingMethod,
+      { fiscalPeriodId },
     )
 
     const rows: RutaRow[] = (Object.keys(declaration.rutor) as (keyof VatDeclarationRutor)[]).map(

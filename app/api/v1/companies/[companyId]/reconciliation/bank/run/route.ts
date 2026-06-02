@@ -123,7 +123,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const accountNumber = body.account_number ?? '1930'
     const { data: cashAccount } = await ctx.supabase
       .from('cash_accounts')
-      .select('id, currency')
+      .select('id, currency, is_primary')
       .eq('company_id', ctx.companyId!)
       .eq('ledger_account', accountNumber)
       .maybeSingle()
@@ -144,6 +144,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         accountNumber,
         currency: (cashAccount?.currency as string | undefined) ?? 'SEK',
         cashAccountId: cashAccount?.id as string | undefined,
+        // Only the primary account claims unassigned (NULL cash_account_id) rows.
+        includeUnassigned: Boolean(cashAccount?.is_primary),
         dryRun: ctx.dryRun,
       })
     } catch (err) {

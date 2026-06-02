@@ -14,10 +14,22 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
+/**
+ * Single source of truth for "is this invoice fully settled?", used by BOTH
+ * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
+ * Numeric, not strict === 0, so a residual öre / float drift still reads as paid.
+ * Number(undefined ?? NaN) = NaN and NaN <= 0 is false, so an ABSENT Balance is
+ * treated as NOT paid (the supplier-invoice list payload omits Balance) — only an
+ * explicit FullyPaid flag or a present non-positive Balance counts as paid.
+ */
+function isFullyPaid(raw: Record<string, unknown>): boolean {
+  return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
+}
+
 function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   if (raw['Cancelled'] === true) return 'cancelled';
   if (raw['Credit'] === true) return 'credited';
-  if (raw['FullyPaid'] === true || raw['Balance'] === 0) return 'paid';
+  if (isFullyPaid(raw)) return 'paid';
   if (raw['Booked'] === true) return 'booked';
   if (raw['Sent'] === true) return 'sent';
   return 'draft';
@@ -49,7 +61,14 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
 export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
   const total = raw['Total'] as number ?? 0;
-  const balance = raw['Balance'] as number ?? 0;
+  // Default an ABSENT Balance to the full total (= fully unpaid), never 0, so a
+  // missing Balance never silently reads as paid. A present Balance (incl. 0) is
+  // used as-is. Mirrors the supplier path; paid-ness comes from isFullyPaid().
+  // When paid, force balance to 0 so the DTO is internally consistent
+  // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
+  // would otherwise leave balance = total alongside paid = true.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
   const rows = (raw['InvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -72,7 +91,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: balance === 0 && total > 0,
+    paid,
     balance: amount(balance, currency),
   };
 
@@ -107,7 +126,15 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
 export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
   const total = raw['Total'] as number ?? 0;
-  const balance = raw['Balance'] as number ?? 0;
+  // Default an ABSENT Balance to the full total (= fully unpaid), never 0.
+  // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
+  // Balance must not be mistaken for "settled" — that would flip a genuinely
+  // open payable to paid downstream. A present Balance (incl. 0) is used as-is.
+  // When paid, force balance to 0 so the DTO is internally consistent
+  // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
+  // would otherwise leave balance = total alongside paid = true.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
   const rows = (raw['SupplierInvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -127,7 +154,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: balance === 0 && total > 0,
+    paid,
     balance: amount(balance, currency),
   };
 

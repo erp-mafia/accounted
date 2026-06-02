@@ -208,6 +208,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
           vat_code: null,
           vat_rate: 0.25,
           vat_amount: 2000,
+          reverse_charge_rate: null,
           created_at: '2024-06-01T00:00:00Z',
         },
       ],
