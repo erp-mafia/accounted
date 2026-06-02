@@ -36,7 +36,7 @@ jobs:
           comment-author: 'github-actions[bot]'
           body-includes: '<!-- swedish-compliance-review-bot -->'
       - name: Post or update PR comment
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
