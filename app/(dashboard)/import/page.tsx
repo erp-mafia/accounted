@@ -2107,7 +2107,7 @@ export default function ImportPage() {
                   {t('sie_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
-                  {['SIE4', '.se', '.si'].map(fmt => (
+                  {['SIE4', '.se'].map(fmt => (
                     <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {fmt}
                     </span>
