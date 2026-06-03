@@ -1183,6 +1183,13 @@ const EmployeeSchemaBase = z.object({
   employment_end: isoDate.optional(),
   employment_degree: z.number().min(1).max(100).default(100),
   salary_type: SalaryTypeSchema.default('monthly'),
+  // Blue-collar vs white-collar split for SCB KLP statistics.
+  worker_category: z.enum(['arbetare', 'tjansteman']).nullable().optional(),
+  // SCB SLP / Svenskt Näringsliv individual-level statistics fields.
+  ssyk_code: z.string().regex(/^\d{1,4}$/).nullable().optional(),
+  cfar_number: z.string().regex(/^\d{1,8}$/).nullable().optional(),
+  arbetstidsart: z.string().max(1).nullable().optional(),
+  anstallningsform: z.enum(['1', '2']).nullable().optional(),
   monthly_salary: z.number().nonnegative().optional(),
   hourly_rate: z.number().nonnegative().optional(),
   tax_table_number: z.number().int().min(29).max(42).optional(),
