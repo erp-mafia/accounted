@@ -1,7 +1,7 @@
 import type { EntityType } from '@/types'
 
 /**
- * Explicit allow-lists for TIC/Bolagsverket `legalEntityType` → gnubok
+ * Explicit allow-lists for TIC/Bolagsverket `legalEntityType` → Accounted
  * EntityType. Strict (not substring) matching avoids misclassifications like
  * "Enskild stiftelse" → enskild_firma, which would provision with K1/
  * kontantmetoden defaults — an ML/BFL correctness risk.

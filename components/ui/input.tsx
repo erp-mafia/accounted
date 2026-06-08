@@ -4,7 +4,20 @@ import { cn } from "@/lib/utils"
 export type InputProps = React.InputHTMLAttributes<HTMLInputElement>
 
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type, ...props }, ref) => {
+  ({ className, type, onWheel, ...props }, ref) => {
+    // Prevent the mouse wheel from silently mutating a focused number input
+    // (e.g. scrolling the page over a salary field turning 20000 into 19998).
+    // Blurring drops focus so the wheel scrolls the page instead of the value.
+    const handleWheel = React.useCallback(
+      (e: React.WheelEvent<HTMLInputElement>) => {
+        if (type === 'number') {
+          e.currentTarget.blur()
+        }
+        onWheel?.(e)
+      },
+      [type, onWheel]
+    )
+
     return (
       <input
         type={type}
@@ -13,6 +26,7 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
           className
         )}
         ref={ref}
+        onWheel={handleWheel}
         {...props}
       />
     )

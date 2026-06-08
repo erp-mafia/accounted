@@ -70,7 +70,7 @@ registerEndpoint({
       gap_start: 142,
       gap_end: 145,
       explanation:
-        'Migration from previous bookkeeping system on 2026-05-12 — series A148-onwards corresponds to the new gnubok numbering; numbers A142-A145 were assigned in the legacy system to manual paper vouchers archived offline (BFL 7 kap retention applies). Paper vouchers are stored in the company archive under reference 2026-PAPER-Q2.',
+        'Migration from previous bookkeeping system on 2026-05-12 — series A148-onwards corresponds to the new Accounted numbering; numbers A142-A145 were assigned in the legacy system to manual paper vouchers archived offline (BFL 7 kap retention applies). Paper vouchers are stored in the company archive under reference 2026-PAPER-Q2.',
     },
     response: {
       data: { id: '0e9c…', voucher_series: 'A', gap_start: 142, gap_end: 145 },

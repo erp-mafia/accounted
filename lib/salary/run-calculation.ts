@@ -43,6 +43,7 @@ const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
   'sick_day15_plus',
   'vab',
   'parental_leave',
+  'unpaid_leave',
 ]
 
 /**
@@ -147,15 +148,20 @@ export async function runSalaryCalculation(
   // foreign key. RLS already constrains the table per-company, but per
   // CLAUDE.md every query carries the company_id filter explicitly so a
   // future RLS lapse can't surface cross-tenant rows.
-  const { data: runEmployees, error: empError } = await supabase
+  const { data: runEmployeesData, error: empError } = await supabase
     .from('salary_run_employees')
     .select('*, employee:employees(*), line_items:salary_line_items(*)')
     .eq('salary_run_id', id)
     .eq('company_id', companyId)
 
-  if (empError || !runEmployees || runEmployees.length === 0) {
-    return { ok: false, code: 'SALARY_RUN_NO_EMPLOYEES' }
+  if (empError) {
+    return { ok: false, code: 'DATABASE_ERROR', details: empError }
   }
+  // An empty roster is valid — a registered employer must still file a
+  // nolldeklaration (HU-only AGI) for months without payroll. Calculation
+  // then yields all-zero totals plus a frozen calculation_params snapshot,
+  // and every downstream loop simply iterates zero times.
+  const runEmployees = runEmployeesData ?? []
 
   // 4. Pre-calculation validation — ensure every employee has the data the
   //    engine needs. We accumulate ALL errors so the caller sees a complete
@@ -166,8 +172,12 @@ export async function runSalaryCalculation(
     if (!emp) continue
     const name = `${emp.first_name} ${emp.last_name}`
 
-    if (emp.salary_type === 'monthly' && (!emp.monthly_salary || emp.monthly_salary <= 0)) {
-      validationErrors.push(`${name}: Månadslön saknas eller är 0`)
+    // A per-run monthly salary of 0 is allowed: it represents an intentional
+    // nollkörning (the user edited this month's salary down to 0). Only a
+    // negative value is rejected. New employees still require monthly_salary > 0
+    // at creation (CreateEmployeeSchema), so a stray 0 cannot arise by accident.
+    if (emp.salary_type === 'monthly' && sre.monthly_salary < 0) {
+      validationErrors.push(`${name}: Månadslön kan inte vara negativ`)
     }
     if (emp.salary_type === 'hourly' && (!emp.hourly_rate || emp.hourly_rate <= 0)) {
       validationErrors.push(`${name}: Timlön saknas eller är 0`)
@@ -294,7 +304,7 @@ export async function runSalaryCalculation(
       supabase,
       companyId,
       employeeId: emp.id,
-      monthlySalary: emp.monthly_salary || 0,
+      monthlySalary: sre.monthly_salary || 0,
       payrollConfig: config,
       periodStart,
       periodEnd,
@@ -357,6 +367,22 @@ export async function runSalaryCalculation(
           sort_order: 0,
         })
       }
+    }
+
+    // Refresh the monthly 'Grundlön' line so the displayed Lönerader table
+    // matches the per-run monthly salary the engine actually uses. The engine
+    // recomputes baseSalary from sre.monthly_salary (not from this line item),
+    // so this update is display-only — it keeps the row consistent after the
+    // user edits this month's salary on the draft.
+    if (emp.salary_type === 'monthly') {
+      const baseAmount =
+        Math.round((sre.monthly_salary || 0) * (emp.employment_degree / 100) * 100) / 100
+      await supabase
+        .from('salary_line_items')
+        .update({ amount: baseAmount })
+        .eq('salary_run_employee_id', sre.id)
+        .eq('company_id', companyId)
+        .eq('item_type', 'monthly_salary')
     }
 
     const employeeName = `${emp.first_name} ${emp.last_name}`
@@ -484,7 +510,7 @@ export async function runSalaryCalculation(
       const baseHourlyRate = effectiveHourlyRate({
         salary_type: emp.salary_type,
         hourly_rate: emp.hourly_rate,
-        monthly_salary: emp.monthly_salary,
+        monthly_salary: sre.monthly_salary,
       })
       const shifts: WorkedDayShift[] = workedDayRows.map((row) => ({
         work_date: row.work_date,
@@ -575,7 +601,7 @@ export async function runSalaryCalculation(
       {
         employmentType: emp.employment_type,
         salaryType: emp.salary_type,
-        monthlySalary: emp.monthly_salary || 0,
+        monthlySalary: sre.monthly_salary || 0,
         hourlyRate: emp.hourly_rate || undefined,
         hoursWorked:
           derivedHoursWorked !== null && derivedHoursWorked > 0
@@ -598,6 +624,10 @@ export async function runSalaryCalculation(
         vaxaStodStart: emp.vaxa_stod_start,
         vaxaStodEnd: emp.vaxa_stod_end,
         lineItems,
+        periodStart,
+        periodEnd,
+        employmentStart: emp.employment_start,
+        employmentEnd: emp.employment_end,
       },
       config,
       taxRates.map((r) => ({

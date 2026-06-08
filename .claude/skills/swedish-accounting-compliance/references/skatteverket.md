@@ -241,7 +241,7 @@ Proposed law to allow Skatteverket to access digital bokföring directly via int
 - Expected riksdag decision: Spring 2026
 - Proposed effective date: 1 July 2026
 
-### Implications for Luka/gnubok
+### Implications for Accounted
 Your system stores bokföring in the cloud. Under the new rules, Skatteverket could request access to a customer's data directly in your system. You should:
 1. Have granular access controls (per-company read access)
 2. Maintain complete audit trails

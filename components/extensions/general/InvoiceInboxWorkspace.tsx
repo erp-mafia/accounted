@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/client'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
@@ -217,7 +218,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=500')
       const json = await res.json()
-      if (res.ok) setItems(json.data?.items ?? [])
+      if (res.ok) {
+        const serverItems: InboxItem[] = json.data?.items ?? []
+        // Preserve optimistic upload placeholders that haven't resolved to a
+        // server row yet. A refetch can now fire mid-upload (a realtime event
+        // from an unrelated booking), and a wholesale replace would briefly
+        // drop the in-flight placeholder. Placeholders carry a `temp-` id that
+        // never collides with a real row, and uploadFile() removes its own
+        // placeholder before its fetchItems(), so this never duplicates.
+        setItems((prev) => {
+          const pending = prev.filter((it) => it.isPlaceholder)
+          return pending.length > 0 ? [...pending, ...serverItems] : serverItems
+        })
+      }
     } catch (err) {
       console.error('[invoice-inbox] fetchItems failed:', err)
     } finally {
@@ -251,6 +264,33 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       })
       .catch(() => { /* keep 'accrual' default */ })
   }, [fetchItems, fetchInboxAddress])
+
+  // Realtime: refetch when any invoice_inbox_items row changes for this
+  // company. The inbox is routinely resolved "out of band" — the in-app agent
+  // sheet commits a staged create_supplier_invoice_from_inbox / book-direct
+  // operation, the /pending page approves one, or another tab books it — and
+  // none of those paths call this component's fetchItems(). Without this, a
+  // booked underlag stayed in "Att göra" until a manual reload (issue #600).
+  // RLS scopes the channel to the user's company, so we never receive other
+  // tenants' events; we refetch the whole list (rather than patch in place) so
+  // the derived status, count pills, and ordering stay authoritative. Mirrors
+  // the /pending page subscription (app/(dashboard)/pending/page.tsx).
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel('invoice_inbox_items:list')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'invoice_inbox_items' },
+        () => {
+          fetchItems()
+        }
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [fetchItems])
 
   // Read the onboarding-dismissed flag from localStorage after mount
   // (SSR-safe — no window access during initial render).
@@ -1590,13 +1630,15 @@ function FieldsRail({
         ) : (
           <>
             {/* Unmatched state: the canonical next step is to find the bank
-                transaction this underlag belongs to. "Skapa leverantörs-
-                faktura" stays as an escape hatch for users who want
-                supplier-invoice tracking (accrual flow). The old "Bokför
-                direkt" escape hatch was removed — its label was unclear
-                and the deterministic-book-without-bank-tx use case is
-                covered by "Matcha mot transaktion" → "Bokför manuellt"
-                (matched state). */}
+                transaction this underlag belongs to. Two escape hatches sit
+                below it — "Skapa leverantörsfaktura" for users who want
+                supplier-invoice tracking (accrual flow), and "Bokför som
+                verifikat" for underlag that aren't a supplier invoice at all
+                (bank fees, owner expenses, the underlag for a correction). The
+                latter opens the same BookDirectlyDialog as the matched state,
+                which works without a bank transaction and lets the user attach
+                one if they want. Per BFL 5 kap 6-7 § the underlag must be
+                bookable as a verifikat, not forced into a supplier invoice. */}
             <Button
               variant="default"
               size="sm"
@@ -1610,6 +1652,14 @@ function FieldsRail({
                 Skapa leverantörsfaktura
               </Button>
             </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={onBookDirect}
+            >
+              Bokför som verifikat
+            </Button>
           </>
         )}
         <Button

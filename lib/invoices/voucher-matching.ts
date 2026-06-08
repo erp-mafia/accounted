@@ -24,6 +24,7 @@ import {
   amountsMatchFuzzy,
   customerNameMatches,
 } from './invoice-matching'
+import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import type { Invoice, Customer } from '@/types'
 
 const log = createLogger('voucher-matching')
@@ -460,6 +461,30 @@ export interface LinkInvoiceToVoucherResult {
   remainingAmount: number
   paymentAmount: number
   journalEntryId: string
+  /** Bank transaction auto-reconciled to the linked voucher, if exactly one
+   *  unbooked line matched it; null when nothing was safely linkable. Lets the
+   *  inbox row leave the Transactions list — the gap this whole flow fixes. */
+  reconciledTransactionId: string | null
+}
+
+/** jsonb payload returned by the link_invoice_to_voucher RPC on success. */
+interface RpcLinkInvoiceOk {
+  ok: true
+  payment_id: string
+  invoice_status: 'paid' | 'partially_paid'
+  paid_amount: number
+  remaining_amount: number
+  payment_amount: number
+  journal_entry_id: string
+  currency: string
+  payment_date: string
+}
+
+/** jsonb payload returned by the link_invoice_to_voucher RPC on guard failure. */
+interface RpcLinkInvoiceErr {
+  ok: false
+  code: VoucherLinkErrorCode
+  details?: Record<string, unknown>
 }
 
 /**
@@ -482,135 +507,103 @@ export async function linkInvoiceToVoucher(
   | { ok: true; result: LinkInvoiceToVoucherResult }
   | { ok: false; code: VoucherLinkErrorCode; details?: Record<string, unknown> }
 > {
-  const { data: invoice, error: invoiceError } = await supabase
+  // All validation + writes happen inside link_invoice_to_voucher (PL/pgSQL).
+  // The function locks the invoice row FOR UPDATE, re-validates the voucher,
+  // and applies the invoices UPDATE + invoice_payments INSERT in a single PG
+  // transaction, so concurrent linkers serialize and a failure on either write
+  // rolls back automatically. The previous TS implementation did
+  // UPDATE-then-INSERT with a manual rollback that restored from a STALE
+  // pre-link snapshot — under concurrent linking it could clobber a sibling's
+  // successful write while leaving its payment row in place (audit C2; mirrors
+  // the supplier-side link_supplier_invoice_to_voucher fix from PR #602).
+  const { data: rpcData, error: rpcError } = await supabase.rpc('link_invoice_to_voucher', {
+    p_invoice_id: params.invoiceId,
+    p_journal_entry_id: params.journalEntryId,
+    p_user_id: userId,
+    p_company_id: companyId,
+    p_notes: params.notes ?? null,
+  })
+
+  if (rpcError) {
+    log.error('link_invoice_to_voucher RPC error', {
+      companyId,
+      userId,
+      invoiceId: params.invoiceId,
+      journalEntryId: params.journalEntryId,
+      message: rpcError.message,
+    })
+    return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: rpcError.message } }
+  }
+
+  const rpc = rpcData as RpcLinkInvoiceOk | RpcLinkInvoiceErr | null
+  if (!rpc) {
+    return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: 'empty RPC response' } }
+  }
+  if (!rpc.ok) {
+    return { ok: false, code: rpc.code, details: rpc.details }
+  }
+
+  // Fetch the now-updated invoice (with customer) for event emission — the RPC
+  // committed before this read, so the row reflects post-link state. Mirrors
+  // the supplier-side wrapper.
+  const { data: invoice } = await supabase
     .from('invoices')
     .select('*, customer:customers(*)')
     .eq('id', params.invoiceId)
     .eq('company_id', companyId)
-    .single()
-  if (invoiceError || !invoice) {
-    return { ok: false, code: 'LINK_VOUCHER_INVOICE_NOT_FOUND', details: { invoice_id: params.invoiceId } }
-  }
+    .maybeSingle()
 
-  if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
-    return { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID', details: { status: invoice.status } }
-  }
-
-  const validation = await validateVoucherForInvoiceLink(
-    supabase,
-    companyId,
-    invoice as Invoice & { customer?: Customer },
-    params.journalEntryId
-  )
-  if (!validation.ok) return validation
-
-  const now = new Date().toISOString()
-  const newPaidAmount = round2((invoice.paid_amount ?? 0) + validation.paymentAmount)
-  const newRemaining = validation.remainingAfter
-  const newStatus: 'paid' | 'partially_paid' = validation.isFullyPaid ? 'paid' : 'partially_paid'
-
-  const { data: updatedRows, error: updateInvError } = await supabase
-    .from('invoices')
-    .update({
-      status: newStatus,
-      paid_at: validation.isFullyPaid ? now : invoice.paid_at,
-      paid_amount: newPaidAmount,
-      remaining_amount: newRemaining,
-    })
-    .eq('id', params.invoiceId)
-    .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
-    .select('id')
-
-  if (updateInvError) {
-    // Real DB failure (RLS, network, constraint) — distinct from "voucher not
-    // found" so the pending-op dispatcher retries instead of auto-rejecting.
-    return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: updateInvError.message } }
-  }
-  if (!updatedRows || updatedRows.length === 0) {
-    return { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID' }
-  }
-
-  const { data: payment, error: insertError } = await supabase
-    .from('invoice_payments')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      invoice_id: params.invoiceId,
-      payment_date: validation.voucher.entry_date,
-      amount: validation.paymentAmount,
-      currency: invoice.currency,
-      exchange_rate: invoice.exchange_rate,
-      journal_entry_id: params.journalEntryId,
-      transaction_id: null,
-      notes: params.notes ?? null,
-    })
-    .select('id')
-    .single()
-
-  if (insertError) {
-    // Roll back the invoice update so we don't leave the row in a half-linked
-    // state. The partial unique index raises 23505 if another linker won the
-    // race between validation and insert.
-    const { error: rollbackError } = await supabase
-      .from('invoices')
-      .update({
-        status: invoice.status,
-        paid_at: invoice.paid_at,
-        paid_amount: invoice.paid_amount,
-        remaining_amount: invoice.remaining_amount,
+  if (invoice) {
+    try {
+      await eventBus.emit({
+        type: 'invoice.paid',
+        payload: {
+          invoice: invoice as Invoice,
+          paymentAmount: rpc.payment_amount,
+          paymentDate: rpc.payment_date,
+          userId,
+          companyId,
+        },
       })
-      .eq('id', params.invoiceId)
-      .eq('company_id', companyId)
-
-    if (rollbackError) {
-      // Rollback failed — the invoice is stuck advanced with no payment row.
-      // Surface loudly so ops can reconcile manually; the insert error code
-      // below still goes back to the caller for the original failure cause.
-      log.error('voucher link rollback failed — invoice left in advanced state without payment row', {
-        companyId,
-        userId,
-        invoiceId: params.invoiceId,
-        journalEntryId: params.journalEntryId,
-        insertError: insertError.message,
-        rollbackError: rollbackError.message,
-      })
-    }
-
-    if (insertError.code === '23505') {
-      return { ok: false, code: 'LINK_VOUCHER_ALREADY_LINKED' }
-    }
-    return {
-      ok: false,
-      code: 'LINK_VOUCHER_DB_ERROR',
-      details: { reason: insertError.message },
+    } catch {
+      /* non-critical */
     }
   }
 
+  // Close the loop on the bank feed: the invoice→voucher link above only
+  // advanced the invoice, so the bank transaction that paid it kept sitting in
+  // the Transactions inbox (journal_entry_id still null). Reconcile it to the
+  // same verifikat when it can be done unambiguously. Best-effort — the invoice
+  // link has already committed, so a failure here must not fail the whole call.
+  let reconciledTransactionId: string | null = null
   try {
-    await eventBus.emit({
-      type: 'invoice.paid',
-      payload: {
-        invoice: invoice as Invoice,
-        paymentAmount: validation.paymentAmount,
-        paymentDate: validation.voucher.entry_date,
-        userId,
-        companyId,
-      },
+    const recon = await autoReconcileTransactionForLinkedVoucher(
+      supabase,
+      companyId,
+      userId,
+      params.journalEntryId,
+      { invoiceId: params.invoiceId },
+    )
+    reconciledTransactionId = recon?.linkedTransactionId ?? null
+  } catch (err) {
+    log.warn('auto-reconcile of bank transaction after voucher link failed (non-blocking)', {
+      companyId,
+      invoiceId: params.invoiceId,
+      journalEntryId: params.journalEntryId,
+      reason: err instanceof Error ? err.message : String(err),
     })
-  } catch {
-    /* non-critical */
   }
 
   return {
     ok: true,
     result: {
-      paymentId: (payment as { id: string }).id,
-      invoiceStatus: newStatus,
-      paidAmount: newPaidAmount,
-      remainingAmount: newRemaining,
-      paymentAmount: validation.paymentAmount,
+      paymentId: rpc.payment_id,
+      invoiceStatus: rpc.invoice_status,
+      paidAmount: rpc.paid_amount,
+      remainingAmount: rpc.remaining_amount,
+      paymentAmount: rpc.payment_amount,
       journalEntryId: params.journalEntryId,
+      reconciledTransactionId,
     },
   }
 }

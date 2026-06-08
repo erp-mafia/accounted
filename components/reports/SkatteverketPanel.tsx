@@ -594,7 +594,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         )}
 
         {/* Local pre-flight check results — surfaced separately from SKV's
-            kontroller so the user knows these are gnubok's own sanity checks,
+            kontroller so the user knows these are Accounted's own sanity checks,
             not Skatteverket's. ERRORs block the submit/validate buttons. */}
         {localChecks.length > 0 && (
           <div className="space-y-1.5">

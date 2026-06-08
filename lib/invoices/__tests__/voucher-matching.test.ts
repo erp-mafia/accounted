@@ -6,7 +6,6 @@ import {
 } from '../voucher-matching'
 import {
   makeInvoice,
-  makeCustomer,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
@@ -329,31 +328,61 @@ describe('linkInvoiceToVoucher', () => {
     eventBus.clear()
   })
 
-  it('rejects when the invoice is not in a payable status', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: { ...makeInvoice({ status: 'paid' }), customer: makeCustomer() },
+  // linkInvoiceToVoucher now delegates validation + writes to the atomic
+  // link_invoice_to_voucher RPC (audit C2) — the wrapper's job is calling it
+  // with the right args and mapping the jsonb result/transport errors through.
+  // Guard behaviour itself is covered by voucher-matching.pg.test.ts against
+  // the real RPC.
+
+  it('passes a guard rejection from the RPC through unchanged', async () => {
+    const rpc = vi.fn().mockResolvedValue({
+      data: { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID', details: { status: 'paid' } },
+      error: null,
     })
     const result = await linkInvoiceToVoucher(
-      supabase as never,
+      { rpc } as never,
       'user-1',
       'company-1',
       { invoiceId: 'inv-1', journalEntryId: 'je-1' },
     )
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
+    if (!result.ok) {
+      expect(result.code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
+      expect(result.details).toEqual({ status: 'paid' })
+    }
+    expect(rpc).toHaveBeenCalledWith('link_invoice_to_voucher', {
+      p_invoice_id: 'inv-1',
+      p_journal_entry_id: 'je-1',
+      p_user_id: 'user-1',
+      p_company_id: 'company-1',
+      p_notes: null,
+    })
   })
 
-  it('rejects when the invoice is missing', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: { message: 'not found' } })
+  it('maps an RPC transport error to LINK_VOUCHER_DB_ERROR', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { message: 'connection reset' } })
     const result = await linkInvoiceToVoucher(
-      supabase as never,
+      { rpc } as never,
       'user-1',
       'company-1',
       { invoiceId: 'inv-1', journalEntryId: 'je-1' },
     )
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_INVOICE_NOT_FOUND')
+    if (!result.ok) {
+      expect(result.code).toBe('LINK_VOUCHER_DB_ERROR')
+      expect(result.details).toEqual({ reason: 'connection reset' })
+    }
+  })
+
+  it('maps an empty RPC response to LINK_VOUCHER_DB_ERROR', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null })
+    const result = await linkInvoiceToVoucher(
+      { rpc } as never,
+      'user-1',
+      'company-1',
+      { invoiceId: 'inv-1', journalEntryId: 'je-1' },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_DB_ERROR')
   })
 })

@@ -6,13 +6,13 @@ describe('mcp resource registry', () => {
     expect(dataResources).toHaveLength(7)
     const uris = dataResources.map((r) => r.uri).sort()
     expect(uris).toEqual([
-      'gnubok://attention',
-      'gnubok://capabilities',
-      'gnubok://chart-of-accounts',
-      'gnubok://company/current',
-      'gnubok://period/active',
-      'gnubok://recent-activity',
-      'gnubok://settings/vat-treatments',
+      'Accounted://attention',
+      'Accounted://capabilities',
+      'Accounted://chart-of-accounts',
+      'Accounted://company/current',
+      'Accounted://period/active',
+      'Accounted://recent-activity',
+      'Accounted://settings/vat-treatments',
     ])
 
     for (const r of dataResources) {
@@ -24,28 +24,28 @@ describe('mcp resource registry', () => {
   })
 
   it('matches base URI ignoring query string', () => {
-    const r = findResource('gnubok://recent-activity?limit=5')
-    expect(r?.uri).toBe('gnubok://recent-activity')
+    const r = findResource('Accounted://recent-activity?limit=5')
+    expect(r?.uri).toBe('Accounted://recent-activity')
   })
 
   it('returns null for unknown URI', () => {
-    expect(findResource('gnubok://does-not-exist')).toBeNull()
+    expect(findResource('Accounted://does-not-exist')).toBeNull()
   })
 
   it('parses query params from URI', () => {
-    const q = parseResourceQuery('gnubok://recent-activity?limit=5&offset=10')
+    const q = parseResourceQuery('Accounted://recent-activity?limit=5&offset=10')
     expect(q?.get('limit')).toBe('5')
     expect(q?.get('offset')).toBe('10')
   })
 
   it('returns undefined when no query', () => {
-    expect(parseResourceQuery('gnubok://capabilities')).toBeUndefined()
+    expect(parseResourceQuery('Accounted://capabilities')).toBeUndefined()
   })
 })
 
 describe('vat-treatments resource', () => {
   it('returns matrix for all customer types without DB access', async () => {
-    const r = findResource('gnubok://settings/vat-treatments')!
+    const r = findResource('Accounted://settings/vat-treatments')!
     const result = (await r.read({
       // Pure-function resource: no DB calls
       supabase: undefined as never,

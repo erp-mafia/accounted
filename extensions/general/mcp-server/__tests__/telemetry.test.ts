@@ -97,6 +97,7 @@ interface ToolCalledPayload {
   isError: boolean
   errorCode: string | null
   errorKind: 'execution' | 'scope_denied' | 'unknown_tool' | null
+  errorMessage: string | null
   requestId: string | number | null
   userId: string
   companyId: string
@@ -177,6 +178,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.isError).toBe(false)
     expect(event.errorCode).toBeNull()
     expect(event.errorKind).toBeNull()
+    expect(event.errorMessage).toBeNull()
     expect(event.actorType).toBe('api_key')
     expect(event.actorId).toBe('key-1')
     expect(event.actorLabel).toBe('Test Key')
@@ -206,6 +208,9 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.isError).toBe(true)
     expect(event.errorKind).toBe('scope_denied')
     expect(event.errorCode).toBe('INSUFFICIENT_SCOPE')
+    // The human message rides along for failure clustering.
+    expect(typeof event.errorMessage).toBe('string')
+    expect((event.errorMessage as string).length).toBeGreaterThan(0)
     // Scope denial exits before tool.execute() runs.
     expect(event.latencyMs).toBe(0)
   })
@@ -224,6 +229,9 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.isError).toBe(true)
     expect(event.errorKind).toBe('unknown_tool')
     expect(event.errorCode).toBe('UNKNOWN_TOOL')
+    // Short deterministic message — NOT the full available-tools list the
+    // client response carries (that would blow the truncation budget).
+    expect(event.errorMessage).toBe('Unknown tool: "gnubok_does_not_exist"')
     expect(event.latencyMs).toBe(0)
   })
 
@@ -245,6 +253,11 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.isError).toBe(true)
     expect(event.errorKind).toBe('execution')
     expect(event.errorCode).toBeTruthy()
+    // The structured error's human message is captured and bounded at 500
+    // chars — the raw material for clustering execution failures into gotchas.
+    expect(typeof event.errorMessage).toBe('string')
+    expect((event.errorMessage as string).length).toBeGreaterThan(0)
+    expect((event.errorMessage as string).length).toBeLessThanOrEqual(500)
     // Execution path measures real latency, even if the tool exits quickly.
     expect(event.latencyMs).toBeGreaterThanOrEqual(0)
   })
@@ -316,11 +329,11 @@ describe('mcp.resource_read telemetry', () => {
     const eventPromise = captureNextResourceReadEvent()
 
     await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://skill/quarterly-vat-review' })
+      mcpRequest('resources/read', { uri: 'Accounted://skill/quarterly-vat-review' })
     )
 
     const event = await eventPromise
-    expect(event.uri).toBe('gnubok://skill/quarterly-vat-review')
+    expect(event.uri).toBe('Accounted://skill/quarterly-vat-review')
     expect(event.kind).toBe('skill')
     expect(event.success).toBe(true)
     expect(event.errorCode).toBeNull()
@@ -330,11 +343,11 @@ describe('mcp.resource_read telemetry', () => {
     const eventPromise = captureNextResourceReadEvent()
 
     await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://nonexistent/whatever' })
+      mcpRequest('resources/read', { uri: 'Accounted://nonexistent/whatever' })
     )
 
     const event = await eventPromise
-    expect(event.uri).toBe('gnubok://nonexistent/whatever')
+    expect(event.uri).toBe('Accounted://nonexistent/whatever')
     expect(event.kind).toBe('unknown')
     expect(event.success).toBe(false)
     expect(event.errorCode).toBe('RESOURCE_NOT_FOUND')
@@ -346,7 +359,7 @@ describe('mcp.resource_read telemetry', () => {
     // The dispatcher only matches kind=skill when findSkill returns a hit;
     // unknown slugs fall through and end up as kind=unknown.
     await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://skill/does-not-exist' })
+      mcpRequest('resources/read', { uri: 'Accounted://skill/does-not-exist' })
     )
 
     const event = await eventPromise
@@ -356,8 +369,67 @@ describe('mcp.resource_read telemetry', () => {
   })
 })
 
+describe('mcp.skill_loaded telemetry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('emits on every successful load — alongside mcp.workflow_started for workflow tier', async () => {
+    const skillLoadedPromise = new Promise<Record<string, unknown>>((resolve) => {
+      const off = eventBus.on('mcp.skill_loaded', (payload) => {
+        off()
+        resolve(payload as Record<string, unknown>)
+      })
+    })
+    const workflowStartedPromise = new Promise<Record<string, unknown>>((resolve) => {
+      const off = eventBus.on('mcp.workflow_started', (payload) => {
+        off()
+        resolve(payload as Record<string, unknown>)
+      })
+    })
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_load_skill',
+        arguments: { slug: 'month-end-close' },
+      })
+    )
+
+    const event = await skillLoadedPromise
+    expect(event.slug).toBe('month-end-close')
+    expect(event.tier).toBe('workflow')
+    expect(event.actorType).toBe('api_key')
+    expect(event.actorId).toBe('key-1')
+    expect(event.userId).toBe('user-1')
+    expect(event.companyId).toBe('company-1')
+
+    // The pre-existing workflow-funnel event still fires for workflow tier.
+    const wf = await workflowStartedPromise
+    expect(wf.slug).toBe('month-end-close')
+  })
+
+  it('does not emit when the slug is unknown (load throws before emission)', async () => {
+    const seen: unknown[] = []
+    eventBus.on('mcp.skill_loaded', (payload) => {
+      seen.push(payload)
+    })
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_load_skill',
+        arguments: { slug: 'nope-not-real' },
+      })
+    )
+    // Flush microtasks — emission is fire-and-forget.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(seen).toHaveLength(0)
+  })
+})
+
 describe('event_log persistence registration', () => {
-  it('includes all three MCP telemetry events in the persisted event types', async () => {
+  it('includes all MCP telemetry events in the persisted event types', async () => {
     // Read the file as text — the constant is module-private. This is a
     // deliberate string-level guard so a future refactor that drops one
     // of the events from the list trips the test.
@@ -368,5 +440,6 @@ describe('event_log persistence registration', () => {
     expect(text).toMatch(/'mcp\.tool_called'/)
     expect(text).toMatch(/'mcp\.tools_list_called'/)
     expect(text).toMatch(/'mcp\.resource_read'/)
+    expect(text).toMatch(/'mcp\.skill_loaded'/)
   })
 })

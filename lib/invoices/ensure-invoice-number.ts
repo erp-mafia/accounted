@@ -4,6 +4,8 @@ import type { Invoice, InvoiceDocumentType } from '@/types'
 type InvoiceShape = Pick<Invoice, 'id' | 'invoice_number'> & {
   invoice_number: string | null
   document_type?: InvoiceDocumentType | null
+  is_self_billed?: boolean | null
+  external_invoice_number?: string | null
 }
 
 /**
@@ -22,6 +24,17 @@ export async function ensureInvoiceNumber(
 ): Promise<string> {
   if (invoice.invoice_number) {
     return invoice.invoice_number
+  }
+
+  // Self-billing invoices we received carry the COUNTERPARTY's number; we must
+  // never consume our own löpnummerserie for them (BFL 5 kap 6§). The DB
+  // constraint invoices_self_billed_numbering guarantees the external number is
+  // present, but guard here so a future caller can't silently mint an F-number.
+  if (invoice.is_self_billed) {
+    if (!invoice.external_invoice_number) {
+      throw new Error('Self-billed invoice is missing external_invoice_number')
+    }
+    return invoice.external_invoice_number
   }
 
   const { data: assigned, error: rpcError } = await supabase.rpc('generate_invoice_number', {

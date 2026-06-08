@@ -66,10 +66,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const Filters = z.object({
       date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      // Settlement account (BAS code), e.g. '1930' / '1932'. Defaults to 1930.
+      account_number: z.string().regex(/^\d{4}$/).optional(),
     })
     const parsed = Filters.safeParse({
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,
+      account_number: url.searchParams.get('account_number') ?? undefined,
     })
     if (!parsed.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -83,12 +86,33 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    const accountNumber = parsed.data.account_number ?? '1930'
+    const { data: cashAccount } = await ctx.supabase
+      .from('cash_accounts')
+      .select('id, currency, is_primary')
+      .eq('company_id', ctx.companyId!)
+      .eq('ledger_account', accountNumber)
+      .maybeSingle()
+    if (!cashAccount && accountNumber !== '1930') {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: [{ field: 'account_number', message: 'Okänt kassakonto för det här företaget' }],
+        },
+      })
+    }
+
     try {
       const status = await getReconciliationStatus(
         ctx.supabase,
         ctx.companyId!,
         parsed.data.date_from,
         parsed.data.date_to,
+        accountNumber,
+        (cashAccount?.currency as string | undefined) ?? 'SEK',
+        cashAccount?.id as string | undefined,
+        // Only the primary account claims unassigned (NULL cash_account_id) rows.
+        Boolean(cashAccount?.is_primary),
       )
       return ok(status, { requestId: ctx.requestId })
     } catch (err) {

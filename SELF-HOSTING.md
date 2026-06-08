@@ -1,6 +1,6 @@
-# Self-Hosting gnubok
+# Self-Hosting Accounted
 
-This guide walks you through deploying gnubok on your own infrastructure using Docker.
+This guide walks you through deploying Accounted on your own infrastructure using Docker.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 1. Set **Site URL** to your deployment URL (e.g., `https://gnubok.example.com`).
 2. Add `https://gnubok.example.com/auth/callback` to the **Redirect URLs** allowlist.
 
-gnubok uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
+Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
 
 MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments — the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish.
 
@@ -66,7 +66,7 @@ These are all available on Supabase hosted. `pg_cron` requires a paid plan — i
 
 ```bash
 git clone https://github.com/erp-mafia/gnubok.git
-cd gnubok
+cd Accounted
 ./setup.sh
 ```
 
@@ -76,7 +76,7 @@ The script checks prerequisites, prompts for your Supabase credentials, auto-gen
 
 ```bash
 git clone https://github.com/erp-mafia/gnubok.git
-cd gnubok
+cd Accounted
 cp .env.docker.example .env
 ```
 

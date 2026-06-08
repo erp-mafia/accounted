@@ -237,11 +237,34 @@ describe('deriveAbsenceLineItems — parental', () => {
   })
 })
 
+describe('deriveAbsenceLineItems — unpaid_leave', () => {
+  it('emits unpaid_leave line item with a per-day daily-rate deduction', () => {
+    const result = deriveAbsenceLineItems(
+      baseInput({
+        monthlySalary: 42000, // dailyRate = 42 000 / 21 = 2 000
+        periodDays: days([
+          ['2026-04-10', 'unpaid_leave'],
+          ['2026-04-13', 'unpaid_leave'],
+        ]),
+      }),
+    )
+    const unpaid = result.lineItems.find(li => li.item_type === 'unpaid_leave')
+    expect(unpaid).toBeDefined()
+    expect(unpaid!.quantity).toBe(2)
+    expect(unpaid!.amount).toBe(-4000)
+    // false — engine's Step 3 absence sum already subtracts unpaid_leave;
+    // setting the flag would double-count in Step 4 totalGrossDeductions.
+    expect(unpaid!.is_gross_deduction).toBe(false)
+    expect(unpaid!.is_vacation_basis).toBe(false)
+    expect(result.aggregated.unpaidLeaveDays).toBe(2)
+  })
+})
+
 describe('deriveAbsenceLineItems — empty', () => {
   it('returns empty result for no absence', () => {
     const result = deriveAbsenceLineItems(baseInput())
     expect(result.lineItems).toEqual([])
-    expect(result.aggregated).toEqual({ sickDays: 0, vabDays: 0, parentalDays: 0 })
+    expect(result.aggregated).toEqual({ sickDays: 0, vabDays: 0, parentalDays: 0, unpaidLeaveDays: 0 })
     expect(result.flagFkReporting).toBe(false)
     expect(result.flagLakarintyg).toBe(false)
   })

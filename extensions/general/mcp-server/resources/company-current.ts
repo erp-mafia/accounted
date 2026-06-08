@@ -10,7 +10,7 @@ import type { McpResource } from './types'
  * Read-only and per-request; no caching. Target payload <8 KB.
  */
 export const companyCurrentResource: McpResource = {
-  uri: 'gnubok://company/current',
+  uri: 'Accounted://company/current',
   name: 'Active Company',
   description: 'Per-company working memory: identity, active fiscal period, lock dates, entity counts, voucher series state, recent activity, approaching Swedish filing deadlines. Read this first when starting work on a company.',
   mimeType: 'application/json',

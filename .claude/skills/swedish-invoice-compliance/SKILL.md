@@ -114,7 +114,7 @@ Electronics >100k SEK/invoice?
 
 ---
 
-## Common error patterns (high-frequency in Luka validation)
+## Common error patterns (high-frequency in Accounted validation)
 
 | Error | Consequence | Fix |
 |---|---|---|
@@ -164,7 +164,7 @@ Electronics >100k SEK/invoice?
 
 ---
 
-## Peppol essentials (for Luka e-invoice generation)
+## Peppol essentials (for Accounted e-invoice generation)
 
 Format: UBL 2.1 XML, profile Peppol BIS Billing 3.0.
 TypeCodes: **380** = invoice, **381** = credit note, **389** = self-billing.

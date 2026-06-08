@@ -10,6 +10,11 @@ interface AccountComboboxProps {
   value: string
   accounts: BASAccount[]
   onChange: (accountNumber: string) => void
+  // Fired when the user definitively commits an account: selecting from the
+  // dropdown (Enter or click) or typing a full 4-digit number. Distinct from
+  // onChange, which also fires on intermediate edits. Callers use this to
+  // auto-advance focus (e.g. to the amount field).
+  onCommit?: (accountNumber: string) => void
   // When provided, an inline "Skapa nytt konto" affordance appears in the
   // dropdown's empty state. The current search string is passed so the caller
   // can prefill the create dialog.
@@ -21,7 +26,7 @@ interface AccountComboboxProps {
 
 const MAX_RESULTS = 50
 
-export default function AccountCombobox({ value, accounts, onChange, onCreateAccount, className }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, className }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -112,8 +117,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
       onChange(accountNumber)
       setSearch(accountNumber)
       setIsOpen(false)
+      onCommit?.(accountNumber)
     },
-    [onChange]
+    [onChange, onCommit]
   )
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -152,9 +158,13 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
     setSearch(newValue)
     // Emit any 4-digit numeric value to the parent. Unknown BAS numbers are
     // accepted optimistically — the submit-time ActivateAccountsDialog lets
-    // the user activate missing accounts without leaving the form.
+    // the user activate missing accounts without leaving the form. A complete
+    // 4-digit number is treated as a commit so focus can advance to the amount.
     if (/^\d{4}$/.test(newValue)) {
       onChange(newValue)
+      // Only treat as a commit when the value newly becomes this account, so
+      // editing an already-committed number doesn't keep stealing focus.
+      if (newValue !== value) onCommit?.(newValue)
     }
     if (!isOpen) {
       setIsOpen(true)
@@ -196,7 +206,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
       {isOpen && flatList.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 w-64 max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
+          className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
         >
           {groupedAccounts.map((group) => (
             <div key={group.className}>
@@ -221,7 +231,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
                     onMouseEnter={() => setHighlightedIndex(flatIndex)}
                   >
                     <span className="font-mono shrink-0">{account.account_number}</span>
-                    <span className="truncate">{account.account_name}</span>
+                    <span className="flex-1 min-w-0 break-words">{account.account_name}</span>
                   </button>
                 )
               })}
@@ -232,7 +242,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
 
       {/* Empty state */}
       {isOpen && search.trim() && flatList.length === 0 && (
-        <div className="absolute z-50 top-full left-0 mt-1 w-64 rounded-md border border-input bg-card shadow-md p-3">
+        <div className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] rounded-md border border-input bg-card shadow-md p-3">
           <p className="text-sm text-muted-foreground">
             Hittade inget konto som matchar.
           </p>

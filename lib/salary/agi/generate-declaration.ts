@@ -62,6 +62,10 @@ const LineItemSchema = z
 const SalaryRunEmployeeRowSchema = z
   .object({
     employee_id: z.string().uuid(),
+    // Per-run snapshot of the monthly salary (authoritative for this run; the
+    // engine reads it, not the employee master). Used for the FK499
+    // sjuklönekostnad daily-rate below.
+    monthly_salary: z.number().nullable().optional(),
     gross_salary: z.number(),
     tax_withheld: z.number(),
     tax_withheld_override: z.number().nullable().optional(),
@@ -180,7 +184,10 @@ export async function generateAgiDeclaration(
     )
     .eq('salary_run_id', salaryRunId)
 
-  if (!runEmployees || runEmployees.length === 0) {
+  // An empty roster is valid — a registered employer must file a
+  // nolldeklaration (HU-only, no individuppgifter) for months without payroll.
+  // Only a genuine query failure (null) is treated as an error here.
+  if (!runEmployees) {
     return { ok: false, code: 'SALARY_RUN_NO_EMPLOYEES' }
   }
 
@@ -351,6 +358,27 @@ export async function generateAgiDeclaration(
       }
     },
   )
+    // Drop individuppgifter with nothing to report. An employee who took 0 kr
+    // and had no benefits, tax or absence this month is simply omitted (you
+    // only file an IU for a person who received something). This yields a clean
+    // HU-only nolldeklaration for a full nollkörning, and omits zero-paid
+    // employees in a mixed run. Borttag (removed) tombstones are always kept.
+    .filter(
+      (e) =>
+        e.removed === true ||
+        (e.grossSalary ?? 0) > 0 ||
+        (e.taxWithheld ?? 0) > 0 ||
+        (e.fSkattPayment ?? 0) > 0 ||
+        (e.benefitCar ?? 0) > 0 ||
+        (e.benefitFuel ?? 0) > 0 ||
+        (e.benefitMeals ?? 0) > 0 ||
+        (e.benefitOther ?? 0) > 0 ||
+        e.housingBenefit !== undefined ||
+        (e.sickDays ?? 0) > 0 ||
+        (e.vabDays ?? 0) > 0 ||
+        (e.parentalDays ?? 0) > 0 ||
+        (e.absenceEvents?.length ?? 0) > 0,
+    )
 
   // 5. Build totals: avgifter by category (with rate-heuristic fallback for legacy runs).
   // Removed-from-AGI rows (FK205 borttag) are tombstones — they must not
@@ -392,7 +420,7 @@ export async function generateAgiDeclaration(
   const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.8
   let totalSjuklonekostnad = 0
   for (const sre of activeEmployees) {
-    const monthly = sre.employee?.monthly_salary ?? 0
+    const monthly = sre.monthly_salary ?? 0
     if (!monthly) continue
     const dailyRate = monthly / 21
     const lineItems = (sre.line_items ?? []) as Array<{ item_type: string; amount?: number | null; quantity?: number | null }>

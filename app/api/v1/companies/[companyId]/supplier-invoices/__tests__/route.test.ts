@@ -365,6 +365,32 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(body.error.details.step).toBe('registration_journal_entry')
   })
 
+  it('rolls back SI row and returns SI_CREATE_NO_FISCAL_PERIOD when no period covers invoice_date', async () => {
+    // Engine returns null (not a throw) when no fiscal period covers the date.
+    mockedReg.mockResolvedValueOnce(null)
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        supplier_invoices: { data: SAMPLE_SI, error: null },
+        supplier_invoice_items: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_CREATE_NO_FISCAL_PERIOD')
+  })
+
   it('returns a dry-run preview when ?dry_run=true', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

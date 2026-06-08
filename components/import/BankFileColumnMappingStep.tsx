@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeft, ArrowRight, Columns3 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { getCSVPreview, normalizeMinusSign } from '@/lib/import/bank-file/formats/generic-csv'
+import { getCSVPreview, normalizeMinusSign, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 
 const HEADER_KEYWORDS = [
@@ -137,29 +137,20 @@ export default function BankFileColumnMappingStep({
 
   const dataRows = hasHeader ? parsedRows.slice(detectedHeaderRow + 1) : parsedRows
 
-  // Auto-guess date/description/amount columns from the first data row.
-  // Only used as initial defaults — user can override any pick.
-  // Match ASCII and Unicode minus; some banks (e.g. Northmill) use U+2212.
-  const AMOUNT_RE = /^[-\u2212\u2013\u2014\u2010]?\d+([.,]\d+)?$/
+  // Auto-guess date/description/amount/balance columns. Matches header labels
+  // first (so the trailing Saldo column is never picked as the amount), then
+  // falls back to value heuristics. Initial defaults only — user can override.
   useEffect(() => {
     if (dateCol !== -1 || descCol !== -1 || amountCol !== -1) return
-    const sample = dataRows[0]
-    if (!sample || sample.length === 0) return
+    if (dataRows.length === 0) return
 
-    const dateIdx = sample.findIndex((cell) =>
-      DATE_PATTERNS.some((re) => re.test(cell.trim()))
-    )
-    const amountIdx = sample
-      .map((cell, i) => ({ i, cell: cell.trim().replace(/\s/g, '') }))
-      .reverse()
-      .find(({ cell, i }) => AMOUNT_RE.test(cell) && i !== dateIdx)?.i ?? -1
-    const descIdx = sample.findIndex((_, i) => i !== dateIdx && i !== amountIdx)
-
-    if (dateIdx >= 0) setDateCol(dateIdx)
-    if (descIdx >= 0) setDescCol(descIdx)
-    if (amountIdx >= 0) setAmountCol(amountIdx)
+    const suggestion = suggestColumnMapping(hasHeader ? columnHeaders : null, dataRows)
+    if (suggestion.date >= 0) setDateCol(suggestion.date)
+    if (suggestion.description >= 0) setDescCol(suggestion.description)
+    if (suggestion.amount >= 0) setAmountCol(suggestion.amount)
+    if (suggestion.balance >= 0) setBalanceCol(suggestion.balance)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataRows])
+  }, [dataRows, hasHeader, columnHeaders])
 
   const isValid = dateCol >= 0 && descCol >= 0 && amountCol >= 0
 

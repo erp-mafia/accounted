@@ -2,7 +2,7 @@
 
 ## The App
 
-gnubok is a Swedish accounting platform for sole traders (enskild firma) and limited companies (aktiebolag). It handles the legally required bookkeeping and financial management that every Swedish business needs.
+Accounted is a Swedish accounting platform for sole traders (enskild firma) and limited companies (aktiebolag). It handles the legally required bookkeeping and financial management that every Swedish business needs.
 
 ## Core Functionality
 
@@ -654,7 +654,7 @@ Core runs with zero extensions. This gives you the standard accounting system: b
 
 ```bash
 # 1. Clone and install
-git clone <repo-url> && cd gnubok
+git clone <repo-url> && cd Accounted
 npm install
 
 # 2. Set environment variables (minimum 4)

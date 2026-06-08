@@ -77,7 +77,7 @@ export const ExtractionSchema = z.object({
       unitPrice: z.number().nullable(),
       lineTotal: z.number(),
       // Sane range for any real-world VAT rate. We allow non-Swedish rates
-      // (UK 20, DE 19, NO 25, ...) since gnubok stores foreign invoices
+      // (UK 20, DE 19, NO 25, ...) since Accounted stores foreign invoices
       // for reference; the strict Swedish allowlist applies later when the
       // user converts to a supplier invoice.
       vatRate: z.number().min(0).max(100).nullable(),

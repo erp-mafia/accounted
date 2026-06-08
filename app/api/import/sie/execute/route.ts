@@ -1,10 +1,8 @@
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { NextResponse } from 'next/server'
 import { parseSIEFile, detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { suggestMappings } from '@/lib/import/account-mapper'
 import { executeSIEImport, checkDuplicateImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
-import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types'
@@ -46,6 +44,7 @@ export const POST = withRouteContext(
         importOpeningBalances: true,
         importTransactions: true,
         voucherSeries: companyDefaultSeries,
+        updateAccountNames: true,
       }
 
       const arrayBuffer = await file.arrayBuffer()
@@ -93,95 +92,9 @@ export const POST = withRouteContext(
         })
       }
 
-      const mappedAccountNumbers = [
-        ...new Set(mappings.filter((m) => m.targetAccount).map((m) => m.targetAccount)),
-      ]
-
-      const allCompanyAccounts = await fetchAllRows(({ from, to }) =>
-        supabase
-          .from('chart_of_accounts')
-          .select('account_number')
-          .eq('company_id', companyId)
-          .range(from, to),
-      )
-      const mappedSet = new Set(mappedAccountNumbers)
-      const existingAccounts = allCompanyAccounts.filter((a) => mappedSet.has(a.account_number))
-
-      const mappingNameLookup = new Map<string, string>()
-      for (const m of mappings) {
-        if (m.targetAccount) {
-          mappingNameLookup.set(m.targetAccount, m.targetName || m.sourceName)
-        }
-      }
-
-      const existingNumbers = new Set(existingAccounts.map((a) => a.account_number))
-      const accountsToActivate = mappedAccountNumbers
-        .filter((num) => !existingNumbers.has(num))
-        .map((num) => {
-          const ref = getBASReference(num)
-          if (ref) {
-            return {
-              user_id: user.id,
-              company_id: companyId,
-              account_number: ref.account_number,
-              account_name: ref.account_name,
-              account_class: ref.account_class,
-              account_group: ref.account_group,
-              account_type: ref.account_type,
-              normal_balance: ref.normal_balance,
-              plan_type: 'full_bas' as const,
-              is_active: true,
-              is_system_account: false,
-              description: ref.description,
-              sru_code: ref.sru_code,
-              sort_order: parseInt(ref.account_number),
-            }
-          }
-
-          // Sub-account not in BAS reference (e.g. 1241 Personbilar). Derive
-          // metadata from the account number.
-          const accountClass = parseInt(num.charAt(0), 10)
-          const accountGroup = num.substring(0, 2)
-          const accountName = mappingNameLookup.get(num) || `Konto ${num}`
-          const accountType =
-            accountClass === 1 ? 'asset'
-              : accountClass === 2 ? 'liability'
-                : accountClass === 3 ? 'revenue'
-                  : 'expense'
-          const normalBalance = accountClass <= 1 || accountClass >= 4 ? 'debit' : 'credit'
-
-          return {
-            user_id: user.id,
-            company_id: companyId,
-            account_number: num,
-            account_name: accountName,
-            account_class: accountClass,
-            account_group: accountGroup,
-            account_type: accountType,
-            normal_balance: normalBalance,
-            plan_type: 'full_bas' as const,
-            is_active: true,
-            is_system_account: false,
-            description: accountName,
-            sru_code: null,
-            sort_order: parseInt(num),
-          }
-        })
-
-      if (accountsToActivate.length > 0) {
-        const { error: activateError } = await supabase
-          .from('chart_of_accounts')
-          .insert(accountsToActivate)
-
-        if (activateError) {
-          opLog.error('sie account activation failed', activateError)
-          return errorResponseFromCode('SIE_IMPORT_ACCOUNT_ACTIVATION_FAILED', opLog, {
-            requestId,
-            details: { reason: activateError.message },
-          })
-        }
-      }
-
+      // Account creation (and #KONTO renames) happen inside executeSIEImport
+      // via syncMappedAccounts — the pre-create block that used to live here
+      // was a duplicate of that logic.
       const result = await executeSIEImport(
         supabase,
         companyId!,
@@ -195,6 +108,7 @@ export const POST = withRouteContext(
           importOpeningBalances: options.importOpeningBalances,
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries || companyDefaultSeries,
+          updateAccountNames: options.updateAccountNames ?? true,
         },
       )
 

@@ -17,7 +17,7 @@ interface RetentionNoticeProps {
  * account danger zone and the company danger zone.
  *
  * Swedish Bokföringslagen (BFL) 7 kap. 2§ requires räkenskapsinformation
- * to be retained for 7 years. gnubok is the system of record, so deleting
+ * to be retained for 7 years. Accounted is the system of record, so deleting
  * a company or an account does not remove the underlying data — it only
  * hides it from the UI and anonymizes PII where applicable.
  */

@@ -35,6 +35,7 @@ export type AbsenceType =
   | 'pregnancy'
   | 'care_relative'
   | 'study'
+  | 'unpaid_leave'
   | 'other_leave'
 
 export interface AbsenceDay {
@@ -44,7 +45,7 @@ export interface AbsenceDay {
 }
 
 export interface DerivedLineItem {
-  item_type: 'sick_karens' | 'sick_day2_14' | 'sick_day15_plus' | 'vab' | 'parental_leave'
+  item_type: 'sick_karens' | 'sick_day2_14' | 'sick_day15_plus' | 'vab' | 'parental_leave' | 'unpaid_leave'
   description: string
   quantity: number
   amount: number
@@ -58,6 +59,7 @@ export interface AggregatedCounts {
   sickDays: number
   vabDays: number
   parentalDays: number
+  unpaidLeaveDays: number
 }
 
 export interface DeriveResult {
@@ -173,6 +175,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     .map(d => d.absence_date)
   const vabDays = periodDays.filter(d => d.absence_type === 'vab')
   const parentalDays = periodDays.filter(d => d.absence_type === 'parental')
+  const unpaidLeaveDays = periodDays.filter(d => d.absence_type === 'unpaid_leave')
 
   let flagFkReporting = false
   let flagLakarintyg = false
@@ -195,7 +198,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // period count. An alternative reading is that cap-suppressed periods
     // shouldn't count toward future windows (only periods that actually
     // had karens deducted). That requires persisting per-period karens-
-    // deduction state, which gnubok doesn't yet do. The period-count
+    // deduction state, which Accounted doesn't yet do. The period-count
     // reading can over-suppress karens for an employee who hits the cap
     // repeatedly — softer error than the opposite.
     //
@@ -334,12 +337,37 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     })
   }
 
+  // ── Unpaid leave (tjänstledighet utan lön) ─────────────────────────────
+  // Each day reduces gross pay by one daily rate (monthlySalary / 21 — same
+  // convention used elsewhere in the engine). Not semestergrundande per SemL
+  // 17 § (only paid leave types accrue vacation).
+  //
+  // is_gross_deduction is deliberately false: the engine's Step 3 absence
+  // sum already subtracts items whose item_type is 'unpaid_leave', so setting
+  // the flag would double-count the amount in Step 4's gross_deduction sum.
+  const unpaidLeaveCount = unpaidLeaveDays.length
+  if (unpaidLeaveCount > 0) {
+    const dailyRate = r(monthlySalary / 21)
+    const deduction = r(dailyRate * unpaidLeaveCount)
+    lineItems.push({
+      item_type: 'unpaid_leave',
+      description: `Tjänstledighet utan lön (${unpaidLeaveCount} dagar)`,
+      quantity: unpaidLeaveCount,
+      amount: -deduction,
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+    })
+  }
+
   return {
     lineItems,
     aggregated: {
       sickDays: periodSickDates.length,
       vabDays: vabCount,
       parentalDays: parentalCount,
+      unpaidLeaveDays: unpaidLeaveCount,
     },
     flagFkReporting,
     flagLakarintyg,

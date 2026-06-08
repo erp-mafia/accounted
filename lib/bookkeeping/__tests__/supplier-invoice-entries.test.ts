@@ -36,9 +36,14 @@ vi.mock('../currency-utils', () => ({
   ),
 }))
 
-// Mock vat-entries with real reverse charge logic
-vi.mock('../vat-entries', () => ({
-  generateReverseChargeLines: vi.fn().mockImplementation(
+// Mock vat-entries: keep the real pure helpers (resolveReverseChargeRate,
+// isReverseChargeBasisAccount, RC_BASIS_ACCOUNTS) and stub only the two
+// line-builders with simplified logic the assertions below rely on.
+vi.mock('../vat-entries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../vat-entries')>()
+  return {
+    ...actual,
+    generateReverseChargeLines: vi.fn().mockImplementation(
     (baseAmount: number, vatRate: number = 0.25, isDomestic: boolean = false) => {
       const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
       const inputAccount = isDomestic ? '2647' : '2645'
@@ -72,7 +77,8 @@ vi.mock('../vat-entries', () => ({
       ]
     }
   ),
-}))
+  }
+})
 
 const { createJournalEntry, findFiscalPeriod } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
@@ -107,6 +113,7 @@ function makeItem(overrides: Partial<SupplierInvoiceItem> = {}): SupplierInvoice
     vat_code: null,
     vat_rate: vatRate,
     vat_amount: vatAmount,
+    reverse_charge_rate: null,
     created_at: '2024-06-01T00:00:00Z',
     ...overrides,
   }
@@ -368,6 +375,78 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     // 2440  = 22 500 - 12 500 = 10 000 (faktisk leverantörsskuld)
     expect(credit2440[0].credit_amount).toBe(10000)
 
+    assertBalanced(input)
+  })
+
+  it('books reverse charge VAT for a 0%-rate line item — defaults to 25% huvudregeln (regression)', async () => {
+    // The exact reported bug: a Finnish (EU) supplier invoice entered with the
+    // line at 0% momssats (the supplier charges no VAT) must still self-assess
+    // at 25%. Before the fix the `rate > 0` guard skipped ALL VAT lines, so the
+    // verifikat was just expense + 2440 — the user had to add VAT lines by hand.
+    const invoice = makeSupplierInvoice({
+      subtotal: 12000,
+      vat_amount: 0,
+      total: 12000,
+      reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 12000, account_number: '5910', vat_rate: 0, reverse_charge_rate: null })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '5910')[0].debit_amount).toBe(12000)
+    // Fiktiv moms self-assessed at the 25% huvudregel default (ruta 30 / 48).
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(3000)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(3000)
+    // Basbeloppsrader for ruta 21 (EU services) — required or SKV rejects FK004.
+    expect(findByAccount(input.lines, '4535')[0].debit_amount).toBe(12000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(12000)
+    // Leverantörsskuld is the net (no VAT rolls into the payable under RC).
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(12000)
+    assertBalanced(input)
+  })
+
+  it('honours an explicit reverse_charge_rate (12%) on a 0%-rate line item', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '6540', vat_rate: 0, reverse_charge_rate: 0.12 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(1200) // 10000 * 0.12
+    expect(findByAccount(input.lines, '2624')[0].credit_amount).toBe(1200) // ruta 31
+    expect(findByAccount(input.lines, '4536')[0].debit_amount).toBe(10000) // ruta 21 @ 12%
+    // 25% accounts must NOT appear when the self-assessed rate is 12%.
+    expect(findByAccount(input.lines, '2614')).toHaveLength(0)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+    assertBalanced(input)
+  })
+
+  it('honours an explicit reverse_charge_rate (6%) on a 0%-rate line item', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '6540', vat_rate: 0, reverse_charge_rate: 0.06 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(600) // 10000 * 0.06
+    expect(findByAccount(input.lines, '2634')[0].credit_amount).toBe(600) // ruta 32
+    expect(findByAccount(input.lines, '4537')[0].debit_amount).toBe(10000) // ruta 21 @ 6%
+    // Higher-rate accounts must NOT appear when the self-assessed rate is 6%.
+    expect(findByAccount(input.lines, '2614')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2624')).toHaveLength(0)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+    expect(findByAccount(input.lines, '4536')).toHaveLength(0)
     assertBalanced(input)
   })
 
@@ -877,6 +956,43 @@ describe('createSupplierInvoicePaymentEntry', () => {
     expect(input.description).toBe('Utbetalning leverantörsfaktura LF-200, Leverantör AB (ankomst 10)')
   })
 
+  it('credits the provided paymentAccount instead of 1930', async () => {
+    const invoice = makeSupplierInvoice()
+
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 10000, '2024-07-01',
+      undefined, undefined, '1940'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '1930')).toHaveLength(0)
+    expect(findByAccount(input.lines, '1940')[0].credit_amount).toBe(10000)
+  })
+
+  it('falls back to 1930 when paymentAccount is undefined', async () => {
+    const invoice = makeSupplierInvoice()
+
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 10000, '2024-07-01'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(10000)
+  })
+
+  it('uses paymentAccount on the FX-difference branch too', async () => {
+    const invoice = makeSupplierInvoice({ total: 11500, currency: 'EUR' })
+
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 11500, '2024-07-15',
+      500, undefined, '2018'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '1930')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2018')[0].credit_amount).toBe(11000)
+  })
+
   it('uses paymentDate not invoice_date as entry_date', async () => {
     const invoice = makeSupplierInvoice({ invoice_date: '2024-06-01' })
 
@@ -936,6 +1052,23 @@ describe('createSupplierInvoiceCashEntry', () => {
     assertBalanced(input)
   })
 
+  it('credits the provided paymentAccount instead of 1930', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 8000, vat_amount: 2000, total: 10000,
+    })
+    const items = [makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business',
+      undefined, '2018'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '1930')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2018')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
   it('domestic zero VAT', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 5000,
@@ -981,6 +1114,24 @@ describe('createSupplierInvoiceCashEntry', () => {
     // Fiktiv moms entries are offsetting; bank payment equals actual invoice amount
     expect(credit1930[0].credit_amount).toBe(10000)
 
+    assertBalanced(input)
+  })
+
+  it('EU reverse charge with a 0%-rate line item self-assesses at 25% (regression)', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 12000, vat_amount: 0, total: 12000, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 12000, account_number: '5910', vat_rate: 0, reverse_charge_rate: null })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(3000)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(3000)
+    expect(findByAccount(input.lines, '4535')[0].debit_amount).toBe(12000)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(12000)
     assertBalanced(input)
   })
 
@@ -1051,6 +1202,111 @@ describe('createSupplierInvoiceCashEntry', () => {
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Kontantbetalning leverantörsfaktura LF-300')
+  })
+})
+
+// ============================================================
+// createSupplierInvoiceCashEntry — foreign-currency settlement
+// (kontantmetoden books the expense at the PAYMENT-date rate; the
+//  payment-account credit must equal the SEK that left the bank)
+// ============================================================
+
+describe('createSupplierInvoiceCashEntry — foreign-currency settlement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('books a no-VAT foreign invoice at the payment-date rate, not the invoice rate (the reported bug)', async () => {
+    // 19 USD invoice. The invoice was captured at rate 9.20 (→ 174.80 SEK),
+    // but the bank actually paid 175.28 SEK at the payment-date rate. Under
+    // kontantmetoden the expense belongs at the payment rate, so 1930 must
+    // equal the bank movement exactly — and there is NO kursdifferens.
+    const invoice = makeSupplierInvoice({
+      currency: 'USD', exchange_rate: 9.20, subtotal: 19, vat_amount: 0, total: 19,
+    })
+    const items = [makeItem({ line_total: 19, account_number: '4000', vat_rate: 0, vat_amount: 0 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2026-01-19', 'non_eu_business',
+      undefined, undefined, 175.28,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // Payment-date rate (175.28 / 19), NOT the invoice's 9.20 (which would give 174.80).
+    expect(findByAccount(input.lines, '4000')[0].debit_amount).toBe(175.28)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(175.28)
+    // No kursvinst/kursförlust under the cash method.
+    expect(findByAccount(input.lines, '7960')).toHaveLength(0)
+    expect(findByAccount(input.lines, '3960')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+    assertBalanced(input)
+  })
+
+  it('translates a foreign reverse-charge invoice (fiktiv moms base) at the payment rate', async () => {
+    // 100 USD EU-service invoice, reverse charge. Bank paid 922.50 SEK.
+    const invoice = makeSupplierInvoice({
+      currency: 'USD', exchange_rate: 9.20, subtotal: 100, vat_amount: 0, total: 100, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 100, account_number: '6540', vat_rate: 0.25, vat_amount: 0 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2026-01-19', 'eu_business',
+      undefined, undefined, 922.50,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '6540')[0].debit_amount).toBe(922.50)
+    // Fiktiv moms on the payment-rate base (922.50 × 25%), and it nets out so
+    // 1930 still equals the bank movement.
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBeCloseTo(230.63, 2)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBeCloseTo(230.63, 2)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(922.50)
+    assertBalanced(input)
+  })
+
+  it('folds a sub-öre rounding residual into the largest expense line so 1930 = bank SEK', async () => {
+    // Two expense lines whose per-line payment-rate rounding sums to 175.29,
+    // one öre over the 175.28 that actually left the bank. The residual is
+    // folded into the larger line so the bank credit lands exactly on 175.28.
+    const invoice = makeSupplierInvoice({
+      currency: 'USD', exchange_rate: 1.75, subtotal: 100, vat_amount: 0, total: 100,
+    })
+    const items = [
+      makeItem({ id: 'a', line_total: 33.33, account_number: '4000', vat_rate: 0, vat_amount: 0 }),
+      makeItem({ id: 'b', line_total: 66.67, account_number: '5000', vat_rate: 0, vat_amount: 0 }),
+    ]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2026-01-19', 'swedish_business',
+      undefined, undefined, 175.28,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const debitSum = input.lines
+      .filter((l) => l.debit_amount > 0)
+      .reduce((s, l) => s + l.debit_amount, 0)
+    expect(Math.round(debitSum * 100) / 100).toBe(175.28)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(175.28)
+    assertBalanced(input)
+  })
+
+  it('ignores settledBankSek for a SEK invoice (behaviour unchanged)', async () => {
+    const invoice = makeSupplierInvoice({
+      currency: 'SEK', subtotal: 8000, vat_amount: 2000, total: 10000,
+    })
+    const items = [makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business',
+      undefined, undefined, 9999, // bogus settlement SEK must be ignored for a SEK invoice
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '6200')[0].debit_amount).toBe(8000)
+    expect(findByAccount(input.lines, '2641')[0].debit_amount).toBe(2000)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
   })
 })
 
@@ -1171,6 +1427,32 @@ describe('createSupplierCreditNoteEntry', () => {
     // totalCredits - totalDebits = (2500 + 10000 + 10000) - (2500 + 10000) = 10000
     expect(debit2440.debit_amount).toBe(10000)
 
+    assertBalanced(input)
+  })
+
+  it('reverses a 0%-rate reverse charge credit note at the 25% default (regression)', async () => {
+    // A credit note for the buggy 0%-rate RC invoice must reverse the same
+    // self-assessed VAT the registration booked, or it leaves ruta 21/30/48
+    // half-cancelled. The credit-note path resolves the same 25% default.
+    const creditNote = makeSupplierInvoice({
+      is_credit_note: true,
+      subtotal: -12000,
+      vat_amount: 0,
+      total: -12000,
+      reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: -12000, account_number: '5910', vat_rate: 0, reverse_charge_rate: null })]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].credit_amount).toBe(3000)
+    expect(findByAccount(input.lines, '2614')[0].debit_amount).toBe(3000)
+    expect(findByAccount(input.lines, '4535')[0].credit_amount).toBe(12000)
+    expect(findByAccount(input.lines, '4598')[0].debit_amount).toBe(12000)
+    expect(findByAccount(input.lines, '2440')[0].debit_amount).toBe(12000)
     assertBalanced(input)
   })
 

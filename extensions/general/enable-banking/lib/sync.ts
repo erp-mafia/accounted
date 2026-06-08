@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAllTransactionsWithRaw, convertTransaction, getAccountBalance } from './api-client'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
+import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
 
@@ -99,19 +100,74 @@ export async function syncAccountTransactions(
 
   const bankTransactions = transactions.map(tx => convertTransaction(tx, account.currency))
 
+  // Only ingest BOOKED transactions — those the ASPSP returned with a real
+  // booking_date. Pending entries are intentionally skipped: a pending row is
+  // unstable across syncs (a later "synka nu" returns the same transaction
+  // either still pending or finally booked, often with a *different* effective
+  // date). Because BOTH the dedup external_id and the content-dedup key are
+  // date-derived, that drift mints a brand-new id and re-imports a transaction
+  // that already exists. Observed in production as the same amount+description
+  // landing twice with different dates — the bank's value_date in one sync, its
+  // booking_date in another. Gating the import set on a stable booking_date
+  // removes the drift at the source, and leaves booked rows' ids byte-identical
+  // (so the existing rows are NOT re-orphaned).
+  //
+  // booking_date is read from the RAW transaction (transactions[i]), index-
+  // aligned with bankTransactions: convertTransaction's booking_date already
+  // falls back to value_date/today, so it cannot tell booked from pending.
+  const bookedEntries = bankTransactions.flatMap((tx, i) => {
+    const bookingDate = transactions[i]?.booking_date
+    return typeof bookingDate === 'string' && bookingDate.trim() !== ''
+      ? [{ tx, bookingDate: bookingDate.trim() }]
+      : []
+  })
+
+  const skippedPending = bankTransactions.length - bookedEntries.length
+  if (skippedPending > 0) {
+    console.log('[enable-banking] Skipped pending transactions (no booking_date)', {
+      connectionId,
+      accountUid: account.uid,
+      skippedPending,
+      total: bankTransactions.length,
+    })
+  }
+
+  // Derive a stable, content-based external_id per booked transaction. We
+  // deliberately do NOT key off the bank's transaction id (entry_reference/
+  // transaction_id): many Swedish ASPSPs regenerate those across requests, so a
+  // repeat "synka nu" produced a fresh id and re-imported transactions the user
+  // had already booked. buildStableExternalIds derives the id from (account,
+  // booking_date, amount) plus an occurrence index, so re-syncs collide on
+  // (company_id, external_id) and dedupe while genuinely identical transactions
+  // are still kept apart. Normalize the IBAN (strip whitespace, uppercase) so
+  // formatting variants from the ASPSP ("SE45 5000 …" vs "SE455000…") don't
+  // change the scope and orphan every prior external_id. Falls back to the
+  // provider account uid.
+  const accountScope = account.iban?.replace(/\s+/g, '').toUpperCase() || account.uid
+  const externalIds = buildStableExternalIds(
+    'eb',
+    accountScope,
+    bookedEntries.map(({ tx, bookingDate }) => ({ date: bookingDate, amount: tx.amount }))
+  )
+
   // Convert Enable Banking format to generic RawTransaction. counterparty
   // identification: prefer IBAN (international, normalized) over BBAN/BG
   // numbers — the own-account detector matches on IBAN first, falling back
   // to counterparty_account for Swedish domestic transfers.
-  const rawTransactions: RawTransaction[] = bankTransactions.map((tx) => {
+  const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate }, i) => {
     const cpAccount = tx.counterparty_account ?? null
     const looksLikeIban = cpAccount && /^[A-Z]{2}\d/.test(cpAccount.replace(/\s+/g, ''))
     return {
-      date: tx.booking_date || tx.date,
-      description: tx.description || tx.counterparty_name || 'Unknown',
+      // The booked date is both the stable dedup anchor (see bookedEntries) and
+      // the accounting-correct ledger date; keep it identical to the value the
+      // external_id was derived from.
+      date: bookingDate,
+      // tx.description is already non-empty (convertTransaction guarantees a
+      // label); the trailing fallbacks are defensive. Ingest re-normalizes.
+      description: tx.description || tx.counterparty_name || FALLBACK_DESCRIPTION,
       amount: tx.amount,
       currency: tx.currency || account.currency,
-      external_id: `eb_${account.iban || account.uid}_${tx.id}`,
+      external_id: externalIds[i],
       mcc_code: tx.merchant_category_code ? parseInt(tx.merchant_category_code, 10) : null,
       merchant_name: tx.counterparty_name || null,
       reference: tx.reference || null,

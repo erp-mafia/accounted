@@ -69,11 +69,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-sent',
   summary: 'Transition a draft invoice to sent (without emailing).',
   description:
-    'Marks a draft invoice as sent — for invoices delivered outside gnubok (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). On accounting_method=accrual, also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
+    'Marks a draft invoice as sent — for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). On accounting_method=accrual, also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
   useWhen:
-    'You delivered the invoice through a channel other than gnubok\'s email (Peppol, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.',
+    'You delivered the invoice through a channel other than Accounted\'s email (Peppol, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.',
   doNotUseFor:
-    'Sending the invoice via gnubok email — use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid — use :mark-paid (PR-B-2b-2).',
+    'Sending the invoice via Accounted email — use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid — use :mark-paid (PR-B-2b-2).',
   pitfalls: [
     'Only invoices in `status=draft` can be marked sent. Other states return 409 INVOICE_UPDATE_NOT_DRAFT (re-used; the action is structurally an update).',
     'Allocation is atomic. If a concurrent transition beats the agent\'s request to the same draft, the runner-up gets 409 INVOICE_UPDATE_NOT_DRAFT and no number is consumed.',

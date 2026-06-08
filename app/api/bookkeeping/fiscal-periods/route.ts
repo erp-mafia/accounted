@@ -5,6 +5,10 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api/bookkeeping/fiscal-periods')
 
 export async function GET() {
   const supabase = await createClient()
@@ -109,7 +113,7 @@ export async function POST(request: Request) {
       // must not block creating the next räkenskapsår.
       const { data: openPeriods } = await supabase
         .from('fiscal_periods')
-        .select('name, period_start, period_end')
+        .select('id, name, period_start, period_end')
         .eq('company_id', companyId)
         .eq('is_closed', false)
         .is('locked_at', null)
@@ -127,15 +131,18 @@ export async function POST(request: Request) {
       )
 
       if (trulyOpen.length > 0) {
-        const names = trulyOpen
-          .map((p) => `${p.name} (${p.period_start} – ${p.period_end})`)
-          .join(', ')
-        return NextResponse.json(
-          {
-            error: `Cannot create a new period while an unlocked period exists. Lock the following first: ${names}`,
-          },
-          { status: 409 }
-        )
+        // Hand the blocking periods (id + name + dates) to the client so the
+        // "Skapa räkenskapsår" dialog can offer to lock them inline and retry,
+        // instead of dead-ending the user on a message they can't act on.
+        const blockingPeriods = trulyOpen.map((p) => ({
+          id: p.id,
+          name: p.name,
+          period_start: p.period_start,
+          period_end: p.period_end,
+        }))
+        return errorResponseFromCode('PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS', log, {
+          details: { blockingPeriods },
+        })
       }
     }
   }

@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Customer Onboarding — gnubok
+const body = `# Customer Onboarding — Accounted
 
 Adding a customer correctly the first time avoids a long tail of wrong-VAT
 invoices. This skill covers the decision tree for picking \`customer_type\`,
@@ -30,7 +30,7 @@ later — much cheaper to ask the customer once at onboarding.
 
 **Special cases:**
 
-- **B2G (Swedish municipality/agency)**: still \`swedish_business\`, but the invoice must be Peppol-formatted (legal requirement since 2019-04-01). gnubok handles Peppol when the customer record has a Peppol endpoint configured.
+- **B2G (Swedish municipality/agency)**: still \`swedish_business\`, but the invoice must be Peppol-formatted (legal requirement since 2019-04-01). Accounted handles Peppol when the customer record has a Peppol endpoint configured.
 - **Consumer customer in another EU country (B2C distance sale)**: \`eu_business\` does NOT apply. Charge Swedish VAT (25/12/6 %) below the OSS threshold; above the threshold the company must register for OSS. This is rare for sole traders — flag the user if turnover suggests they're approaching the threshold.
 
 ## Workflow
@@ -55,12 +55,12 @@ the VAT number is invalid (or unverifiable), reverse charge does NOT apply —
 you must charge Swedish VAT instead. The wrong call here means you under-collect
 VAT and Skatteverket charges interest + penalty later.
 
-gnubok's \`gnubok_create_customer\` runs VIES automatically when \`vat_number\`
+Accounted's \`gnubok_create_customer\` runs VIES automatically when \`vat_number\`
 is provided. The result is stored in \`vat_number_validated\` on the customer.
 Subsequent invoices read this field via \`getAvailableVatRates\` to determine
 which VAT rates are legal.
 
-If VIES is temporarily down (intermittent), gnubok marks the customer as
+If VIES is temporarily down (intermittent), Accounted marks the customer as
 \`vat_number_validated = false\` and you'll see standard 25 % rates instead
 of reverse charge. Re-validate by updating the customer once VIES is back.
 
@@ -83,7 +83,7 @@ appears in \`gnubok_list_customers\` and can be invoiced via \`gnubok_create_inv
 \`gnubok_list_customers\` — confirm the customer appears, customer_type is right.
 Read \`vat_number_validated\` (for EU); if false, double-check the VAT number.
 
-When you eventually call \`gnubok_create_invoice\`, gnubok uses the
+When you eventually call \`gnubok_create_invoice\`, Accounted uses the
 \`getAvailableVatRates\` helper to constrain the dropdown of legal rates per
 customer type. If you see "VAT rate X% is not allowed for customer type Y",
 the customer_type is wrong — re-onboard correctly via the agent flow, do NOT
@@ -91,7 +91,7 @@ hand-pick a different rate.
 
 ## Common errors
 
-- *"VAT rate 25% is not allowed for customer type eu_business"*: the customer's VAT number is validated → reverse charge required. Use 0 % on line items, and gnubok will add the "Omvänd betalningsskyldighet" notation automatically.
+- *"VAT rate 25% is not allowed for customer type eu_business"*: the customer's VAT number is validated → reverse charge required. Use 0 % on line items, and Accounted will add the "Omvänd betalningsskyldighet" notation automatically.
 - *"VAT rate 0% is not allowed for customer type swedish_business"*: domestic customers always get 25/12/6 %. Pick the right rate.
 - *"Customer not found"* on \`gnubok_create_invoice\`: the customer wasn't created (or its pending_operation wasn't approved). Run \`gnubok_list_customers\` to confirm.
 

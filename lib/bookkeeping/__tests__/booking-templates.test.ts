@@ -15,6 +15,7 @@ import {
   stripBankNoise,
   type BookingTemplate,
 } from '../booking-templates'
+import { applySettlementAccount } from '../mapping-engine'
 
 // ============================================================
 // Template Data Integrity
@@ -799,5 +800,49 @@ describe('new and split templates', () => {
     const t = getTemplateById('representation_external')
     expect(t).toBeDefined()
     expect(t!.deductibility_note_sv).toContain('46 kr/person')
+  })
+})
+
+// ============================================================
+// applySettlementAccount — bank-leg routing for non-1930 accounts
+// ============================================================
+
+describe('applySettlementAccount (bank-leg routing)', () => {
+  it('routes the bank_interest_income debit leg to the transaction settlement account', () => {
+    const template = getTemplateById('bank_interest_income')
+    expect(template).toBeDefined()
+    const tx = makeTransaction({ amount: 50, currency: 'SEK' })
+    const base = buildMappingResultFromTemplate(template!, tx, 'enskild_firma')
+    // Template hardcodes 1930 as the bank leg.
+    expect(base.debit_account).toBe('1930')
+    expect(base.credit_account).toBe('8310')
+
+    // Interest that landed on a savings account mapped to 1931 must debit 1931,
+    // not 1930 — otherwise the real bank transaction never reconciles.
+    const routed = applySettlementAccount(base, '1931')
+    expect(routed.debit_account).toBe('1931')
+    expect(routed.credit_account).toBe('8310')
+  })
+
+  it('routes the bank_fees credit leg to the transaction settlement account', () => {
+    const template = getTemplateById('bank_fees')
+    expect(template).toBeDefined()
+    const tx = makeTransaction({ amount: -29, currency: 'SEK' })
+    const base = buildMappingResultFromTemplate(template!, tx, 'enskild_firma')
+    expect(base.debit_account).toBe('6570')
+    expect(base.credit_account).toBe('1930')
+
+    const routed = applySettlementAccount(base, '1931')
+    expect(routed.debit_account).toBe('6570')
+    expect(routed.credit_account).toBe('1931')
+  })
+
+  it('is a no-op when the settlement account is 1930 (legacy/unresolved rows)', () => {
+    const template = getTemplateById('bank_interest_income')!
+    const tx = makeTransaction({ amount: 50, currency: 'SEK' })
+    const base = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+    const routed = applySettlementAccount(base, '1930')
+    expect(routed.debit_account).toBe('1930')
+    expect(routed.credit_account).toBe('8310')
   })
 })

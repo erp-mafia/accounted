@@ -50,12 +50,22 @@ interface AttachmentPreviewSheetProps {
 type IntegrityState = 'valid' | 'invalid' | 'error'
 const integrityCache = new Map<string, IntegrityState>()
 
-function isImageType(type: string | null): boolean {
-  return type?.startsWith('image/') ?? false
+function isImageType(type: string | null, fileName?: string): boolean {
+  if (type?.startsWith('image/')) return true
+  // Legacy uploads and browsers that fail to sniff sometimes leave mime_type
+  // null or set it to application/octet-stream — fall back to filename.
+  if (type === null || type === 'application/octet-stream') {
+    return /\.(jpe?g|png|gif|webp|svg)$/i.test(fileName ?? '')
+  }
+  return false
 }
 
-function isPdfType(type: string | null): boolean {
-  return type === 'application/pdf'
+function isPdfType(type: string | null, fileName?: string): boolean {
+  if (type === 'application/pdf') return true
+  if (type === null || type === 'application/octet-stream') {
+    return fileName?.toLowerCase().endsWith('.pdf') ?? false
+  }
+  return false
 }
 
 function formatFileSize(bytes: number): string {
@@ -247,13 +257,15 @@ export default function AttachmentPreviewSheet({
           <div className="space-y-6">
             {documents.map((doc) => {
               const inlineSrc = `/api/documents/${doc.id}/inline`
-              const previewable = isImageType(doc.mime_type) || isPdfType(doc.mime_type)
+              const previewable =
+                isImageType(doc.mime_type, doc.file_name) ||
+                isPdfType(doc.mime_type, doc.file_name)
               const isReplacing = replacingDocId === doc.id
               return (
                 <div key={doc.id} className="space-y-2">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-2">
-                      {isImageType(doc.mime_type) ? (
+                      {isImageType(doc.mime_type, doc.file_name) ? (
                         <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       ) : (
                         <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -307,7 +319,7 @@ export default function AttachmentPreviewSheet({
                     </div>
                   </div>
 
-                  {isPdfType(doc.mime_type) && integrity[doc.id] === 'invalid' && (
+                  {isPdfType(doc.mime_type, doc.file_name) && integrity[doc.id] === 'invalid' && (
                     <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-border bg-muted/30 p-6 text-center">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15">
                         <AlertTriangle className="h-5 w-5 text-warning-foreground" />
@@ -332,7 +344,7 @@ export default function AttachmentPreviewSheet({
                     </div>
                   )}
 
-                  {isPdfType(doc.mime_type) && integrity[doc.id] !== 'invalid' && (
+                  {isPdfType(doc.mime_type, doc.file_name) && integrity[doc.id] !== 'invalid' && (
                     // <object> + type="application/pdf" invokes Chrome's PDF
                     // plugin directly. <iframe> went through Chrome's frame
                     // pipeline first and intermittently surfaced
@@ -378,7 +390,7 @@ export default function AttachmentPreviewSheet({
                     </>
                   )}
 
-                  {isImageType(doc.mime_type) && (
+                  {isImageType(doc.mime_type, doc.file_name) && (
                     <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
                       <img
                         src={inlineSrc}

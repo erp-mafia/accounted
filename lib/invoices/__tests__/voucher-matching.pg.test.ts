@@ -242,3 +242,175 @@ describe('link_invoice_voucher pg-real guards', () => {
     expect(Number(rows[0].count)).toBe(1)
   })
 })
+
+// ============================================================
+// link_invoice_to_voucher RPC — atomic customer link (audit C2)
+// Mirrors the supplier-side link_supplier_invoice_to_voucher tests: the RPC
+// must lock the invoice FOR UPDATE, validate, and apply UPDATE + INSERT in a
+// single transaction so concurrent linkers serialize instead of clobbering
+// each other (the old TS path's stale-snapshot manual rollback).
+// ============================================================
+
+type RpcResult = {
+  ok: boolean
+  code?: string
+  invoice_status?: string
+  paid_amount?: number
+  remaining_amount?: number
+  payment_amount?: number
+  details?: Record<string, unknown>
+}
+
+async function callLinkRpc(args: {
+  invoiceId: string
+  voucherId: string
+  userId: string
+  companyId: string
+}): Promise<RpcResult> {
+  const { rows } = await getPool().query<{ result: RpcResult }>(
+    `SELECT public.link_invoice_to_voucher($1, $2, $3, $4, NULL) AS result`,
+    [args.invoiceId, args.voucherId, args.userId, args.companyId],
+  )
+  return rows[0].result
+}
+
+describe('link_invoice_to_voucher RPC (atomic link — audit C2)', () => {
+  it('links a full payment: invoice advanced + payment row, one transaction', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceId = await seedInvoice({ userId, companyId, customerId, total: 1000 })
+    const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId, amount: 1000 })
+
+    const result = await callLinkRpc({ invoiceId, voucherId, userId, companyId })
+    expect(result.ok).toBe(true)
+    expect(result.invoice_status).toBe('paid')
+    expect(Number(result.paid_amount)).toBe(1000)
+    expect(Number(result.remaining_amount)).toBe(0)
+
+    const { rows: inv } = await getPool().query(
+      `SELECT status, paid_amount, remaining_amount FROM public.invoices WHERE id = $1`,
+      [invoiceId],
+    )
+    expect(inv[0].status).toBe('paid')
+    expect(Number(inv[0].paid_amount)).toBe(1000)
+    expect(Number(inv[0].remaining_amount)).toBe(0)
+
+    const { rows: pay } = await getPool().query(
+      `SELECT amount FROM public.invoice_payments WHERE invoice_id = $1 AND journal_entry_id = $2`,
+      [invoiceId, voucherId],
+    )
+    expect(pay).toHaveLength(1)
+    expect(Number(pay[0].amount)).toBe(1000)
+  })
+
+  it('links a partial payment as partially_paid with the right remaining', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceId = await seedInvoice({ userId, companyId, customerId, total: 1000 })
+    const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId, amount: 400 })
+
+    const result = await callLinkRpc({ invoiceId, voucherId, userId, companyId })
+    expect(result.ok).toBe(true)
+    expect(result.invoice_status).toBe('partially_paid')
+    expect(Number(result.paid_amount)).toBe(400)
+    expect(Number(result.remaining_amount)).toBe(600)
+  })
+
+  it('rejects overpayment and leaves the invoice completely untouched', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceId = await seedInvoice({ userId, companyId, customerId, total: 1000 })
+    const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId, amount: 1500 })
+
+    const result = await callLinkRpc({ invoiceId, voucherId, userId, companyId })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING')
+
+    const { rows: inv } = await getPool().query(
+      `SELECT status, paid_amount, remaining_amount FROM public.invoices WHERE id = $1`,
+      [invoiceId],
+    )
+    expect(inv[0].status).toBe('sent')
+    expect(Number(inv[0].paid_amount)).toBe(0)
+    expect(Number(inv[0].remaining_amount)).toBe(1000)
+
+    const { rows: pay } = await getPool().query(
+      `SELECT COUNT(*) AS count FROM public.invoice_payments WHERE invoice_id = $1`,
+      [invoiceId],
+    )
+    expect(Number(pay[0].count)).toBe(0)
+  })
+
+  it('rejects re-linking the same voucher to the same invoice (ALREADY_LINKED)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceId = await seedInvoice({ userId, companyId, customerId, total: 2000 })
+    const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId, amount: 1000 })
+
+    const first = await callLinkRpc({ invoiceId, voucherId, userId, companyId })
+    expect(first.ok).toBe(true)
+
+    const second = await callLinkRpc({ invoiceId, voucherId, userId, companyId })
+    expect(second.ok).toBe(false)
+    expect(second.code).toBe('LINK_VOUCHER_ALREADY_LINKED')
+
+    const { rows: pay } = await getPool().query(
+      `SELECT COUNT(*) AS count FROM public.invoice_payments WHERE invoice_id = $1`,
+      [invoiceId],
+    )
+    expect(Number(pay[0].count)).toBe(1)
+  })
+
+  it('REGRESSION (the C2 race): two concurrent full-payment links — exactly one wins', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceId = await seedInvoice({ userId, companyId, customerId, total: 1000 })
+    const voucherA = await seedPostedVoucher({ userId, companyId, fiscalPeriodId, amount: 1000 })
+    const voucherB = await seedPostedVoucher({ userId, companyId, fiscalPeriodId, amount: 1000 })
+
+    // Two different vouchers, each covering the full remaining, racing on the
+    // same invoice from separate pool connections. The FOR UPDATE lock must
+    // serialize them: the loser sees remaining = 0 and gets FULLY_PAID. Under
+    // the old TS path both could pass validation and the invoice ended up
+    // with paid_amount > total (the audit C2 corruption).
+    const [r1, r2] = await Promise.all([
+      callLinkRpc({ invoiceId, voucherId: voucherA, userId, companyId }),
+      callLinkRpc({ invoiceId, voucherId: voucherB, userId, companyId }),
+    ])
+
+    const winners = [r1, r2].filter((r) => r.ok)
+    const losers = [r1, r2].filter((r) => !r.ok)
+    expect(winners).toHaveLength(1)
+    expect(losers).toHaveLength(1)
+    expect(losers[0].code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
+
+    const { rows: inv } = await getPool().query(
+      `SELECT status, paid_amount, remaining_amount FROM public.invoices WHERE id = $1`,
+      [invoiceId],
+    )
+    expect(inv[0].status).toBe('paid')
+    expect(Number(inv[0].paid_amount)).toBe(1000) // never 2000
+    expect(Number(inv[0].remaining_amount)).toBe(0)
+
+    const { rows: pay } = await getPool().query(
+      `SELECT COUNT(*) AS count FROM public.invoice_payments WHERE invoice_id = $1`,
+      [invoiceId],
+    )
+    expect(Number(pay[0].count)).toBe(1)
+  })
+})

@@ -1,4 +1,4 @@
-# Self-Hosting gnubok with Docker
+# Self-Hosting Accounted with Docker
 
 ## Prerequisites
 
@@ -14,7 +14,7 @@ You do **not** need Node.js, npm, or anything else installed locally. The pre-bu
 ### 1. Download the required files
 
 ```bash
-mkdir gnubok && cd gnubok
+mkdir Accounted && cd Accounted
 
 # Compose file + env template
 curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/docker-compose.yml
@@ -41,7 +41,7 @@ Open `.env` and fill in the **required** values:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase dashboard → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase dashboard → Settings → API → `anon` `public` key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Settings → API → `service_role` key |
-| `NEXT_PUBLIC_APP_URL` | The URL where you'll access gnubok (e.g. `https://gnubok.example.com`) |
+| `NEXT_PUBLIC_APP_URL` | The URL where you'll access Accounted (e.g. `https://gnubok.example.com`) |
 | `CRON_SECRET` | Any random string — `openssl rand -hex 32` works |
 
 Once `.env` is filled in, **restrict its permissions** so other users on the host can't read your service-role key or cron secret:
@@ -171,7 +171,7 @@ If you prefer to build locally instead of pulling the pre-built image:
 ```bash
 # Clone the repo
 git clone https://github.com/gnubok/gnubok.git
-cd gnubok
+cd Accounted
 cp .env.docker.example .env
 # Fill in .env
 

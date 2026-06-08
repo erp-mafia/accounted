@@ -37,6 +37,7 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   sick_day15_plus: '7281',
   vab: '7210',
   parental_leave: '7210',
+  unpaid_leave: '7210',
   vacation: '7285',
   semesterersattning: '7285',
   // Travel

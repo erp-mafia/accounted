@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Month-End Close — gnubok
+const body = `# Month-End Close — Accounted
 
 Run this at the end of each calendar month to ensure books are clean before locking the period.
 

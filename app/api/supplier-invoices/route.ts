@@ -132,6 +132,10 @@ export const POST = withRouteContext(
         vat_code: item.vat_code || null,
         vat_rate: vatRate,
         vat_amount: vatAmount,
+        // Self-assessed RC rate (0.06/0.12/0.25) or null. For reverse charge the
+        // supplier charges no VAT (vat_rate stays 0); the engine self-assesses
+        // at this rate, defaulting to 25% huvudregeln when null.
+        reverse_charge_rate: body.reverse_charge ? (item.reverse_charge_rate ?? null) : null,
       }
     })
 
@@ -329,6 +333,17 @@ export const POST = withRouteContext(
             journal_entry_id: journalEntry.id,
             notes: 'Eget utlägg — betalat privat',
           })
+        } else {
+          // createSupplierInvoicePrivatelyPaidEntry returns null ONLY when no
+          // fiscal period covers invoice_date (every other failure throws and
+          // lands in the catch below). Without this branch the invoice would be
+          // saved as status='paid' with no verifikat — a silent orphan. Roll
+          // back and surface an actionable error, per the fatal-orphan note above.
+          await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+          return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', log, {
+            requestId,
+            details: { invoiceDate: invoice.invoice_date },
+          })
         }
       } catch (err) {
         await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
@@ -363,6 +378,19 @@ export const POST = withRouteContext(
             .from('supplier_invoices')
             .update({ registration_journal_entry_id: journalEntry.id })
             .eq('id', invoice.id)
+        } else {
+          // createSupplierInvoiceRegistrationEntry returns null ONLY when no
+          // fiscal period covers invoice_date (every other failure throws and
+          // lands in the catch below). An orphan supplier_invoices row without a
+          // registration JE silently understates leverantörsskuld (2440) and
+          // ingående moms (2641) for the momsdeklaration — exactly the fatal
+          // case the note above warns about. Roll back and surface an
+          // actionable error instead of returning 200.
+          await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+          return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', log, {
+            requestId,
+            details: { invoiceDate: invoice.invoice_date },
+          })
         }
       } catch (err) {
         await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)

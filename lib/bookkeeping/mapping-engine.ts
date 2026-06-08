@@ -374,7 +374,7 @@ function buildOwnAccountTransferResult(
  * This allows mapping rules and templates that don't explicitly set a bank account
  * to work correctly with secondary bank accounts (e.g. 1931).
  */
-function applySettlementAccount(result: MappingResult, bankAccount: string): MappingResult {
+export function applySettlementAccount(result: MappingResult, bankAccount: string): MappingResult {
   if (bankAccount === '1930') return result
   return {
     ...result,

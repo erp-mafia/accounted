@@ -5,6 +5,12 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 
+// The GET scope below builds a PostgREST .or() filter by string interpolation.
+// Guard every interpolated id against a strict UUID shape so a tainted value
+// can never inject filter syntax. Both ids are server-derived (companyId from
+// membership, teamId from a DB column), so this is defense-in-depth.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const BookingTemplateLineSchema = z.object({
   account: z.string().regex(/^\d{4}$/),
   label: z.string().min(1),
@@ -43,12 +49,39 @@ export async function GET() {
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // RLS handles scoping (system OR company OR team)
+  // Resolve the team this company belongs to (if any) so team-shared
+  // templates stay visible while this company is selected.
+  const { data: company } = await supabase
+    .from('companies')
+    .select('team_id')
+    .eq('id', companyId)
+    .maybeSingle()
+  const teamId = company?.team_id ?? null
+
+  // requireCompanyId only ever returns a real membership UUID, but assert the
+  // shape before interpolating it into the .or() filter.
+  if (!UUID_RE.test(companyId)) {
+    return NextResponse.json({ error: 'Invalid company context' }, { status: 400 })
+  }
+
+  // Scope to the SELECTED company: system + this company + this company's team.
+  // RLS (btl_select) is membership-wide — it returns templates from *every*
+  // company the user belongs to — so the active-company narrowing must happen
+  // here in the API layer (mirrors counterparty-templates). Without this, a
+  // user who owns several companies sees all of their templates merged.
+  // Only interpolate a team id that passes the strict UUID guard.
+  const scope = [
+    'is_system.eq.true',
+    `company_id.eq.${companyId}`,
+    ...(teamId && UUID_RE.test(teamId) ? [`team_id.eq.${teamId}`] : []),
+  ].join(',')
+
   const [templatesRes, usageRes] = await Promise.all([
     supabase
       .from('booking_template_library')
       .select('*')
       .eq('is_active', true)
+      .or(scope)
       .order('category')
       .order('name'),
     supabase

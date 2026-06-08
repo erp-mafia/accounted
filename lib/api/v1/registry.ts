@@ -297,10 +297,10 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
   return {
     openapi: '3.1.0',
     info: {
-      title: 'gnubok API',
+      title: 'Accounted API',
       version: API_V1_VERSION,
       description:
-        'Public REST API for gnubok — Swedish double-entry bookkeeping. ' +
+        'Public REST API for Accounted — Swedish double-entry bookkeeping. ' +
         'Every write supports dry-run via `?dry_run=true`. Every request must include ' +
         '`Authorization: Bearer gnubok_sk_...`. See /docs/api for the cookbook.',
     },

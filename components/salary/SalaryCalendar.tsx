@@ -22,6 +22,7 @@ import {
   Heart,
   HeartPulse,
   Loader2,
+  MinusCircle,
   Trash2,
   X,
   type LucideIcon,
@@ -48,6 +49,7 @@ type AbsenceType =
   | 'pregnancy'
   | 'care_relative'
   | 'study'
+  | 'unpaid_leave'
   | 'other_leave'
 
 interface AbsenceDay {
@@ -73,16 +75,17 @@ interface AbsenceTypeMeta {
 }
 
 const TYPE_META: Record<AbsenceType, AbsenceTypeMeta> = {
-  sick:          { label: 'Sjukfrånvaro',     shortLabel: 'Sjuk',   icon: HeartPulse, pillClass: 'bg-red-100 text-red-800' },
-  vab:           { label: 'VAB',              shortLabel: 'VAB',    icon: Baby,       pillClass: 'bg-amber-100 text-amber-800' },
-  parental:      { label: 'Föräldraledighet', shortLabel: 'Förä.',  icon: Heart,      pillClass: 'bg-emerald-100 text-emerald-800' },
-  pregnancy:     { label: 'Graviditetspenning', shortLabel: 'Grav.', icon: Heart,     pillClass: 'bg-pink-100 text-pink-800' },
-  care_relative: { label: 'Närståendepenning', shortLabel: 'Närst.', icon: Heart,     pillClass: 'bg-blue-100 text-blue-800' },
-  study:         { label: 'Studieledig',      shortLabel: 'Studie', icon: Activity,   pillClass: 'bg-indigo-100 text-indigo-800' },
-  other_leave:   { label: 'Övrig ledighet',   shortLabel: 'Övrigt', icon: Activity,   pillClass: 'bg-zinc-100 text-zinc-800' },
+  sick:          { label: 'Sjukfrånvaro',     shortLabel: 'Sjuk',   icon: HeartPulse,   pillClass: 'bg-red-100 text-red-800' },
+  vab:           { label: 'VAB',              shortLabel: 'VAB',    icon: Baby,         pillClass: 'bg-amber-100 text-amber-800' },
+  parental:      { label: 'Föräldraledighet', shortLabel: 'Förä.',  icon: Heart,        pillClass: 'bg-emerald-100 text-emerald-800' },
+  pregnancy:     { label: 'Graviditetspenning', shortLabel: 'Grav.', icon: Heart,       pillClass: 'bg-pink-100 text-pink-800' },
+  care_relative: { label: 'Närståendepenning', shortLabel: 'Närst.', icon: Heart,       pillClass: 'bg-blue-100 text-blue-800' },
+  study:         { label: 'Studieledig',      shortLabel: 'Studie', icon: Activity,     pillClass: 'bg-indigo-100 text-indigo-800' },
+  unpaid_leave:  { label: 'Tjänstledig utan lön', shortLabel: 'Tjänstl.', icon: MinusCircle, pillClass: 'bg-slate-100 text-slate-800' },
+  other_leave:   { label: 'Övrig ledighet',   shortLabel: 'Övrigt', icon: Activity,     pillClass: 'bg-zinc-100 text-zinc-800' },
 }
 
-const TYPE_ORDER: AbsenceType[] = ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'other_leave']
+const TYPE_ORDER: AbsenceType[] = ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave']
 
 // ─── Component ─────────────────────────────────────────────────────
 

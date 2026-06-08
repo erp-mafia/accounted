@@ -144,10 +144,10 @@ describe('Skills registry', () => {
     expect(await findSkill('does-not-exist', supabase as never)).toBeNull()
   })
 
-  it('skillUri uses the gnubok://skill/ prefix; atom slugs are URL-encoded', () => {
-    expect(skillUri('foo')).toBe('gnubok://skill/foo')
-    expect(skillUri('vertical/konsult-it')).toBe('gnubok://skill/vertical%2Fkonsult-it')
-    expect(SKILL_URI_PREFIX).toBe('gnubok://skill/')
+  it('skillUri uses the Accounted://skill/ prefix; atom slugs are URL-encoded', () => {
+    expect(skillUri('foo')).toBe('Accounted://skill/foo')
+    expect(skillUri('vertical/konsult-it')).toBe('Accounted://skill/vertical%2Fkonsult-it')
+    expect(SKILL_URI_PREFIX).toBe('Accounted://skill/')
   })
 })
 
@@ -440,7 +440,7 @@ describe('Skills via MCP protocol', () => {
     __resetAtomCache()
   })
 
-  it('resources/list includes one entry per skill at gnubok://skill/<slug>', async () => {
+  it('resources/list includes one entry per skill at Accounted://skill/<slug>', async () => {
     const res = await handleMcpRequest(mcpRequest('resources/list'))
     const result = await parseResult(res)
     const uris = result.resources.map((r: { uri: string }) => r.uri)
@@ -463,18 +463,18 @@ describe('Skills via MCP protocol', () => {
 
   it('resources/read returns the Markdown body for a skill URI', async () => {
     const res = await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://skill/quarterly-vat-review' })
+      mcpRequest('resources/read', { uri: 'Accounted://skill/quarterly-vat-review' })
     )
     const result = await parseResult(res)
     expect(result.contents).toHaveLength(1)
-    expect(result.contents[0].uri).toBe('gnubok://skill/quarterly-vat-review')
+    expect(result.contents[0].uri).toBe('Accounted://skill/quarterly-vat-review')
     expect(result.contents[0].mimeType).toBe('text/markdown')
     expect(result.contents[0].text).toContain('# Quarterly VAT Review')
   })
 
   it('resources/read returns Resource not found for unknown skill slug', async () => {
     const res = await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://skill/does-not-exist' })
+      mcpRequest('resources/read', { uri: 'Accounted://skill/does-not-exist' })
     )
     const json = await res.json()
     expect(json.error).toBeDefined()

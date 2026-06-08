@@ -4,7 +4,7 @@ Status: **Approved Documented Security Decision**
 Owner: Emil Mattsson (emil.mattsson@arcim.io)
 Last reviewed: 2026-05-11
 
-This document records authorization decisions for gnubok that go beyond the
+This document records authorization decisions for Accounted that go beyond the
 default "the resource creator is the only person who can act on it" model.
 It is the canonical reference for compliance reviewers (OWASP ASVS V8, ISO
 27001:2022 A.5.1 / A.8.3 / A.8.5, SOC 2 CC6.1) when they encounter an
@@ -14,7 +14,7 @@ authorization check that uses `company_id` rather than `user_id`.
 
 ## Multi-tenant model
 
-gnubok is a multi-tenant SaaS where the unit of business ownership is the
+Accounted is a multi-tenant SaaS where the unit of business ownership is the
 **company** (a row in `public.companies`). Users access companies through
 the `company_members` table, which links a user to one or more companies
 with a role (`owner` / `admin` / `member` / `viewer`).
@@ -53,7 +53,7 @@ of who originally drafted it.
 
 ### Why this is intentional
 
-gnubok's users are small businesses and the bookkeepers / consultants they
+Accounted's users are small businesses and the bookkeepers / consultants they
 share access with. Compliance scenarios that drive this model:
 
 1. **Bookkeeper handover.** A consultant who connected a bank during

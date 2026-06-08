@@ -6,6 +6,7 @@ import {
   getDefaultVatTreatmentForCategory,
   buildMappingResultFromCategory,
 } from '../category-mapping'
+import { BAS_REFERENCE } from '../bas-data'
 import { makeTransaction } from '@/tests/helpers'
 import type { TransactionCategory, VatTreatment } from '@/types'
 
@@ -64,7 +65,7 @@ describe('getDefaultAccountForCategory', () => {
   it('returns expense account for expense categories', () => {
     expect(getDefaultAccountForCategory('expense_equipment')).toBe('5410')
     expect(getDefaultAccountForCategory('expense_software')).toBe('5420')
-    expect(getDefaultAccountForCategory('expense_travel')).toBe('5800')
+    expect(getDefaultAccountForCategory('expense_travel')).toBe('5890')
     expect(getDefaultAccountForCategory('expense_office')).toBe('6110')
     expect(getDefaultAccountForCategory('expense_bank_fees')).toBe('6570')
   })
@@ -72,7 +73,7 @@ describe('getDefaultAccountForCategory', () => {
   it('returns income account for income categories', () => {
     expect(getDefaultAccountForCategory('income_services')).toBe('3001')
     expect(getDefaultAccountForCategory('income_products')).toBe('3001')
-    expect(getDefaultAccountForCategory('income_other')).toBe('3900')
+    expect(getDefaultAccountForCategory('income_other')).toBe('3999')
   })
 
   it('returns private account for enskild firma', () => {
@@ -232,10 +233,10 @@ describe('income account resolves by VAT treatment', () => {
     expect(result.creditAccount).toBe(expectedAccount)
   })
 
-  it('income_other always returns 3900 regardless of VAT treatment', () => {
+  it('income_other always returns 3999 regardless of VAT treatment', () => {
     for (const vat of ['standard_25', 'reduced_12', 'reduced_6', 'export', 'reverse_charge', 'exempt'] as VatTreatment[]) {
       const result = getCategoryAccountMapping('income_other', 1000, true, 'enskild_firma', vat)
-      expect(result.creditAccount).toBe('3900')
+      expect(result.creditAccount).toBe('3999')
     }
   })
 
@@ -268,5 +269,62 @@ describe('private transaction accounts by entity type and direction', () => {
 
   it('getDefaultAccountForCategory still returns 2013 for EF (default/withdrawal account)', () => {
     expect(getDefaultAccountForCategory('private', 'enskild_firma')).toBe('2013')
+  })
+})
+
+describe('category default → leaf account guarantee', () => {
+  // BAS encodes the parent/leaf distinction in account_name via the
+  // "(gruppkonto)" suffix. Auditors and Skatteverket downstream reporting
+  // expect postings on leaves, not headers — see migration 03d4b740.
+  const groupAccountNumbers = new Set<string>()
+  for (const acct of BAS_REFERENCE) {
+    if (acct.account_name.includes('(gruppkonto)')) {
+      groupAccountNumbers.add(acct.account_number)
+    }
+  }
+
+  const categoriesUnderGuard: TransactionCategory[] = [
+    'income_services',
+    'income_products',
+    'income_other',
+    'expense_equipment',
+    'expense_software',
+    'expense_travel',
+    'expense_office',
+    'expense_marketing',
+    'expense_professional_services',
+    'expense_representation',
+    'expense_consumables',
+    'expense_vehicle',
+    'expense_telecom',
+    'expense_education',
+    'expense_bank_fees',
+    'expense_card_fees',
+    'expense_currency_exchange',
+    'expense_other',
+    'private',
+    'uncategorized',
+  ]
+
+  it.each(categoriesUnderGuard)('%s default does not resolve to a gruppkonto', (category) => {
+    const target = getDefaultAccountForCategory(category)
+    expect(groupAccountNumbers.has(target)).toBe(false)
+  })
+
+  it('uncategorized positive amount does not credit a gruppkonto', () => {
+    const result = getCategoryAccountMapping('uncategorized', 1000, true)
+    expect(groupAccountNumbers.has(result.creditAccount)).toBe(false)
+  })
+
+  it('expense_telecom resolves to 6230 (Datakommunikation, leaf)', () => {
+    expect(getDefaultAccountForCategory('expense_telecom')).toBe('6230')
+  })
+
+  it('expense_travel resolves to 5890 (Övriga resekostnader, leaf)', () => {
+    expect(getDefaultAccountForCategory('expense_travel')).toBe('5890')
+  })
+
+  it('income_other resolves to 3999 (Övriga rörelseintäkter, leaf)', () => {
+    expect(getDefaultAccountForCategory('income_other')).toBe('3999')
   })
 })

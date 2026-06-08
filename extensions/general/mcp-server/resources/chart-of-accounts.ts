@@ -11,7 +11,7 @@ interface AccountSummary {
 }
 
 export const chartOfAccountsResource: McpResource = {
-  uri: 'gnubok://chart-of-accounts',
+  uri: 'Accounted://chart-of-accounts',
   name: 'Chart of Accounts (BAS)',
   description: 'The active BAS chart of accounts for the current company, grouped by account class (1=assets, 2=liabilities/equity, 3=revenue, 4=COGS, 5-7=expenses, 8=financial). Use to look up account numbers before booking entries.',
   mimeType: 'application/json',

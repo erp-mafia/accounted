@@ -10,7 +10,7 @@ interface Capability {
 }
 
 export const capabilitiesResource: McpResource = {
-  uri: 'gnubok://capabilities',
+  uri: 'Accounted://capabilities',
   name: 'Capabilities',
   description: 'What the current API key can actually do given (a) its granted scopes and (b) the current company state. Surfaces blockers like locked periods so the agent knows ahead of time why an action would fail.',
   mimeType: 'application/json',

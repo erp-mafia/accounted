@@ -49,7 +49,21 @@ export async function createSalaryRunWithEmployees(
       .eq('company_id', companyId)
       .eq('is_active', true)
 
-    for (const emp of employees || []) {
+    // Pay period bounds (inclusive) — used to skip employees whose employment
+    // does not overlap the run. employment_start is NOT NULL on employees;
+    // employment_end is nullable for ongoing employments.
+    const periodStart = `${params.periodYear}-${String(params.periodMonth).padStart(2, '0')}-01`
+    const periodEnd = new Date(Date.UTC(params.periodYear, params.periodMonth, 0))
+      .toISOString()
+      .slice(0, 10)
+
+    const eligibleEmployees = (employees || []).filter((emp) => {
+      if (emp.employment_start && emp.employment_start > periodEnd) return false
+      if (emp.employment_end && emp.employment_end < periodStart) return false
+      return true
+    })
+
+    for (const emp of eligibleEmployees) {
       const baseAmount =
         emp.salary_type === 'monthly'
           ? Math.round((emp.monthly_salary || 0) * (emp.employment_degree / 100) * 100) / 100
@@ -91,7 +105,7 @@ export async function createSalaryRunWithEmployees(
       }
     }
 
-    return { run: run as Record<string, unknown>, employeeCount: (employees || []).length }
+    return { run: run as Record<string, unknown>, employeeCount: eligibleEmployees.length }
   } catch (err) {
     // Compensating delete — never leave a half-populated run. Cascade removes
     // any salary_run_employees / salary_line_items already inserted.

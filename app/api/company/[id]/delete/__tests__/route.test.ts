@@ -114,6 +114,48 @@ describe('POST /api/company/[id]/delete', () => {
     expect(body).toHaveProperty('error')
   })
 
+  it('accepts the settings display name when companies.name is stale', async () => {
+    // Regression: the UI shows company_settings.company_name (the dialog,
+    // label and the enable-gate all use it), but companies.name can be stale.
+    // The server must accept the displayed name, not just the raw column.
+    mockAuth('user-1')
+    mockService({
+      companies: [{ data: { id: 'c1', name: 'Gammalt namn', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+      company_settings: [{ data: { company_name: 'Nytt namn' }, error: null }],
+    })
+
+    const req = createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Nytt namn' },
+    })
+    const { status } = await parseJsonResponse(
+      await POST(req, createMockRouteParams({ id: 'c1' }))
+    )
+    expect(status).toBe(200)
+  })
+
+  it('rejects the stale companies.name when a settings name exists (only the displayed name is accepted)', async () => {
+    // Security: the UI only ever shows company_settings.company_name when set, so
+    // the server must not accept the stale companies.name as an alternative
+    // confirmation — that would be a delete path the user was never shown.
+    mockAuth('user-1')
+    mockService({
+      companies: [{ data: { id: 'c1', name: 'Gammalt namn', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+      company_settings: [{ data: { company_name: 'Nytt namn' }, error: null }],
+    })
+
+    const req = createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Gammalt namn' },
+    })
+    const { status } = await parseJsonResponse(
+      await POST(req, createMockRouteParams({ id: 'c1' }))
+    )
+    expect(status).toBe(400)
+  })
+
   it('returns 403 when caller is member but not owner', async () => {
     mockAuth('user-1')
     mockService({

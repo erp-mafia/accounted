@@ -40,6 +40,7 @@ interface BankFileUploadStepProps {
   onFileSelect: (file: File, formatOverride?: BankFileFormatId) => void
   isLoading: boolean
   error: string | null
+  errorTitle?: string | null
   detectedFormat?: string | null
   detectedFormatName?: string | null
 }
@@ -48,6 +49,7 @@ export default function BankFileUploadStep({
   onFileSelect,
   isLoading,
   error,
+  errorTitle,
   detectedFormat,
   detectedFormatName,
 }: BankFileUploadStepProps) {
@@ -200,7 +202,7 @@ export default function BankFileUploadStep({
             <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
               <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-destructive">Kunde inte läsa filen</p>
+                <p className="font-medium text-destructive">{errorTitle || 'Kunde inte läsa filen'}</p>
                 <p className="text-sm text-muted-foreground">{error}</p>
               </div>
             </div>

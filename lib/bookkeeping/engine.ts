@@ -12,6 +12,8 @@ import {
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
@@ -341,6 +343,12 @@ export async function createDraftEntry(
  * Uses the atomic commit_journal_entry RPC so the voucher number increment
  * and status update happen in one transaction. If the balance trigger rejects
  * the entry, the sequence increment rolls back — no burned numbers.
+ *
+ * Actor attribution: the surrounding runWithActor() scope (set by the
+ * approval entry points — commitPendingOperation, web approve routes) is
+ * forwarded to the RPC, which stamps journal_entries.committed_actor_* and
+ * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs,
+ * identical to pre-attribution behaviour.
  */
 export async function commitEntry(
   supabase: SupabaseClient,
@@ -350,6 +358,7 @@ export async function commitEntry(
   commitMethod?: string,
   rubricVersion?: string
 ): Promise<JournalEntry> {
+  const actor = getActor()
 
   // Atomic: increment voucher sequence + update status in one transaction.
   // Rolls back the sequence if the balance trigger or any constraint fails.
@@ -358,6 +367,8 @@ export async function commitEntry(
     p_entry_id: entryId,
     p_commit_method: commitMethod ?? null,
     p_rubric_version: rubricVersion ?? null,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
   })
 
   if (commitError) {
@@ -589,92 +600,12 @@ export async function reverseEntry(
     throw new EntryAlreadyReversedError()
   }
 
-  // If this was a payment entry, sync the linked invoice/supplier-invoice status
-  const paymentSourceTypes = [
-    'invoice_paid', 'invoice_cash_payment',
-    'supplier_invoice_paid', 'supplier_invoice_cash_payment',
-  ]
-
-  if (paymentSourceTypes.includes(original.source_type) && original.source_id) {
-    // The GL reversal is already handled above (line-by-line mirror of the original
-    // verifikation per BFL 5 kap 5§). Here we sync the business-level invoice state.
-    // Payment amounts come from the payments table, not from GL line inspection —
-    // this works identically for kontantmetod and faktureringsmetod.
-    const entryId = original.id
-
-    if (original.source_type.startsWith('supplier_invoice')) {
-      const { data: payment } = await supabase
-        .from('supplier_invoice_payments')
-        .select('amount')
-        .eq('journal_entry_id', entryId)
-        .single()
-
-      const { data: supplierInvoice } = await supabase
-        .from('supplier_invoices')
-        .select('paid_amount, total_amount, due_date')
-        .eq('id', original.source_id)
-        .eq('company_id', companyId)
-        .single()
-
-      if (supplierInvoice && payment) {
-        const newPaidAmount = Math.round((supplierInvoice.paid_amount - payment.amount) * 100) / 100
-        const newRemaining = Math.round((supplierInvoice.total_amount - Math.max(0, newPaidAmount)) * 100) / 100
-        let newStatus: string
-        if (newPaidAmount > 0) {
-          newStatus = 'partially_paid'
-        } else if (supplierInvoice.due_date && new Date(supplierInvoice.due_date) < new Date()) {
-          newStatus = 'overdue'
-        } else {
-          newStatus = 'approved'
-        }
-
-        await supabase
-          .from('supplier_invoices')
-          .update({
-            status: newStatus,
-            paid_amount: Math.max(0, newPaidAmount),
-            remaining_amount: newRemaining,
-            paid_at: null,
-            payment_journal_entry_id: null,
-          })
-          .eq('id', original.source_id)
-          .eq('company_id', companyId)
-      }
-    } else {
-      const { data: payment } = await supabase
-        .from('invoice_payments')
-        .select('amount')
-        .eq('journal_entry_id', entryId)
-        .single()
-
-      const { data: customerInvoice } = await supabase
-        .from('invoices')
-        .select('paid_amount, due_date')
-        .eq('id', original.source_id)
-        .eq('company_id', companyId)
-        .single()
-
-      if (customerInvoice) {
-        const paymentAmount = payment?.amount ?? customerInvoice.paid_amount
-        const newPaidAmount = Math.round((customerInvoice.paid_amount - paymentAmount) * 100) / 100
-        const revertStatus = newPaidAmount > 0
-          ? 'partially_paid'
-          : customerInvoice.due_date && new Date(customerInvoice.due_date) < new Date()
-            ? 'overdue'
-            : 'sent'
-
-        await supabase
-          .from('invoices')
-          .update({
-            status: revertStatus,
-            paid_at: null,
-            paid_amount: Math.max(0, newPaidAmount),
-          })
-          .eq('id', original.source_id)
-          .eq('company_id', companyId)
-          .in('status', ['paid', 'partially_paid'])
-      }
-    }
+  // If this was a payment entry, sync the linked invoice/supplier-invoice status.
+  // Helper is shared with the DELETE journal entry route so both code paths leave
+  // the invoice in a consistent state (BFL 5 kap 5§ requires GL reversal; this
+  // covers the business-level state that lives outside the GL).
+  if (isPaymentSourceType(original.source_type)) {
+    await syncInvoiceStatusFromPaymentEntry(supabase, companyId, original as JournalEntry)
   }
 
   // Fetch complete reversal entry with lines

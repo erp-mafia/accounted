@@ -25,7 +25,7 @@ function daysBetween(fromIso: string, toIso: string): number {
 }
 
 export const attentionResource: McpResource = {
-  uri: 'gnubok://attention',
+  uri: 'Accounted://attention',
   name: 'What Needs Attention',
   description:
     'One-shot summary of outstanding work for the active company: unbooked transactions, overdue invoices, pending approvals, voucher gaps, upcoming deadlines, bank consent expiry, and period-lock alerts. Each category includes a count, up to 5 sample rows, and a suggested next tool call. Use this at session start to orient before chaining read tools.',
@@ -180,7 +180,7 @@ export const attentionResource: McpResource = {
         samples: overdueAll.slice(0, SAMPLE_LIMIT),
         next: {
           description: 'Granska förfallna fakturor och skicka påminnelser.',
-          resource: 'gnubok://recent-activity?limit=20',
+          resource: 'Accounted://recent-activity?limit=20',
         },
       })
     }
@@ -360,7 +360,7 @@ export const attentionResource: McpResource = {
           ],
           next: {
             description: 'Slutför obokfört arbete innan lock_date.',
-            resource: 'gnubok://period/active',
+            resource: 'Accounted://period/active',
           },
         })
       }

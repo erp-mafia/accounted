@@ -25,7 +25,10 @@ const DeleteCompanySchema = z.object({
  *
  * Rules:
  *  - Only callers with role='owner' in company_members may delete.
- *  - The body must include confirm_name matching companies.name exactly.
+ *  - The body must include confirm_name matching the company's display name.
+ *    The UI shows company_settings.company_name (companies.name may be stale),
+ *    so we validate against that, falling back to companies.name. Either value
+ *    is accepted so the confirm gate never blocks a legitimate deletion.
  *  - Already-archived companies return 404 (treated as not found).
  */
 export async function POST(
@@ -89,8 +92,23 @@ export async function POST(
     )
   }
 
-  // 3. Confirm name matches exactly (case-sensitive trim)
-  if (confirm_name.trim() !== company.name.trim()) {
+  // 3. Confirm name matches the exact name the UI displays. The dashboard layout
+  // resolves the displayed name as `company_settings.company_name || companies.name`
+  // (companies.name may be stale) and CompanyDangerZone gates on that value, so
+  // the server must accept ONLY that single name. Accepting the stale
+  // companies.name as an alternative would open a confirmation path the user was
+  // never shown — weakening the gate on an irreversible action (ASVS V8.2.1).
+  // Case-sensitive trim, mirror of the client-side check.
+  const { data: companySettings } = await service
+    .from('company_settings')
+    .select('company_name')
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  const displayName = (companySettings?.company_name || company.name).trim()
+  const typed = confirm_name.trim()
+
+  if (typed !== displayName) {
     return NextResponse.json(
       { error: 'Företagsnamnet stämmer inte överens.' },
       { status: 400 }

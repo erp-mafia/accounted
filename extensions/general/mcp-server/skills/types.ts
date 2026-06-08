@@ -5,7 +5,7 @@
  *
  *  - **workflow** skills are static Markdown documents the server ships
  *    alongside tools (month-end close, VAT review, year-end, invoicing,
- *    payroll). They document *how* to compose gnubok tools for a real-world
+ *    payroll). They document *how* to compose Accounted tools for a real-world
  *    workflow.
  *  - **horizontal / vertical / modifier** atoms are loaded dynamically from
  *    `agent_atom_registry` — the same atoms the in-app composer assembles for
@@ -64,7 +64,7 @@ export interface Skill {
 export const SKILL_MIME_TYPE = 'text/markdown' as const
 
 /** Resource URI prefix for skills exposed via resources/read. */
-export const SKILL_URI_PREFIX = 'gnubok://skill/' as const
+export const SKILL_URI_PREFIX = 'Accounted://skill/' as const
 
 /** Build a resource URI for a skill. Slugs with slashes (atom ids) are
  *  URL-encoded so the URI remains well-formed. */

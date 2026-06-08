@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * gnubok-mcp — Connect Claude Desktop to your gnubok bookkeeping account.
+ * gnubok-mcp — Connect Claude Desktop to your Accounted bookkeeping account.
  *
  * Usage in claude_desktop_config.json:
  * {

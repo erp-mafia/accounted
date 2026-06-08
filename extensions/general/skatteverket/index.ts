@@ -1907,7 +1907,7 @@ export const skatteverketExtension: Extension = {
 
 /**
  * Parse and validate declaration request body.
- * Computes momsuppgift from gnubok's VAT calculation if not provided directly.
+ * Computes momsuppgift from Accounted's VAT calculation if not provided directly.
  */
 async function parseDeclarationRequest(
   request: Request,

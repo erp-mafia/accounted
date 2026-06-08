@@ -197,7 +197,7 @@ export default function NewUserChecklist({
         </div>
 
         {/* Step 3: Connect Skatteverket — only when the extension is enabled.
-            Optional: connecting here lets gnubok submit moms + AGI and read
+            Optional: connecting here lets Accounted submit moms + AGI and read
             skattekonto saldo, but the user can skip and do it later from
             /settings/skatteverket. The OAuth flow returns to the dashboard
             via return_to=/, which clears the gate via the same path the

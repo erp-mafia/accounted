@@ -12,10 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Loader2, ArrowRight, ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react'
 import type { EntityType } from '@/types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
-import { getBranding } from '@/lib/branding/service'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-
-const branding = getBranding()
 
 const schema = z.object({
   company_name: z.string().min(1, 'Företagsnamn krävs'),
@@ -82,7 +79,7 @@ export default function Step2CompanyDetails({
   const [isLooking, setIsLooking] = useState(false)
   const [lookupError, setLookupError] = useState<string | null>(null)
   const [lookupDone, setLookupDone] = useState<CompanyLookupResult | null>(null)
-  const [orgNumberExists, setOrgNumberExists] = useState(false)
+  const [existingOwn, setExistingOwn] = useState<{ id: string; name: string } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const dupAbortRef = useRef<AbortController | null>(null)
   // Tracks an orgnr that's been pre-verified (BankID CompanyRoles match) so
@@ -96,13 +93,14 @@ export default function Step2CompanyDetails({
 
   const orgNumber = watch('org_number')
 
-  // Debounced duplicate check against gnubok's own companies table. Runs in
-  // parallel with the TIC lookup — they don't conflict. On match, the submit
-  // button is disabled; the server action would also reject ('org_number_exists')
-  // but blocking client-side avoids a wasted roundtrip.
+  // Soft, account-scoped duplicate warning: if THIS user already has a
+  // (non-archived) company with the same org number, surface a non-blocking
+  // note. Org-number reuse is allowed (see lib/company/actions.ts), so this
+  // never disables submit. The endpoint is RLS-scoped to the caller's own
+  // companies, so it can't reveal or count another account's.
   useEffect(() => {
     if (!orgNumber || normalizeOrgNumber(orgNumber) === null) {
-      setOrgNumberExists(false)
+      setExistingOwn(null)
       return
     }
     const timer = setTimeout(() => {
@@ -115,10 +113,10 @@ export default function Step2CompanyDetails({
         .then(async (res) => {
           if (controller.signal.aborted || !res.ok) return
           const { data } = await res.json()
-          setOrgNumberExists(!!data?.exists)
+          setExistingOwn(data?.companies?.[0] ?? null)
         })
         .catch(() => {
-          // Network failure is non-fatal — the server action will re-check.
+          // Advisory only — never blocks creation.
         })
     }, 500)
     return () => {
@@ -267,12 +265,10 @@ export default function Step2CompanyDetails({
               {ticEnabled && lookupError && (
                 <p className="text-xs text-muted-foreground">{lookupError}</p>
               )}
-              {orgNumberExists && (
-                <div className="flex items-start gap-2 text-sm text-destructive">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-                  <span>
-                    {t('step2_company_exists', { appName: branding.appName.toLowerCase() })}
-                  </span>
+              {existingOwn && (
+                <div className="flex items-start gap-2 rounded-md bg-warning/15 px-3 py-2 text-sm text-warning-foreground">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-warning" />
+                  <span>{t('step2_company_exists_own', { name: existingOwn.name })}</span>
                 </div>
               )}
             </div>
@@ -338,7 +334,7 @@ export default function Step2CompanyDetails({
               </Button>
               <Button
                 type="submit"
-                disabled={isSaving || orgNumberExists}
+                disabled={isSaving}
                 className="w-full sm:w-auto"
               >
                 {isSaving ? (

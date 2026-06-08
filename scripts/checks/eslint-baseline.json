@@ -1,0 +1,12 @@
+{
+  "totalErrors": 60,
+  "perRule": {
+    "@next/next/no-assign-module-variable": 1,
+    "@typescript-eslint/no-explicit-any": 15,
+    "prefer-const": 3,
+    "react-hooks/preserve-manual-memoization": 6,
+    "react-hooks/purity": 1,
+    "react-hooks/set-state-in-effect": 28,
+    "react-hooks/static-components": 6
+  }
+}

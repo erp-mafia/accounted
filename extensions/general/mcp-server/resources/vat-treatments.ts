@@ -5,7 +5,7 @@ import type { CustomerType } from '@/types'
 const CUSTOMER_TYPES: CustomerType[] = ['individual', 'swedish_business', 'eu_business', 'non_eu_business']
 
 export const vatTreatmentsResource: McpResource = {
-  uri: 'gnubok://settings/vat-treatments',
+  uri: 'Accounted://settings/vat-treatments',
   name: 'VAT Treatments',
   description: 'Available VAT treatments and rates per customer type, and the resulting moms ruta on the VAT declaration. Use before creating invoices to pick the right VAT rate.',
   mimeType: 'application/json',

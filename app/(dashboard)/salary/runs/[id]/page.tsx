@@ -7,11 +7,12 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ArrowLeft, Calculator, Eye, Check, CreditCard, BookOpen,
-  ArrowLeftCircle, Loader2, Download, FileDown,
+  ArrowLeftCircle, Loader2, Download, FileDown, Trash2,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -125,6 +126,26 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     setActionLoading(null)
   }
 
+  async function handleDelete() {
+    if (!run) return
+    const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+    if (!confirm(`Radera utkastet för ${period}? Alla anställda och beräkningar i körningen tas bort. Detta kan inte ångras.`)) return
+    setActionLoading('delete')
+    const res = await fetch(`/api/salary/runs/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      toast({ title: 'Utkast raderat' })
+      router.push('/salary')
+      return
+    }
+    const result = await res.json()
+    toast({
+      title: 'Kunde inte radera utkast',
+      description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+      variant: 'destructive',
+    })
+    setActionLoading(null)
+  }
+
   async function handleAddEmployee(employeeId: string) {
     setActionLoading('add-employee')
     const res = await fetch(`/api/salary/runs/${id}/employees`, {
@@ -139,6 +160,33 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
       const result = await res.json()
       toast({
         title: 'Kunde inte lägga till anställd',
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    }
+    setActionLoading(null)
+  }
+
+  // Edit this month's monthly salary for one employee (draft only). The engine
+  // reads this per-run value at calc time, so each month's gross can differ
+  // without changing the employee's standard pay. Saved on blur; the user then
+  // clicks Beräkna to refresh the outcome.
+  async function handleSalaryEdit(employeeId: string, raw: string, previous: number) {
+    const monthly = Number(raw.replace(/\s/g, '').replace(',', '.'))
+    if (!Number.isFinite(monthly) || monthly < 0 || monthly === previous) return
+    setActionLoading(`salary-${employeeId}`)
+    const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monthly_salary: monthly }),
+    })
+    if (res.ok) {
+      await loadRun()
+      toast({ title: 'Månadslön uppdaterad', description: 'Klicka Beräkna för att uppdatera utfallet.' })
+    } else {
+      const result = await res.json()
+      toast({
+        title: 'Kunde inte uppdatera månadslön',
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
         variant: 'destructive',
       })
@@ -270,6 +318,26 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   const addedEmployeeIds = new Set(employees.map(e => e.employee_id))
   const notAdded = availableEmployees.filter(e => !addedEmployeeIds.has(e.id))
 
+  // calculation_params is frozen only when the run has been calculated, so it
+  // distinguishes "not yet calculated" from "calculated to 0" (a nollkörning).
+  const isCalculated = run.calculation_params != null
+  const isNollkorning = isCalculated && Math.round((run.total_gross ?? 0) * 100) === 0
+
+  // Advancing a draft to review. For a nollkörning confirm first — an empty
+  // declaration is filed to Skatteverket, which should be deliberate.
+  function handleToReview() {
+    if (
+      isNollkorning &&
+      !confirm(
+        'Detta är en nollkörning — ingen lön rapporteras för perioden. ' +
+          'En nolldeklaration (huvuduppgift utan individuppgifter) lämnas till Skatteverket. Vill du fortsätta?',
+      )
+    ) {
+      return
+    }
+    handleAction('review')
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -326,6 +394,19 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         ))}
       </div>
 
+      {isNollkorning && (
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm font-medium">Nollkörning</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Ingen lön rapporteras för {periodLabel}. En nolldeklaration (huvuduppgift utan
+              individuppgifter) lämnas till Skatteverket — en registrerad arbetsgivare måste lämna
+              arbetsgivardeklaration varje månad, även månader utan lön.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Employees */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
@@ -377,7 +458,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
               <TableHeader>
                 <TableRow>
                   <TableHead>Anställd</TableHead>
-                  <TableHead className="hidden md:table-cell text-right">Brutto</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">{run.status === 'draft' ? 'Månadslön' : 'Brutto'}</TableHead>
                   <TableHead className="hidden lg:table-cell text-right">Skatt</TableHead>
                   <TableHead className="text-right">Netto</TableHead>
                   <TableHead className="hidden lg:table-cell text-right">Avgifter</TableHead>
@@ -393,6 +474,8 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                     : `Anställd ${sre.employee_id.slice(0, 8)}...`
                   const taxValue = sre.tax_withheld_override ?? sre.tax_withheld
                   const avgifterValue = sre.avgifter_amount_override ?? sre.avgifter_amount
+                  // Monthly salary is editable per run while the run is a draft.
+                  const editableSalary = run.status === 'draft' && canWrite && sre.salary_type === 'monthly'
                   return (
                     <TableRow
                       key={sre.id}
@@ -408,10 +491,28 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                           {name}
                         </Link>
                         <span className="md:hidden block text-xs text-muted-foreground font-normal mt-0.5 tabular-nums">
-                          Brutto {formatCurrency(sre.gross_salary)}
+                          {run.status === 'draft'
+                            ? `Månadslön ${formatCurrency(sre.monthly_salary)}`
+                            : `Brutto ${formatCurrency(sre.gross_salary)}`}
                         </span>
                       </TableCell>
-                      <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.gross_salary)}</TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums">
+                        {editableSalary ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={sre.monthly_salary}
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => handleSalaryEdit(sre.employee_id, e.target.value, sre.monthly_salary)}
+                            disabled={actionLoading === `salary-${sre.employee_id}`}
+                            aria-label={`Månadslön för ${name}`}
+                            className="h-8 w-32 ml-auto text-right tabular-nums"
+                          />
+                        ) : (
+                          formatCurrency(sre.gross_salary)
+                        )}
+                      </TableCell>
                       <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(taxValue)}</TableCell>
                       <TableCell className="text-right tabular-nums font-medium">{formatCurrency(sre.net_salary + (sre.tax_withheld - taxValue))}</TableCell>
                       <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(avgifterValue)}</TableCell>
@@ -573,7 +674,11 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         <div className="flex flex-wrap gap-3 justify-end">
           {run.status === 'draft' && (
             <>
-              <Button variant="outline" onClick={handleCalculate} disabled={!!actionLoading || employees.length === 0}>
+              <Button variant="outline" onClick={handleDelete} disabled={!!actionLoading} className="text-destructive hover:text-destructive mr-auto">
+                {actionLoading === 'delete' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                Radera utkast
+              </Button>
+              <Button variant="outline" onClick={handleCalculate} disabled={!!actionLoading}>
                 {actionLoading === 'calculate' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Calculator className="mr-2 h-4 w-4" />}
                 Beräkna
               </Button>
@@ -581,7 +686,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                 {actionLoading === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
                 Förhandsgranska
               </Button>
-              <Button onClick={() => handleAction('review')} disabled={!!actionLoading || run.total_gross === 0}>
+              <Button onClick={handleToReview} disabled={!!actionLoading || !isCalculated}>
                 Till granskning
               </Button>
             </>

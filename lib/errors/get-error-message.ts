@@ -18,6 +18,7 @@
  */
 
 import { formatCurrency } from '@/lib/utils'
+import { getErrorEntry } from './structured-errors'
 
 type ErrorContext =
   | 'invoice'
@@ -279,6 +280,17 @@ export function getErrorMessage(
         details?: unknown
       }
 
+      // For English UI, return the registry's English message for any known
+      // code instead of falling through to the Swedish branches below (which
+      // ignored locale — English users were shown Swedish prose). The Swedish
+      // path is left entirely unchanged; codes absent from the registry still
+      // fall through. The dynamic branches (amounts / lock date / reason) keep
+      // owning Swedish display.
+      if (locale === 'en' && typeof structured.code === 'string') {
+        const entry = getErrorEntry(structured.code)
+        if (entry?.message_en) return entry.message_en
+      }
+
       if (structured.code === 'ACCOUNTS_NOT_IN_CHART' && Array.isArray(structured.account_numbers)) {
         const numbers = structured.account_numbers as string[]
         return `Följande konton behöver aktiveras: ${numbers.join(', ')}`
@@ -324,8 +336,26 @@ export function getErrorMessage(
         return 'Kontering saknas för transaktionen. Kontrollera bokföringsreglerna.'
       }
 
+      if (structured.code === 'NO_OPEN_PERIOD_FOR_DATE') {
+        return 'Det finns ingen räkenskapsperiod som täcker det valda datumet. Skapa eller öppna räkenskapsåret först.'
+      }
+
+      if (structured.code === 'TARGET_PERIOD_CLOSED') {
+        return 'Räkenskapsåret för det valda datumet är stängt (bokslut) och kan inte återöppnas. Bokför rättelsen i innevarande period istället.'
+      }
+
+      if (structured.code === 'TARGET_PERIOD_LOCKED') {
+        const details = structured.details as { lockDate?: string } | undefined
+        return details?.lockDate
+          ? `Räkenskapsperioden för det valda datumet är låst (t.o.m. ${details.lockDate}). Lås upp perioden för att flytta verifikationen dit.`
+          : 'Räkenskapsperioden för det valda datumet är låst. Lås upp perioden för att flytta verifikationen dit.'
+      }
+
       if (structured.code === 'MEANINGLESS_CORRECTION') {
         const details = structured.details as { reason?: string } | undefined
+        if (details?.reason === 'no_date_change') {
+          return 'Det nya datumet är samma som det nuvarande — det finns inget att flytta.'
+        }
         if (details?.reason === 'identical_to_original') {
           return 'Rättelsen är identisk med originalverifikationen — inget har ändrats.'
         }

@@ -12,7 +12,7 @@ import {
 import { useCompany } from '@/contexts/CompanyContext'
 import type { CashAccount } from '@/types'
 
-const STORAGE_KEY_PREFIX = 'gnubok:cash-account:'
+const STORAGE_KEY_PREFIX = 'Accounted:cash-account:'
 
 interface Props {
   /**

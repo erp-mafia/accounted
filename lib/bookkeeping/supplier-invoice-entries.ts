@@ -1,7 +1,13 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
-import { generateReverseChargeLines, generateReverseChargeBasisLines } from './vat-entries'
+import {
+  generateReverseChargeLines,
+  generateReverseChargeBasisLines,
+  isReverseChargeBasisAccount,
+  resolveReverseChargeRate,
+} from './vat-entries'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -12,29 +18,6 @@ import type {
 } from '@/types'
 
 const log = createLogger('supplier-invoice-entries')
-
-/**
- * Accounts that already populate momsdeklaration ruta 20-24 directly when
- * debited. If the user picked one of these as the expense account on an RC
- * invoice item, the engine must NOT add the parallel basbeloppsrader (those
- * would double-count the basis).
- */
-const RC_BASIS_ACCOUNTS = new Set([
-  // ruta 20 — EU goods
-  '4515', '4516', '4517',
-  // ruta 21 — EU services
-  '4535', '4536', '4537',
-  // ruta 22 — non-EU services
-  '4531', '4532', '4533',
-  // ruta 23 — domestic goods RC
-  '4415', '4416', '4417',
-  // ruta 24 — domestic services RC
-  '4425', '4426', '4427',
-])
-
-function isBasisAccount(account: string): boolean {
-  return RC_BASIS_ACCOUNTS.has(account)
-}
 
 /**
  * Build a BFL-compliant verifikation description with event type, counterparty, and suffix.
@@ -202,8 +185,10 @@ export async function createSupplierInvoicePaymentEntry(
   paymentAmount: number,
   paymentDate: string,
   exchangeRateDifference?: number,
-  supplierName?: string
+  supplierName?: string,
+  paymentAccount?: string
 ): Promise<JournalEntry | null> {
+  const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for payment date:', paymentDate)
@@ -228,7 +213,7 @@ export async function createSupplierInvoicePaymentEntry(
 
     // Credit: Bank at actual SEK paid
     lines.push({
-      account_number: '1930',
+      account_number: creditAccount,
       debit_amount: 0,
       credit_amount: Math.round(actualSekPaid * 100) / 100,
       line_description: desc,
@@ -262,7 +247,7 @@ export async function createSupplierInvoicePaymentEntry(
     })
 
     lines.push({
-      account_number: '1930',
+      account_number: creditAccount,
       debit_amount: 0,
       credit_amount: Math.round(paymentAmount * 100) / 100,
       line_description: desc,
@@ -297,33 +282,61 @@ export async function createSupplierInvoiceCashEntry(
   items: SupplierInvoiceItem[],
   paymentDate: string,
   supplierType: string,
-  supplierName?: string
+  supplierName?: string,
+  paymentAccount?: string,
+  // SEK that actually settled the invoice (the amount that left the bank). For
+  // a foreign-currency invoice this pins the whole entry to the PAYMENT-date
+  // rate — see the kontantmetoden note below. Omit for SEK invoices and the
+  // behaviour is byte-identical to before.
+  settledBankSek?: number
 ): Promise<JournalEntry | null> {
+  const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for payment date:', paymentDate)
     return null
   }
 
+  // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap —
+  // "bokföring vid betalningstillfället"), so the entire verifikat is translated
+  // at the PAYMENT-date rate (ÅRL 4 kap 6 §). There is no kursvinst/kursförlust
+  // because no leverantörsskuld was ever carried at a historical rate — that
+  // only happens under faktureringsmetoden (handled by the 2440-clearing path
+  // with 7960/3960). When the caller passes the SEK that actually settled the
+  // invoice, we derive the implied payment-date rate from it so the payment-
+  // account credit equals the bank movement to the öre. For SEK invoices, or
+  // when no settlement SEK is supplied, we keep the invoice's stored rate.
+  const isForeign = invoice.currency !== 'SEK'
+  const useSettlementRate =
+    settledBankSek != null && settledBankSek > 0 && isForeign && invoice.total > 0
+  const effectiveRate = useSettlementRate
+    ? settledBankSek / invoice.total
+    : invoice.exchange_rate
+
   const desc = buildSupplierDescription('Kontantbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName)
   const lines: CreateJournalEntryLineInput[] = []
+  // Expense debit lines tracked separately so a sub-öre translation residual
+  // can be folded into the largest one (öresavrundning step below).
+  const expenseLines: CreateJournalEntryLineInput[] = []
 
   // Aggregate expense amounts by account number and convert to SEK
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
     const current = expenseByAccount.get(item.account_number) || 0
-    const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate)
+    const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, effectiveRate)
     expenseByAccount.set(item.account_number, current + itemSek)
   }
 
   // Debit: Expense accounts (in SEK)
   for (const [accountNumber, amount] of expenseByAccount) {
-    lines.push({
+    const line: CreateJournalEntryLineInput = {
       account_number: accountNumber,
       debit_amount: Math.round(amount * 100) / 100,
       credit_amount: 0,
       line_description: desc,
-    })
+    }
+    lines.push(line)
+    expenseLines.push(line)
   }
 
   const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
@@ -341,8 +354,10 @@ export async function createSupplierInvoiceCashEntry(
     // Per-rate bucketing: see registration entry above for the FK004 rationale.
     // Drive iteration off the basis (line_total per rate) — fiktiv moms is
     // always statutory base × rate; manual vat_amount overrides don't apply.
-    const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
-    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
+    // effectiveRate (payment-date rate under kontantmetoden) keeps the fiktiv
+    // moms base consistent with the expense lines above.
+    const baseByRate = groupBaseByRate(items, invoice.currency, effectiveRate)
+    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, effectiveRate)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
@@ -356,8 +371,9 @@ export async function createSupplierInvoiceCashEntry(
       }
     }
   } else if (invoice.vat_amount > 0) {
-    // Domestic standard: Debit ingående moms per rate group
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    // Domestic standard: Debit ingående moms per rate group (at the payment-
+    // date rate when settling a foreign invoice — see effectiveRate above).
+    const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
         lines.push({
@@ -370,12 +386,30 @@ export async function createSupplierInvoiceCashEntry(
     }
   }
 
-  // Credit: Företagskonto — balance guarantee: ensures sum(debits) === sum(credits)
+  // Öresavrundning: when translating a foreign invoice at the payment-date
+  // rate, per-line rounding can drift the implied bank total by an öre or two.
+  // Fold that residual into the largest expense line so the payment-account
+  // credit lands exactly on the SEK that left the bank (1930 reconciles to the
+  // bank transaction). Immaterial to the momsdeklaration — rutor are whole
+  // kronor. The |residual| ≤ 1 guard ensures we only absorb rounding noise,
+  // never a real shortfall (a partial settlement is blocked upstream).
+  if (useSettlementRate && expenseLines.length > 0) {
+    const debitSum = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const creditSum = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    const provisionalCredit = roundOre(debitSum - creditSum)
+    const residual = roundOre(settledBankSek! - provisionalCredit)
+    if (residual !== 0 && Math.abs(residual) <= 1) {
+      const target = expenseLines.reduce((a, b) => (b.debit_amount >= a.debit_amount ? b : a))
+      target.debit_amount = roundOre(target.debit_amount + residual)
+    }
+  }
+
+  // Credit: payment account — balance guarantee: ensures sum(debits) === sum(credits)
   // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   lines.push({
-    account_number: '1930',
+    account_number: creditAccount,
     debit_amount: 0,
     credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
     line_description: desc,
@@ -658,9 +692,15 @@ function groupVatByRate(
 }
 
 /**
- * Group items by VAT rate and sum the base (line_total) per rate.
- * Used by reverse-charge paths to compute fiktiv moms from the basis,
- * decoupled from any manual VAT override on the items themselves.
+ * Group items by their self-assessed reverse-charge rate and sum the base
+ * (line_total) per rate. Used by reverse-charge paths to compute fiktiv moms
+ * from the basis, decoupled from any manual VAT override on the items.
+ *
+ * The grouping key is the *self-assessed* rate (resolveReverseChargeRate), not
+ * the line's vat_rate: under omvänd skattskyldighet the supplier charges 0%, so
+ * the line vat_rate is 0, but the buyer self-assesses at 25% (huvudregeln) or
+ * the explicit per-item reverse_charge_rate. Without this a 0%-rate RC line
+ * would key on rate 0 and the `rate > 0` guard below would skip its VAT lines.
  */
 function groupBaseByRate(
   items: SupplierInvoiceItem[],
@@ -670,7 +710,7 @@ function groupBaseByRate(
 ): Map<number, number> {
   const baseByRate = new Map<number, number>()
   for (const item of items) {
-    const rate = item.vat_rate ?? 0.25
+    const rate = resolveReverseChargeRate(item)
     let baseSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
     if (useAbsoluteValues) baseSek = Math.abs(baseSek)
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + baseSek)
@@ -692,8 +732,8 @@ function groupNonBasisBaseByRate(
 ): Map<number, number> {
   const baseByRate = new Map<number, number>()
   for (const item of items) {
-    if (isBasisAccount(item.account_number)) continue
-    const rate = item.vat_rate ?? 0.25
+    if (isReverseChargeBasisAccount(item.account_number)) continue
+    const rate = resolveReverseChargeRate(item)
     let itemSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
     if (useAbsoluteValues) itemSek = Math.abs(itemSek)
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + itemSek)

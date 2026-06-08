@@ -24,9 +24,16 @@ export async function POST(request: Request) {
 
   const validation = await validateBody(request, BankLinkSchema)
   if (!validation.success) return validation.response
-  const { transaction_id, journal_entry_id } = validation.data
+  const { transaction_id, journal_entry_id, account_number } = validation.data
 
-  const result = await manualLink(supabase, companyId, transaction_id, journal_entry_id, user.id)
+  const result = await manualLink(
+    supabase,
+    companyId,
+    transaction_id,
+    journal_entry_id,
+    user.id,
+    account_number ?? '1930',
+  )
 
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 400 })

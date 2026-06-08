@@ -234,3 +234,87 @@ processing_activities:
       - no_financial_figures_in_body
       - tls_to_resend
       - rls_company_scoped
+
+  - id: ai.inference
+    name: AI-inferens (kategorisering + dokumenttolkning) via Amazon Bedrock
+    purpose: >-
+      Föreslå bokföringskategori för banktransaktioner och tolka/extrahera
+      uppladdade underlag (kvitton, leverantörsfakturor) med Anthropic
+      Claude-modeller körda i Amazon Bedrock. Endast aktiv när tenanten
+      uttryckligen aktiverat AI-funktioner — kärntjänsten (bokföring, fakturor,
+      moms, rapporter) fungerar fullt ut utan AI.
+    lawful_basis: art_6_1_a   # consent — opt-in, AI features off by default
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: aws-bedrock
+    data_subjects:
+      - business_owner
+      - counterparty                  # namn/belopp på uppladdade underlag
+    data_categories:
+      - user.financial                # transaktionsdata skickad för kategorisering
+      - user.document                 # uppladdade kvitton/fakturor för OCR/extraktion
+    recipients:
+      - name: Amazon Web Services (Amazon Bedrock)
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Inferens körs i AWS-regionen eu-north-1 (Stockholm) — ingen överföring
+        till tredje land. AWS DPA + SCC + DPF-certifiering finns som
+        skyddsmekanism. Prompter lagras ej hos Bedrock efter anropet och används
+        ej till modellträning.
+    retention:
+      duration: none_at_processor
+      basis: no_retention_bedrock     # prompt not persisted by Bedrock post-inference
+      stored_in:
+        - ai_usage_tracking           # usage metadata only (tokens/cost), no payload body
+    security_measures:
+      - opt_in_consent_required
+      - eu_region_inference_eu_north_1
+      - prompts_not_retained_after_inference
+      - not_used_for_model_training
+      - rls_company_scoped
+      - tls_to_bedrock
+
+  - id: mcp.telemetry
+    name: MCP/agent-telemetri i event_log
+    purpose: >-
+      Varje MCP-verktygsanrop loggar metadata (verktygsnamn, felkod,
+      felmeddelande max 500 tecken, latens, aktör, session) och varje
+      skill-laddning loggar slug/tier till event_log. Syftet är
+      tillförlitlighetsanalys av agentgränssnittet: felfrekvens per verktyg,
+      korrelation mellan laddade skills och efterföljande fel, samt agenters
+      egenrapporterade feedback (agent.feedback). Inga verktygsargument
+      eller verktygsresultat persisteras.
+    lawful_basis: art_6_1_f   # legitimate interest (service reliability/improvement)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.unique_id                # userId, actorId (API-nyckel-id), sessionId
+      - user.contact                  # actorLabel (användarvald API-nyckeletikett)
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor; no third-country transfer.
+    retention:
+      # Differentiated TTL via /api/events/cleanup/cron: mcp.*/agent.*-rader
+      # behålls 180 dagar (felfrekvens-trender kräver mer än leveransfönstret);
+      # övriga event_log-rader (leveranshändelser) 30 dagar.
+      duration: 180d
+      basis: legitimate_interest_reliability
+      stored_in:
+        - event_log
+    security_measures:
+      - rls_user_scoped_select        # event_log SELECT: auth.uid() = user_id
+      - service_role_only_writes
+      - error_message_truncated_500_chars
+      - no_tool_args_or_results_persisted

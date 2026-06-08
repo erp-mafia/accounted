@@ -13,6 +13,8 @@
  */
 
 import { getAuthorizationHeader } from './jwt'
+import { deriveTransactionLabel } from './transaction-label'
+import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -149,6 +151,11 @@ export interface BankTransaction {
   counterparty_account?: string
   reference?: string
   merchant_category_code?: string
+  // ISO 20022 / proprietary transaction codes — carried through so the
+  // description fallback can derive a meaningful Swedish label when remittance
+  // text and a counterparty name are both absent. See deriveTransactionLabel.
+  bank_transaction_code?: string
+  proprietary_bank_transaction_code?: string
 }
 
 // Constants
@@ -157,6 +164,22 @@ const MAX_RETRIES = 2
 const RETRY_DELAY_MS = 1000
 const MAX_PAGINATION_PAGES = 100
 const DEFAULT_PAGE_SIZE = 500
+
+/**
+ * Thrown by getAccountTransactions on a non-OK response. Carries the HTTP
+ * status and raw body so the pagination caller (getAllTransactions) can run the
+ * same first-page strategy/window fallbacks as getAllTransactionsWithRaw. The
+ * message is identical to the previous plain Error for back-compat.
+ */
+class TransactionsFetchError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(`Failed to get transactions (${status}): ${body}`)
+    this.name = 'TransactionsFetchError'
+  }
+}
 
 // API Helper
 
@@ -498,7 +521,7 @@ export async function getAccountTransactions(
       strategy,
       hasContinuationKey: !!continuationKey,
     })
-    throw new Error(`Failed to get transactions (${response.status}): ${body}`)
+    throw new TransactionsFetchError(response.status, body)
   }
 
   return response.json()
@@ -516,15 +539,57 @@ export async function getAllTransactions(
   const allTransactions: Transaction[] = []
   let continuationKey: string | undefined
   let page = 0
+  let activeStrategy = strategy
+  // date_from is narrowed in place when the ASPSP rejects the window (below).
+  let activeDateFrom = dateFrom
 
-  do {
-    const response = await getAccountTransactions(
-      accountUid,
-      dateFrom,
-      dateTo,
-      continuationKey,
-      strategy
-    )
+  while (true) {
+    let response: TransactionsResponse
+    try {
+      response = await getAccountTransactions(
+        accountUid,
+        activeDateFrom,
+        dateTo,
+        continuationKey,
+        activeStrategy
+      )
+    } catch (err) {
+      // Apply the same first-page recovery as getAllTransactionsWithRaw. Only
+      // TransactionsFetchError carries the status/body needed to decide;
+      // network errors and the like propagate untouched.
+      if (err instanceof TransactionsFetchError) {
+        const recovery = planFirstPageRecovery({
+          status: err.status,
+          body: err.body,
+          page,
+          hasContinuationKey: !!continuationKey,
+          activeStrategy,
+          activeDateFrom,
+          dateTo,
+        })
+        if (recovery.type === 'drop-strategy') {
+          console.warn('[enable-banking] strategy rejected by API, retrying without strategy', {
+            accountUid,
+            strategy: activeStrategy,
+            body: err.body,
+          })
+          activeStrategy = undefined
+          continue
+        }
+        if (recovery.type === 'narrow') {
+          console.warn('[enable-banking] ASPSP rejected history window, retrying with narrower date_from', {
+            accountUid,
+            previousDateFrom: activeDateFrom,
+            nextDateFrom: recovery.dateFrom,
+            dateTo,
+            body: err.body,
+          })
+          activeDateFrom = recovery.dateFrom
+          continue
+        }
+      }
+      throw err
+    }
 
     allTransactions.push(...response.transactions)
     continuationKey = response.continuation_key
@@ -534,9 +599,93 @@ export async function getAllTransactions(
       console.warn(`[enable-banking] Pagination cap reached (${MAX_PAGINATION_PAGES} pages) for account ${accountUid}`)
       break
     }
-  } while (continuationKey)
+    if (!continuationKey) break
+  }
 
   return allTransactions
+}
+
+/**
+ * Lookback windows (days before date_to) we step through when an ASPSP rejects
+ * the requested transaction history. Descending so each fallback yields a
+ * strictly narrower window. PSD2 obliges banks to ~90 days without fresh SCA;
+ * the smaller rungs cover banks that cap below that.
+ */
+const ASPSP_HISTORY_FALLBACK_DAYS = [90, 60, 30] as const
+
+/**
+ * Enable Banking wraps upstream-bank failures in a generic envelope, e.g.
+ * {"code":400,"message":"Error interacting with ASPSP","error":"ASPSP_ERROR"}.
+ * A too-wide history window is the most common trigger — see the date-narrowing
+ * fallback in getAllTransactionsWithRaw.
+ */
+function isAspspError(body: string): boolean {
+  return body.includes('ASPSP_ERROR') || body.includes('interacting with ASPSP')
+}
+
+/**
+ * Given the date_from we just tried, return the next strictly-narrower
+ * date_from from ASPSP_HISTORY_FALLBACK_DAYS, anchored to date_to. Returns
+ * undefined when no narrower window remains (or date_to is missing), which
+ * ends the retry loop. The "strictly narrower" guard keeps the loop monotonic
+ * and terminating even if the original window was already short.
+ */
+function nextNarrowerDateFrom(
+  currentDateFrom: string | undefined,
+  dateTo: string | undefined
+): string | undefined {
+  if (!dateTo) return undefined
+  const anchor = new Date(`${dateTo}T00:00:00Z`)
+  if (!Number.isFinite(anchor.getTime())) return undefined
+
+  for (const days of ASPSP_HISTORY_FALLBACK_DAYS) {
+    const candidate = new Date(anchor.getTime() - days * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split('T')[0]
+    if (!currentDateFrom || candidate > currentDateFrom) {
+      return candidate
+    }
+  }
+  return undefined
+}
+
+/**
+ * First-page recovery policy shared by getAllTransactions and
+ * getAllTransactionsWithRaw, so the two pagination loops can't drift. Fallbacks
+ * apply only to the very first request (page 0, no continuation_key) — a
+ * continuation_key is scoped to the window/strategy that produced it, so the
+ * query is never rewritten mid-pagination.
+ *
+ *  - 'drop-strategy' — an unsupported strategy enum: retry the same window.
+ *  - 'narrow'        — the ASPSP rejected the history window: retry with a
+ *                      narrower date_from (the bank caps history below the ask).
+ *  - 'give-up'       — nothing left to try; the caller should rethrow.
+ */
+type FirstPageRecovery =
+  | { type: 'drop-strategy' }
+  | { type: 'narrow'; dateFrom: string }
+  | { type: 'give-up' }
+
+function planFirstPageRecovery(args: {
+  status: number
+  body: string
+  page: number
+  hasContinuationKey: boolean
+  activeStrategy: TransactionsFetchStrategy | undefined
+  activeDateFrom: string | undefined
+  dateTo: string | undefined
+}): FirstPageRecovery {
+  const { status, body, page, hasContinuationKey, activeStrategy, activeDateFrom, dateTo } = args
+  if (status !== 400 || page !== 0 || hasContinuationKey) return { type: 'give-up' }
+  // Drop an unsupported strategy first — preserves the full requested window.
+  if (activeStrategy) return { type: 'drop-strategy' }
+  // Then handle the ASPSP rejecting the window itself (e.g. Danske past ~90
+  // days): step date_from toward date_to so a partial sync survives.
+  if (isAspspError(body)) {
+    const dateFrom = nextNarrowerDateFrom(activeDateFrom, dateTo)
+    if (dateFrom) return { type: 'narrow', dateFrom }
+  }
+  return { type: 'give-up' }
 }
 
 /**
@@ -546,6 +695,12 @@ export async function getAllTransactions(
  * If `strategy` is provided and the API rejects it with a 400 on the first
  * request, retry once without `strategy` so unknown enum values can't break
  * the sync. Logs a warning when the fallback fires.
+ *
+ * If the ASPSP then still rejects the first page with an ASPSP_ERROR (typically
+ * a history window beyond the bank's PSD2 limit, e.g. Danske past ~90 days),
+ * progressively narrow date_from toward date_to (90→60→30 days) so a partial
+ * sync of the recent window survives instead of failing outright. Logs a
+ * warning on each narrowing.
  */
 export async function getAllTransactionsWithRaw(
   accountUid: string,
@@ -558,10 +713,12 @@ export async function getAllTransactionsWithRaw(
   let continuationKey: string | undefined
   let page = 0
   let activeStrategy = strategy
+  // date_from is narrowed in place when the ASPSP rejects the window (below).
+  let activeDateFrom = dateFrom
 
   while (true) {
     const params = new URLSearchParams()
-    if (dateFrom) params.set('date_from', dateFrom)
+    if (activeDateFrom) params.set('date_from', activeDateFrom)
     if (dateTo) params.set('date_to', dateTo)
     if (continuationKey) params.set('continuation_key', continuationKey)
     if (activeStrategy) params.set('strategy', activeStrategy)
@@ -574,9 +731,16 @@ export async function getAllTransactionsWithRaw(
 
     if (!response.ok) {
       const body = await response.text()
-      // If the API rejects an unknown strategy on the very first request,
-      // fall back to the implicit default and retry the same page.
-      if (response.status === 400 && activeStrategy && page === 0 && !continuationKey) {
+      const recovery = planFirstPageRecovery({
+        status: response.status,
+        body,
+        page,
+        hasContinuationKey: !!continuationKey,
+        activeStrategy,
+        activeDateFrom,
+        dateTo,
+      })
+      if (recovery.type === 'drop-strategy') {
         console.warn('[enable-banking] strategy rejected by API, retrying without strategy', {
           accountUid,
           strategy: activeStrategy,
@@ -585,12 +749,23 @@ export async function getAllTransactionsWithRaw(
         activeStrategy = undefined
         continue
       }
+      if (recovery.type === 'narrow') {
+        console.warn('[enable-banking] ASPSP rejected history window, retrying with narrower date_from', {
+          accountUid,
+          previousDateFrom: activeDateFrom,
+          nextDateFrom: recovery.dateFrom,
+          dateTo,
+          body,
+        })
+        activeDateFrom = recovery.dateFrom
+        continue
+      }
       console.error('[enable-banking] getAllTransactionsWithRaw failed', {
         status: response.status,
         statusText: response.statusText,
         body,
         accountUid,
-        dateFrom,
+        dateFrom: activeDateFrom,
         dateTo,
         strategy: activeStrategy,
         page,
@@ -639,14 +814,27 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
     booking_date: tx.booking_date || tx.value_date || new Date().toISOString().split('T')[0],
     amount,
     currency: tx.transaction_amount.currency || accountCurrency,
+    // Fallback chain: bank's payment message → counterparty name → a Swedish
+    // label derived from the ISO 20022 / MCC codes the bank DID send (card
+    // purchases, ATM, fees, interest) → 'Okänd transaktion'. The final fallback
+    // is also normalized at the ingest boundary, so any leftover lands as the
+    // same Swedish neutral.
     description: tx.remittance_information?.filter(r => r.trim()).join(' ') ||
                  (isCredit ? debtorName : creditorName) ||
-                 'Unknown',
+                 deriveTransactionLabel({
+                   bankTransactionCode: tx.bank_transaction_code,
+                   proprietaryBankTransactionCode: tx.proprietary_bank_transaction_code,
+                   mcc: tx.merchant_category_code,
+                   isCredit,
+                 }) ||
+                 FALLBACK_DESCRIPTION,
     counterparty_name: isCredit ? debtorName : creditorName,
     counterparty_account: isCredit
       ? tx.debtor_account?.iban || tx.debtor_account?.bban
       : tx.creditor_account?.iban || tx.creditor_account?.bban,
-    merchant_category_code: tx.merchant_category_code
+    merchant_category_code: tx.merchant_category_code,
+    bank_transaction_code: tx.bank_transaction_code,
+    proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code,
   }
 }
 

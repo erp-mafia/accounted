@@ -15,18 +15,12 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Employee } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
+import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   employee: 'Anställd',
   company_owner: 'Företagsledare',
   board_member: 'Styrelseledamot',
-}
-
-const F_SKATT_LABELS: Record<string, string> = {
-  a_skatt: 'A-skatt',
-  f_skatt: 'F-skatt',
-  fa_skatt: 'FA-skatt',
-  not_verified: 'Ej verifierad',
 }
 
 function RequiredMark() {
@@ -43,11 +37,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [saving, setSaving] = useState(false)
   const [employmentType, setEmploymentType] = useState('employee')
   const [salaryType, setSalaryType] = useState('monthly')
-  const [fSkattStatus, setFSkattStatus] = useState('a_skatt')
-  const [isSidoinkomst, setIsSidoinkomst] = useState(false)
   const [vacationRule, setVacationRule] = useState('procentregeln')
-
-  const requiresTaxTable = fSkattStatus === 'a_skatt' && !isSidoinkomst
+  const [tax, setTax] = useState<EmployeeTaxValue | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -57,8 +48,6 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         setEmployee(data)
         setEmploymentType(data.employment_type)
         setSalaryType(data.salary_type || 'monthly')
-        setFSkattStatus(data.f_skatt_status || 'a_skatt')
-        setIsSidoinkomst(data.is_sidoinkomst || false)
         setVacationRule(data.vacation_rule || 'procentregeln')
       }
       setLoading(false)
@@ -75,13 +64,15 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       first_name: form.get('first_name') as string,
       last_name: form.get('last_name') as string,
       employment_type: employmentType,
+      employment_start: form.get('employment_start') as string || undefined,
+      employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
       salary_type: salaryType,
-      f_skatt_status: fSkattStatus,
-      is_sidoinkomst: isSidoinkomst,
-      tax_table_number: parseInt(form.get('tax_table_number') as string) || undefined,
-      tax_column: parseInt(form.get('tax_column') as string) || 1,
-      tax_municipality: form.get('tax_municipality') as string || undefined,
+      f_skatt_status: tax?.f_skatt_status,
+      is_sidoinkomst: tax?.is_sidoinkomst,
+      tax_table_number: tax?.tax_table_number ?? undefined,
+      tax_column: tax?.tax_column ?? 1,
+      tax_municipality: tax?.tax_municipality || undefined,
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,
@@ -248,6 +239,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                 <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" disabled={!canWrite} />
               </div>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="employment_start">Anställningsdatum<RequiredMark /></Label>
+                <Input id="employment_start" name="employment_start" type="date" defaultValue={employee.employment_start || ''} required disabled={!canWrite} />
+                <p className="text-xs text-muted-foreground">Lönen proportioneras automatiskt om anställningen börjar eller slutar mitt i en löneperiod.</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="employment_end">Slutdatum</Label>
+                <Input id="employment_end" name="employment_end" type="date" defaultValue={employee.employment_end || ''} disabled={!canWrite} />
+                <p className="text-xs text-muted-foreground">Lämna tomt för pågående anställning.</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -286,81 +289,23 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         </Card>
 
         {/* Tax */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Skatt</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="f_skatt_status">Skatteform</Label>
-                <Select value={fSkattStatus} onValueChange={setFSkattStatus} disabled={!canWrite}>
-                  <SelectTrigger id="f_skatt_status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="a_skatt">A-skatt</SelectItem>
-                    <SelectItem value="f_skatt">F-skatt</SelectItem>
-                    <SelectItem value="fa_skatt">FA-skatt</SelectItem>
-                    <SelectItem value="not_verified">Ej verifierad</SelectItem>
-                  </SelectContent>
-                </Select>
-                {employee.f_skatt_verified_at && (
-                  <p className="text-xs text-muted-foreground">
-                    Verifierad: {new Date(employee.f_skatt_verified_at).toLocaleDateString('sv-SE')}
-                  </p>
-                )}
-              </div>
-              <div className="flex items-end pb-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={isSidoinkomst}
-                    onChange={(e) => setIsSidoinkomst(e.target.checked)}
-                    disabled={!canWrite}
-                    className="rounded border-border"
-                  />
-                  Sidoinkomst (30% skatteavdrag)
-                </label>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="tax_table_number">
-                  Skattetabell (29-42){requiresTaxTable && <RequiredMark />}
-                </Label>
-                <Input
-                  id="tax_table_number"
-                  name="tax_table_number"
-                  type="number"
-                  min="29"
-                  max="42"
-                  defaultValue={employee.tax_table_number || ''}
-                  required={requiresTaxTable}
-                  disabled={!canWrite}
-                />
-                <p className="text-xs text-muted-foreground">Baseras på folkbokföringskommun</p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tax_column">Kolumn (1-6)</Label>
-                <Input id="tax_column" name="tax_column" type="number" defaultValue={employee.tax_column} min="1" max="6" disabled={!canWrite} />
-                <p className="text-xs text-muted-foreground">1 = standard under 66 år</p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tax_municipality">
-                  Folkbokföringskommun{requiresTaxTable && <RequiredMark />}
-                </Label>
-                <Input
-                  id="tax_municipality"
-                  name="tax_municipality"
-                  defaultValue={employee.tax_municipality || ''}
-                  required={requiresTaxTable}
-                  disabled={!canWrite}
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <EmployeeTaxCard
+          personnummer={employee.personnummer || ''}
+          disabled={!canWrite}
+          onChange={setTax}
+          initial={{
+            f_skatt_status: employee.f_skatt_status || 'a_skatt',
+            is_sidoinkomst: employee.is_sidoinkomst || false,
+            tax_table_number: employee.tax_table_number ?? null,
+            tax_column: employee.tax_column ?? 1,
+            tax_municipality: employee.tax_municipality || '',
+          }}
+        />
+        {employee.f_skatt_verified_at && (
+          <p className="-mt-2 text-xs text-muted-foreground">
+            F-skatt verifierad: {new Date(employee.f_skatt_verified_at).toLocaleDateString('sv-SE')}
+          </p>
+        )}
 
         {/* Vacation */}
         <Card>

@@ -327,34 +327,53 @@ export async function fetchKommunTaxRates(year: number): Promise<Array<{
   totalRate: number
   tableNumber: number
 }>> {
-  const params = new URLSearchParams({
-    'år': year.toString(),
-    '_limit': '500',
-  })
+  // The dataset has one row per församling (~1300/year), not per kommun (~290),
+  // so a single page would silently drop most municipalities. Page through all
+  // rows via _offset until the result set is exhausted.
+  const PAGE_SIZE = 500
+  const MAX_ROWS = 5000 // safety cap (~4x the real row count)
 
-  const response = await fetch(`${KOMMUN_RATES_API}?${params.toString()}`, {
-    headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(10000),
-  })
-
-  if (!response.ok) {
-    throw new Error(`Kommun rates API returned ${response.status}`)
-  }
-
-  const data = await response.json() as {
-    results: Array<{
-      'kommun': string
-      'summa, exkl. kyrkoavgift': string
-    }>
-  }
-
-  // Deduplicate by kommun (multiple församlingar per kommun)
+  // Deduplicate by kommun (multiple församlingar per kommun share the same
+  // kommunal + landstingsskatt, so the first row's rate is representative).
   const byKommun = new Map<string, number>()
-  for (const r of data.results) {
-    const rate = parseFloat(r['summa, exkl. kyrkoavgift'])
-    if (!byKommun.has(r.kommun)) {
-      byKommun.set(r.kommun, rate)
+  let offset = 0
+
+  while (offset < MAX_ROWS) {
+    const params = new URLSearchParams({
+      'år': year.toString(),
+      '_limit': String(PAGE_SIZE),
+      '_offset': String(offset),
+    })
+
+    const response = await fetch(`${KOMMUN_RATES_API}?${params.toString()}`, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Kommun rates API returned ${response.status}`)
     }
+
+    const data = await response.json() as {
+      resultCount?: number
+      results: Array<{
+        'kommun': string
+        'summa, exkl. kyrkoavgift': string
+      }>
+    }
+
+    for (const r of data.results) {
+      const kommun = normalizeKommunName(r.kommun)
+      const rate = parseFloat(r['summa, exkl. kyrkoavgift'])
+      if (kommun && !byKommun.has(kommun)) {
+        byKommun.set(kommun, rate)
+      }
+    }
+
+    offset += data.results.length
+    // Stop when the page came back short or we've consumed the whole dataset.
+    if (data.results.length < PAGE_SIZE) break
+    if (typeof data.resultCount === 'number' && offset >= data.resultCount) break
   }
 
   return Array.from(byKommun.entries()).map(([kommun, rate]) => ({
@@ -363,6 +382,25 @@ export async function fetchKommunTaxRates(year: number): Promise<Array<{
     // Table number: round total rate. ≤0.50 rounds down, ≥0.51 rounds up
     tableNumber: Math.round(rate),
   }))
+}
+
+/**
+ * Skatteverket returns kommun names in uppercase ("UPPLANDS VÄSBY"). Title-case
+ * them for display and storage, preserving hyphenated parts ("Höör-...") and the
+ * common "i"/"och" connectors lowercase.
+ */
+function normalizeKommunName(raw: string): string {
+  const lowerWords = new Set(['i', 'och'])
+  return raw
+    .trim()
+    .toLowerCase()
+    .split(/(\s+|-)/) // keep separators (spaces, hyphens) as tokens
+    .map((token) => {
+      if (token.trim() === '' || token === '-') return token
+      if (lowerWords.has(token)) return token
+      return token.charAt(0).toUpperCase() + token.slice(1)
+    })
+    .join('')
 }
 
 // ── Legacy compatibility (used by calculation-engine.ts) ──

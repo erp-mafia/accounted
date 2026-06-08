@@ -21,7 +21,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
-import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, Receipt, Lock, Repeat } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
@@ -114,6 +114,7 @@ export default function InvoicesPage() {
   const filteredInvoices = invoices.filter((invoice) => {
     const matchesSearch =
       (invoice.invoice_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (invoice.external_invoice_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (invoice.customer as { name: string })?.name?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const isCreditNote = !!invoice.credited_invoice_id
@@ -274,6 +275,18 @@ export default function InvoicesPage() {
             const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
             const isProforma = docType === 'proforma'
             const isDeliveryNote = docType === 'delivery_note'
+            // A draft that already has a number is issued-but-unsent ("Granska &
+            // skapa" done, "Skicka" pending) — distinct from a true unnumbered
+            // draft. Show "Ej skickad" so the two don't look alike. Display-only.
+            const isUnsentInvoice =
+              invoice.status === 'draft' &&
+              !!invoice.invoice_number &&
+              !isProforma &&
+              !isDeliveryNote &&
+              !isCreditNote &&
+              !invoice.is_self_billed
+            const statusLabelKey = isUnsentInvoice ? 'status_unsent' : status.labelKey
+            const statusVariant: InvoiceStatusVariant | 'outline' = isUnsentInvoice ? 'outline' : status.variant
             const relativeTime = invoice.due_date ? getRelativeTimeLabel(invoice.due_date, invoice.status) : null
             const displayedTotal = getDisplayTotal(
               { total: Number(invoice.total), currency: invoice.currency },
@@ -305,8 +318,8 @@ export default function InvoicesPage() {
                     </div>
                   }
                 >
-                  <DataListPrimary className={cn(!invoice.invoice_number && 'italic text-muted-foreground')}>
-                    {invoiceNumberDisplay(invoice.invoice_number)}{' '}
+                  <DataListPrimary className={cn(!invoice.invoice_number && !invoice.external_invoice_number && 'italic text-muted-foreground')}>
+                    {invoice.is_self_billed ? invoiceDisplayNumber(invoice) : (invoice.invoice_number ?? '—')}{' '}
                     <span className="font-normal text-muted-foreground">
                       · {(invoice.customer as { name: string })?.name}
                     </span>
@@ -315,10 +328,10 @@ export default function InvoicesPage() {
                     <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
                     <DataListMetaSeparator />
                     <Badge
-                      variant={status.variant as 'default' | 'secondary' | 'destructive'}
+                      variant={statusVariant as 'default' | 'secondary' | 'destructive' | 'outline'}
                       className="h-4 px-1.5 py-0 text-[10px]"
                     >
-                      {t(status.labelKey)}
+                      {t(statusLabelKey)}
                     </Badge>
                     {isCreditNote && (
                       <>
@@ -341,6 +354,14 @@ export default function InvoicesPage() {
                         <DataListMetaSeparator />
                         <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
                           {t('badge_delivery_note')}
+                        </Badge>
+                      </>
+                    )}
+                    {invoice.is_self_billed && (
+                      <>
+                        <DataListMetaSeparator />
+                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
+                          {t('badge_self_billed')}
                         </Badge>
                       </>
                     )}

@@ -39,6 +39,57 @@ export function getVatRate(treatment: VatTreatment): number {
 }
 
 /**
+ * Expense/basis accounts that already populate momsdeklaration ruta 20-24
+ * directly when debited (the basbelopp for a reverse-charge purchase). If an RC
+ * item is booked straight to one of these, the engine must NOT add the parallel
+ * basbeloppsrader — that would double-count ruta 20-24.
+ *
+ *   ruta 20  EU goods             4515/4516/4517
+ *   ruta 21  EU services          4535/4536/4537
+ *   ruta 22  non-EU services      4531/4532/4533
+ *   ruta 23  domestic goods RC    4415/4416/4417
+ *   ruta 24  domestic services RC 4425/4426/4427
+ */
+export const RC_BASIS_ACCOUNTS: ReadonlySet<string> = new Set([
+  '4515', '4516', '4517',
+  '4535', '4536', '4537',
+  '4531', '4532', '4533',
+  '4415', '4416', '4417',
+  '4425', '4426', '4427',
+])
+
+export function isReverseChargeBasisAccount(account: string): boolean {
+  return RC_BASIS_ACCOUNTS.has(account)
+}
+
+/**
+ * The self-assessed VAT rate to apply to a reverse-charge line.
+ *
+ * Under omvänd skattskyldighet the supplier charges no VAT, so the line's own
+ * `vat_rate` is 0 (the v1 supplier-invoice API mandates this). The buyer must
+ * still self-assess output + input VAT at the Swedish statutory rate that would
+ * apply to the service domestically — 25% under huvudregeln for EU services
+ * (ML 6 kap 34 §), 12%/6% for reduced-rated services. Resolution order:
+ *
+ *   1. explicit per-item `reverse_charge_rate` (the UI's self-assessment picker)
+ *   2. a positive `vat_rate` on the line (legacy/API callers that encoded the
+ *      self-assessment rate directly on vat_rate)
+ *   3. 25% huvudregel default — never silently drop the fiktiv-moms lines.
+ *
+ * Keeping this in one place means the booking engine and the review-dialog
+ * preview can never drift. The original bug was two independent copies of a
+ * `rate > 0` assumption, each skipping the VAT entirely on a 0%-rate RC line.
+ */
+export function resolveReverseChargeRate(
+  item: { vat_rate?: number | null; reverse_charge_rate?: number | null },
+): number {
+  const explicit = item.reverse_charge_rate
+  if (explicit != null && explicit > 0) return explicit
+  if (item.vat_rate != null && item.vat_rate > 0) return item.vat_rate
+  return 0.25
+}
+
+/**
  * Generate output VAT lines for sales invoices
  * Debit 1510 Kundfordringar [total incl VAT]
  * Credit 30xx Försäljning [subtotal]

@@ -4,7 +4,7 @@ export const QUICKSTART_MD = `# Quickstart — send your first invoice
 
 ## What you'll need
 
-- A test API key (\`gnubok_sk_test_*\`) from the gnubok dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data — safe for evals.
+- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data — safe for evals.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
@@ -12,7 +12,7 @@ export const QUICKSTART_MD = `# Quickstart — send your first invoice
 Test keys are scoped to a single sandbox company by default; this call confirms the auth works and returns the \`companyId\` you'll use in the rest of the cookbook.
 
 \`\`\`bash
-curl https://gnubok.app/api/v1/companies \\
+curl https://app.gnubok.se/api/v1/companies \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -32,7 +32,7 @@ Save the \`id\` as \`COMPANY_ID\` for the next steps.
 Every write supports \`?dry_run=true\` — the response shows the would-be record without committing. Use it in agent test loops to validate inputs before paying the side-effect cost.
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -70,7 +70,7 @@ Invoices are typed (B2B, EU-business, individual) and support mixed-rate VAT (pe
 
 \`\`\`bash
 INVOICE_IDEMP=$(uuidgen)
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/invoices" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $INVOICE_IDEMP" \\
   -H "Content-Type: application/json" \\
@@ -106,7 +106,7 @@ Response includes the auto-allocated invoice number, the computed VAT lines, and
 \`POST /invoices/{id}/send\` posts the verifikation, generates the PDF, and emails the customer in a single transaction. Strict-mode: if any step fails, none of them commit.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -125,7 +125,7 @@ Response carries the now-posted voucher number:
     "request_id": "req_...",
     "audit": {
       "voucher_number": "F-2026-001",
-      "voucher_url": "https://gnubok.app/bookkeeping/...",
+      "voucher_url": "https://app.gnubok.se/bookkeeping/...",
       "immutable_at": "2026-05-15T12:00:00Z"
     }
   }
@@ -137,7 +137,7 @@ Response carries the now-posted voucher number:
 When the customer pays, mark the invoice paid. The engine generates the payment voucher (debit 1930 bank, credit 1510 AR) and links it to the invoice.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\

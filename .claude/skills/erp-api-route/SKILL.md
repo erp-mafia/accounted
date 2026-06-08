@@ -1,6 +1,6 @@
 ---
 name: erp-api-route
-description: "Generate Next.js 16 API routes for gnubok with correct auth guards, Supabase client usage, event emission, journal entry creation, and error handling. Use when creating new API endpoints in app/api/. Handles the Next.js 16 async params pattern, ensureInitialized() for events, non-blocking journal entry wrapping, and defense-in-depth user_id filtering."
+description: "Generate Next.js 16 API routes for Accounted with correct auth guards, Supabase client usage, event emission, journal entry creation, and error handling. Use when creating new API endpoints in app/api/. Handles the Next.js 16 async params pattern, ensureInitialized() for events, non-blocking journal entry wrapping, and defense-in-depth user_id filtering."
 ---
 
 # ERP API Route Generator

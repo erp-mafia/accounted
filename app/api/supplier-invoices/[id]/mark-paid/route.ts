@@ -5,7 +5,9 @@ import {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { validateBody } from '@/lib/api/validate'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -124,16 +126,54 @@ export const POST = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method')
+      .select('accounting_method, last_supplier_payment_account')
       .eq('company_id', companyId)
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
+    const paymentAccount = body.payment_account || undefined
+
+    // Route on the supplier invoice's actual booking state, not the current
+    // accounting_method. A supplier invoice that was booked at receipt under
+    // accrual (Dr expense + 2641 / Cr 2440) must clear 2440 here even if the
+    // company has since switched to kontantmetoden — otherwise the supplier
+    // debt orphans on 2440 and expense + input VAT double-count.
+    const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
+    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
 
     let journalEntryId: string | null = null
 
     try {
-      if (accountingMethod === 'cash') {
+      if (body.lines) {
+        const totalDebit = body.lines.reduce((s, l) => s + l.debit_amount, 0)
+        const totalCredit = body.lines.reduce((s, l) => s + l.credit_amount, 0)
+        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+          return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', opLog, {
+            requestId,
+            details: { totalDebit, totalCredit },
+          })
+        }
+        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
+        if (!fiscalPeriodId) {
+          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', opLog, {
+            requestId,
+            details: { paymentDate },
+          })
+        }
+        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
+        const desc = invoice.supplier?.name
+          ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
+          : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
+        const je = await createJournalEntry(supabase, companyId!, user.id, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: paymentDate,
+          description: desc,
+          source_type: sourceType,
+          source_id: invoice.id,
+          lines: body.lines,
+        })
+        if (je) journalEntryId = je.id
+      } else if (useCashEntry) {
         const journalEntry = await createSupplierInvoiceCashEntry(
           supabase, companyId!, user.id,
           invoice as SupplierInvoice,
@@ -141,6 +181,7 @@ export const POST = withRouteContext(
           paymentDate,
           invoice.supplier?.supplier_type || 'swedish_business',
           invoice.supplier?.name,
+          paymentAccount,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else {
@@ -150,6 +191,7 @@ export const POST = withRouteContext(
           paymentAmount, paymentDate,
           body.exchange_rate_difference,
           invoice.supplier?.name,
+          paymentAccount,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       }
@@ -238,6 +280,27 @@ export const POST = withRouteContext(
       opLog.warn('failed to record supplier_invoice_payments row', paymentError)
     }
 
+    // Under kontantmetoden the cash payment entry is the ONLY booking of the
+    // affärshändelse, so its underlag (the document from the inbox) must hang on
+    // THIS verifikat per BFL 5 kap 6 §. Under faktureringsmetoden the document
+    // is already linked to the registration verifikat at receipt — re-linking
+    // here would move it off that primary booking, so we attach only for the
+    // cash entry. Non-fatal: the payment is already committed and immutable, so
+    // a link failure is logged and the invoice stays usable (mirrors the
+    // registration-time linking in commitCreateSupplierInvoiceFromInbox).
+    const invoiceDocumentId = (invoice as { document_id?: string | null }).document_id
+    if (useCashEntry && invoiceDocumentId && journalEntryId) {
+      try {
+        await linkToJournalEntry(supabase, companyId!, invoiceDocumentId, journalEntryId)
+      } catch (linkErr) {
+        opLog.warn('failed to link supplier invoice document to cash payment JE', {
+          documentId: invoiceDocumentId,
+          journalEntryId,
+          error: linkErr instanceof Error ? linkErr.message : String(linkErr),
+        })
+      }
+    }
+
     try {
       await eventBus.emit({
         type: 'supplier_invoice.paid',
@@ -245,6 +308,19 @@ export const POST = withRouteContext(
       })
     } catch (err) {
       opLog.warn('supplier_invoice.paid event emission failed', err as Error)
+    }
+
+    // Remember the chosen payment account so the next dialog can default to it.
+    // Only update when the caller actually picked one — the MCP / agent path
+    // sends no payment_account and shouldn't churn this setting.
+    if (paymentAccount && paymentAccount !== settings?.last_supplier_payment_account) {
+      const { error: settingsError } = await supabase
+        .from('company_settings')
+        .update({ last_supplier_payment_account: paymentAccount })
+        .eq('company_id', companyId)
+      if (settingsError) {
+        opLog.warn('failed to persist last_supplier_payment_account', settingsError)
+      }
     }
 
     return NextResponse.json({

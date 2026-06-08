@@ -317,12 +317,14 @@ export const POST = withRouteContext(
       })
     }
 
-    // Allocate F-series number on save (Fortnox-style). The user gets a numbered
-    // draft they can download and send manually without first lying about
-    // having sent it. Discarded numbered drafts become 'cancelled' rather than
-    // deleted, so the F-series stays gap-free per ML 17 kap 24§.
-    // Delivery notes already have their number from the insert above.
-    if (documentType === 'invoice' || documentType === 'proforma') {
+    // Allocate the F-series number on save (Fortnox-style) — UNLESS the caller
+    // asked to save as an unnumbered draft. A direct create gives the user a
+    // numbered draft they can download and send manually; "Spara som utkast"
+    // (save_as_draft) defers numbering to the explicit "Granska och skapa" step
+    // (POST /invoices/{id}/finalize) so the draft can be hard-deleted with no
+    // gap in the F-series per ML 17 kap 24§. Delivery notes are always numbered
+    // at insert above and ignore the flag.
+    if (!invoiceInput.save_as_draft && (documentType === 'invoice' || documentType === 'proforma')) {
       try {
         await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
       } catch (err) {
@@ -373,8 +375,10 @@ export const POST = withRouteContext(
       .eq('id', invoice.id)
       .single()
 
-    // Emit event only for real invoices (proformas / delivery notes / quotes are informational).
-    if (completeInvoice && documentType === 'invoice') {
+    // Emit event only for real, issued invoices. Unnumbered drafts (save_as_draft)
+    // are not issued yet — the invoice.created event (which drives webhooks and the
+    // audit log) fires when the user finalizes via "Granska och skapa".
+    if (completeInvoice && documentType === 'invoice' && !invoiceInput.save_as_draft) {
       await eventBus.emit({
         type: 'invoice.created',
         payload: { invoice: completeInvoice as Invoice, companyId: companyId!, userId: user.id },

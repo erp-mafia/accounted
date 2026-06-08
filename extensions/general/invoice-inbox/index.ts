@@ -20,6 +20,7 @@ import {
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/api/schemas'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -1671,6 +1672,9 @@ export const invoiceInboxExtension: Extension = {
             vat_code: bodyItem.vat_code || null,
             vat_rate: vatRate,
             vat_amount: vatAmount,
+            // Self-assessed RC rate (0.06/0.12/0.25) or null — engine defaults
+            // to 25% huvudregeln when null for a reverse-charge invoice.
+            reverse_charge_rate: body.reverse_charge ? (bodyItem.reverse_charge_rate ?? null) : null,
           }
         })
 
@@ -1714,6 +1718,68 @@ export const invoiceInboxExtension: Extension = {
           .single()
 
         if (invoiceError || !invoice) {
+          // A unique-index hit on (company_id, supplier_id,
+          // supplier_invoice_number) is a recoverable conflict — the user
+          // already registered this invoice (often manually, then tried to
+          // convert the same inbox document). Mirror the main
+          // /api/supplier-invoices route and return a friendly 409 with the
+          // existing invoice, instead of letting the raw Postgres message
+          // surface as a generic 500 ("Ett oväntat serverfel uppstod").
+          const pgErr = invoiceError as { code?: string; message?: string } | null
+          const isDuplicateNumber =
+            pgErr?.code === '23505' &&
+            (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
+
+          if (isDuplicateNumber) {
+            // Tenancy: ctx.supabase is the cookie-scoped RLS client and the
+            // supplier_invoices SELECT policy is
+            // `company_id IN (SELECT user_company_ids())`. Combined with the
+            // explicit company_id filter below, this lookup can only ever
+            // resolve an invoice the caller's own company owns — the returned
+            // details are never cross-tenant (OWASP ASVS V8.2.1; ISO 27001
+            // A.8.3; GDPR art.25(2)).
+            const { data: existing } = await ctx.supabase
+              .from('supplier_invoices')
+              .select('id, supplier_invoice_number, status')
+              .eq('company_id', ctx.companyId)
+              .eq('supplier_id', body.supplier_id)
+              .eq('supplier_invoice_number', body.supplier_invoice_number)
+              .maybeSingle()
+
+            let creditNoteId: string | null = null
+            if (existing?.status === 'credited') {
+              const { data: creditNote } = await ctx.supabase
+                .from('supplier_invoices')
+                .select('id')
+                .eq('company_id', ctx.companyId)
+                .eq('credited_invoice_id', existing.id)
+                .eq('is_credit_note', true)
+                .maybeSingle()
+              creditNoteId = creditNote?.id ?? null
+            }
+
+            // Return ONLY server-authoritative fields the recovery dialog needs
+            // (the existing row, read under RLS). The raw request body
+            // (supplier_id / supplier_invoice_number) is deliberately not
+            // echoed back: the client already holds it from its own form state,
+            // and reflecting user-supplied values widens the response surface
+            // for no benefit (GDPR art.5(1)(c) data minimisation; OWASP ASVS
+            // V4.5). The Postgres constraint name is used only to classify the
+            // error above and is never placed in the response.
+            return errorResponseFromCode('SI_CREATE_DUPLICATE_INVOICE_NUMBER', ctx.log, {
+              details: {
+                existing: existing
+                  ? {
+                      id: existing.id,
+                      supplier_invoice_number: existing.supplier_invoice_number,
+                      status: existing.status,
+                      credit_note_id: creditNoteId,
+                    }
+                  : null,
+              },
+            })
+          }
+
           return NextResponse.json({ error: invoiceError?.message || 'Failed to create invoice' }, { status: 500 })
         }
 
@@ -1766,9 +1832,39 @@ export const invoiceInboxExtension: Extension = {
                   .eq('id', item.document_id)
                   .eq('company_id', ctx.companyId)
               }
+            } else {
+              // createSupplierInvoiceRegistrationEntry returns null ONLY when no
+              // fiscal period covers invoice_date (every other failure throws).
+              // Roll back so we never mark the inbox item converted against an
+              // unbooked supplier invoice (orphan understating 2440/2641).
+              await ctx.supabase
+                .from('supplier_invoices')
+                .delete()
+                .eq('id', invoice.id)
+                .eq('company_id', ctx.companyId)
+              return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', ctx.log, {
+                details: { invoiceDate: (invoice as SupplierInvoice).invoice_date },
+              })
             }
           } catch (err) {
-            console.error('[invoice-inbox/convert] Failed to create registration journal entry:', err)
+            // Engine threw (period lock, unbalanced entry, etc.) instead of
+            // cleanly returning null. Roll back the supplier invoice so the inbox
+            // item is never marked converted against an unbooked invoice (an orphan
+            // understating 2440/2641), then surface the error — mirroring the main
+            // /api/supplier-invoices route's registration catch.
+            await ctx.supabase
+              .from('supplier_invoices')
+              .delete()
+              .eq('id', invoice.id)
+              .eq('company_id', ctx.companyId)
+            const typed = bookkeepingErrorResponse(err)
+            if (typed) return typed
+            return errorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
+              details: {
+                reason: err instanceof Error ? err.message : 'unknown',
+                step: 'registration_journal_entry',
+              },
+            })
           }
         }
 

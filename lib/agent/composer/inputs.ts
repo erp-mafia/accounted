@@ -84,7 +84,7 @@ export async function loadCompanySettings(
 // ownership in the user's mouth.
 //
 // We match the user's enrichment row against this company's org_number.
-// `companyId` is the gnubok UUID — we need to read the orgnr from
+// `companyId` is the Accounted UUID — we need to read the orgnr from
 // `companies` to do the match. Cheap (single SELECT each) and only runs once
 // per agent build.
 //
@@ -108,7 +108,7 @@ export async function loadUserDirectorship(
   companyId: string,
 ): Promise<{ confirmedDirector: boolean }> {
   // Read this company's org_number — the BankID CompanyRoles row keys on
-  // companyRegistrationNumber, not the gnubok company UUID.
+  // companyRegistrationNumber, not the Accounted company UUID.
   const { data: companyRow } = await supabase
     .from('companies')
     .select('org_number')

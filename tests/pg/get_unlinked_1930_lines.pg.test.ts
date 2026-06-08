@@ -17,7 +17,7 @@ async function insertPostedJournalEntry(params: {
   companyId: string
   fiscalPeriodId: string
   entryDate: string
-  sourceType: 'opening_balance' | 'manual' | 'bank_transaction' | 'import'
+  sourceType: 'opening_balance' | 'manual' | 'bank_transaction' | 'import' | 'storno' | 'correction'
   voucherNumber: number
   amount?: number
 }): Promise<string> {
@@ -102,6 +102,44 @@ describe('get_unlinked_gl_lines RPC — opening_balance exclusion', () => {
     expect(returnedIds.has(manualEntryId)).toBe(true)
     // IB voucher should NOT be returned regardless of company/date scope.
     expect(rows.find((r) => r.source_type === 'opening_balance')).toBeUndefined()
+  })
+
+  it('excludes storno and correction vouchers from the unmatched-1930 set', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId,
+      companyId,
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+    })
+
+    // A storno and a correction voucher on 1930 (the products of the correctEntry
+    // flow), plus a normal bank voucher. Stornos/corrections are book-only
+    // reversals with no bank-feed counterpart — they must be EXCLUDED so a
+    // reconciled period doesn't show them as omatchade verifikationer.
+    await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-02', sourceType: 'storno', voucherNumber: 20, amount: 25000,
+    })
+    await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 21, amount: 25000,
+    })
+    const bankEntryId = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-03', sourceType: 'bank_transaction', voucherNumber: 22, amount: 1500,
+    })
+
+    const { rows } = await getPool().query(
+      `SELECT journal_entry_id, source_type FROM public.get_unlinked_gl_lines($1)`,
+      [companyId],
+    )
+
+    const returnedIds = new Set(rows.map((r) => r.journal_entry_id))
+    expect(returnedIds.has(bankEntryId)).toBe(true)
+    expect(rows.find((r) => r.source_type === 'storno')).toBeUndefined()
+    expect(rows.find((r) => r.source_type === 'correction')).toBeUndefined()
   })
 
   it('still applies date_from / date_to filtering', async () => {

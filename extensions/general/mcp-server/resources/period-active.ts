@@ -1,7 +1,7 @@
 import type { McpResource } from './types'
 
 export const periodActiveResource: McpResource = {
-  uri: 'gnubok://period/active',
+  uri: 'Accounted://period/active',
   name: 'Active Fiscal Period',
   description: 'The fiscal period that the current date falls within: lock state, opening-balance status, retention deadline. Use to check whether new entries can be posted.',
   mimeType: 'application/json',

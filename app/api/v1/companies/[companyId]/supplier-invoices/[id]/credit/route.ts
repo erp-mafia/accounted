@@ -57,7 +57,7 @@ const SI_FULL_COLUMNS = `
   vat_treatment, reverse_charge, remaining_amount,
   is_credit_note, credited_invoice_id, arrival_number,
   supplier:suppliers(id, name, supplier_type),
-  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount)
+  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate)
 `
 
 const SupplierInvoiceCredited = z.object({
@@ -166,6 +166,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         vat_code: string | null
         vat_rate: number
         vat_amount: number
+        reverse_charge_rate: number | null
       }>
     } & Record<string, unknown>
 
@@ -215,6 +216,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         vat_code: item.vat_code,
         vat_rate: item.vat_rate,
         vat_amount: item.vat_amount,
+        reverse_charge_rate: item.reverse_charge_rate,
       }))
       return dryRunPreview(
         {
@@ -306,6 +308,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       vat_code: item.vat_code,
       vat_rate: item.vat_rate,
       vat_amount: item.vat_amount,
+      // Preserve the self-assessed RC rate so the credit note reverses fiktiv
+      // moms at the same rate the original was booked at.
+      reverse_charge_rate: item.reverse_charge_rate,
     }))
     if (creditItems.length > 0) {
       const { error: itemsErr } = await ctx.supabase

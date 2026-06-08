@@ -276,6 +276,55 @@ describe('correctEntry', () => {
     expect(result.corrected).toBeDefined()
   })
 
+  it('accepts a source_type=correction entry as the original (chained correction, BFL 5 kap. 5 §)', async () => {
+    // The user just corrected entry A → got correction C. They now want to
+    // correct C. Service must not care about source_type of the original —
+    // status='posted' is the only constraint.
+    const correctionAsOriginal = makeJournalEntry({
+      id: 'correction-1',
+      status: 'posted',
+      source_type: 'correction',
+      correction_of_id: 'orig-A',
+      description: 'Rättelse: Test purchase',
+      fiscal_period_id: 'fp-1',
+      voucher_series: 'A',
+      lines: [
+        makeJournalEntryLine({ account_number: '5420', debit_amount: 1200, credit_amount: 0 }),
+        makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1200 }),
+      ],
+    })
+    const secondReversal = makeJournalEntry({ id: 'reversal-2', reverses_id: 'correction-1' })
+    const secondCorrection = makeJournalEntry({
+      id: 'correction-2',
+      correction_of_id: 'correction-1',
+      source_type: 'correction',
+    })
+
+    results = [
+      { data: correctionAsOriginal, error: null },                            // 0: fetch original (the prior correction)
+      { data: secondReversal, error: null },                                  // 1: insert reversal
+      { data: null, error: null },                                            // 2: insert reversal lines
+      { data: null, error: null },                                            // 3: post reversal
+      { data: [{ id: 'acc-5430', account_number: '5430' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
+      { data: secondCorrection, error: null },                                // 5: insert corrected
+      { data: null, error: null },                                            // 6: insert corrected lines
+      { data: null, error: null },                                            // 7: post corrected
+      { data: [{ id: 'correction-1' }], error: null },                        // 8: CAS update
+      { data: { ...secondReversal, lines: [] }, error: null },                // 9: fetch final reversal
+      { data: { ...secondCorrection, lines: [] }, error: null },              // 10: fetch final corrected
+    ]
+
+    const supabase = makeClient()
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'correction-1', [
+      { account_number: '5430', debit_amount: 1500, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1500 },
+    ])
+
+    expect(result.reversal.reverses_id).toBe('correction-1')
+    expect(result.corrected.correction_of_id).toBe('correction-1')
+    expect(result.corrected.source_type).toBe('correction')
+  })
+
   it('emits journal_entry.corrected event', async () => {
     setupResults()
 
@@ -289,5 +338,94 @@ describe('correctEntry', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1', companyId: 'company-1' })
     )
+  })
+})
+
+describe('correctEntry — date/period override (recordate engine)', () => {
+  const originalEntry = makeJournalEntry({
+    id: 'orig-1',
+    status: 'posted',
+    description: 'Webbhotell',
+    entry_date: '2024-06-15',
+    fiscal_period_id: 'fp-1',
+    voucher_series: 'A',
+    lines: [
+      makeJournalEntryLine({ account_number: '5410', debit_amount: 1000, credit_amount: 0 }),
+      makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+    ],
+  })
+
+  // Same multiset as the original — allowed here because the *date* is the
+  // change (a wrong-year fix keeps the lines untouched).
+  const identicalLines = [
+    { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+  ]
+
+  it('re-books the corrected entry in the target period/date while the storno stays in the original period', async () => {
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    results = [
+      { data: originalEntry, error: null },                                                          // 0 fetch original
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null },  // 1 target period
+      { data: reversalEntry, error: null },                                                          // 2 insert reversal
+      { data: null, error: null },                                                                   // 3 reversal lines
+      { data: null, error: null },                                                                   // 4 post reversal
+      { data: [{ id: 'acc-5410', account_number: '5410' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 5 accounts
+      { data: correctedEntry, error: null },                                                         // 6 insert corrected
+      { data: null, error: null },                                                                   // 7 corrected lines
+      { data: null, error: null },                                                                   // 8 post corrected
+      { data: [{ id: 'orig-1' }], error: null },                                                     // 9 CAS
+      { data: { ...reversalEntry, lines: [] }, error: null },                                        // 10 final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },                                       // 11 final corrected
+    ]
+    const supabase = makeClient()
+    const result = await correctEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'orig-1',
+      identicalLines,
+      { newEntryDate: '2025-06-15', newFiscalPeriodId: 'fp-2' }
+    )
+    expect(result.corrected).toBeDefined()
+
+    const je = inserts
+      .filter((i) => i.table === 'journal_entries')
+      .map((i) => i.payload as { source_type: string; fiscal_period_id: string; entry_date: string })
+    expect(je).toHaveLength(2)
+    expect(je[0]).toMatchObject({ source_type: 'storno', fiscal_period_id: 'fp-1', entry_date: '2024-06-15' })
+    expect(je[1]).toMatchObject({ source_type: 'correction', fiscal_period_id: 'fp-2', entry_date: '2025-06-15' })
+  })
+
+  it('rejects when the new date falls outside the target period bounds', async () => {
+    results = [
+      { data: originalEntry, error: null },                                                          // 0 fetch original
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-05-31' }, error: null },  // 1 target period — 06-15 out of bounds
+    ]
+    const supabase = makeClient()
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', identicalLines, {
+        newEntryDate: '2025-06-15',
+        newFiscalPeriodId: 'fp-2',
+      })
+    ).rejects.toMatchObject({ code: 'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD' })
+
+    // No storno should have been written.
+    expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
+  })
+
+  it('rejects when the target period cannot be found', async () => {
+    results = [
+      { data: originalEntry, error: null },           // 0 fetch original
+      { data: null, error: { message: 'no rows' } },  // 1 target period missing
+    ]
+    const supabase = makeClient()
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', identicalLines, {
+        newEntryDate: '2025-06-15',
+        newFiscalPeriodId: 'fp-2',
+      })
+    ).rejects.toMatchObject({ code: 'FISCAL_PERIOD_NOT_FOUND' })
   })
 })

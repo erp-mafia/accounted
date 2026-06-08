@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -20,21 +20,27 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, Search, Trash2, X } from 'lucide-react'
+import { ChevronDown, Layers, Search, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
+import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
+import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
 import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatchDialog'
 import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
+import { MatchVoucherDialog } from '@/components/transactions/MatchVoucherDialog'
 import InvoicePicker from '@/components/transactions/InvoicePicker'
 import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
+import MatchAllocationDialog from '@/components/transactions/MatchAllocationDialog'
+import BulkBookDialog from '@/components/transactions/BulkBookDialog'
 import TransactionBookingDialog from '@/components/transactions/TransactionBookingDialog'
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
+import EditTransactionTitleDialog from '@/components/transactions/EditTransactionTitleDialog'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
@@ -120,6 +126,12 @@ export default function TransactionsPage() {
   const [invoicePickerTransaction, setInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   const [supplierInvoicePickerOpen, setSupplierInvoicePickerOpen] = useState(false)
   const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [splitMatchOpen, setSplitMatchOpen] = useState(false)
+  const [splitMatchTransaction, setSplitMatchTransaction] = useState<TransactionWithInvoice | null>(null)
+  // "Matcha mot befintlig verifikation" — link a bank tx to an already-booked
+  // voucher (salary, Fortnox import, manual entry) with no new bokföring.
+  const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
+  const [bulkBookOpen, setBulkBookOpen] = useState(false)
   const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
 
@@ -188,7 +200,9 @@ export default function TransactionsPage() {
   const [sourceFilter, setSourceFilter] = useState<'all' | 'bank' | 'skatteverket'>('all')
 
   const { toast } = useToast()
-  const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
+  const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
+  // Bank transaction whose title is being edited (null = dialog closed).
+  const [editTitleTarget, setEditTitleTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = createClient()
   const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
@@ -198,7 +212,7 @@ export default function TransactionsPage() {
 
   // Computed lists
   const uncategorizedTransactions = transactions
-    .filter((t) => t.is_business === null && !exitingIds.has(t.id))
+    .filter((t) => t.is_business === null && !t.is_ignored && !exitingIds.has(t.id))
     .sort((a, b) => {
       const aHasMatch = a.potential_invoice || a.potential_supplier_invoice ? 1 : 0
       const bHasMatch = b.potential_invoice || b.potential_supplier_invoice ? 1 : 0
@@ -282,7 +296,10 @@ export default function TransactionsPage() {
         .from('transactions')
         .select('*', { count: 'exact', head: true })
         .eq('company_id', company.id)
-        .is('is_business', null),
+        .is('is_business', null)
+        // Same predicate as lib/worklist countUnbookedTransactions — ignored
+        // rows are handled, not pending.
+        .eq('is_ignored', false),
     ])
 
     if (txError) {
@@ -429,8 +446,8 @@ export default function TransactionsPage() {
 
       if (cancelled) return
 
-      if (entityRes?.entity_type) {
-        setEntityType(entityRes.entity_type)
+      if (entityRes?.data?.entity_type) {
+        setEntityType(entityRes.data.entity_type)
       }
     }
 
@@ -850,7 +867,86 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleConfirmInvoiceMatch(opts?: { force?: boolean; expected_journal_entry_id?: string }) {
+  async function handleIgnoreTransaction(tx: TransactionWithInvoice) {
+    // Mirrors BankReconciliationView's ignore flow: Ignorera is fully
+    // reversible, but the row vanishes immediately — confirmation before the
+    // write plus an Ångra toast gives two recovery affordances. The
+    // "Ignorerade transaktioner" card on Rapporter → Bankavstämning is the
+    // standing third.
+    const ok = await confirm({
+      title: 'Ignorera transaktionen?',
+      description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton — riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
+      confirmLabel: 'Ignorera',
+      cancelLabel: 'Avbryt',
+      variant: 'warning',
+    })
+    if (!ok) return
+
+    setTemplatePickerOpen(false)
+    try {
+      const res = await fetch(`/api/transactions/${tx.id}/ignore`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok || result.error) {
+        toast({
+          title: 'Kunde inte ignorera transaktionen',
+          description: typeof result.error === 'string' ? result.error : undefined,
+          variant: 'destructive',
+        })
+        return
+      }
+      setExitingIds((prev) => new Set(prev).add(tx.id))
+      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) => (t.id === tx.id ? { ...t, is_ignored: true } : t))
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(tx.id)
+          return next
+        })
+      }, 350)
+      toast({
+        title: 'Transaktionen ignorerad',
+        description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)}`,
+        action: (
+          <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(tx.id)}>
+            Ångra
+          </ToastAction>
+        ),
+      })
+    } catch {
+      toast({ title: 'Kunde inte ignorera transaktionen', variant: 'destructive' })
+    }
+  }
+
+  async function handleUnignoreTransaction(transactionId: string) {
+    try {
+      const res = await fetch(`/api/transactions/${transactionId}/ignore`, { method: 'DELETE' })
+      const result = await res.json()
+      if (!res.ok || result.error) {
+        toast({ title: 'Kunde inte återställa transaktionen', variant: 'destructive' })
+        return
+      }
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: false } : t))
+      )
+      setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
+    } catch {
+      toast({ title: 'Kunde inte återställa transaktionen', variant: 'destructive' })
+    }
+  }
+
+  async function handleConfirmInvoiceMatch(opts?: {
+    force?: boolean
+    expected_journal_entry_id?: string
+    lines?: Array<{
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+      line_description?: string
+    }>
+  }) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
     const isCustomer = !!selectedTransaction.potential_invoice
@@ -874,6 +970,12 @@ export default function TransactionsPage() {
         if (opts.expected_journal_entry_id) {
           body.expected_journal_entry_id = opts.expected_journal_entry_id
         }
+      }
+      // User-edited journal entry rows from the match dialog. Forwarded
+      // verbatim; the server validates balance and posts via
+      // createJournalEntry directly. Default routing applies when omitted.
+      if (opts?.lines && opts.lines.length >= 2) {
+        body.lines = opts.lines
       }
 
       const response = await fetch(url, {
@@ -1009,6 +1111,38 @@ export default function TransactionsPage() {
     }
   }
 
+  function openMatchVoucherDialog(transaction: TransactionWithInvoice) {
+    setMatchVoucherTx(transaction)
+  }
+
+  // Called by MatchVoucherDialog after /api/reconciliation/bank/link succeeds.
+  // The row is now booked (journal_entry_id set, is_business true) so the inbox
+  // filter drops it — animate it out the same way as the invoice-link path.
+  function handleVoucherLinked(transactionId: string, journalEntryId: string, voucherLabel: string) {
+    toast({
+      title: 'Bankhändelsen kopplad',
+      description: voucherLabel
+        ? `Kopplad till verifikation ${voucherLabel}. Ingen ny bokföring skapad.`
+        : 'Ingen ny bokföring skapad.',
+    })
+    setMatchVoucherTx(null)
+    setExitingIds((prev) => new Set(prev).add(transactionId))
+    setTimeout(() => {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === transactionId
+            ? { ...t, is_business: true, journal_entry_id: journalEntryId }
+            : t,
+        ),
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(transactionId)
+        return next
+      })
+    }, 350)
+  }
+
   async function handleMatchInvoice(transactionId: string, invoiceId: string): Promise<boolean> {
     try {
       const response = await fetch(`/api/transactions/${transactionId}/match-invoice`, {
@@ -1049,127 +1183,29 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleSelectInvoiceFromPicker(invoice: Invoice & { customer?: Customer }) {
+  function handleSelectInvoiceFromPicker(invoice: Invoice & { customer?: Customer }) {
     if (!invoicePickerTransaction) return
+    // Don't POST directly from the picker. Route through the confirm dialog
+    // so the user sees the JE preview (Debet 1930 / Kredit 1510, or the cash
+    // variant) before the booking is created. Same UX as the auto-suggested
+    // path. Closes the picker and opens the match dialog with the picked
+    // invoice attached as potential_invoice.
     const tx = invoicePickerTransaction
-    setIsMatchingFromPicker(true)
-    try {
-      const response = await fetch(`/api/transactions/${tx.id}/match-invoice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_id: invoice.id }),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        toast({
-          title: 'Fakturamatchning misslyckades',
-          description: getErrorMessage(result, { context: 'transaction' }),
-          variant: 'destructive',
-        })
-        setIsMatchingFromPicker(false)
-        return
-      }
-
-      toast({
-        title: 'Faktura matchad',
-        description: `Faktura ${invoice.invoice_number ?? ''} markerad som betald`,
-      })
-
-      setInvoicePickerOpen(false)
-      setInvoicePickerTransaction(null)
-      setExitingIds((prev) => new Set(prev).add(tx.id))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
-      setTimeout(() => {
-        setTransactions((prev) =>
-          prev.map((t) =>
-            t.id === tx.id
-              ? {
-                  ...t,
-                  invoice_id: invoice.id,
-                  potential_invoice_id: null,
-                  potential_invoice: undefined,
-                  is_business: true,
-                  category: (result.category ?? 'income_services') as TransactionCategory,
-                  journal_entry_id: result.journal_entry_id,
-                }
-              : t
-          )
-        )
-        setExitingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(tx.id)
-          return next
-        })
-        setIsMatchingFromPicker(false)
-      }, 350)
-    } catch {
-      toast({
-        title: 'Matchning misslyckades',
-        description: t('match_failed_with_invoice'),
-        variant: 'destructive',
-      })
-      setIsMatchingFromPicker(false)
-    }
+    setInvoicePickerOpen(false)
+    setInvoicePickerTransaction(null)
+    setSelectedTransaction({ ...tx, potential_invoice: invoice })
+    setMatchDialogOpen(true)
   }
 
-  async function handleSelectSupplierInvoiceFromPicker(invoice: SupplierInvoice & { supplier?: Supplier }) {
+  function handleSelectSupplierInvoiceFromPicker(invoice: SupplierInvoice & { supplier?: Supplier }) {
     if (!supplierInvoicePickerTransaction) return
+    // Route through the confirm dialog so the supplier-side JE preview
+    // (Debet 2440 / Kredit 1930, or kontant-variant) is shown before commit.
     const tx = supplierInvoicePickerTransaction
-    setIsMatchingSupplierFromPicker(true)
-    try {
-      const response = await fetch(`/api/transactions/${tx.id}/match-supplier-invoice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supplier_invoice_id: invoice.id }),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        toast({
-          title: 'Matchning misslyckades',
-          description: getErrorMessage(result, { context: 'transaction' }),
-          variant: 'destructive',
-        })
-        setIsMatchingSupplierFromPicker(false)
-        return
-      }
-
-      toast({
-        title: 'Leverantörsfaktura matchad',
-        description: `Faktura ${invoice.supplier_invoice_number ?? ''} markerad som betald`,
-      })
-
-      setSupplierInvoicePickerOpen(false)
-      setSupplierInvoicePickerTransaction(null)
-      setExitingIds((prev) => new Set(prev).add(tx.id))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
-      setTimeout(() => {
-        setTransactions((prev) =>
-          prev.map((t) =>
-            t.id === tx.id
-              ? {
-                  ...t,
-                  supplier_invoice_id: invoice.id,
-                  is_business: true,
-                  journal_entry_id: result.journal_entry_id ?? t.journal_entry_id,
-                }
-              : t
-          )
-        )
-        setExitingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(tx.id)
-          return next
-        })
-        setIsMatchingSupplierFromPicker(false)
-      }, 350)
-    } catch {
-      toast({
-        title: 'Matchning misslyckades',
-        description: 'Transaktionen kunde inte matchas med leverantörsfakturan. Försök igen.',
-        variant: 'destructive',
-      })
-      setIsMatchingSupplierFromPicker(false)
-    }
+    setSupplierInvoicePickerOpen(false)
+    setSupplierInvoicePickerTransaction(null)
+    setSelectedTransaction({ ...tx, potential_supplier_invoice: invoice })
+    setMatchDialogOpen(true)
   }
 
   function openInvoiceMatchPicker(transaction: TransactionWithInvoice) {
@@ -1182,46 +1218,109 @@ export default function TransactionsPage() {
     }
   }
 
+  function openSplitMatchDialog(transaction: TransactionWithInvoice) {
+    setSplitMatchTransaction(transaction)
+    setSplitMatchOpen(true)
+  }
+
+  // Selected-tx derivation for bulk-book eligibility.
+  // The action bar shows "Bokför i klump" only when ≥2 txs are selected,
+  // share the same date, and same direction (all income or all expense) —
+  // matches the RPC's same-day + same-direction invariants so the user
+  // doesn't submit a guaranteed-fail batch.
+  const selectedTransactions = useMemo(
+    () => transactions.filter((t) => selectedIds.has(t.id)),
+    [transactions, selectedIds],
+  )
+  const bulkBookEligible = useMemo(() => {
+    if (selectedTransactions.length < 2) return false
+    const first = selectedTransactions[0]!
+    return selectedTransactions.every(
+      (t) => t.date === first.date && (t.amount > 0) === (first.amount > 0),
+    )
+  }, [selectedTransactions])
+
+  async function handleBulkBookSuccess() {
+    // Animate every selected tx out of the inbox, then refetch and clear
+    // the selection state. Mirrors the per-tx match success animation.
+    const ids = Array.from(selectedIds)
+    setExitingIds((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.add(id)
+      return next
+    })
+    await fetchTransactions()
+    setSelectedIds(new Set())
+    setIsBatchMode(false)
+    setTimeout(() => {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        for (const id of ids) next.delete(id)
+        return next
+      })
+    }, 350)
+  }
+
+  async function handleSplitMatchSuccess() {
+    if (!splitMatchTransaction) return
+    const txId = splitMatchTransaction.id
+    // Mark the tx as exiting to trigger the same removal animation the
+    // single-match flow uses, then drop it from the inbox once the refetch
+    // confirms it's booked. Mirrors the pattern at the supplier-invoice
+    // match success path below.
+    setExitingIds((prev) => new Set(prev).add(txId))
+    await fetchTransactions()
+    setTimeout(() => {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(txId)
+        return next
+      })
+    }, 350)
+  }
+
   async function handleCreateTransaction(data: CreateTransactionInput) {
     setIsCreating(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      toast({ title: t('login_required_title'), description: t('login_required_description'), variant: 'destructive' })
-      setIsCreating(false)
-      return
-    }
-
-    const { data: transaction, error } = await supabase
-      .from('transactions')
-      .insert({
-        company_id: company!.id,
-        user_id: user.id,
-        date: data.date,
-        description: data.description,
-        amount: data.amount,
-        currency: data.currency,
-        category: data.category || 'uncategorized',
-        is_business: null,
-        notes: data.notes,
+    try {
+      // Create through the server route so the payload is validated server-side
+      // (shared CreateTransactionSchema) and the DB CHECK applies — the browser
+      // client must never be the only guard on a mutation.
+      const response = await fetch('/api/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: data.date,
+          description: data.description,
+          amount: data.amount,
+          currency: data.currency,
+          category: data.category,
+          notes: data.notes,
+        }),
       })
-      .select()
-      .single()
-
-    if (error) {
-      toast({ title: 'Kunde inte skapa transaktion', description: error.message, variant: 'destructive' })
-    } else {
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Kunde inte skapa transaktion',
+          description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+          variant: 'destructive',
+        })
+        return
+      }
       toast({ title: 'Transaktion tillagd', description: `${data.description} har lagts till` })
-      setTransactions([transaction, ...transactions])
+      setTransactions([result.data, ...transactions])
       setIsDialogOpen(false)
+    } catch {
+      toast({ title: 'Kunde inte skapa transaktion', description: t('booking_failed_description'), variant: 'destructive' })
+    } finally {
+      setIsCreating(false)
     }
-    setIsCreating(false)
   }
 
   async function handleDeleteTransaction(id: string) {
     const transaction = transactions.find((t) => t.id === id)
     if (!transaction) return
 
-    const ok = await confirmDelete({
+    const ok = await confirm({
       title: 'Ta bort transaktion',
       description: `Är du säker på att du vill ta bort "${transaction.description}"? Åtgärden kan inte ångras.`,
       confirmLabel: 'Ta bort',
@@ -1248,6 +1347,46 @@ export default function TransactionsPage() {
         description: t('delete_failed_description'),
         variant: 'destructive',
       })
+    }
+  }
+
+  function openEditTitleDialog(transaction: TransactionWithInvoice) {
+    setEditTitleTarget(transaction)
+  }
+
+  // Persist a new title via PATCH. Returns true on success so the dialog can
+  // close; updates the local list optimistically (description + edited tag).
+  async function handleSaveTitle(description: string): Promise<boolean> {
+    const target = editTitleTarget
+    if (!target) return false
+    try {
+      const response = await fetch(`/api/transactions/${target.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('edit_title_failed'),
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        return false
+      }
+      const updated = result.data as { description: string; title_edited_at: string | null }
+      setTransactions((prev) =>
+        prev.map((tx) =>
+          tx.id === target.id
+            ? { ...tx, description: updated.description, title_edited_at: updated.title_edited_at }
+            : tx,
+        ),
+      )
+      toast({ title: t('edit_title_saved') })
+      return true
+    } catch {
+      toast({ title: t('edit_title_failed'), variant: 'destructive' })
+      return false
     }
   }
 
@@ -1334,7 +1473,7 @@ export default function TransactionsPage() {
 
   async function handleBatchDelete() {
     const ids = Array.from(selectedIds)
-    const ok = await confirmDelete({
+    const ok = await confirm({
       title: `Ta bort ${ids.length} transaktioner?`,
       description: 'Åtgärden kan inte ångras.',
       confirmLabel: 'Ta bort',
@@ -1600,7 +1739,11 @@ export default function TransactionsPage() {
         onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
       />
 
-      <BankSyncStatusChip />
+      <div className="flex flex-wrap items-center gap-2">
+        <BankSyncStatusChip />
+        <BankSyncNowButton />
+      </div>
+      <BankSyncSinceLastVisit />
 
       {/* Search + view dropdown */}
       <div className="flex items-center gap-2">
@@ -1710,8 +1853,11 @@ export default function TransactionsPage() {
                     onCategorize={handleCategorize}
                     onOpenMatchDialog={openMatchDialog}
                     onOpenMatchInvoicePicker={openInvoiceMatchPicker}
+                    onOpenSplitMatch={openSplitMatchDialog}
+                    onOpenMatchVoucher={openMatchVoucherDialog}
                     onOpenCategoryDialog={openCategoryDialog}
                     onDelete={handleDeleteTransaction}
+                    onEditTitle={openEditTitleDialog}
                     onToggleSelect={toggleBatchSelect}
                   />
                 ) : (
@@ -1772,6 +1918,23 @@ export default function TransactionsPage() {
                 <Trash2 className="mr-1 h-3 w-3" />
                 Ta bort
               </Button>
+              {/* Bulk-book (samlingsverifikation) — only when ≥2 selected on
+                  the same date + same direction. Disabled state explains why
+                  via title. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setBulkBookOpen(true)}
+                disabled={!bulkBookEligible}
+                title={
+                  !bulkBookEligible
+                    ? 'Välj minst två transaktioner från samma datum och samma riktning'
+                    : 'Skapa en samlingsverifikation för de valda transaktionerna'
+                }
+              >
+                <Layers className="mr-1 h-3 w-3" />
+                Bokför i klump
+              </Button>
               <Button size="sm" onClick={() => setShowBatchSelector(true)}>
                 Bokför
               </Button>
@@ -1796,6 +1959,30 @@ export default function TransactionsPage() {
         isConfirming={isConfirmingMatch}
         onConfirm={handleConfirmInvoiceMatch}
         onLinkToExisting={handleLinkToExistingVoucher}
+      />
+
+      <MatchVoucherDialog
+        open={matchVoucherTx !== null}
+        onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
+        transaction={matchVoucherTx}
+        onLinked={handleVoucherLinked}
+      />
+
+      <MatchAllocationDialog
+        open={splitMatchOpen}
+        onOpenChange={(o) => {
+          setSplitMatchOpen(o)
+          if (!o) setSplitMatchTransaction(null)
+        }}
+        transaction={splitMatchTransaction}
+        onSuccess={handleSplitMatchSuccess}
+      />
+
+      <BulkBookDialog
+        open={bulkBookOpen}
+        onOpenChange={setBulkBookOpen}
+        transactions={selectedTransactions}
+        onSuccess={handleBulkBookSuccess}
       />
 
       <TransactionBookingDialog
@@ -1844,6 +2031,16 @@ export default function TransactionsPage() {
                 }}
               >
                 Matcha med faktura…
+              </Button>
+            )}
+            {templatePickerTransaction && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start text-muted-foreground"
+                onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
+              >
+                Ignorera transaktionen…
               </Button>
             )}
           </div>
@@ -1959,7 +2156,17 @@ export default function TransactionsPage() {
         </DialogContent>
       </Dialog>
 
-      <DestructiveConfirmDialog {...deleteDialogProps} />
+      <DestructiveConfirmDialog {...confirmDialogProps} />
+
+      <EditTransactionTitleDialog
+        open={editTitleTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setEditTitleTarget(null)
+        }}
+        currentTitle={editTitleTarget?.description ?? ''}
+        originalTitle={editTitleTarget?.original_description ?? null}
+        onSave={handleSaveTitle}
+      />
 
       <SkattekontoMatchDialog
         row={skvMatchTarget}

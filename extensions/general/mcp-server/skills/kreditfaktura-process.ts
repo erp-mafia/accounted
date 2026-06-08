@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Kreditfaktura (Credit Note) Process — gnubok
+const body = `# Kreditfaktura (Credit Note) Process — Accounted
 
 When a sent invoice needs to be partially or fully reversed, Swedish law
 (BFL 5 kap. 6-7 §, ML 17 kap. 30 §) requires a kreditfaktura — not a delete,
@@ -78,7 +78,7 @@ If the original was unpaid, no refund — the credit just zeroes the AR balance.
 
 The customer receives a PDF marked "KREDITFAKTURA" with reference to the
 original invoice number. ML 17 kap. 30 § requires the kreditfaktura to
-reference the document being credited — gnubok does this automatically.
+reference the document being credited — Accounted does this automatically.
 
 ### Step 5 — Verify
 

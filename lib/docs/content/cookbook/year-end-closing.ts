@@ -17,7 +17,7 @@ This is the operational companion to the [Fiscal-periods reference](/docs/api/re
 Before locking anything, verify the period's continuity. BFL 5 kap requires that the closing balance (UB) of year N equals the opening balance (IB) of year N+1 on every BAS 1xxx, 2xxx account.
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/reports/continuity-check?from=2025-01-01&to=2025-12-31" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/continuity-check?from=2025-01-01&to=2025-12-31" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -45,7 +45,7 @@ Response:
 BFNAR 2013:2 kap 6–7 §§ requires explanations for missing voucher numbers. Run the check:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&period=2025" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&period=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -56,7 +56,7 @@ For every gap returned, file an explanation via \`POST /voucher-gap-explanations
 For aktiebolag, BFL 7 kap requires every verifikation to have its underlag (receipt, faktura, kontrakt) attached. The check:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/compliance/check?type=unmatched_documents&period=2025" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/compliance/check?type=unmatched_documents&period=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -67,7 +67,7 @@ Attach missing documents via \`POST /journal-entries/{id}/documents\` before loc
 \`POST /fiscal-periods/{id}/lock\` blocks all writes to the period while leaving it reversible. Use this when the year's books are "done" but you may still need to add a year-end accrual entry under supervision.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -87,7 +87,7 @@ Locked periods can be unlocked via \`PATCH\` with a clear reason that lands in t
 This is an async operation:
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/year-end" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/year-end" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -136,7 +136,7 @@ Poll the operation; on \`succeeded\` the result block lists every voucher posted
 After year-end runs, the new period (\`next_period_id\`) has IB on every balance-sheet account matching the prior period's UB. Verify:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/reports/trial-balance?period=2026" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/trial-balance?period=2026" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -149,7 +149,7 @@ If opening balances are wrong (rare; the engine validates before posting), use \
 After the declaration, the auditor's review (if applicable), and any year-end accruals are settled, close the period. **BFL 5 kap 8 §: closing is irreversible.** No code path can re-open a closed period.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/close" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/close" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -163,7 +163,7 @@ The \`confirmation_phrase\` is a forced typed acknowledgment. The request fails 
 For an AB, the annual report (årsredovisning) is filed with Bolagsverket within 7 months of the fiscal-year end. v1 produces the K2/K3-formatted source data; you typeset it externally and submit via Bolagsverket Mina Sidor.
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/reports/annual-report?year=2025" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/annual-report?year=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -175,11 +175,11 @@ The tax declaration (INK2 for AB, NE-bilaga for enskild firma) is due in March/M
 
 \`\`\`bash
 # Aktiebolag — INK2
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/reports/ink2?year=2025" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/ink2?year=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 
 # Enskild firma — NE-bilaga
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/reports/ne-bilaga?year=2025" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/ne-bilaga?year=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 

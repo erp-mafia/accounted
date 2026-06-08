@@ -42,6 +42,9 @@ import {
   executeSIEImport,
   checkDuplicateImport,
 } from '@/lib/import/sie-import'
+import { suggestMappings } from '@/lib/import/account-mapper'
+import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
+import type { SIEAccountMappingRecord } from '@/lib/import/types'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -62,7 +65,7 @@ registerEndpoint({
   description:
     'Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as the request body, parses it, checks for duplicate imports by file-hash, and replays every #VER + #TRANS into the company\'s bookkeeping. Returns an `operation_id` immediately — poll `GET /api/v1/operations/{id}` for status + final result. The byte-equivalent dashboard route at /api/import/sie/execute backs the same lib helper, so a SIE imported via v1 matches what the dashboard would produce.',
   useWhen:
-    'Migrating bookkeeping data from another system (Fortnox, Bokio, Visma) into gnubok, restoring from a backup .se file, or recreating a period from an archive.',
+    'Migrating bookkeeping data from another system (Fortnox, Bokio, Visma) into Accounted, restoring from a backup .se file, or recreating a period from an archive.',
   doNotUseFor:
     'Bank transaction CSV/XML imports (use POST /imports/bank). Single-voucher creation (use POST /journal-entries). Importing into a period that already has posted entries — SIE imports run on a fresh period.',
   pitfalls: [
@@ -71,6 +74,7 @@ registerEndpoint({
     'Duplicate-file detection is by SHA-256 hash — re-importing the same file returns 409 SIE_IMPORT_DUPLICATE without re-running the import.',
     'The operation can take 1–5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'BFL 7 kap räkenskapsinformation: once a SIE import completes, the resulting verifikationer are immutable. Cancellation midway is not supported.',
+    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides). By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ — pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
     response: {
@@ -148,6 +152,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         importOpeningBalances: z.boolean().optional().default(true),
         importTransactions: z.boolean().optional().default(true),
         voucherSeries: z.string().min(1).max(2).optional().default('A'),
+        updateAccountNames: z.boolean().optional().default(true),
       })
       // OWASP V4.5: reject unknown keys so a future schema-extension
       // (or a careless edit) doesn't silently pass mass-assigned fields
@@ -223,6 +228,38 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    // Build account mappings server-side from the file's #KONTO records and
+    // any stored per-company overrides — same as the dashboard execute route.
+    // (This route used to pass [] as mappings, which executeSIEImport's
+    // mapping-coverage guard rejects for any real file.)
+    const { data: storedMappings } = await ctx.supabase
+      .from('sie_account_mappings')
+      .select('*')
+      .eq('company_id', ctx.companyId)
+    const mappings = suggestMappings(
+      parsed.accounts,
+      BAS_REFERENCE,
+      (storedMappings as SIEAccountMappingRecord[]) || undefined,
+    )
+
+    // Reject unmappable files with a clean 400 before starting the operation
+    // row, mirroring the dashboard route — the alternative is a permanently
+    // failed operation from executeSIEImport's coverage guard.
+    const unmapped = mappings.filter((m) => !m.targetAccount)
+    if (unmapped.length > 0) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'file',
+          message: `${unmapped.length} account(s) in the SIE file could not be mapped to BAS accounts.`,
+          unmapped_accounts: unmapped.slice(0, 5).map((m) => ({
+            account: m.sourceAccount,
+            name: m.sourceName,
+          })),
+        },
+      })
+    }
+
     // Start the operation row — caller polls /operations/{id} for status.
     const op = await startOperation(
       ctx.supabase,
@@ -248,7 +285,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ctx.companyId!,
         ctx.userId,
         parsed,
-        [],
+        mappings,
         {
           filename: file.name,
           fileContent: content,
@@ -256,6 +293,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           importOpeningBalances: options.importOpeningBalances,
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries,
+          updateAccountNames: options.updateAccountNames,
         },
       )
       await completeOperation(ctx.supabase, { id: op.id, result }, ctx.log)

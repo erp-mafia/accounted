@@ -1,13 +1,13 @@
 export const WEBHOOKS_MD = `# Webhooks
 
-> Receive HMAC-signed POST notifications when state changes in gnubok — invoices paid, journal entries committed, periods locked, salary runs booked, AGI files generated. At-least-once delivery with exponential backoff over ~72 hours.
+> Receive HMAC-signed POST notifications when state changes in Accounted — invoices paid, journal entries committed, periods locked, salary runs booked, AGI files generated. At-least-once delivery with exponential backoff over ~72 hours.
 
-If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is identical: subscribe a URL to an event type, gnubok POSTs each event with a signed JSON body, your receiver returns 2xx to acknowledge. The signature header format and retry policy are the same. The event types are gnubok-specific.
+If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is identical: subscribe a URL to an event type, Accounted POSTs each event with a signed JSON body, your receiver returns 2xx to acknowledge. The signature header format and retry policy are the same. The event types are gnubok-specific.
 
 ## Lifecycle
 
 1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks). The response includes an HMAC signing secret returned **exactly once** — store it on the receiver side immediately. If you lose it, delete the webhook and create a new one.
-2. **gnubok emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
+2. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
 3. **The dispatcher cron runs every minute**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout.
 4. **Your receiver verifies the signature**, processes the event idempotently, and returns 2xx.
 5. **Failed deliveries retry** at \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~72 hours total). After all attempts the delivery is marked \`dead\`. HTTP 410 from your receiver short-circuits to \`dead\` immediately and **auto-disables** the webhook.
@@ -115,7 +115,7 @@ const app = express()
 const SECRET = process.env.GNUBOK_WEBHOOK_SECRET // whsec_...
 
 // Important: capture the RAW body before any JSON parsing — the signature
-// is computed against the exact bytes gnubok sent, not a re-serialised JSON.
+// is computed against the exact bytes Accounted sent, not a re-serialised JSON.
 app.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
@@ -207,7 +207,7 @@ def verify_signature(body: bytes, header: str, secret: bytes) -> bool:
 
 ### Common pitfalls
 
-- **Using parsed JSON instead of raw bytes.** Re-serialising the body (\`JSON.stringify(req.body)\`) produces different bytes than gnubok sent — the signature won't match. Capture the raw body before any framework parses it.
+- **Using parsed JSON instead of raw bytes.** Re-serialising the body (\`JSON.stringify(req.body)\`) produces different bytes than Accounted sent — the signature won't match. Capture the raw body before any framework parses it.
 - **Forgetting the timestamp window.** Without checking \`t\`, an attacker who captured one signed payload can replay it forever. 5 minutes is our recommended window; tighten if your clock skew is small.
 - **Treating retries as duplicates of failure.** Retries arrive when *we* didn't get a 2xx. A 200 response that arrives slowly may not reach us in time and we'll retry — your receiver sees the same \`X-Gnubok-Delivery\` twice. Idempotency is on you.
 - **Returning 5xx for application errors.** A 5xx triggers the full retry policy (~72h of attempts). If your handler hit an application bug that won't resolve on retry, return 200 and queue the failure for internal investigation; only return 5xx for genuinely transient problems.
@@ -235,7 +235,7 @@ Re-enable with [\`PATCH /webhooks/{webhookId}\`](/docs/api/reference/webhooks#pa
 
 Webhook delivery rows are *behandlingshistorik* (a system-event log) per BFNAR 2013:2 kap 8 § — they are immutable once they reach a terminal state (\`delivered\` or \`dead\`) so the audit trail of who-was-notified-when stays intact. The underlying *räkenskapsinformation* (the verifikation, the faktura, the AGI XML itself) lives in its own table with its own BFL 7 kap retention — webhook delivery rows are NOT räkenskapsinformation and the 7-year retention applies to the underlying record, not to the delivery envelope.
 
-For accounting-event delivery rows (\`journal_entry.*\`, \`period.*\`, \`salary_run.booked\`, \`agi.generated\`, \`invoice.paid\`, \`supplier_invoice.paid\`), gnubok keeps the delivery rows for 7 years. **This is a voluntary operational audit-trail policy gnubok chose because the duration aligns conveniently with BFL 7 kap retention on the underlying records — it is NOT itself a statutory obligation.** The 7-year statutory retention under BFL 7 kap 1 § applies to the underlying verifikation / faktura / AGI XML in its own table, not to the delivery envelope. The integrator's own retention obligations likewise attach to the underlying records you receive (and any local copies you persist), not to the delivery-row metadata.
+For accounting-event delivery rows (\`journal_entry.*\`, \`period.*\`, \`salary_run.booked\`, \`agi.generated\`, \`invoice.paid\`, \`supplier_invoice.paid\`), Accounted keeps the delivery rows for 7 years. **This is a voluntary operational audit-trail policy Accounted chose because the duration aligns conveniently with BFL 7 kap retention on the underlying records — it is NOT itself a statutory obligation.** The 7-year statutory retention under BFL 7 kap 1 § applies to the underlying verifikation / faktura / AGI XML in its own table, not to the delivery envelope. The integrator's own retention obligations likewise attach to the underlying records you receive (and any local copies you persist), not to the delivery-row metadata.
 
 Deleting a webhook does not delete its delivery history; the FK is \`ON DELETE SET NULL\` so the audit trail survives.
 `

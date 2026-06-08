@@ -4,24 +4,24 @@
     "version": 2
   },
   "horizontal/swedish-accounting-compliance/bas-kontoplan": {
-    "hash": "7e953d87cf9d34ed19b59979e86ae9b7e1cb92e1d15b9cc74817702618481260",
-    "version": 1
+    "hash": "0d1b05466568344be0afd4b360d582db23331ae4f1b4b05681cc92c50d099bdb",
+    "version": 2
   },
   "horizontal/swedish-accounting-compliance/bfl-bfnar": {
     "hash": "2240a0e67af22450468f5bcd85ddf2037fd3ed37e8db662afff6cbaf93d4b398",
     "version": 1
   },
   "horizontal/swedish-accounting-compliance/changes-2025-2026": {
-    "hash": "c99a22584f8bd696eb28bf166ba16c890019a69222ce06e6a289f3f6dbe7908f",
-    "version": 1
+    "hash": "ffc4c5d618bb8840f43fd48c8d4a3e464768e84abdaeb49da016e0051b260964",
+    "version": 3
   },
   "horizontal/swedish-accounting-compliance/sie4": {
     "hash": "0b73718716d3aab442c25bb0d0fa8057087481fe86f6792e28403dd03fb5af11",
     "version": 1
   },
   "horizontal/swedish-accounting-compliance/skatteverket": {
-    "hash": "defc2ca882c2a000d08446ae5413e3b77bf6a5d6d03c34b709bc2dd35209ebca",
-    "version": 1
+    "hash": "9605f2b56989119b3cac2081a84cc7dbf7bc73e10e40d8648b917b4cff06bacf",
+    "version": 3
   },
   "horizontal/swedish-asset-accounting": {
     "hash": "f7c79332c0fbc24f391aac3aeb1a01327bb803d11864dd68e52e37a6df2e8588",
@@ -40,8 +40,8 @@
     "version": 1
   },
   "horizontal/swedish-e-invoicing": {
-    "hash": "349bdeea6971f88cb20e77bf90684aa185492706aa15b224ffea231ab3a93513",
-    "version": 2
+    "hash": "bbcb94de81be7663384085104811a801ed6a12aa37cb2a34eefc6d0ba41267e6",
+    "version": 4
   },
   "horizontal/swedish-e-invoicing/consumer-and-b2c": {
     "hash": "886cf35d3663b88d3b5bc8ca1766e14f073eb3de1f9e75aa55479582e638f32c",
@@ -92,8 +92,8 @@
     "version": 1
   },
   "horizontal/swedish-invoice-compliance": {
-    "hash": "281eb51a191bf9c6f7db3604ebd9bae1bdac1fd99c2ef20385d3e6ba40c8e315",
-    "version": 2
+    "hash": "adf8765c94dfd26b73e5053a7e9c310a4fd66238c1f57a8836368384d26e9510",
+    "version": 4
   },
   "horizontal/swedish-invoice-compliance/invoice-rules": {
     "hash": "6d6b51ce14d1d28a780909b2e1513062c4433dbb282e3c21d764732d7346e716",
@@ -192,8 +192,8 @@
     "version": 1
   },
   "horizontal/swedish-sru-filing": {
-    "hash": "357d19064da31b0a6092e62af64e24be5e8bbc664ca55c7803b4d4b2ffc73811",
-    "version": 2
+    "hash": "a8c3b59da83adcd55806a5b7fb164bb97c08274922b956af48694e4066dd2d38",
+    "version": 4
   },
   "horizontal/swedish-sru-filing/sru-codes": {
     "hash": "e295059a8d92b9a5530bbdc15fc33e96b3fb61618d0e99f397cf61cc4c48cd0f",
@@ -328,8 +328,8 @@
     "version": 1
   },
   "modifier/single-shareholder-ab-fmb": {
-    "hash": "6a8888230079627a508bf533a38590c498f9270db037d2828dab6a98ac7655f3",
-    "version": 1
+    "hash": "d79be2b50e33774453b8d6baaec59b79fd4bb7771550cec00f7edd7afedfb30a",
+    "version": 2
   },
   "vertical/bygg-hantverk": {
     "hash": "9670e3515b607176efbdab05be8fc0d76f531ddb1fee8b2d70cbf78802ef571a",

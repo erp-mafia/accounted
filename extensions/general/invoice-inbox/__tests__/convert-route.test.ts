@@ -131,6 +131,45 @@ describe('POST /items/:id/convert', () => {
     expect(status).toBe(404)
   })
 
+  it('returns 409 (not 500) when the supplier invoice number already exists', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: 42 })
+    // Insert collides with idx_supplier_invoices_company_supplier_number.
+    enqueue({
+      data: null,
+      error: {
+        code: '23505',
+        message:
+          'duplicate key value violates unique constraint "idx_supplier_invoices_company_supplier_number"',
+      },
+    })
+    // Lookup of the existing (non-credited) invoice for the conflict payload.
+    enqueue({
+      data: { id: 'existing-1', supplier_invoice_number: 'F-2024-001', status: 'approved' },
+    })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: VALID_CONVERT_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: Record<string, unknown> & { existing?: { id: string } } }
+    }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_CREATE_DUPLICATE_INVOICE_NUMBER')
+    expect(body.error.details?.existing?.id).toBe('existing-1')
+    // Data minimisation: the raw request body must NOT be echoed back into the
+    // error envelope — only the server-authoritative `existing` row.
+    expect(body.error.details).not.toHaveProperty('supplierId')
+    expect(body.error.details).not.toHaveProperty('supplierInvoiceNumber')
+  })
+
   it('successfully converts inbox item to supplier invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inboxItem = makeInvoiceInboxItem({ status: 'received', document_id: 'doc-1' })

@@ -43,6 +43,7 @@ export interface ImportExecuteOptions {
   createFiscalPeriod: boolean
   importOpeningBalances: boolean
   importTransactions: boolean
+  updateAccountNames: boolean
   voucherSeries: string
 }
 
@@ -59,6 +60,7 @@ export default function ImportReviewStep({
     createFiscalPeriod: true,
     importOpeningBalances: true,
     importTransactions: true,
+    updateAccountNames: true,
     voucherSeries: 'B',
   })
   const [defaultSeries, setDefaultSeries] = useState<string | null>(null)
@@ -144,6 +146,16 @@ export default function ImportReviewStep({
   const mappedCount = mappings.filter((m) => m.targetAccount).length
   const hasOpeningBalances = preview.openingBalanceTotal > 0
   const hasTransactions = preview.voucherCount > 0
+  // Identity-mapped accounts whose #KONTO name differs from the BAS default —
+  // mirrors the filter in syncMappedAccounts, so the count matches what the
+  // import would actually rename/create with a custom name.
+  const customNameCount = mappings.filter(
+    (m) =>
+      m.targetAccount &&
+      m.sourceAccount === m.targetAccount &&
+      m.sourceName?.trim() &&
+      m.sourceName.trim() !== m.targetName?.trim()
+  ).length
 
   // Full-screen loading takeover during import execution
   if (isLoading) {
@@ -283,6 +295,25 @@ export default function ImportReviewStep({
               checked={options.importTransactions}
               onCheckedChange={(checked) => updateOption('importTransactions', checked)}
               disabled={!hasTransactions}
+            />
+          </div>
+
+          {/* Account names from file */}
+          <div className="flex items-start justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="update-account-names" className="font-medium">
+                Använd kontonamn från filen
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {customNameCount > 0
+                  ? `${customNameCount} ${customNameCount === 1 ? 'konto' : 'konton'} har egna namn i filen som skiljer sig från BAS-standard`
+                  : 'Kontonamnen i filen följer BAS-standard'}
+              </p>
+            </div>
+            <Switch
+              id="update-account-names"
+              checked={options.updateAccountNames}
+              onCheckedChange={(checked) => updateOption('updateAccountNames', checked)}
             />
           </div>
 

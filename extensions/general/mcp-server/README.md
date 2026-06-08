@@ -1,6 +1,6 @@
-# gnubok MCP server
+# Accounted MCP server
 
-JSON-RPC 2.0 server exposing the gnubok bookkeeping engine to MCP clients (Claude Desktop, Claude Code, etc.). Endpoint: `/api/extensions/ext/mcp-server/mcp`. OAuth and stdio bridge live alongside the API surface — see `app/api/mcp-oauth/` and `packages/gnubok-mcp/`.
+JSON-RPC 2.0 server exposing the Accounted bookkeeping engine to MCP clients (Claude Desktop, Claude Code, etc.). Endpoint: `/api/extensions/ext/mcp-server/mcp`. OAuth and stdio bridge live alongside the API surface — see `app/api/mcp-oauth/` and `packages/gnubok-mcp/`.
 
 ## Tool authoring contract
 
@@ -17,17 +17,17 @@ Enforced by tests in `__tests__/` — these are not style preferences, they're g
 
 Tool definitions (name, description, inputSchema, outputSchema, annotations) are declared as static object literals at module load — no timestamps, no UUIDs, no Date/Math.random in the definition layer. This makes the `tools/list` JSON payload byte-stable across requests, which lets agent-side prompt caches stay warm. **Do not introduce per-request non-determinism into the definitions block.** Anything time-bound or random belongs inside `execute()`.
 
-For internal Anthropic API usage (today only `extensions/general/invoice-inbox/lib/extract-invoice-fields.ts`): annotate stable prefixes with `cache_control: { type: 'ephemeral' }` and log `usage.cache_read_input_tokens` for hit-ratio observability. The 1h TTL from the agent-native API plan (item 10) requires the direct Anthropic API; gnubok's Bedrock path defaults to a shorter TTL.
+For internal Anthropic API usage (today only `extensions/general/invoice-inbox/lib/extract-invoice-fields.ts`): annotate stable prefixes with `cache_control: { type: 'ephemeral' }` and log `usage.cache_read_input_tokens` for hit-ratio observability. The 1h TTL from the agent-native API plan (item 10) requires the direct Anthropic API; Accounted's Bedrock path defaults to a shorter TTL.
 
 ## Payload-size watchdog
 
-`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling (currently 25,000 tokens). If the test fires, the right answer is rarely "raise the ceiling" — instead, trim descriptions or leverage `gnubok_search_tools` (already deployed; tool definitions can defer to it for discovery rather than enumerating in `tools/list`).
+`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling (currently 36,000 tokens — bumped from 32,000 when top-level `Tool.title` landed on all tools for Claude Connectors Directory readiness). If the test fires, the right answer is rarely "raise the ceiling" — instead, trim descriptions or leverage `gnubok_search_tools` (already deployed; tool definitions can defer to it for discovery rather than enumerating in `tools/list`).
 
 ## Where things live
 
 - `server.ts` — the tools array + JSON-RPC dispatcher
 - `tool-result.ts` — `withNext()`, `toToolError()` response helpers
-- `resources/` — read-only `gnubok://` URIs (active company, period, recent activity, capabilities, attention items, voucher gaps, chart of accounts, VAT treatments)
+- `resources/` — read-only `Accounted://` URIs (active company, period, recent activity, capabilities, attention items, voucher gaps, chart of accounts, VAT treatments)
 - `widgets/` — inline HTML widgets (receipt-matcher, vat-review)
 - `prompts/` — slash-command-style prompts
 - `skills/` — domain-knowledge skill bodies served via `gnubok_load_skill`

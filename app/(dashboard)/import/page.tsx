@@ -9,9 +9,9 @@ import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download } from 'lucide-react'
+import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { BankSelector, type Bank } from '@/extensions/general/enable-banking/components/BankSelector'
@@ -73,6 +73,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import dynamic from 'next/dynamic'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
+import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
@@ -98,10 +99,13 @@ const BANK_STEP_LABELS: Record<BankFileStep, string> = {
 
 function BankFileImportWizard() {
   const { toast } = useToast()
+  const tTx = useTranslations('transactions')
+  const { company } = useCompany()
 
   const [bankStep, setBankStep] = useState<BankFileStep>('upload')
   const [bankIsLoading, setBankIsLoading] = useState(false)
   const [bankError, setBankError] = useState<string | null>(null)
+  const [bankErrorTitle, setBankErrorTitle] = useState<string | null>(null)
 
   // Parse results
   const [parseResult, setParseResult] = useState<BankFileParseResult | null>(null)
@@ -114,12 +118,35 @@ function BankFileImportWizard() {
   // Import result
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null)
 
+  // Active PSD2 connections — drives an overlap warning so users don't
+  // accidentally upload a CSV covering periods we already sync nightly.
+  const [activePsd2Banks, setActivePsd2Banks] = useState<string[]>([])
+  useEffect(() => {
+    if (!company?.id) return
+    let cancelled = false
+    const supabase = createClient()
+    supabase
+      .from('bank_connections')
+      .select('bank_name')
+      .eq('company_id', company.id)
+      .eq('status', 'active')
+      .then(({ data }) => {
+        if (cancelled) return
+        const names = Array.from(new Set((data ?? []).map((r) => r.bank_name).filter(Boolean)))
+        setActivePsd2Banks(names)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
+
   const steps = parseResult?.format === 'generic_csv' ? BANK_STEPS_WITH_MAPPING : BANK_STEPS
   const currentStepIndex = steps.indexOf(bankStep)
   const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const handleFileSelect = useCallback(async (file: File, formatOverride?: BankFileFormatId) => {
     setBankError(null)
+    setBankErrorTitle(null)
     setBankIsLoading(true)
 
     try {
@@ -137,10 +164,25 @@ function BankFileImportWizard() {
       const data = await res.json()
 
       if (!res.ok) {
-        if (data.error === 'duplicate') {
-          setBankError(data.message)
+        // Structured error envelope: { error: { code, message, message_en, details } }
+        const err = data?.error
+        if (err && typeof err === 'object') {
+          if (err.code === 'BANK_FILE_DUPLICATE') {
+            const importedAt = err.details?.importedAt ? formatDate(err.details.importedAt) : null
+            const count = typeof err.details?.importedCount === 'number' ? err.details.importedCount : null
+            const when = importedAt
+              ? ` ${importedAt}${count !== null ? ` (${count} transaktioner)` : ''}`
+              : ''
+            setBankErrorTitle('Filen är redan importerad')
+            setBankError(
+              `Den här filen är redan importerad${when}. Transaktionerna finns redan under Transaktioner. ` +
+                'Exportera en ny fil från banken om du vill lägga till fler transaktioner.'
+            )
+          } else {
+            setBankError(err.message || 'Kunde inte läsa filen')
+          }
         } else {
-          setBankError(data.error || 'Kunde inte läsa filen')
+          setBankError(typeof err === 'string' ? err : 'Kunde inte läsa filen')
         }
         return
       }
@@ -234,11 +276,31 @@ function BankFileImportWizard() {
     setFilename('')
     setIngestResult(null)
     setBankError(null)
+    setBankErrorTitle(null)
     setRawFileContent('')
   }
 
   return (
     <div className="space-y-6">
+      {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
+      <BankSyncStatusChip />
+
+      {/* Overlap warning — active PSD2 means file import will likely create
+          duplicates of transactions the nightly sync already covers. */}
+      {activePsd2Banks.length > 0 && (
+        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+          <div className="flex-1 text-sm">
+            <p className="font-medium">
+              {tTx('import_psd2_active_warning_title', { bankName: activePsd2Banks.join(', ') })}
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              {tTx('import_psd2_active_warning_body')}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Progress */}
       <Card>
         <CardContent className="pt-6">
@@ -270,6 +332,7 @@ function BankFileImportWizard() {
           onFileSelect={handleFileSelect}
           isLoading={bankIsLoading}
           error={bankError}
+          errorTitle={bankErrorTitle}
           detectedFormat={detectedFormat}
           detectedFormatName={detectedFormatName}
         />
@@ -2044,7 +2107,7 @@ export default function ImportPage() {
                   {t('sie_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
-                  {['SIE4', '.se', '.si'].map(fmt => (
+                  {['SIE4', '.se'].map(fmt => (
                     <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {fmt}
                     </span>

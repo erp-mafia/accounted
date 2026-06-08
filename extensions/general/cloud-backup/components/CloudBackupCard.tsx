@@ -236,7 +236,7 @@ export default function CloudBackupCard() {
             <>
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Koppla ditt Google-konto för att ladda upp säkerhetsbackupen till din egen Drive.
-                gnubok får bara tillgång till filer som appen själv skapar (scope{' '}
+                Accounted får bara tillgång till filer som appen själv skapar (scope{' '}
                 <span className="font-mono text-xs">drive.file</span>).
               </p>
               <div className="mt-4">

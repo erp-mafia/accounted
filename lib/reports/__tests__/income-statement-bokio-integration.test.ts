@@ -128,7 +128,7 @@ describe.skipIf(!fixturesAvailable)('income statement — Bokio SIE regression (
     const report = await generateIncomeStatement(supabase, 'company-1', 'period-2025')
 
     // Bokio shows årets resultat = 221 316.27 kr on their V194 voucher.
-    // gnubok computes 220 906.27 (Revenue 370 314.68 − Expenses 149 408.41),
+    // Accounted computes 220 906.27 (Revenue 370 314.68 − Expenses 149 408.41),
     // which is the mathematically exact figure. The 410 kr difference is
     // öresutjämning/rounding that Bokio absorbed into V194 itself.
     expect(report.net_result).toBeCloseTo(220_906.27, 2)

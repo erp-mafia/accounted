@@ -1,49 +1,16 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { commitEntry } from '@/lib/bookkeeping/engine'
-import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
-import { createLogger } from '@/lib/logger'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 ensureInitialized()
 
-const log = createLogger('api.bookkeeping.commit')
-
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  try {
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal-entry.commit',
+  async (_request, { supabase, companyId, user }, { params }) => {
+    const { id } = await params
     const posted = await commitEntry(supabase, companyId, user.id, id, 'user_accept')
     return NextResponse.json({ data: posted })
-  } catch (err) {
-    const typed = bookkeepingErrorResponse(err)
-    if (typed) return typed
-    // Untyped error path: engine logging didn't fire, so log here.
-    log.error('commit endpoint failed (untyped)', err as Error, {
-      companyId,
-      userId: user.id,
-      entityType: 'journal_entry',
-      entityId: id,
-    })
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to commit entry' },
-      { status: 400 }
-    )
-  }
-}
+  },
+  { requireWrite: true },
+)

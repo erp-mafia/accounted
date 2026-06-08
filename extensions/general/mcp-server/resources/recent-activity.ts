@@ -1,7 +1,7 @@
 import type { McpResource } from './types'
 
 export const recentActivityResource: McpResource = {
-  uri: 'gnubok://recent-activity',
+  uri: 'Accounted://recent-activity',
   name: 'Recent Activity',
   description: 'Most recent journal entries, invoices, and bank transactions for the current company. Optional ?limit=N (default 20, max 100). Use to orient on the latest state without burning tool calls.',
   mimeType: 'application/json',

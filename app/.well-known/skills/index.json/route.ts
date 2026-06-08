@@ -27,7 +27,7 @@ export async function GET(_request: Request) {
       summary: s.summary,
       tags: s.tags,
       /** MCP resource URI; load via the MCP server's resources/read with an authenticated key. */
-      uri: `gnubok://skill/${s.slug}`,
+      uri: `Accounted://skill/${s.slug}`,
     })),
   }
 

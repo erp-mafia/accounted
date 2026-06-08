@@ -6,7 +6,8 @@
  *   - emits one structured `info` log on completion with duration
  *   - converts any thrown value into the canonical error envelope via
  *     errorResponse(); the request id appears in the response body and the
- *     X-Request-Id response header
+ *     X-Request-Id response header. Unhandled errors are logged ("op failed")
+ *     with the resolved { requestId, operation, userId, companyId } context.
  *
  * Usage:
  *   export const POST = withRouteContext('invoice.send', async (req, ctx) => {
@@ -95,6 +96,10 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
     const requestId = generateRequestId()
     const start = Date.now()
     const log = createLogger(`api/${operation}`, { requestId, operation })
+    // Upgraded as request context resolves, so an unhandled throw in the catch
+    // below is logged with the richest available { userId, companyId } context
+    // (audit trail / OWASP V16), not just { requestId, operation }.
+    let errLog = log
 
     try {
       const auth = await requireAuth()
@@ -111,6 +116,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       const { user, supabase } = auth
       const userLog = log.child({ userId: user.id })
+      errLog = userLog
 
       let companyId: string | null = null
       try {
@@ -144,6 +150,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         supabase,
         companyId,
       }
+      errLog = ctx.log
 
       const response = await handler(request, ctx, params)
 
@@ -157,8 +164,8 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       })
       return response
     } catch (err) {
-      log.error('op failed', err as Error, { durationMs: Date.now() - start })
-      return errorResponse(err, log, { requestId })
+      errLog.error('op failed', err as Error, { durationMs: Date.now() - start })
+      return errorResponse(err, errLog, { requestId })
     }
   }
 }

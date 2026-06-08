@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Quarterly VAT Review — gnubok
+const body = `# Quarterly VAT Review — Accounted
 
 End-to-end review of momsdeklaration (SKV 4700) before filing to Skatteverket.
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-echo "gnubok setup"
+echo "Accounted setup"
 echo "============"
 echo ""
 
@@ -30,7 +30,7 @@ if [ -f .env ]; then
 fi
 
 if [ ! -f .env.docker.example ]; then
-  echo "ERROR: .env.docker.example not found. Are you in the gnubok directory?"
+  echo "ERROR: .env.docker.example not found. Are you in the Accounted directory?"
   exit 1
 fi
 

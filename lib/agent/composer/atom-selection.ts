@@ -214,7 +214,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
   const lines: string[] = []
   lines.push(`# Företag`)
   lines.push(`Namn: ${inputs.companyName}`)
-  lines.push(`Juridisk form (gnubok): ${inputs.entityType}`)
+  lines.push(`Juridisk form (Accounted): ${inputs.entityType}`)
   lines.push('')
 
   const known = buildKnownFacts(inputs)

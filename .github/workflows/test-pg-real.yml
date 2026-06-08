@@ -7,6 +7,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  coverage-gate:
+    # Enforces the database.md rule: a migration touching a trigger/RPC/RLS/
+    # DEFERRABLE must come with a *.pg.test.ts change. Previously instruction-
+    # only. Escape hatch: `-- pg-test: covered-by <path>` / `-- pg-test: skip
+    # (<reason>)` comments inside the migration.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so the merge-base with the PR base branch exists.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Require pg-real coverage for trigger/RPC/RLS migrations
+        env:
+          PG_GATE_BASE: origin/${{ github.base_ref }}
+        run: node scripts/check-pg-test-coverage.mjs
+
   pg-real:
     runs-on: ubuntu-latest
 
@@ -31,7 +50,7 @@ jobs:
       PGPASSWORD: postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:

@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
@@ -54,6 +55,10 @@ export default function NewInvoicePage() {
   const { company } = useCompany()
   const supabase = createClient()
   const t = useTranslations('invoice_editor')
+  const ts = useTranslations('self_billing')
+  // Toggle between a normal customer invoice (default) and registering a
+  // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
+  const [mode, setMode] = useState<'invoice' | 'self_billed'>('invoice')
 
   const schema = useMemo(() => {
     const itemSchema = z.object({
@@ -79,6 +84,11 @@ export default function NewInvoicePage() {
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       notes: z.string().optional(),
+      // Self-billing received (mottagen självfaktura). Present in the form for
+      // both modes; required only in self_billed mode — enforced in onSubmit.
+      external_invoice_number: z.string().optional(),
+      self_billing_agreement_ref: z.string().optional(),
+      received_date: z.string().optional(),
       // Invoice-level ROT/RUT claim info. Personnummer is plaintext on
       // the wire; the API encrypts it before storage.
       deduction_personnummer: z.string().optional(),
@@ -92,6 +102,7 @@ export default function NewInvoicePage() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
@@ -122,6 +133,7 @@ export default function NewInvoicePage() {
     handleSubmit,
     watch,
     setValue,
+    setError,
     formState: { errors, isDirty },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -131,6 +143,9 @@ export default function NewInvoicePage() {
       due_date: '',
       currency: 'SEK',
       document_type: 'invoice' as InvoiceDocumentType,
+      external_invoice_number: '',
+      self_billing_agreement_ref: '',
+      received_date: '',
       items: [{
         description: '',
         quantity: 1,
@@ -151,6 +166,7 @@ export default function NewInvoicePage() {
   // Set date defaults on client only to avoid hydration mismatch
   useEffect(() => {
     setValue('invoice_date', format(new Date(), 'yyyy-MM-dd'))
+    setValue('received_date', format(new Date(), 'yyyy-MM-dd'))
     setValue('due_date', format(addDays(new Date(), 30), 'yyyy-MM-dd'))
   }, [])
 
@@ -364,7 +380,9 @@ export default function NewInvoicePage() {
   // the API recomputes server-side as the source of truth. Skipped for
   // non-invoice document types (proformas and delivery notes don't book
   // a deduction).
-  const isInvoiceDoc = watchDocumentType === 'invoice'
+  const isSelfBilled = mode === 'self_billed'
+  // ROT/RUT is an own-issued, B2C concept — never shown for a received self-bill.
+  const isInvoiceDoc = watchDocumentType === 'invoice' && !isSelfBilled
   const deductionByKind = { rot: 0, rut: 0 }
   if (isInvoiceDoc) {
     for (const item of watchItems) {
@@ -383,7 +401,69 @@ export default function NewInvoicePage() {
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
   const toPay = Math.round((total - deductionTotal) * 100) / 100
 
+  // Self-billing path: no review dialog, no PDF, no send — it arrives already
+  // booked. POST straight to the dedicated endpoint and open the verifikat.
+  async function handleSelfBilledSubmit(data: FormData) {
+    setIsSubmitting(true)
+    try {
+      const response = await fetch('/api/invoices/self-billed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_id: data.customer_id,
+          external_invoice_number: data.external_invoice_number,
+          self_billing_agreement_ref: data.self_billing_agreement_ref || undefined,
+          invoice_date: data.invoice_date,
+          received_date: data.received_date,
+          due_date: data.due_date,
+          currency: data.currency,
+          notes: data.notes,
+          items: data.items.map((i) => ({
+            description: i.description,
+            quantity: i.quantity,
+            unit: i.unit,
+            unit_price: i.unit_price,
+            vat_rate: i.vat_rate,
+          })),
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(result, { context: 'invoice', statusCode: response.status }))
+      }
+      toast({
+        title: ts('created_title'),
+        description: ts('created_description', { number: data.external_invoice_number ?? '' }),
+      })
+      router.push(`/invoices/${result.data.id}`)
+    } catch (error) {
+      toast({
+        title: ts('create_failed_title'),
+        description: getErrorMessage(error, { context: 'invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   async function onSubmit(data: FormData) {
+    if (isSelfBilled) {
+      // The two self-billing-only fields are optional in the shared schema —
+      // enforce them here so the inline errors render under the right inputs.
+      let valid = true
+      if (!data.external_invoice_number?.trim()) {
+        setError('external_invoice_number', { message: ts('validation_external_number_required') })
+        valid = false
+      }
+      if (!data.received_date) {
+        setError('received_date', { message: ts('validation_received_date_required') })
+        valid = false
+      }
+      if (!valid) return
+      await handleSelfBilledSubmit(data)
+      return
+    }
     setPendingData(data)
     // Re-fetch the preview right before review so the displayed number
     // reflects any concurrent invoice creations. Skip for delivery notes.
@@ -503,6 +583,61 @@ export default function NewInvoicePage() {
     }
   }
 
+  // "Spara som utkast" — save an unnumbered draft (save_as_draft) without the
+  // review dialog. The invoice gets no F-number and fires no invoice.created
+  // until the user opens it and clicks "Granska & skapa" (finalize). Same
+  // ROT/RUT privacy sanitization as handleConfirm.
+  async function saveDraftData(data: FormData) {
+    setIsSavingDraft(true)
+
+    const anyDeduction = data.items.some((i) => i.deduction_type)
+    const sanitizedItems = data.items.map((item) => {
+      if (item.deduction_type) return item
+      const {
+        deduction_type: _dt,
+        labor_hours: _lh,
+        work_type: _wt,
+        housing_designation: _hd,
+        apartment_number: _an,
+        ...rest
+      } = item
+      return rest
+    })
+    const payload: CreateInvoiceInput = {
+      ...(data as CreateInvoiceInput),
+      save_as_draft: true,
+      items: sanitizedItems as CreateInvoiceInput['items'],
+      ...(anyDeduction
+        ? {}
+        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
+    }
+
+    try {
+      const response = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(result, { context: 'invoice', statusCode: response.status }))
+      }
+      toast({
+        title: t('toast_draft_saved_title'),
+        description: t('toast_draft_saved_description'),
+      })
+      router.push(`/invoices/${result.data.id}`)
+    } catch (error) {
+      toast({
+        title: t('save_draft_failed_title'),
+        description: getErrorMessage(error, { context: 'invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSavingDraft(false)
+    }
+  }
+
   async function handleSendNow() {
     if (!createdInvoiceId) return
     setIsSending(true)
@@ -583,12 +718,16 @@ export default function NewInvoicePage() {
     )
   }
 
-  const titleText = watchDocumentType === 'proforma'
+  const titleText = isSelfBilled
+    ? ts('title')
+    : watchDocumentType === 'proforma'
     ? t('title_proforma')
     : watchDocumentType === 'delivery_note'
       ? t('title_delivery_note')
       : t('title_invoice')
-  const subtitleText = watchDocumentType === 'proforma'
+  const subtitleText = isSelfBilled
+    ? ts('subtitle')
+    : watchDocumentType === 'proforma'
     ? t('subtitle_proforma')
     : watchDocumentType === 'delivery_note'
       ? t('subtitle_delivery_note')
@@ -603,7 +742,7 @@ export default function NewInvoicePage() {
         <div className="flex-1 min-w-0">
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
             {titleText}
-            {numberPreview && (
+            {numberPreview && !isSelfBilled && (
               <span className="ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl">
                 ({numberPreview})
               </span>
@@ -618,7 +757,14 @@ export default function NewInvoicePage() {
         />
       </div>
 
-      {hasBankDetails === false && (
+      <Tabs value={mode} onValueChange={(v) => setMode(v as 'invoice' | 'self_billed')}>
+        <TabsList>
+          <TabsTrigger value="invoice">{t('mode_invoice')}</TabsTrigger>
+          <TabsTrigger value="self_billed">{t('mode_self_billed')}</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {hasBankDetails === false && !isSelfBilled && (
         <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3 text-sm">
           <Landmark className="h-4 w-4 shrink-0 text-muted-foreground" />
           <p className="text-muted-foreground">{t('bank_missing_warning')}</p>
@@ -635,8 +781,8 @@ export default function NewInvoicePage() {
             {/* Customer selection */}
             <Card>
             <CardHeader>
-              <CardTitle>{t('customer_card_title')}<RequiredMark /></CardTitle>
-              <CardDescription>{t('customer_card_description')}</CardDescription>
+              <CardTitle>{isSelfBilled ? <>{ts('customer_label')}<RequiredMark /></> : <>{t('customer_card_title')}<RequiredMark /></>}</CardTitle>
+              <CardDescription>{isSelfBilled ? ts('issuer_card_description') : t('customer_card_description')}</CardDescription>
             </CardHeader>
             <CardContent>
               <Controller
@@ -669,6 +815,22 @@ export default function NewInvoicePage() {
               </Button>
               {errors.customer_id && (
                 <p className="text-sm text-destructive mt-2">{errors.customer_id.message}</p>
+              )}
+
+              {isSelfBilled && (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>{ts('external_number_label')}<RequiredMark /></Label>
+                    <Input placeholder={ts('external_number_placeholder')} {...register('external_invoice_number')} />
+                    {errors.external_invoice_number && (
+                      <p className="text-sm text-destructive">{errors.external_invoice_number.message}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{ts('agreement_ref_label')}</Label>
+                    <Input placeholder={ts('agreement_ref_placeholder')} {...register('self_billing_agreement_ref')} />
+                  </div>
+                </div>
               )}
 
             </CardContent>
@@ -1035,25 +1197,27 @@ export default function NewInvoicePage() {
                 <CardTitle>{t('details_card_title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>{t('document_type_label')}</Label>
-                <Controller
-                  name="document_type"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="invoice">{t('doctype_invoice')}</SelectItem>
-                        <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
-                        <SelectItem value="delivery_note">{t('doctype_delivery_note')}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </div>
+              {!isSelfBilled && (
+                <div className="space-y-2">
+                  <Label>{t('document_type_label')}</Label>
+                  <Controller
+                    name="document_type"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="invoice">{t('doctype_invoice')}</SelectItem>
+                          <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
+                          <SelectItem value="delivery_note">{t('doctype_delivery_note')}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>{t('currency_label')}</Label>
@@ -1087,44 +1251,58 @@ export default function NewInvoicePage() {
                 <Input type="date" {...register('due_date')} aria-required="true" />
               </div>
 
-              {watchDocumentType === 'invoice' && (
+              {isSelfBilled && (
+                <div className="space-y-2">
+                  <Label>{ts('received_date_label')}<RequiredMark /></Label>
+                  <Input type="date" {...register('received_date')} aria-required="true" />
+                  {errors.received_date && (
+                    <p className="text-sm text-destructive">{errors.received_date.message}</p>
+                  )}
+                </div>
+              )}
+
+              {watchDocumentType === 'invoice' && !isSelfBilled && (
                 <div className="space-y-2">
                   <Label>{t('delivery_date_label')}</Label>
                   <Input type="date" {...register('delivery_date')} placeholder={t('delivery_date_placeholder')} />
                 </div>
               )}
 
-              <Separator />
+              {!isSelfBilled && (
+                <>
+                  <Separator />
 
-              <div className="space-y-2">
-                <Label>{t('your_reference_label')}</Label>
-                <Controller
-                  name="your_reference"
-                  control={control}
-                  render={({ field }) => (
-                    <TagInput
-                      value={field.value ?? ''}
-                      onChange={field.onChange}
-                      placeholder={t('your_reference_placeholder')}
+                  <div className="space-y-2">
+                    <Label>{t('your_reference_label')}</Label>
+                    <Controller
+                      name="your_reference"
+                      control={control}
+                      render={({ field }) => (
+                        <TagInput
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          placeholder={t('your_reference_placeholder')}
+                        />
+                      )}
                     />
-                  )}
-                />
-              </div>
+                  </div>
 
-              <div className="space-y-2">
-                <Label>{t('our_reference_label')}</Label>
-                <Controller
-                  name="our_reference"
-                  control={control}
-                  render={({ field }) => (
-                    <TagInput
-                      value={field.value ?? ''}
-                      onChange={field.onChange}
-                      placeholder={t('our_reference_placeholder')}
+                  <div className="space-y-2">
+                    <Label>{t('our_reference_label')}</Label>
+                    <Controller
+                      name="our_reference"
+                      control={control}
+                      render={({ field }) => (
+                        <TagInput
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          placeholder={t('our_reference_placeholder')}
+                        />
+                      )}
                     />
-                  )}
-                />
-              </div>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -1183,16 +1361,32 @@ export default function NewInvoicePage() {
           </Card>
 
             {/* Actions — desktop/tablet only */}
-            <Button
-              type="submit"
-              className="w-full hidden md:block"
-              size="lg"
-              disabled={isSubmitting || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              {t('review_and_create')}
-            </Button>
+            <div className="hidden md:flex md:flex-col md:gap-2">
+              <Button
+                type="submit"
+                className="w-full"
+                size="lg"
+                disabled={isSubmitting || isSavingDraft || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
+                {isSelfBilled ? ts('register') : t('review_and_create')}
+              </Button>
+              {!isSelfBilled && watchDocumentType === 'invoice' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  size="lg"
+                  disabled={isSubmitting || isSavingDraft || !canWrite}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : t('save_as_draft_tooltip')}
+                  onClick={handleSubmit(saveDraftData)}
+                >
+                  {isSavingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {t('save_as_draft')}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1207,14 +1401,26 @@ export default function NewInvoicePage() {
                 {formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}
               </p>
             </div>
-            <Button
-              type="submit"
-              disabled={isSubmitting || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              {t('review_and_create')}
-            </Button>
+            <div className="flex items-center gap-2">
+              {!isSelfBilled && watchDocumentType === 'invoice' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isSubmitting || isSavingDraft || !canWrite}
+                  onClick={handleSubmit(saveDraftData)}
+                >
+                  {isSavingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : t('save_as_draft_short')}
+                </Button>
+              )}
+              <Button
+                type="submit"
+                disabled={isSubmitting || isSavingDraft || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
+                {isSelfBilled ? ts('register') : t('review_and_create')}
+              </Button>
+            </div>
           </div>
         </div>
       </form>
@@ -1274,6 +1480,7 @@ export default function NewInvoicePage() {
             notes={pendingData?.notes}
             numberPreview={numberPreview}
             oreRounding={oreRounding}
+            vatRegistered={vatRegistered}
           />
         </ConfirmationDialog>
       )}

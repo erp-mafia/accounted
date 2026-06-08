@@ -15,7 +15,7 @@ This is the operational companion to the [Reports reference](/docs/api/reference
 \`GET /reports/vat-declaration\` returns rutor 05–62 plus the reconciliation block:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/reports/vat-declaration?period=2026-04" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/vat-declaration?period=2026-04" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -88,7 +88,7 @@ The VAT declaration for April 2026 onwards will show split balances on rutor 11/
 BFNAR 2013:2 kap 6–7 §§ requires every voucher gap to have a documented explanation. Skatteverket may ask why \`F-2026-0042\` exists when no \`F-2026-0041\` is on the books. Check before declaring:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&period=2026-04" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&period=2026-04" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -99,7 +99,7 @@ If gaps exist, file an explanation via \`POST /voucher-gap-explanations\` BEFORE
 The declaration is computed from posted entries in the period. If the period is still open and you have draft entries that should be in this declaration, commit them before declaring. After declaring, lock the period:
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -113,7 +113,7 @@ v1 does not submit the declaration. The receipt-quality JSON above is what you t
 For audit-trail completeness, capture the submission confirmation number from Skatteverket and store it on the period via \`PATCH /fiscal-periods/{id}\`:
 
 \`\`\`bash
-curl -X PATCH "https://gnubok.app/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID" \\
+curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Content-Type: application/json" \\
   -d '{ "submission_reference": "SKV-2026-04-AB123456" }'

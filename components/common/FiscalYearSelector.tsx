@@ -15,7 +15,7 @@ import { Lock } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { FiscalPeriod } from '@/types'
 
-const STORAGE_KEY_PREFIX = 'gnubok:fiscal-year:'
+const STORAGE_KEY_PREFIX = 'Accounted:fiscal-year:'
 const ALL_YEARS_VALUE = '__all__'
 
 interface Props {

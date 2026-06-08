@@ -11,6 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
@@ -51,6 +52,10 @@ import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
 } from '@/lib/invoices/voucher-matching'
+import {
+  findMatchingVouchersForSupplierInvoice,
+  validateVoucherForSupplierInvoiceLink,
+} from '@/lib/invoices/supplier-voucher-matching'
 import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { closePeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
@@ -116,6 +121,10 @@ interface McpToolAnnotations {
 
 interface McpTool {
   name: string
+  // Top-level Tool.title per MCP spec 2025-06-18 (human-facing label for
+  // directory listings; distinct from annotations.title). Short Title Case
+  // noun phrase. Flows out via the tools/list serializer below.
+  title?: string
   description: string
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
@@ -832,7 +841,7 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
  *  buyer's VAT number is invalid).
  *
  *  Companies using non-standard charts must either book to one of these
- *  or extend the list — gnubok's BAS chart only ships 3001/3002/3003/3004
+ *  or extend the list — Accounted's BAS chart only ships 3001/3002/3003/3004
  *  by default, but 30xx alternates are common in custom charts. */
 const RUTA_05_ACCOUNTS = [
   // Domestic sales by VAT rate (canonical BAS)
@@ -1394,7 +1403,8 @@ function previousPeriodArgs(
 export const tools: McpTool[] = [
   {
     name: 'gnubok_search_tools',
-    description: 'Search gnubok MCP tools by keyword and return their schemas at a chosen detail level. Call this first when looking for a capability — avoids loading every tool schema upfront.',
+    title: 'Search MCP Tools',
+    description: 'Search Accounted MCP tools by keyword and return their schemas at a chosen detail level. Call this first when looking for a capability — avoids loading every tool schema upfront.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1512,6 +1522,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_skills',
+    title: 'List Domain Skills',
     description: 'List available domain-knowledge skills filtered to this company (entity type, VAT, payroll). Workflow guides + loaded specialty atoms. Pass include_all=true to see hidden skills. Call gnubok_load_skill(slug) for any body.',
     inputSchema: {
       type: 'object',
@@ -1636,6 +1647,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_load_skill',
+    title: 'Load Domain Skill',
     description: 'Load a skill body by slug. Workflow slugs are flat (e.g. "month-end-close"); atom slugs match registry ids (e.g. "vertical/konsult-it", "modifier/holding-ab"). Call gnubok_list_skills to find slugs.',
     inputSchema: {
       type: 'object',
@@ -1673,6 +1685,12 @@ export const tools: McpTool[] = [
         const available = all.map((s) => s.slug).join(', ')
         throw new Error(`Skill not found: "${slug}". Available skills: ${available}`)
       }
+      // Every load, every tier — records which skill/atom bodies agents
+      // actually pull (mcp.skill_loaded). Without this, "which atom was
+      // loaded" is unanswerable and atom effectiveness can't be measured.
+      if (actor) {
+        emitSkillLoaded({ slug: skill.slug, tier: skill.tier, actor, userId, companyId })
+      }
       // Workflow-tier skills are the closed-form processes (month-end-close,
       // year-end-close, payroll-monthly). Loading one is a strong signal the
       // agent is starting that workflow — emit so we can track completion
@@ -1693,7 +1711,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_remember_fact',
-    description: 'Capture a durable fact, preference, pattern, or correction about the company. Use mid-conversation when the user says something the agent should remember next time. Writes immediately — does not stage. Use sparingly for foundational signal, not for one-off context.',
+    title: 'Remember Company Fact',
+    description: 'Capture a durable fact, preference, or correction about the company. Use mid-conversation when the user says something to remember next time. Writes immediately — does not stage. Use sparingly.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1807,6 +1826,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_forget_fact',
+    title: 'Forget Company Fact',
     description: 'Deactivate a memory entry by id. Use when the user explicitly asks to forget something or supersedes it. The row is kept for audit (is_active=false) but no longer surfaces in prompts.',
     inputSchema: {
       type: 'object',
@@ -1849,6 +1869,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_feedback',
+    title: 'Send Agent Feedback',
     description: 'Report agent-side feedback: missing tool, wrong description, skill gap, or a positive signal. Goes to event_log for product-team triage. Rate-limited 1/min/key.',
     inputSchema: {
       type: 'object',
@@ -1947,6 +1968,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_agent_briefing',
+    title: 'Get Agent Briefing',
     description: 'Bootstrap this company\'s specialized accountant context in one call: profile_summary, the atoms loaded for the company (metadata only — call gnubok_load_skill for bodies), and the top-30 active memories. Call once at session start.',
     inputSchema: {
       type: 'object',
@@ -2077,7 +2099,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_transactions',
-    description: 'Stage one or more transactions for the user to approve. Each item creates a separate pending operation; commit each via gnubok_approve_pending_operation when the user authorises. Useful for ingesting rows from external sources (Airtable, CSVs, etc.). Max 10 per call.',
+    title: 'Create Bank Transactions',
+    description: 'Stage one or more transactions for the user to approve. Each creates a separate pending operation; commit each via gnubok_approve_pending_operation. Use for ingesting external rows (Airtable, CSV). Max 10.',
     outputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2189,6 +2212,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_uncategorized_transactions',
+    title: 'List Uncategorized Transactions',
     description: 'List bank transactions with no journal entry yet, newest first. Paginated.',
     inputSchema: {
       type: 'object',
@@ -2207,10 +2231,10 @@ export const tools: McpTool[] = [
         description: { type: 'string' },
         amount: { type: 'number' },
         currency: { type: 'string' },
-        merchant_name: { type: 'string' },
-        reference: { type: 'string' },
-        is_business: { type: 'boolean' },
-        category: { type: 'string' },
+        merchant_name: { type: ['string', 'null'] },
+        reference: { type: ['string', 'null'] },
+        is_business: { type: ['boolean', 'null'] },
+        category: { type: ['string', 'null'] },
       },
     }),
     annotations: {
@@ -2259,6 +2283,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_transactions_without_documents',
+    title: 'List Transactions Missing Receipts',
     description: 'List BANK TRANSACTIONS booked without an attached underlag. For imported/manual verifikat (no bank tx row) call gnubok_list_verifikat_without_documents — this tool only covers bank-driven entries.',
     inputSchema: {
       type: 'object',
@@ -2278,10 +2303,10 @@ export const tools: McpTool[] = [
         description: { type: 'string' },
         amount: { type: 'number' },
         currency: { type: 'string' },
-        merchant_name: { type: 'string' },
-        reference: { type: 'string' },
-        is_business: { type: 'boolean' },
-        category: { type: 'string' },
+        merchant_name: { type: ['string', 'null'] },
+        reference: { type: ['string', 'null'] },
+        is_business: { type: ['boolean', 'null'] },
+        category: { type: ['string', 'null'] },
         journal_entry_id: { type: 'string' },
       },
     }),
@@ -2338,6 +2363,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_verifikat_without_documents',
+    title: 'List Verifikat Missing Documents',
     description: 'List POSTED journal entries (verifikat) that have no document_attachments row. Covers SIE-imported, manual and salary vouchers that the transactions-based tool misses. Newest first, paginated.',
     inputSchema: {
       type: 'object',
@@ -2435,7 +2461,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_categorize_transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation when the user authorises. If the row has an attached underlag, the tool reads its extracted_data and rejects vat_treatment="reverse_charge" when the seller already charged VAT.',
+    title: 'Categorize Bank Transaction',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. If an underlag is attached it rejects vat_treatment="reverse_charge" when the seller already charged VAT.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2518,6 +2545,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_receipt_matcher',
+    title: 'Receipt Matcher Widget',
     description: 'Open an interactive widget for drag-and-drop receipt-to-transaction matching. Renders inline in compatible clients.',
     inputSchema: {
       type: 'object',
@@ -2570,6 +2598,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_customers',
+    title: 'List Customers',
     description: 'List all customers for the active company. Use to look up customer_id for invoice creation.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     outputSchema: {
@@ -2602,6 +2631,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_customer',
+    title: 'Create Customer',
     description: 'Stage a new customer. Stages for user approval — NOT created until approved in the web app. EU VAT numbers trigger VIES validation.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
@@ -2682,6 +2712,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_invoices',
+    title: 'List Customer Invoices',
     description: 'List invoices for the active company, newest first. Optional status filter.',
     inputSchema: {
       type: 'object',
@@ -2743,6 +2774,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_invoice',
+    title: 'Create Customer Invoice',
     description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Stages for user approval — invoice number assigned at approval.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
@@ -2887,6 +2919,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_trial_balance',
+    title: 'Trial Balance (Råbalans)',
     description: 'Trial balance (huvudbok) for a fiscal period — all account balances with debit/credit totals. Defaults to most recent period.',
     inputSchema: {
       type: 'object',
@@ -3005,6 +3038,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_vat_report',
+    title: 'VAT Declaration (Momsdeklaration)',
     description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to also open the review widget (claude.ai / Desktop).',
     outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
     inputSchema: {
@@ -3042,6 +3076,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_review_widget',
+    title: 'VAT Review Widget',
     description: 'Open the interactive VAT review widget for a period. Equivalent to gnubok_get_vat_report(render_ui=true); kept as an alias for clients pinned to this tool name.',
     inputSchema: {
       type: 'object',
@@ -3068,7 +3103,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_close_check',
-    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor + blocker scan (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts ≥ 4000 kr, reverse-charge mirroring) + period sanity ratios + Skatteverket deadline + ready_to_close.",
+    title: 'VAT Close Check (Momsdeklaration)',
+    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor + blocker scan (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts ≥ 4000 kr, reverse-charge) + ready_to_close.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3118,6 +3154,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_kpi_report',
+    title: 'Business KPI Report',
     description: 'Business KPIs for a fiscal period: gross margin, net result, cash position, receivables, expense ratio, payment days, VAT liability, monthly trend.',
     inputSchema: {
       type: 'object',
@@ -3220,6 +3257,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_income_statement',
+    title: 'Income Statement (Resultaträkning)',
     description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category.',
     inputSchema: {
       type: 'object',
@@ -3276,6 +3314,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_paid',
+    title: 'Mark Invoice as Paid',
     description: 'Mark an invoice as paid and create the payment journal entry. Stages for approval. Status must be sent or overdue.',
     inputSchema: {
       type: 'object',
@@ -3333,6 +3372,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_send_invoice',
+    title: 'Send Invoice by Email',
     description: 'Send invoice via email with PDF attachment. Stages for approval. Requires customer email + email service configured.',
     inputSchema: {
       type: 'object',
@@ -3392,6 +3432,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_sent',
+    title: 'Mark Invoice as Sent',
     description: 'Mark a draft invoice as sent without sending email (when delivered manually). Stages for approval. Status must be draft.',
     inputSchema: {
       type: 'object',
@@ -3445,6 +3486,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_suppliers',
+    title: 'List Suppliers (Leverantörer)',
     description: 'List all suppliers (leverantörer) with contact and payment details, sorted by name.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     outputSchema: {
@@ -3477,6 +3519,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_supplier',
+    title: 'Create Supplier (Leverantör)',
     description: 'Stage a new supplier (leverantör). Stages for user approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
@@ -3612,6 +3655,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_supplier_invoices',
+    title: 'List Supplier Invoices',
     description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
     inputSchema: {
       type: 'object',
@@ -3669,6 +3713,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_counterparty_templates',
+    title: 'List Counterparty Templates',
     description: 'List active counterparty categorization templates — learned patterns from prior categorizations used for auto-matching new transactions.',
     inputSchema: {
       type: 'object',
@@ -3717,6 +3762,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_suggest_categories',
+    title: 'Suggest Transaction Categories',
     description: 'Suggest categories for uncategorized transactions using mapping rules, pattern matching, history, and counterparty templates. Up to 20 transactions per call.',
     inputSchema: {
       type: 'object',
@@ -3819,6 +3865,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_accounts',
+    title: 'List Chart of Accounts (Kontoplan)',
     description: 'List chart of accounts (kontoplan). account_class: 1=assets, 2=liabilities, 3=revenue, 4–7=expenses, 8=financial.',
     inputSchema: {
       type: 'object',
@@ -3868,6 +3915,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_balance_sheet',
+    title: 'Balance Sheet (Balansräkning)',
     description: 'Balance sheet (balansräkning) for a fiscal period: assets, equity, and liabilities sections with totals + balance check.',
     inputSchema: {
       type: 'object',
@@ -3920,6 +3968,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_general_ledger',
+    title: 'General Ledger (Huvudbok)',
     description: 'General ledger (huvudbok) for a fiscal period: per-account opening balance, entries, closing balance. Optional account range filter. For ad-hoc cross-account, amount, or free-text line queries use gnubok_query_journal.',
     inputSchema: {
       type: 'object',
@@ -3962,6 +4011,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_query_journal',
+    title: 'Query Journal Lines',
     description: "Flexible journal-line query — replaces chained ledger calls for ad-hoc questions. Filters: accounts, date range, amount range, voucher series/number, source type, status, project, cost center, free-text. Returns lines with parent voucher metadata + totals.",
     inputSchema: {
       type: 'object',
@@ -3974,7 +4024,7 @@ export const tools: McpTool[] = [
         date_to: { type: 'string', description: 'Latest entry date (YYYY-MM-DD, inclusive)' },
         amount_min: { type: 'number', description: 'Minimum line amount (absolute value of debit OR credit)' },
         amount_max: { type: 'number', description: 'Maximum line amount (absolute value)' },
-        text: { type: 'string', description: 'Free-text search in entry description and line description' },
+        text: { type: 'string', maxLength: 200, description: 'Free-text search in entry description and line description (max 200 chars)' },
         voucher_series: { type: 'string', description: 'Filter by voucher series (e.g. "A")' },
         voucher_number_from: { type: 'number', description: 'Lowest voucher number (inclusive)' },
         voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
@@ -3982,7 +4032,7 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
         project: { type: 'string', description: 'Filter by project code' },
         cost_center: { type: 'string', description: 'Filter by cost center' },
-        limit: { type: 'number', description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
       },
     },
     outputSchema: {
@@ -4013,7 +4063,7 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args, companyId, _userId, supabase) {
+    async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
       const status = (args.status as string) || 'posted'
       const accounts = args.accounts as string[] | undefined
@@ -4024,71 +4074,61 @@ export const tools: McpTool[] = [
         throw new Error('accounts list capped at 50 — use account_from/account_to for ranges')
       }
 
-      // Build the line-level query with a forced inner join on journal_entries
-      // so we can filter by the parent's company_id, status, date range, etc.
-      let query = supabase
-        .from('journal_entry_lines')
-        .select(
-          'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
-          { count: 'exact' }
-        )
-        .eq('journal_entries.company_id', companyId)
-
-      if (status === 'all') {
-        query = query.in('journal_entries.status', ['posted', 'reversed'])
-      } else {
-        query = query.eq('journal_entries.status', status)
-      }
-
-      if (accounts && accounts.length > 0) {
-        query = query.in('account_number', accounts)
-      } else {
-        if (accountFrom) query = query.gte('account_number', accountFrom)
-        if (accountTo) query = query.lte('account_number', accountTo)
-      }
-
       const dateFrom = args.date_from as string | undefined
       const dateTo = args.date_to as string | undefined
-      if (dateFrom) query = query.gte('journal_entries.entry_date', dateFrom)
-      if (dateTo) query = query.lte('journal_entries.entry_date', dateTo)
-
       const voucherSeries = args.voucher_series as string | undefined
-      if (voucherSeries) query = query.eq('journal_entries.voucher_series', voucherSeries)
       const vnFrom = args.voucher_number_from as number | undefined
       const vnTo = args.voucher_number_to as number | undefined
-      if (typeof vnFrom === 'number') query = query.gte('journal_entries.voucher_number', vnFrom)
-      if (typeof vnTo === 'number') query = query.lte('journal_entries.voucher_number', vnTo)
-
       const sourceType = args.source_type as string | undefined
-      if (sourceType) query = query.eq('journal_entries.source_type', sourceType)
-
       const project = args.project as string | undefined
-      if (project) query = query.eq('project', project)
       const costCenter = args.cost_center as string | undefined
-      if (costCenter) query = query.eq('cost_center', costCenter)
 
-      // Free-text search across both line description and entry description.
-      // PostgREST `or` filter applies at the joined level when fully qualified.
-      const text = (args.text as string | undefined)?.trim()
-      if (text) {
-        // Escape both LIKE wildcards (`%` and `_`) so a search for "2_441"
-        // matches the literal string instead of "2X441". Replace `,` with a
-        // space because PostgREST treats it as the `or` separator.
-        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_').replace(/,/g, ' ')
-        query = query.or(
-          `line_description.ilike.%${escaped}%,journal_entries.description.ilike.%${escaped}%`
-        )
+      // Each text-search leg needs its own builder instance — PostgREST
+      // query builders are not reusable across awaits. The factory closes
+      // over the resolved filter values above.
+      const buildBaseQuery = () => {
+        let q = supabase
+          .from('journal_entry_lines')
+          .select(
+            'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
+            { count: 'exact' }
+          )
+          .eq('journal_entries.company_id', companyId)
+
+        if (status === 'all') {
+          q = q.in('journal_entries.status', ['posted', 'reversed'])
+        } else {
+          q = q.eq('journal_entries.status', status)
+        }
+
+        if (accounts && accounts.length > 0) {
+          q = q.in('account_number', accounts)
+        } else {
+          if (accountFrom) q = q.gte('account_number', accountFrom)
+          if (accountTo) q = q.lte('account_number', accountTo)
+        }
+
+        if (dateFrom) q = q.gte('journal_entries.entry_date', dateFrom)
+        if (dateTo) q = q.lte('journal_entries.entry_date', dateTo)
+
+        if (voucherSeries) q = q.eq('journal_entries.voucher_series', voucherSeries)
+        if (typeof vnFrom === 'number') q = q.gte('journal_entries.voucher_number', vnFrom)
+        if (typeof vnTo === 'number') q = q.lte('journal_entries.voucher_number', vnTo)
+
+        if (sourceType) q = q.eq('journal_entries.source_type', sourceType)
+
+        if (project) q = q.eq('project', project)
+        if (costCenter) q = q.eq('cost_center', costCenter)
+
+        return q
       }
 
-      // Order by date desc then voucher_number desc — most recent first
-      query = query
-        .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
-        .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
-        .order('sort_order', { ascending: true })
-        .limit(limit)
-
-      const { data, error, count } = await query
-      if (error) throw new Error(`Database error: ${error.message}`)
+      const applyOrderAndLimit = <T extends ReturnType<typeof buildBaseQuery>>(q: T): T =>
+        q
+          .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+          .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+          .order('sort_order', { ascending: true })
+          .limit(limit) as T
 
       type LineRow = {
         id: string
@@ -4111,19 +4151,115 @@ export const tools: McpTool[] = [
         }
       }
 
+      // Free-text search runs as two parallel .ilike() queries — one against
+      // line_description (base table) and one against journal_entries.description
+      // (embedded resource). PostgREST's flat .or() filter cannot span a base
+      // column and an embedded-resource column ("failed to parse logic tree"),
+      // so we issue two queries and merge by line id. Same pattern as
+      // lib/invoices/duplicate-payment-candidates.ts.
+      const text = (args.text as string | undefined)?.trim()
+      let data: LineRow[] = []
+      let dbMatched = 0
+      // True when at least one text-search leg filled its per-leg fetch
+      // window — i.e. more matches probably exist on the DB side that didn't
+      // make it into the merge. Drives the `truncated` signal honestly even
+      // when the merged distinct set fits inside `limit`.
+      let legCapHit = false
+
+      if (text) {
+        // Length guard — defence in depth against pathological inputs even
+        // though .ilike() parameterises the value (compliance A.8.28).
+        if (text.length > 200) {
+          throw new Error('text filter must be 200 characters or shorter')
+        }
+
+        // LIKE wildcards `%` and `_` are escaped so a search for "2_441"
+        // matches the literal string. Comma stripping is intentionally NOT
+        // applied here: the previous implementation needed it because the
+        // value was interpolated into PostgREST's OR DSL where `,` is the
+        // separator. The .ilike() path passes the pattern as a parameterised
+        // filter operand where `,` is a literal — stripping would mangle
+        // searches for real commas in line descriptions.
+        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+        const pattern = `%${escaped}%`
+
+        // Fetch up to 2× limit per leg to reduce global-ordering loss when
+        // one leg is much more selective than the other (e.g. 150 line
+        // matches vs 5 entry matches with limit=100). Hard-capped at 500
+        // rows per leg so a caller-supplied `limit` near its own ceiling
+        // can't fan out to 2× very large queries. The final post-merge
+        // slice still caps at `limit`; the wider per-leg window just gives
+        // the merge a better tail to choose from.
+        const legLimit = Math.min(limit * 2, 500)
+
+        const buildLeg = (column: 'line_description' | 'journal_entries.description') =>
+          buildBaseQuery()
+            .ilike(column, pattern)
+            .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+            .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+            .order('sort_order', { ascending: true })
+            .limit(legLimit)
+
+        const [byLine, byEntry] = await Promise.all([
+          buildLeg('line_description'),
+          buildLeg('journal_entries.description'),
+        ])
+        if (byLine.error || byEntry.error) {
+          log.warn('query_journal text-search failed', {
+            companyId,
+            userId,
+            byLine: byLine.error?.message ?? null,
+            byEntry: byEntry.error?.message ?? null,
+          })
+          throw new Error('Database error while running text search')
+        }
+
+        const merged = new Map<string, LineRow>()
+        for (const row of (byLine.data ?? []) as unknown as LineRow[]) merged.set(row.id, row)
+        for (const row of (byEntry.data ?? []) as unknown as LineRow[]) {
+          if (!merged.has(row.id)) merged.set(row.id, row)
+        }
+        data = Array.from(merged.values())
+          .sort((a, b) => {
+            const ad = a.journal_entries.entry_date
+            const bd = b.journal_entries.entry_date
+            if (ad !== bd) return ad < bd ? 1 : -1
+            const av = a.journal_entries.voucher_number
+            const bv = b.journal_entries.voucher_number
+            if (av !== bv) return bv - av
+            return a.sort_order - b.sort_order
+          })
+          .slice(0, limit)
+
+        // Honest distinct-row count among what we fetched. If a leg hit its
+        // window cap, more distinct matches may exist; `legCapHit` carries
+        // that signal downstream so `truncated` isn't faked false.
+        dbMatched = merged.size
+        legCapHit =
+          (byLine.data?.length ?? 0) >= legLimit ||
+          (byEntry.data?.length ?? 0) >= legLimit
+      } else {
+        const res = await applyOrderAndLimit(buildBaseQuery())
+        if (res.error) {
+          log.warn('query_journal failed', { companyId, userId, error: res.error.message })
+          throw new Error('Database error while running journal query')
+        }
+        data = (res.data ?? []) as unknown as LineRow[]
+        dbMatched = res.count ?? data.length
+      }
+
       // Apply amount filter post-fetch — PostgREST can't OR an abs(debit) >= n
       // with abs(credit) >= n cleanly. Lines are debit XOR credit, so checking
       // max(debit, credit) works.
       const amountMin = args.amount_min as number | undefined
       const amountMax = args.amount_max as number | undefined
       const amountFilterApplied = typeof amountMin === 'number' || typeof amountMax === 'number'
-      const filtered = (data ?? []).filter((row) => {
-        const r = row as unknown as LineRow
+      const filtered = data.filter((r) => {
         const lineAmount = Math.max(Number(r.debit_amount) || 0, Number(r.credit_amount) || 0)
         if (typeof amountMin === 'number' && lineAmount < amountMin) return false
         if (typeof amountMax === 'number' && lineAmount > amountMax) return false
         return true
-      }) as unknown as LineRow[]
+      })
 
       // Compute totals on the fetched-and-filtered set. Note: when truncated,
       // these are totals of the returned slice, not the full match. The
@@ -4161,11 +4297,10 @@ export const tools: McpTool[] = [
       // result, and surface the pre-filter count + a flag separately so an
       // agent can still tell the DB matched more (it just didn't pass the
       // amount predicate).
-      const dbMatched = count ?? (data ?? []).length
       const total_lines = amountFilterApplied ? lines.length : dbMatched
       const truncated = amountFilterApplied
-        ? (data ?? []).length >= limit && lines.length === limit
-        : dbMatched > lines.length
+        ? data.length >= limit && lines.length === limit
+        : dbMatched > lines.length || legCapHit
       return {
         lines,
         truncated,
@@ -4201,6 +4336,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_ar_ledger',
+    title: 'AR Ledger (Kundreskontra)',
     description: 'Accounts receivable ledger (kundreskontra): outstanding customer invoices with aging.',
     inputSchema: {
       type: 'object',
@@ -4224,6 +4360,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_supplier_ledger',
+    title: 'AP Ledger (Leverantörsreskontra)',
     description: 'Accounts payable ledger (leverantörsreskontra): outstanding supplier invoices with aging.',
     inputSchema: {
       type: 'object',
@@ -4249,6 +4386,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_transaction_to_invoice',
+    title: 'Match Transaction to Invoice',
     description: 'Match a bank transaction (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number/customer match before staging — preview mirrors what you pass. Supports partial payments and auto-storno of prior categorization.',
     inputSchema: {
       type: 'object',
@@ -4324,7 +4462,538 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_match_batch_allocate',
+    title: 'Batch-Allocate Payment',
+    description: 'Allocate 1 bank tx across N customer OR N supplier invoices (samlingsbetalning, BFL 5 kap 6§). Use when one receipt covers many invoices or one transfer pays many bills. Customer needs income, supplier expense. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string' },
+        allocations: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 100,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', enum: ['customer_invoice', 'supplier_invoice'] },
+              invoice_id: { type: 'string' },
+              supplier_invoice_id: { type: 'string' },
+              amount: { type: 'number', exclusiveMinimum: 0, description: 'Amount in TX currency. Cross-currency = bank-credited SEK.' },
+            },
+            required: ['kind', 'amount'],
+          },
+        },
+      },
+      required: ['transaction_id', 'allocations'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      const allocations = args.allocations as Array<{
+        kind: 'customer_invoice' | 'supplier_invoice'
+        invoice_id?: string
+        supplier_invoice_id?: string
+        amount: number
+      }>
+      if (!transactionId) throw new Error('transaction_id is required')
+      if (!Array.isArray(allocations) || allocations.length === 0) {
+        throw new Error('allocations is required (non-empty array)')
+      }
+
+      const { data: transaction, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, journal_entry_id')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .single()
+      if (txError || !transaction) throw new Error('Transaction not found')
+      if (transaction.journal_entry_id) throw new Error('Transaction is already booked')
+      if (transaction.amount === 0) throw new Error('Transaction has zero amount')
+
+      // Direction guard mirrors the RPC: customer_invoice → income, supplier_invoice → expense.
+      const hasCustomer = allocations.some((a) => a.kind === 'customer_invoice')
+      const hasSupplier = allocations.some((a) => a.kind === 'supplier_invoice')
+      if (hasCustomer && hasSupplier) {
+        throw new Error('Cannot mix customer_invoice and supplier_invoice allocations in one batch')
+      }
+      if (hasCustomer && transaction.amount <= 0) {
+        throw new Error('Customer allocations require an income transaction (amount > 0)')
+      }
+      if (hasSupplier && transaction.amount >= 0) {
+        throw new Error('Supplier allocations require an expense transaction (amount < 0)')
+      }
+
+      // Per-allocation guard (Greptile P1): each row must carry the
+      // correct ID for its kind. The inputSchema marks both invoice_id
+      // and supplier_invoice_id as optional because they're mutually
+      // exclusive — but the JSON-Schema vocabulary can't express "X
+      // required iff Y=A". Check explicitly here. Round-8: also reject
+      // unexpected extra IDs (V4.5) — a customer_invoice row supplying
+      // supplier_invoice_id silently leaks the extra ID into preview_data.
+      for (const [i, a] of allocations.entries()) {
+        if (a.kind === 'customer_invoice') {
+          if (!a.invoice_id) {
+            throw new Error(`allocations[${i}]: invoice_id is required when kind=customer_invoice`)
+          }
+          if (a.supplier_invoice_id) {
+            throw new Error(`allocations[${i}]: supplier_invoice_id must not be set when kind=customer_invoice`)
+          }
+        } else if (a.kind === 'supplier_invoice') {
+          if (!a.supplier_invoice_id) {
+            throw new Error(`allocations[${i}]: supplier_invoice_id is required when kind=supplier_invoice`)
+          }
+          if (a.invoice_id) {
+            throw new Error(`allocations[${i}]: invoice_id must not be set when kind=supplier_invoice`)
+          }
+        }
+      }
+
+      // Tenant-isolation pre-check (OWASP V8.2.1): verify every
+      // referenced invoice belongs to this company BEFORE staging.
+      // The RPC also re-checks this, but failing fast at the MCP
+      // layer gives the agent a clear error instead of an opaque
+      // BATCH_INVOICE_NOT_FOUND code at commit time.
+      const invoiceIds = allocations
+        .filter((a) => a.kind === 'customer_invoice')
+        .map((a) => a.invoice_id!)
+      const supplierInvoiceIds = allocations
+        .filter((a) => a.kind === 'supplier_invoice')
+        .map((a) => a.supplier_invoice_id!)
+      // Belt-and-suspenders (CC6.1): assert both count equality AND the
+      // missing-set is empty. The Supabase REST client de-dupes by PK so
+      // count >= unique input length is enough on its own, but the
+      // explicit guard prevents an undefined-row edge case in the JSON
+      // response from silently passing.
+      if (invoiceIds.length > 0) {
+        const uniqueIds = Array.from(new Set(invoiceIds))
+        const { data: found } = await supabase
+          .from('invoices')
+          .select('id')
+          .in('id', uniqueIds)
+          .eq('company_id', companyId)
+        const foundRows = found ?? []
+        const foundSet = new Set(foundRows.map((r) => r.id))
+        const missing = uniqueIds.filter((id) => !foundSet.has(id))
+        if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
+          throw new Error(`Invoices not found for this company: ${missing.join(', ') || '(count mismatch)'}`)
+        }
+      }
+      if (supplierInvoiceIds.length > 0) {
+        const uniqueIds = Array.from(new Set(supplierInvoiceIds))
+        const { data: found } = await supabase
+          .from('supplier_invoices')
+          .select('id')
+          .in('id', uniqueIds)
+          .eq('company_id', companyId)
+        const foundRows = found ?? []
+        const foundSet = new Set(foundRows.map((r) => r.id))
+        const missing = uniqueIds.filter((id) => !foundSet.has(id))
+        if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
+          throw new Error(`Supplier invoices not found for this company: ${missing.join(', ') || '(count mismatch)'}`)
+        }
+      }
+
+      const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0)
+      const txAbs = Math.abs(transaction.amount)
+      // 0.005 SEK tolerance is for floating-point equalisation only,
+      // NOT a rounding allowance. The RPC `match_batch_allocate`
+      // re-enforces the same guard (BATCH_AMOUNT_EXCEEDS_TX /
+      // BATCH_AMOUNT_BELOW_TX) authoritatively (per PR #607 round 3),
+      // and the verifikat lines balance exactly to the öre.
+      if (Math.abs(totalAllocated - txAbs) > 0.005) {
+        throw new Error(
+          `Allocations sum (${totalAllocated.toFixed(2)}) must equal transaction amount (${txAbs.toFixed(2)})`
+        )
+      }
+
+      const txDesc = transaction.merchant_name || transaction.description || transactionId
+      // Swedish plurals: kundfaktura → kundfakturor (not kundfakturaor).
+      // Same for leverantörsfaktura → leverantörsfakturor.
+      const noun = hasCustomer ? 'kundfaktura' : 'leverantörsfaktura'
+      const summary = `${allocations.length} ${allocations.length === 1 ? noun : `${noun.slice(0, -1)}or`}`
+
+      return stagePendingOperation(supabase, companyId, userId, 'match_batch_allocate',
+        `Fördela: ${txDesc} → ${summary}`,
+        { transaction_id: transactionId, allocations },
+        // GDPR Art.25: transaction_description is included in preview_data
+        // so the user can recognise the tx at approval time (merchant_name
+        // or fallback to bank description). Same trade-off documented on
+        // gnubok_link_transaction_to_journal_entry — it's the minimum
+        // signal needed for an informed approval. Counterparty-identifying
+        // invoice IDs stay in params (audit trail); they are NOT echoed
+        // back into preview_data beyond aggregate counts.
+        {
+          transaction_description: txDesc,
+          transaction_amount: transaction.amount,
+          transaction_currency: transaction.currency,
+          transaction_date: transaction.date,
+          allocations_count: allocations.length,
+          allocations_kind: hasCustomer ? 'customer_invoice' : 'supplier_invoice',
+          total_allocated: totalAllocated,
+        },
+        actor,
+        {
+          description: 'After approval the combined verifikat is created and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
+          tool: hasCustomer ? 'gnubok_get_ar_ledger' : 'gnubok_get_supplier_ledger',
+        },
+        { dateForPeriodCheck: transaction.date }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_link_transaction_to_journal_entry',
+    title: 'Link Transaction to Verifikat',
+    description: 'Link 1 bank tx to an already-posted verifikat (no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string' },
+        journal_entry_id: { type: 'string' },
+        invoice_id: { type: 'string', description: 'Optional kundfaktura to settle alongside the link.' },
+      },
+      required: ['transaction_id', 'journal_entry_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      const journalEntryId = args.journal_entry_id as string
+      const invoiceId = (args.invoice_id as string | undefined) ?? undefined
+      if (!transactionId || !journalEntryId) {
+        throw new Error('transaction_id and journal_entry_id are required')
+      }
+
+      // Tenant-isolation + state pre-checks (OWASP V8.2.1). The commit
+      // handler re-validates authoritatively; failing fast at stage time
+      // gives the agent a clean error before the user is asked to approve.
+      const { data: tx, error: txError } = await supabase
+        .from('transactions')
+        .select('id, date, amount, currency, journal_entry_id, description, merchant_name')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (txError || !tx) throw new Error('Transaction not found')
+      if (tx.journal_entry_id) {
+        throw new Error('Transaction is already linked to a journal entry')
+      }
+
+      const { data: je, error: jeError } = await supabase
+        .from('journal_entries')
+        .select('id, status, voucher_series, voucher_number, entry_date')
+        .eq('id', journalEntryId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (jeError || !je) throw new Error('Journal entry not found')
+      if (je.status !== 'posted') {
+        throw new Error(`Journal entry must be posted (status=${je.status})`)
+      }
+
+      let invoicePreview: { invoice_number: string | null; remaining: number | null; will_be_fully_paid: boolean } | null = null
+      if (invoiceId) {
+        // GDPR Art.5(1)(c): only the columns the preview displays. We need
+        // remaining_amount for the will-be-fully-paid math, invoice_number
+        // for the staged-op title, and currency so we can fast-fail the
+        // mismatch before the user is asked to approve (the commit handler
+        // re-checks authoritatively via LINK_TX_INVOICE_CURRENCY_MISMATCH).
+        const { data: invoice, error: invError } = await supabase
+          .from('invoices')
+          .select('id, invoice_number, status, currency, remaining_amount')
+          .eq('id', invoiceId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (invError || !invoice) throw new Error('Invoice not found')
+        if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+          throw new Error(`Invoice is not in an open state (status=${invoice.status})`)
+        }
+        // Currency-mismatch pre-stage check (swedish-compliance PR #614
+        // round 8). The link-to-existing-voucher contract requires tx and
+        // invoice currency to match — cross-currency settlement must go
+        // through the match-invoice flow that posts 3960/7960 FX-diff
+        // lines via buildInvoicePaymentClearingLines. Failing fast here
+        // saves the user an approval round-trip.
+        if (tx.currency !== invoice.currency) {
+          throw new Error(
+            `Transaction currency (${tx.currency}) does not match invoice currency (${invoice.currency}). Cross-currency settlement must go through the match-invoice flow.`
+          )
+        }
+        // Explicit NaN guard (A.8.28): silently treating a malformed numeric
+        // column as 0 would let a bogus preview pass to the user. The DB
+        // column is NUMERIC NOT NULL on remaining_amount once status leaves
+        // 'draft', so a NaN here means something upstream is broken.
+        const remaining = Number(invoice.remaining_amount)
+        const txAmount = Number(tx.amount)
+        if (!Number.isFinite(remaining) || !Number.isFinite(txAmount)) {
+          throw new Error('Invoice remaining_amount or tx amount is not a finite number')
+        }
+        const newRemaining = Math.max(0, Math.round((remaining - txAmount) * 100) / 100)
+        invoicePreview = {
+          invoice_number: (invoice.invoice_number as string | null) ?? null,
+          remaining: newRemaining,
+          will_be_fully_paid: newRemaining <= 0,
+        }
+      }
+
+      // Period-lock check uses the LATER of tx.date and je.entry_date so a
+      // tx in an open period attached to a verifikat in a locked period
+      // surfaces the period_status envelope correctly. Mirrors the same
+      // logic in gnubok_bulk_book_transactions.
+      const txDate = tx.date as string
+      const jeDate = je.entry_date as string
+      const periodCheckDate = jeDate > txDate ? jeDate : txDate
+
+      // Centralised verifikat-label format (formatVoucherLabel) — keeps the
+      // MCP staging preview and the committed audit-trail label byte-identical,
+      // so BFL 5 kap 7§ traceability holds even if the format ever changes.
+      const voucherLabel = formatVoucherLabel(
+        je.voucher_series as string | null,
+        je.voucher_number as number | null,
+      )
+      const txDesc = (tx.merchant_name as string | null) || (tx.description as string | null) || transactionId.slice(0, 8)
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'link_transaction_journal_entry',
+        invoiceId
+          ? `Länka ${txDesc} → verifikat ${voucherLabel} + faktura ${invoicePreview?.invoice_number ?? invoiceId.slice(0, 8)}`
+          : `Länka ${txDesc} → verifikat ${voucherLabel}`,
+        { transaction_id: transactionId, journal_entry_id: journalEntryId, invoice_id: invoiceId ?? null },
+        // GDPR Art.25: voucher_description is intentionally OMITTED from
+        // preview_data — it can carry free-text merchant/counterparty PII
+        // and the voucher_label alone uniquely identifies the verifikat for
+        // the user's approval decision. Same reasoning as the per-tx
+        // description handling elsewhere in this file.
+        {
+          transaction_description: txDesc,
+          transaction_amount: tx.amount,
+          transaction_currency: tx.currency,
+          transaction_date: txDate,
+          voucher_label: voucherLabel,
+          voucher_date: jeDate,
+          invoice_id: invoiceId ?? null,
+          invoice_number: invoicePreview?.invoice_number ?? null,
+          invoice_remaining_after: invoicePreview?.remaining ?? null,
+          will_be_fully_paid: invoicePreview?.will_be_fully_paid ?? null,
+        },
+        actor,
+        {
+          description: invoiceId
+            ? 'After approval the tx attaches to the existing verifikat and the invoice flips to paid/partially_paid. No new bokföring. Verify with gnubok_get_ar_ledger.'
+            : 'After approval the tx attaches to the existing verifikat. No new bokföring. Verify with gnubok_query_journal.',
+          tool: invoiceId ? 'gnubok_get_ar_ledger' : 'gnubok_query_journal',
+        },
+        { dateForPeriodCheck: periodCheckDate }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_bulk_book_transactions',
+    title: 'Bulk-Book Transactions',
+    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Either link N txs to an existing posted verifikat, or create a new verifikat from caller lines. All txs share date + direction. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tx_ids: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'string' } },
+        existing_journal_entry_id: { type: 'string' },
+        new_entry: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            description: { type: 'string', minLength: 1, maxLength: 500 },
+            lines: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 200,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  account_number: { type: 'string', pattern: '^\\d{4}$' },
+                  debit_amount: { type: 'number', minimum: 0 },
+                  credit_amount: { type: 'number', minimum: 0 },
+                  currency: { type: 'string', minLength: 3, maxLength: 3 },
+                  line_description: { type: 'string', maxLength: 200 },
+                },
+                required: ['account_number', 'debit_amount', 'credit_amount', 'currency'],
+              },
+            },
+          },
+          required: ['description', 'lines'],
+        },
+      },
+      required: ['tx_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const txIds = args.tx_ids as string[]
+      const existingJeId = (args.existing_journal_entry_id as string | undefined) ?? null
+      const newEntry = (args.new_entry as { description: string; lines: unknown[] } | undefined) ?? null
+      if (!Array.isArray(txIds) || txIds.length === 0) throw new Error('tx_ids is required (non-empty)')
+      if ((existingJeId == null) === (newEntry == null)) {
+        throw new Error('Provide exactly one of existing_journal_entry_id or new_entry')
+      }
+
+      // Balance pre-check on the create-new path (compliance-swarm V2.3
+      // / swedish-compliance). The RPC also rejects with
+      // BULK_BOOK_UNBALANCED, but failing fast here lets the agent get
+      // a clear error before staging is even attempted.
+      // The 0.005 tolerance is for floating-point equalisation only,
+      // NOT a rounding allowance per BFL 5 kap 4–5§. The RPC enforces
+      // exact balance to the öre on insert.
+      if (newEntry) {
+        const lines = (newEntry as { lines?: Array<{ debit_amount?: number; credit_amount?: number }> }).lines
+        if (Array.isArray(lines) && lines.length > 0) {
+          // Reject NaN / non-finite values explicitly (A.8.28).
+          // `Number(x) || 0` silently treats NaN as 0; that would let
+          // a malformed amount pass the balance check by accident.
+          // Round-8 addition: reject debit=0 && credit=0 "ghost" lines
+          // (BFL 5 kap 6§ — every line must represent a real
+          // bokföringspost with a non-zero amount).
+          for (const [i, l] of lines.entries()) {
+            const d = Number(l.debit_amount)
+            const c = Number(l.credit_amount)
+            if (!Number.isFinite(d) || !Number.isFinite(c)) {
+              throw new Error(`new_entry.lines[${i}]: debit_amount and credit_amount must be finite numbers`)
+            }
+            if (d === 0 && c === 0) {
+              throw new Error(`new_entry.lines[${i}]: debit_amount and credit_amount cannot both be zero (BFL 5 kap 6§)`)
+            }
+          }
+          const totalDebit = lines.reduce((s, l) => s + Number(l.debit_amount), 0)
+          const totalCredit = lines.reduce((s, l) => s + Number(l.credit_amount), 0)
+          if (Math.abs(totalDebit - totalCredit) > 0.005) {
+            throw new Error(
+              `new_entry.lines must balance — debits=${totalDebit.toFixed(2)} credits=${totalCredit.toFixed(2)}`
+            )
+          }
+        }
+      }
+
+      const { data: txs, error: txError } = await supabase
+        .from('transactions')
+        .select('id, amount, currency, date, journal_entry_id')
+        .in('id', txIds)
+        .eq('company_id', companyId)
+      if (txError || !txs || txs.length !== txIds.length) {
+        throw new Error('One or more transactions not found')
+      }
+      const booked = txs.find((t) => t.journal_entry_id != null)
+      if (booked) throw new Error(`Transaction ${booked.id} is already booked`)
+      const dates = new Set(txs.map((t) => t.date))
+      if (dates.size > 1) throw new Error('All transactions must share the same date')
+      // Reject zero-amount txs (round-8 / A.8.28). The direction computation
+      // below treats amount === 0 as 'expense' (amount > 0 is false), which
+      // would then mis-classify a real income tx in the same batch. Mirrors
+      // the explicit zero-amount guard in gnubok_match_batch_allocate.
+      const zeroAmountTx = txs.find((t) => t.amount === 0)
+      if (zeroAmountTx) throw new Error(`Transaction ${zeroAmountTx.id} has zero amount`)
+      const direction = txs[0]!.amount > 0 ? 'income' : 'expense'
+      if (txs.some((t) => (direction === 'income' ? t.amount < 0 : t.amount > 0))) {
+        throw new Error('All transactions must share the same direction (all income or all expense)')
+      }
+      // Currency homogeneity (swedish-compliance): a samlingsverifikat
+      // combining e.g. SEK + EUR txs without explicit FX lines violates
+      // BFL 5 kap 2§ (alla belopp skall uttryckas i svenska kronor)
+      // read together with the valutakurs rules in BFL 5 kap 6§.
+      // Cross-currency batches should go through gnubok_match_batch_allocate
+      // (which handles the FX diff on 7960/3960). Reject mixed currencies here.
+      const currencies = new Set(txs.map((t) => t.currency))
+      if (currencies.size > 1) {
+        // Route the agent to the cross-currency-capable tool rather
+        // than letting it retry with hand-built FX lines.
+        throw new Error(
+          'All transactions must share the same currency. For cross-currency allocations, use gnubok_match_batch_allocate (which handles the FX diff on 7960/3960).'
+        )
+      }
+
+      const txSum = txs.reduce((s, t) => s + t.amount, 0)
+      const txDate = txs[0]!.date as string
+
+      // For link-existing branch, also fetch the target JE and use the
+      // LATER of tx_date and JE.entry_date for period-lock check
+      // (swedish-compliance): otherwise a tx in an open period could be
+      // attached to a verifikat in a closed period and the guard
+      // would miss it. Same query also enforces tenant isolation on
+      // the JE (OWASP V8.2.1) before the RPC sees the ID.
+      let periodCheckDate = txDate
+      if (existingJeId) {
+        const { data: je, error: jeError } = await supabase
+          .from('journal_entries')
+          .select('id, entry_date, status')
+          .eq('id', existingJeId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (jeError || !je) {
+          throw new Error('Existing journal entry not found for this company')
+        }
+        if (je.status !== 'posted') {
+          throw new Error(`Existing journal entry must be posted (status=${je.status})`)
+        }
+        // Pass the later date so the period-lock guard fires on whichever
+        // side is in a locked/closed period.
+        periodCheckDate = (je.entry_date as string) > txDate ? (je.entry_date as string) : txDate
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'bulk_book_transactions',
+        existingJeId
+          ? `Länka ${txIds.length} transaktioner till verifikat (${txDate})`
+          : `Samlingsverifikation: ${txIds.length} transaktioner ${txDate}`,
+        {
+          tx_ids: txIds,
+          existing_journal_entry_id: existingJeId,
+          new_entry: newEntry,
+        },
+        // GDPR Art.25: preview_data carries only aggregate counts + the
+        // shared date/direction — no per-tx descriptions, no per-line
+        // descriptions, no counterparty IDs. The user-facing approval
+        // dialog reconstructs detail from the tx_ids list at render time
+        // rather than persisting denormalized PII here. Same privacy-by-
+        // design rationale as gnubok_link_transaction_to_journal_entry.
+        {
+          tx_count: txIds.length,
+          tx_date: txDate,
+          tx_sum: txSum,
+          direction,
+          mode: existingJeId ? 'link_existing' : 'create_new',
+        },
+        actor,
+        {
+          description: 'After approval the verifikat carries the combined business event. Verify with gnubok_query_journal or gnubok_get_reconciliation_status.',
+          tool: 'gnubok_query_journal',
+        },
+        { dateForPeriodCheck: periodCheckDate }
+      )
+    },
+  },
+
+  {
     name: 'gnubok_find_voucher_candidates_for_invoice',
+    title: 'Find Voucher Candidates (Invoice)',
     description: 'List posted verifikat that credit kundfordran (1510) and could be the payment for this invoice. Use before gnubok_link_invoice_to_voucher when the user wants to mark a faktura paid against an existing verifikation (no new bokföring).',
     inputSchema: {
       type: 'object',
@@ -4390,6 +5059,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_invoice_to_voucher',
+    title: 'Link Invoice to Voucher',
     description: 'Markera en faktura som betald genom att länka till en befintlig verifikation som redan krediterar kundfordran (1510). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_invoice först.',
     inputSchema: {
       type: 'object',
@@ -4475,8 +5145,162 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_find_voucher_candidates_for_supplier_invoice',
+    title: 'Find Voucher Candidates (Supplier Invoice)',
+    description: 'List posted verifikat that debit leverantörsskuld (2440) and could be the payment for this supplier invoice. Use before gnubok_link_supplier_invoice_to_voucher when marking a leverantörsfaktura paid against an existing verifikation (no new bokföring).',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string', description: 'UUID of the supplier invoice to find candidates for' },
+        limit: { type: 'number', description: 'Max candidates to return (default 10, max 50)' },
+      },
+      required: ['supplier_invoice_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string' },
+        invoice_status: { type: 'string' },
+        candidates: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['supplier_invoice_id', 'candidates'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const supplierInvoiceId = args.supplier_invoice_id as string
+      if (!supplierInvoiceId) throw new Error('supplier_invoice_id is required')
+      const limit = Math.min(Math.max(1, Number(args.limit) || 10), 50)
+
+      const { data: invoice, error } = await supabase
+        .from('supplier_invoices')
+        .select(
+          'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)'
+        )
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .single()
+      if (error || !invoice) throw new Error('Supplier invoice not found')
+
+      if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+        return {
+          supplier_invoice_id: supplierInvoiceId,
+          invoice_status: invoice.status,
+          candidates: [],
+        }
+      }
+
+      const candidates = await findMatchingVouchersForSupplierInvoice(
+        supabase,
+        companyId,
+        invoice as never,
+        { limit },
+      )
+      return {
+        supplier_invoice_id: supplierInvoiceId,
+        invoice_status: invoice.status,
+        candidates,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_link_supplier_invoice_to_voucher',
+    title: 'Link Supplier Invoice to Voucher',
+    description: 'Markera en leverantörsfaktura som betald genom att länka till en befintlig verifikation som redan debiterar leverantörsskuld (2440). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_supplier_invoice först.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string', description: 'UUID of the supplier invoice to mark paid' },
+        journal_entry_id: { type: 'string', description: 'UUID of the existing posted verifikat to link' },
+        notes: { type: 'string', description: 'Optional note stored on the supplier_invoice_payments row' },
+      },
+      required: ['supplier_invoice_id', 'journal_entry_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const supplierInvoiceId = args.supplier_invoice_id as string
+      const journalEntryId = args.journal_entry_id as string
+      const notes = (args.notes as string | undefined) ?? undefined
+      if (!supplierInvoiceId || !journalEntryId) {
+        throw new Error('supplier_invoice_id and journal_entry_id are required')
+      }
+
+      const { data: invoice, error: invErr } = await supabase
+        .from('supplier_invoices')
+        .select(
+          'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)'
+        )
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .single()
+      if (invErr || !invoice) throw new Error('Supplier invoice not found')
+      if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+        throw new Error('Supplier invoice is not in a matchable state (must be registered, approved, overdue, or partially_paid)')
+      }
+
+      const validation = await validateVoucherForSupplierInvoiceLink(
+        supabase,
+        companyId,
+        invoice as never,
+        journalEntryId,
+      )
+      if (!validation.ok) {
+        throw new Error(
+          `${validation.code}${validation.details ? `: ${JSON.stringify(validation.details)}` : ''}`,
+        )
+      }
+
+      const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
+        ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
+        : journalEntryId.slice(0, 8)
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'link_supplier_invoice_voucher',
+        `Länka verifikat ${voucherLabel} → leverantörsfaktura ${invoice.supplier_invoice_number ?? supplierInvoiceId.slice(0, 8)}`,
+        { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes },
+        {
+          supplier_invoice_number: invoice.supplier_invoice_number,
+          invoice_currency: invoice.currency,
+          invoice_remaining: invoice.remaining_amount,
+          voucher_label: voucherLabel,
+          voucher_date: validation.voucher.entry_date,
+          voucher_description: validation.voucher.description,
+          ap_debit_amount: validation.apDebitAmount,
+          payment_amount: validation.paymentAmount,
+          will_be_fully_paid: validation.isFullyPaid,
+          remaining_after: validation.remainingAfter,
+          supplier_name: (invoice.supplier as unknown as { name?: string } | null)?.name ?? null,
+        },
+        actor,
+        {
+          description: 'After approval the supplier invoice transitions to paid (or partially_paid). No new verifikat is created — the existing voucher is the payment posting.',
+          tool: 'gnubok_get_supplier_ledger',
+        },
+      )
+    },
+  },
+
+  {
     name: 'gnubok_auto_match_period',
-    description: "Bulk reconciliation: scan unmatched income transactions in a date range and propose invoice matches with confidence + reasoning. dry_run=true (default) previews without staging; dry_run=false stages every match above confidence_threshold as a pending operation.",
+    title: 'Auto-Match Period Income',
+    description: "Bulk reconciliation: scan unmatched income in a date range and propose invoice matches with confidence + reasoning. dry_run=true (default) previews; dry_run=false stages matches above confidence_threshold.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4666,6 +5490,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_fiscal_periods',
+    title: 'List Fiscal Periods',
     description: 'List all fiscal periods (räkenskapsperioder) with status: active (open), locked (no new entries), or closed (year-end completed).',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     outputSchema: {
@@ -4709,6 +5534,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_reconciliation_status',
+    title: 'Bank Reconciliation Status',
     description: 'Bank reconciliation status: matched/unmatched counts, match rate, bank vs ledger balance, difference. Optional date range.',
     inputSchema: {
       type: 'object',
@@ -4736,6 +5562,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_upload_document',
+    title: 'Upload Document to Inbox',
     description: 'Upload a PDF/JPEG/PNG/HEIC/WebP (max 20 MB) to the inbox. Runs deterministic field extraction on text-based PDFs.',
     inputSchema: {
       type: 'object',
@@ -4848,6 +5675,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_inbox_items',
+    title: 'List Inbox Items',
     description: 'List document inbox items. Each has a `processed` flag covering all terminal links (transaction match, supplier invoice, or journal entry), so a booked receipt counts as done. unprocessed_only=true returns only docs still needing handling.',
     inputSchema: {
       type: 'object',
@@ -4946,6 +5774,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_inbox_item',
+    title: 'Get Inbox Item',
     description: 'Get a single inbox item with complete extracted data, supplier match, email metadata, and timestamps.',
     inputSchema: {
       type: 'object',
@@ -4981,6 +5810,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_supplier_invoice_from_inbox',
+    title: 'Create Supplier Invoice from Inbox',
     description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier (matched or via org_number/name), assembles line items from extracted_data, applies VAT + FX, attaches the source document. Stages for human review; honors dry_run.",
     inputSchema: {
       type: 'object',
@@ -5172,6 +6002,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_unmatched_documents',
+    title: 'List Unmatched Documents',
     description: 'List inbox documents not yet attached to any bank transaction or supplier invoice. Returns vendor/amount/currency/date hints. The amount is in the invoice currency — FX-normalise before comparing to transactions.amount.',
     inputSchema: {
       type: 'object',
@@ -5326,6 +6157,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_document_content',
+    title: 'Get Document Content',
     description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
     inputSchema: {
       type: 'object',
@@ -5392,6 +6224,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_attach_document_to_transaction',
+    title: 'Attach Document to Transaction',
     description: 'Stage attaching a document to a bank transaction. Verify tx (date, amount, counterparty) and document (filename, vendor, amount) match first — the preview shown to the human reviewer mirrors what you pass here. Stages for approval.',
     inputSchema: {
       type: 'object',
@@ -5521,6 +6354,7 @@ export const tools: McpTool[] = [
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_employees',
+    title: 'List Employees',
     description: 'List employees for the active company. Personnummer returned masked (YYYYMMDD-XXXX).',
     inputSchema: {
       type: 'object',
@@ -5554,6 +6388,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_salary_run',
+    title: 'Get Salary Run',
     description: 'Get salary run with status, totals, per-employee breakdown (gross, tax, net, avgifter, vacation accrual) and step-by-step calculation breakdown.',
     inputSchema: {
       type: 'object',
@@ -5583,6 +6418,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_salary_journal',
+    title: 'Salary Journal (Lönejournal)',
     description: 'Salary journal (lönejournal) for a year: per-employee per-month rows + yearly totals.',
     inputSchema: {
       type: 'object',
@@ -5601,6 +6437,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_create_salary_run',
+    title: 'Create Salary Run',
     description: 'Stage creation of a draft salary run for a period + base lines for all active employees. Commit via gnubok_approve_pending_operation; then run gnubok_calculate_salary_run. Final booking happens in the web UI.',
     inputSchema: {
       type: 'object',
@@ -5656,6 +6493,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_calculate_salary_run',
+    title: 'Calculate Salary Run',
     description: 'Calculate a draft salary run: tax, avgifter, vacation accrual, totals. Run must be in draft status.',
     inputSchema: {
       type: 'object',
@@ -5701,6 +6539,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_generate_agi',
+    title: 'Generate AGI Declaration',
     description: 'Stage AGI XML generation (Arbetsgivardeklaration) for a salary run. High-risk: produces statutory Skatteverket underlag (BFL 7-year retention). Commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
@@ -5749,6 +6588,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_close_period',
+    title: 'Close Fiscal Period',
     description: 'Stage period close (irreversible per BFL). Requires period locked + year-end closing entry posted. High-risk — always staged, never auto-committed.',
     inputSchema: {
       type: 'object',
@@ -5804,6 +6644,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_lock_period',
+    title: 'Lock Fiscal Period',
     description: 'Stage period lock — blocks new entries. Requires zero unbooked business transactions. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -5871,6 +6712,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_uncategorize_transaction',
+    title: 'Uncategorize Transaction',
     description: 'Stage uncategorize: reverses linked journal entry via storno (never deletes) and clears the category. Stages for approval.',
     inputSchema: {
       type: 'object',
@@ -5936,6 +6778,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_export_sie',
+    title: 'Export SIE File',
     description: 'Generate SIE-4 file for a fiscal period (standard Swedish bookkeeping interchange format). Returns SIE text content.',
     inputSchema: {
       type: 'object',
@@ -5993,7 +6836,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_audit_package',
-    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal register, VAT) + receipts + audit log + voucher gaps, zipped. Returns a 1-hour signed download URL. Long-running on large datasets.",
+    title: 'Generate Audit Package',
+    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped. 1-hour signed URL.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6133,7 +6977,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_year_end_readiness',
-    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced trial balance, FX revaluation needed) + warnings + optional preview of the closing entry. Use this before staging year-end.",
+    title: 'Year-End Readiness Check',
+    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced TB, FX revaluation) + optional closing-entry preview.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6243,6 +7088,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_run_year_end',
+    title: 'Run Year-End Closing (Bokslut)',
     description: 'Stage year-end closing: zero result accounts (class 3–8) into 2099, lock period, create next period, seed opening balances. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -6287,6 +7133,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_set_opening_balances',
+    title: 'Set Opening Balances (Ingående Balans)',
     description: 'Stage opening-balance entry: copy class 1–2 closing balances from a closed period into the next period.',
     inputSchema: {
       type: 'object',
@@ -6336,6 +7183,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_run_currency_revaluation',
+    title: 'Run Currency Revaluation',
     description: 'Stage currency revaluation: revalue open FX receivables/payables to closing-date rate (posts 3960/7960). One per period max.',
     inputSchema: {
       type: 'object',
@@ -6369,6 +7217,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_voucher_gaps',
+    title: 'List Voucher Gaps',
     description: 'List voucher number gaps in a fiscal period (BFNAR 2013:2 audit requirement). Each gap shows whether it has an explanation.',
     inputSchema: {
       type: 'object',
@@ -6441,6 +7290,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_explain_voucher_gap',
+    title: 'Explain Voucher Gap',
     description: 'Stage explanation for a voucher gap (BFNAR 2013:2 compliance — every gap needs a documented reason).',
     inputSchema: {
       type: 'object',
@@ -6487,6 +7337,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_supplier_invoice',
+    title: 'Approve Supplier Invoice',
     description: 'Stage approval of a registered supplier invoice (registered → approved). High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -6529,6 +7380,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_credit_supplier_invoice',
+    title: 'Credit Supplier Invoice (Kreditfaktura)',
     description: 'Stage credit-note (kreditfaktura) for a supplier invoice: mirror invoice with negative effect + reverses registration JE (accrual).',
     inputSchema: {
       type: 'object',
@@ -6570,6 +7422,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_convert_invoice',
+    title: 'Convert Proforma to Invoice',
     description: 'Stage conversion of a proforma invoice to a real invoice. Allocates F-series number, copies items, marks proforma cancelled.',
     inputSchema: {
       type: 'object',
@@ -6612,6 +7465,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_unlock_period',
+    title: 'Unlock Fiscal Period',
     description: 'Stage period unlock — clears locked_at so entries can be posted again. Cannot unlock a closed period. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -6660,6 +7514,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_credit_invoice',
+    title: 'Credit Customer Invoice (Kreditfaktura)',
     description: 'Stage credit note (kreditfaktura) for a customer invoice: KR- prefixed mirror invoice + reverses original JE (accrual). Original must be sent/paid/overdue and not already credited.',
     inputSchema: {
       type: 'object',
@@ -6713,6 +7568,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_import_sie',
+    title: 'Import SIE File',
     description: 'Stage SIE-file import (types 1–4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -6729,6 +7585,7 @@ export const tools: McpTool[] = [
         import_opening_balances: { type: 'boolean' },
         import_transactions: { type: 'boolean' },
         voucher_series: { type: 'string', description: 'Override voucher series for imported vouchers' },
+        update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
       },
       required: ['file_content', 'filename', 'mappings'],
     },
@@ -6747,7 +7604,7 @@ export const tools: McpTool[] = [
       // entries, what balances) and a broken/unbalanced file is rejected HERE,
       // not after they approve a blind byte count. commitImportSie re-parses on
       // commit (defense-in-depth — the staged string could be tampered).
-      const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
+      const { parseSIEFile, validateSIEFile, getEffectiveOpeningBalances } = await import('@/lib/import/sie-parser')
       let parsed
       try {
         parsed = parseSIEFile(fileContent)
@@ -6759,8 +7616,43 @@ export const tools: McpTool[] = [
         throw new Error(`SIE-filen är ogiltig och importeras inte: ${validation.errors.join('; ')}`)
       }
 
-      const ibCurrent = parsed.openingBalances.filter((b) => b.yearIndex === 0)
+      // Effective set: explicit #IB 0, or IB derived from #UB -1 when the
+      // source system exports none (issue #675) — so the approver sees the
+      // real IB total and UB-1-only files pass the coverage check below.
+      const ibCurrent = getEffectiveOpeningBalances(parsed).balances
       const ibTotal = Math.round(ibCurrent.reduce((s, b) => s + b.amount, 0) * 100) / 100
+
+      // Mapping-coverage check. The executor's per-voucher loop silently
+      // skips any line whose account is not in `mappings`, so an empty or
+      // non-overlapping mapping set produces a committed import with
+      // journal_entries_created=0 that then claims the (company_id,
+      // file_hash) slot in the partial unique index and blocks retry.
+      // Refuse to stage when the mapping wouldn't cover a single account
+      // present in the file.
+      const importOB = Boolean(args.import_opening_balances)
+      const sourceAccountsInFile = new Set<string>()
+      for (const v of parsed.vouchers) for (const l of v.lines) sourceAccountsInFile.add(l.account)
+      if (importOB) for (const b of ibCurrent) sourceAccountsInFile.add(b.account)
+      const mappedSources = new Set(
+        (mappings as Array<{ sourceAccount?: unknown; targetAccount?: unknown }>)
+          .filter((m) => typeof m?.targetAccount === 'string' && m.targetAccount.length > 0 && typeof m?.sourceAccount === 'string')
+          .map((m) => m.sourceAccount as string),
+      )
+      const coveredAccounts = [...sourceAccountsInFile].filter((a) => mappedSources.has(a))
+      const accountsMapped = { covered: coveredAccounts.length, total: sourceAccountsInFile.size }
+      const wouldSkipAllVouchers = sourceAccountsInFile.size > 0 && coveredAccounts.length === 0
+
+      if (wouldSkipAllVouchers) {
+        const sample = [...sourceAccountsInFile].slice(0, 8).join(', ')
+        throw new Error(
+          `Kontomappningarna täcker inga konton i SIE-filen — alla ` +
+            `${parsed.stats.totalVouchers} verifikationer skulle hoppas över ` +
+            `och importen skulle skapa 0 verifikat. Filen innehåller ` +
+            `${sourceAccountsInFile.size} unika källkonton (t.ex. ${sample}). ` +
+            `Bifoga "mappings" där sourceAccount matchar #KONTO-numren i filen ` +
+            `och targetAccount är ett giltigt BAS-konto.`,
+        )
+      }
 
       return stagePendingOperation(supabase, companyId, userId, 'import_sie',
         `SIE-import: ${filename}`,
@@ -6772,11 +7664,16 @@ export const tools: McpTool[] = [
           import_opening_balances: Boolean(args.import_opening_balances),
           import_transactions: Boolean(args.import_transactions),
           voucher_series: args.voucher_series,
+          // Default true — Boolean(undefined) would silently flip it off.
+          update_account_names:
+            args.update_account_names === undefined ? true : Boolean(args.update_account_names),
         },
         {
           filename,
           file_size_bytes: fileContent.length,
           mappings_count: mappings.length,
+          accounts_mapped: accountsMapped,
+          would_skip_all_vouchers: wouldSkipAllVouchers,
           company_name: parsed.header.companyName,
           org_number: parsed.header.orgNumber,
           fiscal_year: { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd },
@@ -6799,10 +7696,110 @@ export const tools: McpTool[] = [
     },
   },
 
+  {
+    name: 'gnubok_undo_sie_import',
+    title: 'Undo SIE Import',
+    description: 'Stage undo of a completed SIE import: hard-deletes its entries (transactions + opening balance), detaches docs, resets voucher_sequences, marks the row \'undone\' so the file can be re-imported. Use after a botched import. Period must be open. HIGH risk.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        import_id: { type: 'string', description: 'UUID of the sie_imports row to undo. Must be status=\'completed\'.' },
+        reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason — shown in pending_operations review.' },
+      },
+      required: ['import_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const importId = args.import_id as string
+      const reason = typeof args.reason === 'string' ? args.reason : undefined
+
+      if (!importId) throw new Error('import_id is required')
+      if (reason !== undefined && reason.length > 500) {
+        throw new Error('reason must be 500 characters or fewer')
+      }
+
+      // Pre-flight mirrors undoSIEImport: confirm row exists, belongs to
+      // this company, is in 'completed' status, and (if linked) the fiscal
+      // period is open + unlocked. Surfacing rejection at stage-time keeps
+      // the agent honest about what the approver is being asked to confirm.
+      type ImportRow = {
+        id: string
+        filename: string
+        fiscal_year_start: string | null
+        fiscal_year_end: string | null
+        transactions_count: number | null
+        opening_balance_entry_id: string | null
+        status: string
+        fiscal_period_id: string | null
+        imported_at: string | null
+      }
+      const { data, error: lookupErr } = await supabase
+        .from('sie_imports')
+        .select('id, filename, fiscal_year_start, fiscal_year_end, transactions_count, opening_balance_entry_id, status, fiscal_period_id, imported_at')
+        .eq('id', importId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const importRow = data as ImportRow | null
+
+      if (lookupErr) {
+        throw new Error(`Kunde inte slå upp SIE-import ${importId}: ${lookupErr.message}`)
+      }
+      if (!importRow) {
+        throw new Error(`SIE-import hittades inte: ${importId}`)
+      }
+      if (importRow.status !== 'completed') {
+        throw new Error(`Bara slutförda importer kan ångras (nuvarande status: ${importRow.status}).`)
+      }
+
+      let fiscalPeriodName: string | null = null
+      if (importRow.fiscal_period_id) {
+        const { data: period } = await supabase
+          .from('fiscal_periods')
+          .select('name, is_closed, locked_at')
+          .eq('id', importRow.fiscal_period_id)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (period?.is_closed || period?.locked_at) {
+          throw new Error(
+            `Räkenskapsåret "${period.name ?? 'okänt'}" är låst eller stängt. ` +
+            `Öppna perioden innan du ångrar importen.`,
+          )
+        }
+        fiscalPeriodName = (period as { name?: string } | null)?.name ?? null
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'undo_sie_import',
+        `Ångra SIE-import: ${importRow.filename}`,
+        { import_id: importId },
+        {
+          import: {
+            id: importRow.id,
+            filename: importRow.filename,
+            fiscal_year: { start: importRow.fiscal_year_start, end: importRow.fiscal_year_end },
+            fiscal_period_name: fiscalPeriodName,
+            transactions_count: importRow.transactions_count ?? 0,
+            has_opening_balance_entry: Boolean(importRow.opening_balance_entry_id),
+            imported_at: importRow.imported_at,
+          },
+          reason: reason ?? null,
+          will: 'hard-delete the import\'s journal entries (transactions + opening balance), detach user-attached documents, reset voucher_sequences, and mark the sie_imports row as \'undone\' so the file can be re-imported',
+        },
+        actor,
+        {
+          description: 'After commit, re-stage the SIE import with corrected mappings via gnubok_import_sie.',
+          tool: 'gnubok_import_sie',
+        },
+      )
+    },
+  },
+
   // ── Phase 4: arbitrary-line bookkeeping primitives ───────────────
 
   {
     name: 'gnubok_create_voucher',
+    title: 'Create Manual Voucher (Verifikation)',
     description: 'Stage a manual verifikation with arbitrary balanced lines. Use for capitalization (1010), period-end accruals, FX adjustments, rättelseposter outside categorize_transaction. Pass inbox_item_id to book a kvitto direct — links inbox + attaches doc. HIGH risk.',
     inputSchema: {
       type: 'object',
@@ -6813,6 +7810,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: { type: 'string', description: 'UUID of fiscal period. If omitted, resolved from entry_date.' },
         voucher_series: { type: 'string', description: 'Single letter A–Z. Defaults to A.' },
         notes: { type: 'string', description: 'Internal notes (max 2000 chars) — visible on the verifikation but not on reports.' },
+        is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Marks the entry source_type=opening_balance so bank reconciliation excludes it from period movement. Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
         inbox_item_id: { type: 'string', description: 'Optional inbox item UUID to book directly. On confirm, the inbox item is linked to the new verifikat and its OCR document is attached to the journal entry. Fails if the inbox item is already booked (as voucher) or converted (to supplier invoice).' },
         lines: {
           type: 'array',
@@ -6989,16 +7987,23 @@ export const tools: McpTool[] = [
       }
 
       // NOTE: source_type is intentionally NOT included in the staged params.
-      // The executor hardcodes 'manual' so a tampered or future direct-staged
-      // pending_operations row can't misrepresent the entry's origin.
+      // The executor derives it: 'opening_balance' when the typed
+      // is_opening_balance flag is set AND the executor re-validates the entry
+      // genuinely looks like an IB (all class-1/2 lines, dated on the period
+      // start); otherwise 'manual'. We never accept a raw source_type string —
+      // a tampered or future direct-staged pending_operations row can't
+      // misrepresent the entry's origin, only assert "this is an IB" via a
+      // boolean the executor independently verifies.
+      const isOpeningBalance = args.is_opening_balance === true
       return stagePendingOperation(supabase, companyId, userId, 'create_voucher',
-        `Manuell verifikation: ${description}`,
+        `${isOpeningBalance ? 'Ingående balans' : 'Manuell verifikation'}: ${description}`,
         {
           entry_date: entryDate,
           description,
           fiscal_period_id: fiscalPeriodId,
           voucher_series: (args.voucher_series as string) || undefined,
           notes: (args.notes as string) || undefined,
+          is_opening_balance: isOpeningBalance,
           inbox_item_id: inboxItemId,
           document_id: inboxDocumentId,
           lines,
@@ -7030,7 +8035,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_correct_entry',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ — storno + new corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645 while preserving the expense leg. Account drives momsdeklaration ruta, not tax_code. HIGH risk.',
+    title: 'Correct Posted Entry (Rättelse)',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ — storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645. Account drives ruta. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7191,6 +8197,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reverse_journal_entry',
+    title: 'Reverse Journal Entry (Storno)',
     description: 'Stage a storno: inverts debits/credits; original stays visible per BFL 5 kap. Use only when the affärshändelse should never have been booked (duplicate, ghost, test). If booked wrong, use gnubok_correct_entry; for refunds, gnubok_credit_invoice. HIGH risk.',
     inputSchema: {
       type: 'object',
@@ -7290,7 +8297,7 @@ export const tools: McpTool[] = [
       // If the original touches output/input VAT accounts (2610–2670), a storno
       // is correct ONLY if the moms period covering entry_date has not yet been
       // filed with Skatteverket. For filed periods the legal path is an
-      // omprövning (rättelse-omprövning per ML 2023:200, SFL 22 kap). gnubok
+      // omprövning (rättelse-omprövning per ML 2023:200, SFL 22 kap). Accounted
       // doesn't track per-VAT-period filing status today, so we surface a
       // soft warning rather than block — the human approver decides.
       const vatAccounts = originalLines
@@ -7343,6 +8350,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_dispositioner',
+    title: 'Propose Year-End Dispositioner',
     description:
       'Read-only proposal of bokslutsdispositioner for a fiscal period: periodiseringsfond (avsättning + obligatorisk återföring), överavskrivningar, SLP, bolagsskatt. Call before staging postings.',
     inputSchema: {
@@ -7368,6 +8376,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_accruals',
+    title: 'Propose Accruals (Periodiseringar)',
     description:
       'Read-only proposal of periodiseringar (förutbetalda/upplupna kostnader). Currently surfaces the vacation-liability change; manual prepaid/accrued entries are submitted by the UI form.',
     inputSchema: {
@@ -7390,6 +8399,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_annual_depreciation',
+    title: 'Propose Annual Depreciation (Avskrivning)',
     description:
       'Read-only per-asset planenlig avskrivning proposal for a fiscal period. Reads the asset register and existing depreciation schedules. Call before staging the post.',
     inputSchema: {
@@ -7412,6 +8422,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_post_annual_depreciation',
+    title: 'Post Annual Depreciation (Avskrivning)',
     description:
       'Stage planenlig avskrivning posts — one journal entry per asset for independent reversibility. Mid-risk, always staged.',
     inputSchema: {
@@ -7496,6 +8507,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_preview_arsredovisning',
+    title: 'Preview Annual Report (Årsredovisning)',
     description:
       'Read-only K2 årsredovisning preview for a fiscal period. Returns flerårsöversikt, eget-kapital-förändring, RR, BR, K2 noter, signature slots. PDF download is via UI.',
     inputSchema: {
@@ -7518,6 +8530,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_preview_ef_declaration',
+    title: 'Preview EF Declaration (NE-bilaga)',
     description:
       'Read-only EF declaration preview: egenavgifter schablonavdrag, räntefördelning, periodiseringsfond, expansionsfond. All declaration-only, never booked. Pass kapitalunderlag and prior-year amounts as inputs.',
     inputSchema: {
@@ -7561,6 +8574,7 @@ export const tools: McpTool[] = [
   // Mirrors the /pending web UI for agents that self-review before committing.
   {
     name: 'gnubok_list_pending_operations',
+    title: 'List Pending Operations',
     description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Use to review the queue before calling gnubok_approve_pending_operation or gnubok_reject_pending_operation.',
     inputSchema: {
       type: 'object',
@@ -7618,6 +8632,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
+    title: 'Approve Pending Operation',
     description: "Commit a staged pending_operation when the user has explicitly authorised the operation_id. risk_level=high requires confirmed=true — surface the BFL 5 kap 5§ irreversibility to the user first. The /pending web UI offers an equivalent commit path.",
     inputSchema: {
       type: 'object',
@@ -7679,12 +8694,42 @@ export const tools: McpTool[] = [
         log.warn('Failed to resolve user email for MCP approval', { userId, err })
       }
 
+      // commit_method provenance (agent_first_vision.md §8 P0-1): MCP
+      // approvals are relayed through an agent credential — record that in
+      // the immutable layer instead of claiming 'user_accept'. The positive
+      // acknowledgment (confirmed=true for high risk) is agent-attested, not
+      // a first-party human session; an auditor reading the GL can now tell
+      // the difference (BFNAR 2013:2 kap 8 behandlingshistorik).
+      //
+      // ALL MCP traffic authenticates as an api_key actor — the claude.ai
+      // OAuth connector's access_token is itself a minted gnubok_sk_ key
+      // (app/api/mcp-oauth/token/route.ts), indistinguishable from the
+      // bridge at this layer — so 'api_key' is the truthful value for every
+      // path through this handler. 'agent' (also in the CHECK) is reserved
+      // for first-party agent surfaces (e.g. in-app agent chat) once they
+      // commit through this layer with a distinguishable actor type.
+      //
+      // commitMethod reaches the journal only for create_voucher ops
+      // (pre-existing); the actor option below covers EVERY journal commit
+      // this operation makes via the runWithActor() scope inside
+      // commitPendingOperation, stamping journal_entries.committed_actor_*
+      // and the audit_log COMMIT row (migration 20260619120000).
+      const commitMethod =
+        actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
+
       const result = await commitPendingOperation(
         supabase,
         userId,
         companyId,
         operation,
-        { commitMethod: 'user_accept', ...(userEmail ? { userEmail } : {}) }
+        {
+          commitMethod,
+          actor: {
+            type: actor?.type === 'api_key' ? 'api_key' : 'user',
+            ...(actor?.label ? { label: actor.label } : {}),
+          },
+          ...(userEmail ? { userEmail } : {}),
+        }
       )
 
       // Audit the MCP-initiated approval. Failure must not break the user
@@ -7701,7 +8746,7 @@ export const tools: McpTool[] = [
             operation_type: operation.operation_type,
             risk_level: operation.risk_level,
             outcome: result.status,
-            commit_method: 'user_accept',
+            commit_method: commitMethod,
             channel: 'mcp',
             confirmed: args.confirmed === true,
           },
@@ -7728,6 +8773,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reject_pending_operation',
+    title: 'Reject Pending Operation',
     description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
     inputSchema: {
       type: 'object',
@@ -7827,7 +8873,8 @@ export const tools: McpTool[] = [
   // ── Bring-your-own-extraction for inbox items ────────────────
   {
     name: 'gnubok_set_inbox_extracted_data',
-    description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than gnubok\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
+    title: 'Set Inbox Extracted Data',
+    description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than Accounted\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7956,7 +9003,11 @@ export const tools: McpTool[] = [
 // ── MCP Protocol Handler ─────────────────────────────────────
 
 const SERVER_INFO = {
+  // `name` is a stable identifier clients may key state on — stays 'gnubok'
+  // per the rebrand rule. `title` is the human-readable display name
+  // (MCP spec 2025-06-18).
   name: 'gnubok',
+  title: 'Accounted',
   version: '1.0.0',
 }
 
@@ -7990,6 +9041,7 @@ function emitToolCallTelemetry(payload: {
   isError: boolean
   errorCode: string | null
   errorKind: 'execution' | 'scope_denied' | 'unknown_tool' | null
+  errorMessage: string | null
   requestId: string | number | null
   userId: string
   companyId: string
@@ -8008,6 +9060,10 @@ function emitToolCallTelemetry(payload: {
         isError: payload.isError,
         errorCode: payload.errorCode,
         errorKind: payload.errorKind,
+        // Truncated: domain error messages are short, but unknown-tool /
+        // validation messages can embed long lists. 500 chars is plenty for
+        // clustering failures into gotchas without bloating event_log rows.
+        errorMessage: payload.errorMessage ? payload.errorMessage.slice(0, 500) : null,
         requestId: payload.requestId,
         userId: payload.userId,
         companyId: payload.companyId,
@@ -8147,6 +9203,36 @@ function checkAndEmitNextHintFollowed(
     .catch((err) => console.error('[mcp] next_hint_followed emit failed:', err))
 }
 
+/**
+ * Fire-and-forget telemetry for every successful gnubok_load_skill, all tiers.
+ * Unlike mcp.workflow_started (workflow tier only), this records WHICH skill
+ * or atom body the agent pulled — the denominator for correlating a loaded
+ * atom with downstream tool-error rates.
+ */
+function emitSkillLoaded(payload: {
+  slug: string
+  tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+  actor: ActorContext
+  userId: string
+  companyId: string
+}): void {
+  void eventBus
+    .emit({
+      type: 'mcp.skill_loaded',
+      payload: {
+        slug: payload.slug,
+        tier: payload.tier,
+        sessionId: payload.actor.sessionId ?? null,
+        actorType: payload.actor.type,
+        actorId: payload.actor.id ?? null,
+        actorLabel: payload.actor.label ?? null,
+        userId: payload.userId,
+        companyId: payload.companyId,
+      },
+    })
+    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
+}
+
 /** Fire-and-forget telemetry for workflow lifecycle. */
 function emitWorkflowStarted(payload: {
   slug: string
@@ -8267,7 +9353,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           },
           serverInfo: SERVER_INFO,
           instructions: [
-            'gnubok — Swedish double-entry bookkeeping via conversation.',
+            'Accounted — Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
             '• tools/list returns the full schema for every tool. To narrow a large catalog, call gnubok_search_tools(query="…") — it ranks tools by relevance; pass detail="name"|"summary"|"full" to control payload size.',
@@ -8319,6 +9405,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         jsonRpc(id ?? null, {
           tools: allowedTools.map((t) => ({
             name: t.name,
+            ...(t.title ? { title: t.title } : {}),
             description: t.description,
             inputSchema: t.inputSchema,
             ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
@@ -8347,6 +9434,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           isError: true,
           errorCode: 'UNKNOWN_TOOL',
           errorKind: 'unknown_tool',
+          // Just the requested name — the full available-tools list returned
+          // to the client would blow the truncation budget without adding
+          // analytical signal.
+          errorMessage: `Unknown tool: "${toolName}"`,
           requestId: id ?? null,
           userId,
           companyId,
@@ -8373,6 +9464,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           isError: true,
           errorCode: scopeError.error.code,
           errorKind: 'scope_denied',
+          errorMessage: scopeError.error.message_sv,
           requestId: id ?? null,
           userId,
           companyId,
@@ -8435,6 +9527,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           isError: false,
           errorCode: null,
           errorKind: null,
+          errorMessage: null,
           requestId: id ?? null,
           userId,
           companyId,
@@ -8452,6 +9545,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           isError: true,
           errorCode: structured.error.code,
           errorKind: 'execution',
+          // message_sv is the canonical domain message ("Verifikationen
+          // balanserar inte", "Perioden är låst", …) — the text worth
+          // clustering when mining failures for gotchas.
+          errorMessage: structured.error.message_sv,
           requestId: id ?? null,
           userId,
           companyId,
@@ -8523,7 +9620,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
-      // Skills exposed at gnubok://skill/<slug> — Markdown bodies, forward-compatible
+      // Skills exposed at Accounted://skill/<slug> — Markdown bodies, forward-compatible
       // with a future native MCP skills/list primitive. Atom slugs (slash-bearing
       // registry ids) are URL-encoded in the URI; skillSlugFromUri decodes.
       if (uri.startsWith(SKILL_URI_PREFIX)) {

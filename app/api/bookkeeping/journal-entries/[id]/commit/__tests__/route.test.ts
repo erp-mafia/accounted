@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   parseJsonResponse,
   createMockRouteParams,
   makeJournalEntry,
 } from '@/tests/helpers'
+import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
 const mockCreateClient = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
@@ -20,8 +22,9 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
 const mockCommitEntry = vi.fn()
@@ -48,6 +51,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
     mockCreateClient.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
     })
+    requireWriteMock.mockResolvedValue({ ok: true })
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -63,6 +67,25 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
 
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 403 when the caller lacks write permission (role/MFA write gate)', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Du har endast läsbehörighet i detta företag.' },
+        { status: 403 },
+      ),
+    })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
+      method: 'POST',
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
+    expect(mockCommitEntry).not.toHaveBeenCalled()
   })
 
   it('returns posted entry on success', async () => {
@@ -91,16 +114,18 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
     )
   })
 
-  it('returns 400 when engine throws', async () => {
-    mockCommitEntry.mockRejectedValue(new Error('Entry not balanced'))
+  it('maps a typed engine error to the canonical structured envelope', async () => {
+    // commitEntry throws typed bookkeeping errors; the wrapper routes them
+    // through errorResponse() → registry status + { error: { code, ... } }.
+    mockCommitEntry.mockRejectedValue(new JournalEntryNotBalancedError(1000, 900))
 
     const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
       method: 'POST',
     })
     const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message_en?: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Entry not balanced')
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_BALANCED')
   })
 })

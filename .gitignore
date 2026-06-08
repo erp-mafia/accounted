@@ -33,6 +33,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 !.env.docker.example
 
 # vercel
@@ -69,3 +70,6 @@ supabase/.temp/
 supabase/.branches/
 
 /scripts
+
+# Local-only SIE test fixtures — may contain real/scrubbed company data, never commit
+tests/fixtures/sie/

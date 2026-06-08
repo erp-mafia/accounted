@@ -16,6 +16,9 @@ export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
+export const NO_OPEN_PERIOD_FOR_DATE = 'NO_OPEN_PERIOD_FOR_DATE' as const
+export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
+export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
 
 // ============================================================================
 // AccountsNotInChartError — kept for back-compat (many existing call sites)
@@ -139,7 +142,10 @@ export class CurrencyRevaluationAlreadyExistsError extends Error {
   }
 }
 
-export type MeaninglessCorrectionReason = 'net_zero_per_account' | 'identical_to_original'
+export type MeaninglessCorrectionReason =
+  | 'net_zero_per_account'
+  | 'identical_to_original'
+  | 'no_date_change'
 
 export class MeaninglessCorrectionError extends Error {
   readonly code = MEANINGLESS_CORRECTION
@@ -147,9 +153,54 @@ export class MeaninglessCorrectionError extends Error {
     super(
       reason === 'net_zero_per_account'
         ? 'Correction lines net to zero on every account — no economic event represented (BFL 5 kap. 5 §).'
-        : 'Correction lines are identical to the original entry — nothing to correct.'
+        : reason === 'no_date_change'
+          ? 'New date equals the current date — nothing to move.'
+          : 'Correction lines are identical to the original entry — nothing to correct.'
     )
     this.name = 'MeaninglessCorrectionError'
+  }
+}
+
+/**
+ * Raised when a verifikation is moved (recordate) to a date that no fiscal
+ * period covers. We do not auto-create periods on a correction.
+ */
+export class NoOpenPeriodForDateError extends Error {
+  readonly code = NO_OPEN_PERIOD_FOR_DATE
+  constructor(public readonly date: string) {
+    super(`No fiscal period covers ${date}`)
+    this.name = 'NoOpenPeriodForDateError'
+  }
+}
+
+/**
+ * Raised when the target date of a recordate falls in a closed fiscal year
+ * (bokslut). A closed year cannot be reopened — the correction must be booked
+ * in the current open period instead.
+ */
+export class TargetPeriodClosedError extends Error {
+  readonly code = TARGET_PERIOD_CLOSED
+  constructor(public readonly date: string) {
+    super(`The fiscal period covering ${date} is closed`)
+    this.name = 'TargetPeriodClosedError'
+  }
+}
+
+/**
+ * Raised when the target date of a recordate falls in a locked period or is
+ * covered by the company-wide bookkeeping lock date. Carries the lock date so
+ * the UI can offer an unlock affordance.
+ */
+export class TargetPeriodLockedError extends Error {
+  readonly code = TARGET_PERIOD_LOCKED
+  constructor(
+    public readonly date: string,
+    public readonly lockDate: string | null
+  ) {
+    super(
+      `The fiscal period covering ${date} is locked${lockDate ? ` (lock date ${lockDate})` : ''}`
+    )
+    this.name = 'TargetPeriodLockedError'
   }
 }
 
@@ -222,7 +273,10 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof BookkeepingDatabaseError ||
-    err instanceof MeaninglessCorrectionError
+    err instanceof MeaninglessCorrectionError ||
+    err instanceof NoOpenPeriodForDateError ||
+    err instanceof TargetPeriodClosedError ||
+    err instanceof TargetPeriodLockedError
   )
 }
 
@@ -382,6 +436,45 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
         },
       },
       { status: 400 }
+    )
+  }
+
+  if (err instanceof NoOpenPeriodForDateError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { date: err.date },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof TargetPeriodClosedError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { date: err.date },
+        },
+      },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof TargetPeriodLockedError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { date: err.date, lockDate: err.lockDate },
+        },
+      },
+      { status: 409 }
     )
   }
 

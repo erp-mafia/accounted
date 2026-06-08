@@ -384,6 +384,12 @@ export interface MigrationDocumentation {
     unmapped: number
   }
 
+  // Chart-of-accounts renames applied from the file's #KONTO records
+  // (behandlingshistorik per BFNAR 2013:2 — who/when is carried by
+  // importedBy/importedAt on this record). Absent when nothing was renamed
+  // and on imports recorded before this field existed.
+  accountRenames?: Array<{ accountNumber: string; from: string; to: string }>
+
   // Voucher statistics
   vouchers: {
     total: number

@@ -42,6 +42,17 @@ export interface SalaryCalculationInput {
 
   /** Line items */
   lineItems: CalculationLineItem[]
+
+  /**
+   * Pay period bounds (YYYY-MM-DD). Together with employmentStart/employmentEnd
+   * they drive partial-month proration: an employee hired mid-period or
+   * terminated mid-period receives only the workday-fraction of base salary.
+   * When omitted, proration is skipped (ratio = 1).
+   */
+  periodStart?: string
+  periodEnd?: string
+  employmentStart?: string
+  employmentEnd?: string | null
 }
 
 export interface CalculationLineItem {
@@ -135,6 +146,80 @@ function fmtKr(amount: number): string {
 }
 
 // ============================================================
+// Partial-month proration
+// ============================================================
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function parseIsoDateUtc(s: string): Date {
+  return new Date(`${s}T00:00:00Z`)
+}
+
+function maxDate(a: string, b: string): string {
+  return a >= b ? a : b
+}
+
+function minDate(a: string, b: string): string {
+  return a <= b ? a : b
+}
+
+/**
+ * Count Mon–Fri days inclusive between start and end (YYYY-MM-DD). Returns 0
+ * when start > end. Swedish bank holidays are NOT excluded — the engine uses
+ * the same 21-workday convention used elsewhere (monthlySalary / 21), so a
+ * variable workday count that excluded holidays would diverge from the
+ * baseline daily rate convention.
+ */
+function countWorkdaysInclusive(start: string, end: string): number {
+  if (start > end) return 0
+  const startMs = parseIsoDateUtc(start).getTime()
+  const endMs = parseIsoDateUtc(end).getTime()
+  const totalDays = Math.round((endMs - startMs) / DAY_MS) + 1
+  let workdays = 0
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date(startMs + i * DAY_MS)
+    const dow = d.getUTCDay() // 0 = Sun, 6 = Sat
+    if (dow >= 1 && dow <= 5) workdays += 1
+  }
+  return workdays
+}
+
+/**
+ * Fraction of the pay period the employee was actually employed, measured in
+ * Mon–Fri workdays. Returns 1 when the employee was employed for the full
+ * period (or when employment dates / period bounds are missing). Returns 0
+ * when the employee was not employed at all during the period.
+ *
+ * This is the standard Swedish payroll convention for partial-month proration:
+ * an employee hired 2026-05-15 gets workdays-in-(May 15–31) / workdays-in-May.
+ * Hourly employees are not prorated here — they are paid for actually-worked
+ * hours, so the calling code passes salaryType='monthly' to gate this.
+ */
+export function prorateBaseSalaryForPeriod(
+  employmentStart: string | undefined,
+  employmentEnd: string | null | undefined,
+  periodStart: string | undefined,
+  periodEnd: string | undefined,
+): number {
+  if (!periodStart || !periodEnd) return 1
+  if (!employmentStart) return 1
+  const effectiveStart = maxDate(employmentStart, periodStart)
+  const effectiveEnd = employmentEnd ? minDate(employmentEnd, periodEnd) : periodEnd
+  if (effectiveStart > effectiveEnd) return 0
+  // Fast path: employment fully covers the period.
+  if (employmentStart <= periodStart && (!employmentEnd || employmentEnd >= periodEnd)) {
+    return 1
+  }
+  const overlap = countWorkdaysInclusive(effectiveStart, effectiveEnd)
+  const total = countWorkdaysInclusive(periodStart, periodEnd)
+  if (total === 0) return 1
+  const ratio = overlap / total
+  if (ratio < 0) return 0
+  if (ratio > 1) return 1
+  return ratio
+}
+
+// ============================================================
 // Main calculation
 // ============================================================
 
@@ -162,13 +247,43 @@ export function calculateSalary(
   // ─── Step 1: Base salary ───
   let baseSalary: number
   if (input.salaryType === 'monthly') {
-    baseSalary = r(input.monthlySalary * (input.employmentDegree / 100))
-    steps.push({
-      label: 'Grundlön',
-      formula: 'månadslön × (sysselsättningsgrad / 100)',
-      input: { monthly_salary: input.monthlySalary, employment_degree: input.employmentDegree },
-      output: baseSalary,
-    })
+    const degreeAdjusted = r(input.monthlySalary * (input.employmentDegree / 100))
+    const prorationRatio = prorateBaseSalaryForPeriod(
+      input.employmentStart,
+      input.employmentEnd,
+      input.periodStart,
+      input.periodEnd,
+    )
+    if (prorationRatio < 1 && input.periodStart && input.periodEnd) {
+      baseSalary = r(degreeAdjusted * prorationRatio)
+      const overlapStart = input.employmentStart && input.employmentStart > input.periodStart
+        ? input.employmentStart
+        : input.periodStart
+      const overlapEnd = input.employmentEnd && input.employmentEnd < input.periodEnd
+        ? input.employmentEnd
+        : input.periodEnd
+      steps.push({
+        label: 'Grundlön (proportionerad anställningsperiod)',
+        formula: 'månadslön × (sysselsättningsgrad / 100) × (arbetsdagar i anställning / arbetsdagar i period)',
+        input: {
+          monthly_salary: input.monthlySalary,
+          employment_degree: input.employmentDegree,
+          degree_adjusted: degreeAdjusted,
+          overlap_start: overlapStart,
+          overlap_end: overlapEnd,
+          proration_ratio: Math.round(prorationRatio * 10000) / 10000,
+        },
+        output: baseSalary,
+      })
+    } else {
+      baseSalary = degreeAdjusted
+      steps.push({
+        label: 'Grundlön',
+        formula: 'månadslön × (sysselsättningsgrad / 100)',
+        input: { monthly_salary: input.monthlySalary, employment_degree: input.employmentDegree },
+        output: baseSalary,
+      })
+    }
   } else {
     const hours = input.hoursWorked || 0
     const rate = input.hourlyRate || 0
@@ -205,7 +320,7 @@ export function calculateSalary(
 
   // ─── Step 3: Subtract absence deductions ───
   const absenceItems = input.lineItems.filter(
-    li => ['sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'vacation'].includes(li.itemType)
+    li => ['sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'unpaid_leave', 'vacation'].includes(li.itemType)
   )
   const totalAbsence = r(absenceItems.reduce((sum, li) => sum + li.amount, 0))
   if (totalAbsence !== 0) {

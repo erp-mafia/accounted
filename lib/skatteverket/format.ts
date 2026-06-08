@@ -1,7 +1,7 @@
 import type { VatPeriodType } from '@/types'
 
 /**
- * Convert a gnubok org_number to Skatteverket's 12-digit "redovisare" format.
+ * Convert a Accounted org_number to Skatteverket's 12-digit "redovisare" format.
  *
  * Rules:
  * - Organisationsnummer (10 digits, e.g. 5020000013): prefix with "16" → 165020000013
@@ -30,7 +30,7 @@ export function formatRedovisare(
 }
 
 /**
- * Convert gnubok period parameters to Skatteverket's YYYYMM format.
+ * Convert Accounted period parameters to Skatteverket's YYYYMM format.
  *
  * Skatteverket expects the last month of the period.
  * - monthly period 3, year 2025 → "202503"

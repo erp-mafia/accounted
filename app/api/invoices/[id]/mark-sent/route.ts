@@ -9,6 +9,7 @@ import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { createLogger } from '@/lib/logger'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 
 ensureInitialized()
@@ -37,6 +38,7 @@ export async function POST(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const log = createLogger('invoice.mark-sent', { companyId, invoiceId: id })
 
   // Fetch invoice
   const { data: invoice, error: invoiceError } = await supabase
@@ -61,7 +63,7 @@ export async function POST(
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
-    console.error('Failed to assign invoice number on mark-sent:', err)
+    log.error('failed to assign invoice number on mark-sent', err as Error)
     return NextResponse.json(
       { error: 'Kunde inte tilldela fakturanummer. Försök igen.' },
       { status: 500 }
@@ -103,13 +105,24 @@ export async function POST(
       )
       if (journalEntry) {
         journalEntryId = journalEntry.id
-        await supabase
+        const { error: linkError } = await supabase
           .from('invoices')
           .update({ journal_entry_id: journalEntry.id })
           .eq('id', id)
+        if (linkError) {
+          // Don't fail mark-sent — the verifikat committed; only the link
+          // failed. But log it through the structured logger so it reaches log
+          // aggregation/alerting: this write silently no-ops when the
+          // journal_entry_id column is missing (it was absent in prod until the
+          // 20260613100000 migration), which leaves mark-paid unable to detect
+          // an already-booked sale.
+          log.error('mark-sent: journal_entry_id link to invoice failed', linkError, {
+            journalEntryId: journalEntry.id,
+          })
+        }
       }
     } catch (err) {
-      console.error('Failed to create invoice journal entry on mark-sent:', err)
+      log.error('failed to create invoice journal entry on mark-sent', err as Error)
     }
   }
 
@@ -162,7 +175,7 @@ export async function POST(
         journal_entry_id: journalEntryId ?? undefined,
       })
     } catch (err) {
-      console.error('Failed to archive invoice PDF on mark-sent:', err)
+      log.error('failed to archive invoice PDF on mark-sent', err as Error)
     }
   }
 

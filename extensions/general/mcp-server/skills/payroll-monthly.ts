@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Monthly Payroll — gnubok
+const body = `# Monthly Payroll — Accounted
 
 Salary run + AGI filing for one calendar month.
 

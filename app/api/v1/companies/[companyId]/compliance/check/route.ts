@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/compliance/check?type=...
  *
- * gnubok's defensible edge: a single, structured pre-flight endpoint that
+ * Accounted's defensible edge: a single, structured pre-flight endpoint that
  * surfaces the same compliance checks the MCP / dashboard run, in a form
  * an agent can act on programmatically.
  *
@@ -204,7 +204,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/compliance/check',
   summary: 'Run a structured compliance pre-flight check.',
   description:
-    'Generalised pre-flight that consolidates the gnubok pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity). vat_close is planned for a follow-up PR (the underlying function currently lives in the MCP extension and core routes cannot import from extensions; it will be extracted into lib/reports/ then exposed here). New types can be added without changing the response shape.',
+    'Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity). vat_close is planned for a follow-up PR (the underlying function currently lives in the MCP extension and core routes cannot import from extensions; it will be extracted into lib/reports/ then exposed here). New types can be added without changing the response shape.',
   useWhen:
     'Before committing to an irreversible action (VAT close, year-end close), or as a periodic audit sweep to surface blockers before they become urgent.',
   doNotUseFor:

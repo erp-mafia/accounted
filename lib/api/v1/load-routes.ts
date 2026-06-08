@@ -27,7 +27,7 @@ import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/correct/route'
 import '@/app/api/v1/companies/[companyId]/journal-entries/batch-create/route'
 import '@/app/api/v1/companies/[companyId]/voucher-gap-explanations/route'
 
-// Phase 4 PR-2 — compliance-check (gnubok's defensible edge).
+// Phase 4 PR-2 — compliance-check (Accounted's defensible edge).
 import '@/app/api/v1/companies/[companyId]/compliance/check/route'
 
 // Phase 4 PR-2 — fiscal-periods async ops (lock/close/year-end/opening-balances/currency-revaluation).

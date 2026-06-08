@@ -15,7 +15,7 @@ This is the operational companion to the [Salary-runs reference](/docs/api/refer
 \`POST /salary-runs\` opens a run in \`draft\` status. Personnummer in the response is masked to \`ÅÅÅÅMMDDXXXX\` per GDPR Art.5(1)(c) — the full value only appears on \`GET /employees/{id}\` (deliberate drill-in).
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -55,7 +55,7 @@ Totals are null until you calculate.
 \`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026), age-adjusted reductions per Prop. 2025/26:66 (the youth-reduction band is **18–22 years old at the start of 2026** — i.e. employees **born 2003–2007** for the 2026 income year, NOT a blanket "under-25"; the elder reduction applies at **67+ from 2026**, not 66+), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -94,7 +94,7 @@ The \`review\` status is a soft hold — the math is done but no journal entries
 \`POST /salary-runs/{id}/approve\` validates and locks the math. After this point you can't \`PATCH\` per-employee \`grundlön\` etc. — corrections require reverting to draft (only possible if no payment is recorded).
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -109,10 +109,10 @@ Failures return \`SALARY_RUN_APPROVE_VALIDATION_FAILED\` with a per-employee bre
 
 ## 4. Mark paid (approved → paid)
 
-After the bank transfer settles (or you mark it on the same day for cash-method shops), tell gnubok:
+After the bank transfer settles (or you mark it on the same day for cash-method shops), tell Accounted:
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -132,7 +132,7 @@ This step records the payment event but does NOT post the journal entry yet — 
 The 2731 series is the **employer-contributions-payable** liability per BAS 2026 — not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -166,7 +166,7 @@ If \`book\` fails partway (e.g. period locked while waiting for the bank-side co
 \`POST /salary-runs/{id}/generate-agi\` produces the arbetsgivardeklaration på individnivå XML for the period. Skatteverket requires AGI monthly; the XML is embedded in the JSON response — no separate file endpoint.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -192,7 +192,7 @@ Save the XML to disk and upload it to **Skatteverket Mina Sidor → Tjänster �
 After Skatteverket confirms acceptance, store the confirmation number on the AGI:
 
 \`\`\`bash
-curl -X PATCH "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/agi" \\
+curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/agi" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Content-Type: application/json" \\
   -d '{ "submission_reference": "SKV-AGI-2026-05-A1B2C3" }'

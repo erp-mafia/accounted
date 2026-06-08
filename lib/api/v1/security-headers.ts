@@ -30,7 +30,7 @@ export const PUBLIC_SECURITY_HEADERS: Record<string, string> = {
   // form contexts. `default-src 'none'` is the strictest possible CSP and
   // costs nothing here.
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
-  // HSTS — every gnubok deployment is HTTPS-only. 1 year is the standard
+  // HSTS — every Accounted deployment is HTTPS-only. 1 year is the standard
   // production value; includeSubDomains because the apex serves everything.
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
 }

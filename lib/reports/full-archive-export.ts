@@ -296,12 +296,17 @@ async function generatePeriodReports(
   let vatDeclaration: unknown = null
   try {
     const startDate = new Date(period.period_start)
+    // Annual VAT for an archive must cover the whole räkenskapsår, which may be
+    // extended/shortened — pass the fiscal period so the span isn't truncated to
+    // the calendar year that period_start happens to fall in.
     vatDeclaration = await calculateVatDeclaration(
       supabase,
       companyId,
       'yearly',
       startDate.getFullYear(),
-      1
+      1,
+      'accrual',
+      { fiscalPeriodId: period.id }
     )
   } catch {
     // VAT declaration may fail if no relevant entries exist — skip gracefully
@@ -521,7 +526,7 @@ interface SieSourceManifestEntry {
 /**
  * Copy raw imported SIE files from the `sie-files` storage bucket into the
  * archive under `sie/original/`. Preserves the byte-identical source that the
- * user uploaded (vs the `sie/<period>.se` files which gnubok re-generates from
+ * user uploaded (vs the `sie/<period>.se` files which Accounted re-generates from
  * the current journal entries).
  *
  * `sie/imports.json` and `sie/account_mappings.json` are written regardless of

@@ -36,8 +36,47 @@ export const POST = withRouteContext(
       .select('*, employee:employees(employment_type), line_items:salary_line_items(*)')
       .eq('salary_run_id', id)
 
-    if (empError || !employees || employees.length === 0) {
-      return errorResponseFromCode('SALARY_RUN_NO_EMPLOYEES', opLog, { requestId })
+    if (empError) {
+      return errorResponse(empError, opLog, { requestId })
+    }
+    const roster = employees ?? []
+
+    // Nollkörning: a run with no monetary effect (employees set to 0 kr, or no
+    // roster at all) has nothing to post. The bookkeeping engine forbids
+    // zero-amount vouchers (every entry must balance with debit & credit > 0),
+    // so we skip journal-entry creation entirely and just advance to 'booked'.
+    // The AGI nolldeklaration is then the only artefact for the period.
+    const nothingToBook =
+      Math.round((run.total_gross ?? 0) * 100) === 0 &&
+      Math.round((run.total_tax ?? 0) * 100) === 0 &&
+      Math.round((run.total_avgifter ?? 0) * 100) === 0 &&
+      Math.round((run.total_vacation_accrual ?? 0) * 100) === 0
+
+    if (nothingToBook) {
+      const { data: bookedRun, error: updateError } = await supabase
+        .from('salary_runs')
+        .update({
+          status: 'booked',
+          booked_at: new Date().toISOString(),
+          booked_by: user.id,
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .select()
+        .single()
+
+      if (updateError) {
+        return errorResponse(updateError, opLog, { requestId })
+      }
+
+      await eventBus.emit({
+        type: 'salary_run.booked',
+        payload: { salaryRunId: id, entryIds: [], userId: user.id, companyId: companyId! },
+      })
+
+      opLog.info('salary run booked as nollkörning (no journal entries)', { salaryRunId: id })
+
+      return NextResponse.json({ data: bookedRun })
     }
 
     try {
@@ -56,7 +95,7 @@ export const POST = withRouteContext(
           total_net: run.total_net,
           total_avgifter: run.total_avgifter,
           total_vacation_accrual: run.total_vacation_accrual,
-          employees: employees.map((sre) => ({
+          employees: roster.map((sre) => ({
             employee_id: sre.employee_id,
             employment_type: sre.employee?.employment_type || 'employee',
             gross_salary: sre.gross_salary,

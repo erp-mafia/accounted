@@ -34,6 +34,10 @@ import {
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
   CurrencyRevaluationAlreadyExistsError,
+  MeaninglessCorrectionError,
+  NoOpenPeriodForDateError,
+  TargetPeriodClosedError,
+  TargetPeriodLockedError,
   isBookkeepingError,
 } from '../bookkeeping/errors'
 
@@ -347,6 +351,18 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
       code: err.code,
       details: { debitAccount: err.debitAccount, creditAccount: err.creditAccount },
     }
+  }
+  if (err instanceof MeaninglessCorrectionError) {
+    return { code: err.code, details: { reason: err.reason } }
+  }
+  if (err instanceof NoOpenPeriodForDateError) {
+    return { code: err.code, details: { date: err.date } }
+  }
+  if (err instanceof TargetPeriodClosedError) {
+    return { code: err.code, details: { date: err.date } }
+  }
+  if (err instanceof TargetPeriodLockedError) {
+    return { code: err.code, details: { date: err.date, lockDate: err.lockDate } }
   }
   if (err instanceof BookkeepingDatabaseError) {
     return { code: err.code, details: { operation: err.operation } }

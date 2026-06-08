@@ -31,7 +31,7 @@ type Period = { id: string; period_start: string; period_end: string; is_closed:
 function buildMockSupabase(options: {
   user?: { id: string } | null
   allPeriods?: Period[]
-  openPeriods?: Array<{ name: string; period_start: string; period_end: string }>
+  openPeriods?: Array<{ id?: string; name: string; period_start: string; period_end: string }>
   bookkeepingLockedThrough?: string | null
   overlapping?: Array<{ id: string; name: string }>
   insertResult?: { data: unknown; error: unknown }
@@ -78,7 +78,7 @@ function buildMockSupabase(options: {
       // For update (call 5): .update(...).eq(...).eq(...)
 
       chainable.select = vi.fn().mockImplementation((sel: string) => {
-        if (sel.includes('name') && sel.includes('period_start') && !sel.includes('id')) {
+        if (sel.includes('name') && sel.includes('period_start')) {
           // openPeriods query: .eq(company_id).eq(is_closed=false).is(locked_at, null).order(...)
           return {
             eq: vi.fn().mockReturnValue({
@@ -178,17 +178,22 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.error).toMatch(/must start on 2026-01-01/)
   })
 
-  it('rejects forward period when an unlocked open period exists and lists its name', async () => {
+  it('rejects forward period when an unlocked open period exists and returns it as a blocking period', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false }],
-      openPeriods: [{ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      openPeriods: [{ id: 'p1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
     })
     const req = createMockRequest({ name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' })
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error).toMatch(/unlocked period/)
-    expect(body.error).toMatch(/FY 2025 \(2025-01-01 – 2025-12-31\)/)
+    // Canonical envelope with a machine code + the blocking periods so the
+    // dialog can offer to lock them inline.
+    expect(body.error.code).toBe('PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS')
+    expect(body.error.message).toMatch(/låsa föregående räkenskapsår/)
+    expect(body.error.details.blockingPeriods).toEqual([
+      { id: 'p1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+    ])
   })
 
   // Regression: BFL 6 kap allows löpande bokföring of the new year in parallel
@@ -232,7 +237,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
   it('rejects forward period creation when company-wide lock only partially covers prior period', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
-      openPeriods: [{ name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' }],
+      openPeriods: [{ id: 'p1', name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' }],
       bookkeepingLockedThrough: '2024-06-30',
       overlapping: [],
     })
@@ -240,7 +245,10 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error).toMatch(/FY 2024/)
+    expect(body.error.code).toBe('PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS')
+    expect(body.error.details.blockingPeriods).toEqual([
+      { id: 'p1', name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+    ])
   })
 
   it('allows backward period creation', async () => {
@@ -337,7 +345,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
         const callNum = fpCallIndex
         return {
           select: vi.fn().mockImplementation((sel: string) => {
-            if (sel.includes('name') && sel.includes('period_start') && !sel.includes('id')) {
+            if (sel.includes('name') && sel.includes('period_start')) {
               return {
                 eq: vi.fn().mockReturnValue({
                   eq: vi.fn().mockReturnValue({
@@ -413,7 +421,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
         const callNum = fpCallIndex
         return {
           select: vi.fn().mockImplementation((sel: string) => {
-            if (sel.includes('name') && sel.includes('period_start') && !sel.includes('id')) {
+            if (sel.includes('name') && sel.includes('period_start')) {
               return {
                 eq: vi.fn().mockReturnValue({
                   eq: vi.fn().mockReturnValue({

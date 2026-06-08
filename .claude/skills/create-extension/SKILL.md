@@ -1,6 +1,6 @@
 ---
 name: create-extension
-description: "Generate and implement extensions for gnubok: scaffold files, configure manifests, write event handlers, API routes, services, workspace UIs, settings panels, and testing. Use when creating new extensions, adding surfaces to existing extensions, or understanding the extension architecture. Covers the full lifecycle from scaffolding to registration."
+description: "Generate and implement extensions for Accounted: scaffold files, configure manifests, write event handlers, API routes, services, workspace UIs, settings panels, and testing. Use when creating new extensions, adding surfaces to existing extensions, or understanding the extension architecture. Covers the full lifecycle from scaffolding to registration."
 ---
 
 # Extension Generator

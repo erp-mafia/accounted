@@ -95,6 +95,25 @@ describe('getErrorMessage — typed bookkeeping error codes', () => {
   })
 })
 
+describe('getErrorMessage — English locale uses registry English (C9)', () => {
+  it('returns the registry English message for a known structured code instead of Swedish', () => {
+    const code = 'FISCAL_PERIOD_NOT_FOUND'
+    const sv = getErrorMessage({ error: { code, message: '...' } })
+    const en = getErrorMessage({ error: { code, message: '...' } }, { locale: 'en' })
+
+    expect(sv).toMatch(/[åäö]/i) // default (Swedish) path is unchanged
+    expect(en).not.toBe(sv) // English locale now differs
+    expect(en).not.toMatch(/[åäö]/i) // …and is no longer Swedish prose
+    expect(en.toLowerCase()).toContain('fiscal period')
+  })
+
+  it('leaves the Swedish (default-locale) message identical to before', () => {
+    expect(getErrorMessage({ error: { code: 'CANNOT_REVERSE_NON_POSTED', message: '...' } })).toBe(
+      'Endast bokförda verifikationer kan stornas.',
+    )
+  })
+})
+
 describe('getErrorMessage — existing patterns still work', () => {
   it('regex match for "Entry date ... outside fiscal period" on plain string', () => {
     const msg = getErrorMessage('Entry date 2024-06-15 is outside fiscal period "FY 2025"')

@@ -79,6 +79,34 @@ const HANDELSBANKEN_CSV_WITH_PREL = [
   '2024-01-13;2024-01-13;LÖNEUTBETALNING;25000,00;12643,67',
 ].join('\n')
 
+// Real Handelsbanken web exports can prepend account/period metadata rows
+// (and a blank line) before the actual column header.
+const HANDELSBANKEN_CSV_WITH_PREAMBLE = [
+  'Kontonummer;6789 123 456 789',
+  'Kontohavare;Wiklund, Cristel',
+  'Period;2024-01-01 - 2024-01-31',
+  '',
+  'Reskontradatum;Transaktionsdatum;Text;Belopp;Saldo',
+  '2024-01-15;2024-01-15;SPOTIFY AB;-99,00;12345,67',
+  '2024-01-14;2024-01-14;HEMKÖP;-432,50;12444,67',
+  '2024-01-13;2024-01-13;LÖNEUTBETALNING;25000,00;12877,17',
+].join('\n')
+
+// Negative amounts exported with a Unicode minus (U+2212) instead of ASCII '-'.
+const HANDELSBANKEN_CSV_UNICODE_MINUS = [
+  'Reskontradatum;Transaktionsdatum;Text;Belopp;Saldo',
+  '2024-01-15;2024-01-15;SPOTIFY AB;−139,00;12345,67',
+  '2024-01-14;2024-01-14;HEMKÖP;−1 432,50;12444,67',
+  '2024-01-13;2024-01-13;LÖNEUTBETALNING;25000,00;12877,17',
+].join('\n')
+
+// A quoted Text field that itself contains the semicolon delimiter.
+const HANDELSBANKEN_CSV_QUOTED_SEMICOLON = [
+  'Reskontradatum;Transaktionsdatum;Text;Belopp;Saldo',
+  '2024-01-15;2024-01-15;"BETALNING; FAKTURA 100";-99,00;12345,67',
+  '2024-01-14;2024-01-14;HEMKÖP;-432,50;12444,67',
+].join('\n')
+
 const CAMT053_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
 <BkToCstmrStmt>
@@ -876,6 +904,47 @@ describe('parseBankFile — Handelsbanken format', () => {
 
     const result = parseBankFile(diffDates, 'shb.csv')
     expect(result.transactions[0].date).toBe('2024-01-15')
+  })
+
+  it('detects Handelsbanken CSV when a metadata preamble precedes the header', () => {
+    const format = detectFileFormat(HANDELSBANKEN_CSV_WITH_PREAMBLE, 'kontoutdrag.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('handelsbanken')
+  })
+
+  it('skips the metadata preamble rows and parses the transactions', () => {
+    const result = parseBankFile(HANDELSBANKEN_CSV_WITH_PREAMBLE, 'kontoutdrag.csv')
+
+    expect(result.format).toBe('handelsbanken')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues).toHaveLength(0)
+    expect(result.stats.skipped_rows).toBe(0)
+
+    const descriptions = result.transactions.map((t) => t.description)
+    expect(descriptions).not.toContain('Kontonummer')
+    expect(result.transactions[0].description).toBe('SPOTIFY AB')
+    expect(result.transactions[2].amount).toBe(25000)
+  })
+
+  it('parses negative amounts that use a Unicode minus (U+2212) instead of dropping them', () => {
+    const result = parseBankFile(HANDELSBANKEN_CSV_UNICODE_MINUS, 'shb.csv')
+
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues).toHaveLength(0)
+    expect(result.stats.skipped_rows).toBe(0)
+    expect(result.transactions[0].amount).toBe(-139)
+    expect(result.transactions[1].amount).toBe(-1432.5)
+    expect(result.transactions[2].amount).toBe(25000)
+  })
+
+  it('handles a quoted Text field that contains the semicolon delimiter', () => {
+    const result = parseBankFile(HANDELSBANKEN_CSV_QUOTED_SEMICOLON, 'shb.csv')
+
+    expect(result.transactions).toHaveLength(2)
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions[0].description).toBe('BETALNING; FAKTURA 100')
+    expect(result.transactions[0].amount).toBe(-99)
+    expect(result.transactions[1].amount).toBe(-432.5)
   })
 })
 

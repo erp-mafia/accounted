@@ -12,8 +12,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { AccountNumber } from '@/components/ui/account-number'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Plus, Trash2 } from 'lucide-react'
@@ -163,63 +163,18 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </p>
         </div>
 
-        {/* Original entry (read-only) */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {/* Original entry metadata — lines live inside CorrectionPreview below */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
             <span className="font-mono">{formatVoucher(entry)}</span>
             <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
             <Badge variant="outline" className="text-xs">Original</Badge>
           </div>
           <p className="text-sm">{entry.description}</p>
-
-          <div className="hidden sm:block">
-            <table className="w-full text-sm">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                <tr className="border-b text-left">
-                  <th className="py-1.5 w-48">Konto</th>
-                  <th className="py-1.5">Beskrivning</th>
-                  <th className="py-1.5 w-28 text-right">Debet</th>
-                  <th className="py-1.5 w-28 text-right">Kredit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {originalLines.map((line) => (
-                  <tr key={line.id} className="border-b last:border-0">
-                    <td className="py-1.5"><AccountNumber number={line.account_number} showName /></td>
-                    <td className="py-1.5 text-muted-foreground">{line.line_description || ''}</td>
-                    <td className="py-1.5 text-right">
-                      {Number(line.debit_amount) > 0
-                        ? Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })
-                        : ''}
-                    </td>
-                    <td className="py-1.5 text-right">
-                      {Number(line.credit_amount) > 0
-                        ? Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })
-                        : ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="sm:hidden space-y-1.5">
-            {originalLines.map((line) => (
-              <div key={line.id} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm">
-                <div className="min-w-0">
-                  <AccountNumber number={line.account_number} showName />
-                </div>
-                <span className="font-mono text-xs shrink-0 ml-2">
-                  {Number(line.debit_amount) > 0
-                    ? `D ${Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}`
-                    : `K ${Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}`}
-                </span>
-              </div>
-            ))}
-          </div>
         </div>
 
-        {/* Divider */}
-        <div className="border-t my-2" />
+        {/* Live diff: original | storno | correction | förändring */}
+        <CorrectionPreview originalLines={originalLines} correctedLines={lines} />
 
         {/* Corrected lines (editable) */}
         <div className="space-y-2">

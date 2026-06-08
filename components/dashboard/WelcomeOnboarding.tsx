@@ -208,11 +208,7 @@ export default function WelcomeOnboarding({
         let title = t('toast_error_title')
         let description: string = result.error || t('toast_create_failed')
         let backToStep2 = false
-        if (result.error === 'org_number_exists') {
-          title = t('toast_company_exists_title')
-          description = t('toast_company_exists_description', { appName: branding.appName.toLowerCase() })
-          backToStep2 = true
-        } else if (result.error === 'org_number_invalid') {
+        if (result.error === 'org_number_invalid') {
           title = t('toast_org_invalid_title')
           description = t('toast_org_invalid_description')
           backToStep2 = true

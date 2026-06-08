@@ -69,6 +69,7 @@ function enqueueHappyPath(opts: {
     remaining_amount?: number
     paid_amount?: number
   }
+  accountingMethod?: string
 }) {
   // 1. transactions fetch
   enqueue({
@@ -98,7 +99,7 @@ function enqueueHappyPath(opts: {
     error: null,
   })
   // 3. company_settings fetch
-  enqueue({ data: { accounting_method: 'accrual' }, error: null })
+  enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
   // 4. supplier_invoices update (CAS)
   enqueue({ data: [{ id: SI_UUID }], error: null })
   // 5. supplier_invoice_payments insert
@@ -194,5 +195,123 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — non-FX paths', 
     expect(body.success).toBe(true)
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
+  })
+
+  it('returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING when tx exceeds invoice remaining (same currency)', async () => {
+    // Tx pays out 6 000 SEK, invoice has 5 000 SEK remaining. Legacy code path
+    // would push paid_amount past invoice.total. The new guard rejects so the
+    // user routes the excess through the split-payment flow.
+    enqueue({
+      data: {
+        id: TX_UUID,
+        company_id: 'company-1',
+        amount: -6000,
+        currency: 'SEK',
+        amount_sek: null,
+        supplier_invoice_id: null,
+        date: '2026-05-12',
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        status: 'registered',
+        remaining_amount: 5000,
+        paid_amount: 0,
+        supplier: { supplier_type: 'swedish_business' },
+        items: [],
+      },
+      error: null,
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: unknown }>(res)
+    expect(status).toBe(400)
+    expect((body.error as { code: string }).code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    const details = (body.error as { details: Record<string, number> }).details
+    expect(details.transaction_amount).toBe(6000)
+    expect(details.remaining_amount).toBe(5000)
+    expect(details.excess).toBe(1000)
+  })
+
+  it('does NOT trigger overshoot guard on currency mismatch (FX path clamps to remaining)', async () => {
+    // SEK transaction paying a EUR invoice. The currency-mismatch branch
+    // collapses paymentAmountInvoiceCurrency to invoice.remaining_amount and
+    // cannot overshoot, so the guard must not fire here.
+    enqueueHappyPath({
+      transaction: { amount: -10000, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice — cash method + FX', () => {
+  it('full cross-currency settlement books at the payment rate (no FX-unsupported error)', async () => {
+    // Cash method, SEK account paying a 25 USD invoice. The invoice's stored
+    // rate (9.20 → 230 SEK) differs from the 239 SEK that actually left the
+    // bank — previously this was blocked. It must now succeed and hand the
+    // cash builder the real bank SEK so 1930 matches the bank line.
+    enqueueHappyPath({
+      transaction: { amount: -239, currency: 'SEK' },
+      invoice: { currency: 'USD', exchange_rate: 9.20, remaining_amount: 25 },
+      accountingMethod: 'cash',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    // settledBankSek is the 10th positional arg (index 9).
+    expect(mockCreateCashEntry.mock.calls[0][9]).toBe(239)
+  })
+
+  it('full same-currency foreign settlement passes the actual bank SEK to the cash builder', async () => {
+    // 19 USD invoice paid from a USD card showing amount_sek = 175.28, while
+    // the invoice was captured at 9.20 (174.80). Full settlement → booked at
+    // the payment rate (175.28), no kursdifferens.
+    enqueueHappyPath({
+      transaction: { amount: -19, currency: 'USD', amount_sek: -175.28 },
+      invoice: { currency: 'USD', exchange_rate: 9.20, remaining_amount: 19 },
+      accountingMethod: 'cash',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreateCashEntry.mock.calls[0][9]).toBe(175.28)
+  })
+
+  it('foreign tx with no amount_sek books at the invoice rate, not the raw foreign amount', async () => {
+    // The bank line carries no stored SEK (amount_sek null). The old fallback
+    // treated 19 USD as 19 SEK → "19 kr". We must instead use the invoice's
+    // rate (≈175 kr): no settledBankSek override is passed (FX diff is 0,
+    // there's no independent bank figure) and the entry is NOT blocked.
+    enqueueHappyPath({
+      transaction: { amount: -19, currency: 'USD', amount_sek: null },
+      invoice: { currency: 'USD', exchange_rate: 9.225, remaining_amount: 19 },
+      accountingMethod: 'cash',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
+    // No bogus settledBankSek=19 override — the builder uses the invoice rate.
+    expect(mockCreateCashEntry.mock.calls[0][9]).toBeUndefined()
+  })
+
+  it('PARTIAL foreign payment under the cash method is still rejected', async () => {
+    // Paying only 10 of 19 USD remaining. The cash builder books the whole
+    // invoice, so a partial bank amount cannot pin the entry — still blocked.
+    enqueueHappyPath({
+      transaction: { amount: -10, currency: 'USD', amount_sek: -92.25 },
+      invoice: { currency: 'USD', exchange_rate: 9.20, remaining_amount: 19 },
+      accountingMethod: 'cash',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_SI_CASH_FX_UNSUPPORTED')
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
   })
 })

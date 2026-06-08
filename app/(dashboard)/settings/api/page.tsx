@@ -1,13 +1,5 @@
-'use client'
-
-import { ApiKeysPanel } from '@/components/settings/ApiKeysPanel'
-import { OAuthClientsPanel } from '@/components/settings/OAuthClientsPanel'
+import { ApiSettingsContent } from '@/components/settings/sections/ApiSettingsContent'
 
 export default function ApiSettingsPage() {
-  return (
-    <div className="space-y-8">
-      <ApiKeysPanel />
-      <OAuthClientsPanel />
-    </div>
-  )
+  return <ApiSettingsContent />
 }

@@ -11,7 +11,12 @@ import {
   validateScopes,
   hasScope,
   validateApiKey,
+  findStageApproveConflict,
   DEFAULT_SCOPES,
+  DEFAULT_OAUTH_SCOPES,
+  STAGING_SCOPES,
+  TOOL_SCOPE_MAP,
+  API_KEY_SCOPES,
 } from '../api-keys'
 import { createClient } from '@supabase/supabase-js'
 
@@ -154,6 +159,69 @@ describe('hasScope', () => {
 
   it('returns false when scope absent', () => {
     expect(hasScope(['transactions:read', 'reports:read'], 'invoices:write')).toBe(false)
+  })
+})
+
+// ============================================================
+// findStageApproveConflict
+// ============================================================
+
+describe('findStageApproveConflict', () => {
+  it('returns null when approve scope is absent', () => {
+    expect(findStageApproveConflict(['invoices:write', 'reports:read'])).toBeNull()
+  })
+
+  it('returns null when approve scope present but no staging scope', () => {
+    expect(
+      findStageApproveConflict(['pending_operations:approve', 'reports:read']),
+    ).toBeNull()
+  })
+
+  it('returns the offending staging scope when both are present', () => {
+    expect(
+      findStageApproveConflict(['invoices:write', 'pending_operations:approve']),
+    ).toBe('invoices:write')
+  })
+
+  it('treats every STAGING_SCOPES member as a conflict alongside approve', () => {
+    for (const staging of STAGING_SCOPES) {
+      expect(findStageApproveConflict([staging, 'pending_operations:approve'])).toBe(staging)
+    }
+  })
+
+  it('does NOT treat agent:write as a staging scope', () => {
+    expect(STAGING_SCOPES).not.toContain('agent:write')
+    // agent:write + approve is not a SoD conflict — memory writes don't stage
+    // bookkeeping that approve would commit.
+    expect(
+      findStageApproveConflict(['agent:write', 'pending_operations:approve']),
+    ).toBeNull()
+  })
+})
+
+// ============================================================
+// agent:write scope wiring
+// ============================================================
+
+describe('agent:write scope', () => {
+  it('is a registered scope with a Swedish label and description', () => {
+    expect(API_KEY_SCOPES['agent:write']).toBeDefined()
+    expect(API_KEY_SCOPES['agent:write'].label).toBe('Agent — skriv')
+    expect(typeof API_KEY_SCOPES['agent:write'].description).toBe('string')
+  })
+
+  it('maps the memory write tools to agent:write', () => {
+    expect(TOOL_SCOPE_MAP.gnubok_remember_fact).toBe('agent:write')
+    expect(TOOL_SCOPE_MAP.gnubok_forget_fact).toBe('agent:write')
+  })
+
+  it('keeps gnubok_get_agent_briefing on agent:read', () => {
+    expect(TOOL_SCOPE_MAP.gnubok_get_agent_briefing).toBe('agent:read')
+  })
+
+  it('is excluded from the default scope grants', () => {
+    expect(DEFAULT_SCOPES).not.toContain('agent:write')
+    expect(DEFAULT_OAUTH_SCOPES).not.toContain('agent:write')
   })
 })
 

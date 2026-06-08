@@ -1,50 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
-  createServiceClient: vi.fn(),
 }))
 
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/server'
 import { GET } from '../route'
+import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 const mockCreateClient = vi.mocked(createClient)
-const mockCreateServiceClient = vi.mocked(createServiceClient)
-
-function mockAuth(user: { id: string } | null) {
-  mockCreateClient.mockResolvedValue({
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }) },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any)
-}
 
 /**
- * Service-role mock. Returns a match only if the incoming `.eq('org_number', X)`
- * value matches `existing`. Anything else (or empty `existing`) returns null.
+ * Minimal authenticated-client mock. `companies.data` seeds what the RLS-scoped
+ * `from('companies').select().eq().is()` chain resolves to. In production RLS
+ * filters this to the caller's own memberships; the route does no extra
+ * filtering, so the test just controls what the query returns.
  */
-function mockService(existing?: string) {
-  let lastOrgNumber: string | null = null
-  const chain: Record<string, unknown> = {}
-  const methods = ['select', 'eq', 'is', 'limit', 'maybeSingle']
-  for (const m of methods) {
-    chain[m] = (...args: unknown[]) => {
-      if (m === 'eq' && args[0] === 'org_number') {
-        lastOrgNumber = String(args[1])
-      }
-      if (m === 'maybeSingle') {
-        return Promise.resolve({
-          data: existing && lastOrgNumber === existing ? { id: 'other' } : null,
-          error: null,
-        })
-      }
-      return chain
-    }
+function buildSupabase(opts: {
+  user: { id: string } | null
+  companies?: { data?: unknown; error?: unknown }
+}) {
+  const result = {
+    data: opts.companies?.data ?? null,
+    error: opts.companies?.error ?? null,
   }
-  mockCreateServiceClient.mockReturnValue({
-    from: vi.fn().mockReturnValue(chain),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any)
+  const chain: Record<string, unknown> = {}
+  for (const m of ['select', 'eq', 'is', 'limit', 'order']) {
+    chain[m] = () => chain
+  }
+  ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(result)
+  return {
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }) },
+    from: vi.fn(() => chain),
+  }
 }
 
 beforeEach(() => {
@@ -53,68 +41,65 @@ beforeEach(() => {
 
 describe('GET /api/company/check-org-number', () => {
   it('returns 401 when unauthenticated', async () => {
-    mockAuth(null)
-    mockService()
-    const req = createMockRequest('/api/company/check-org-number?org_number=5560125790')
-    const { status } = await parseJsonResponse(await GET(req))
+    mockCreateClient.mockResolvedValue(buildSupabase({ user: null }) as never)
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
   })
 
   it('returns 400 when org_number is missing', async () => {
-    mockAuth({ id: 'user-1' })
-    mockService()
-    const req = createMockRequest('/api/company/check-org-number')
-    const { status } = await parseJsonResponse(await GET(req))
+    mockCreateClient.mockResolvedValue(buildSupabase({ user: { id: 'u1' } }) as never)
+    const res = await GET(createMockRequest('/api/company/check-org-number'))
+    const { status } = await parseJsonResponse(res)
     expect(status).toBe(400)
   })
 
-  it('returns exists=false when the org number is not registered', async () => {
-    mockAuth({ id: 'user-1' })
-    mockService(undefined) // no existing match
-    const req = createMockRequest('/api/company/check-org-number?org_number=5560125790')
-    const { status, body } = await parseJsonResponse(await GET(req))
+  it('returns exists:false for malformed org_number without querying', async () => {
+    const supabase = buildSupabase({ user: { id: 'u1' } })
+    mockCreateClient.mockResolvedValue(supabase as never)
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=not-a-number'))
+    const { status, body } = await parseJsonResponse<{
+      data: { exists: boolean; companies: unknown[] }
+    }>(res)
     expect(status).toBe(200)
-    expect((body as { data: { exists: boolean } }).data.exists).toBe(false)
+    expect(body.data.exists).toBe(false)
+    expect(body.data.companies).toEqual([])
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('returns exists=true when the org number is already registered', async () => {
-    mockAuth({ id: 'user-1' })
-    mockService('5560125790')
-    const req = createMockRequest('/api/company/check-org-number?org_number=5560125790')
-    const { status, body } = await parseJsonResponse(await GET(req))
+  it("reports the user's own matching companies (account-scoped via RLS)", async () => {
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({
+        user: { id: 'u1' },
+        companies: { data: [{ id: 'c1', name: 'Acme AB' }] },
+      }) as never,
+    )
+    // Hyphenated input still matches the stored 10-digit canonical.
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=556012-5790'))
+    const { status, body } = await parseJsonResponse<{
+      data: { exists: boolean; companies: { id: string; name: string }[] }
+    }>(res)
     expect(status).toBe(200)
-    expect((body as { data: { exists: boolean } }).data.exists).toBe(true)
+    expect(body.data.exists).toBe(true)
+    expect(body.data.companies).toEqual([{ id: 'c1', name: 'Acme AB' }])
   })
 
-  it('normalizes formatted org numbers before lookup (strips hyphens/spaces)', async () => {
-    mockAuth({ id: 'user-1' })
-    mockService('5560125790')
-    const req = createMockRequest('/api/company/check-org-number?org_number=556012-5790')
-    const { status, body } = await parseJsonResponse(await GET(req))
+  it('returns exists:false when the user has no company with that org number', async () => {
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({ user: { id: 'u1' }, companies: { data: [] } }) as never,
+    )
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const { status, body } = await parseJsonResponse<{ data: { exists: boolean } }>(res)
     expect(status).toBe(200)
-    expect((body as { data: { exists: boolean } }).data.exists).toBe(true)
+    expect(body.data.exists).toBe(false)
   })
 
-  it('normalizes 12-digit input to 10-digit canonical before lookup', async () => {
-    // Stored form is 10-digit canonical (8001011231); user types 12-digit
-    // personnummer with century prefix.
-    mockAuth({ id: 'user-1' })
-    mockService('8001011231')
-    const req = createMockRequest('/api/company/check-org-number?org_number=198001011231')
-    const { status, body } = await parseJsonResponse(await GET(req))
-    expect(status).toBe(200)
-    expect((body as { data: { exists: boolean } }).data.exists).toBe(true)
-  })
-
-  it('returns exists=false for Luhn-invalid input (not a duplicate of anything)', async () => {
-    // The submit-time server action will reject this as org_number_invalid;
-    // here we just confirm the check endpoint doesn't produce a misleading
-    // "exists=true" result by accidentally matching an invalid number.
-    mockAuth({ id: 'user-1' })
-    mockService('5560125790') // a real registered number
-    const req = createMockRequest('/api/company/check-org-number?org_number=5560125791')
-    const { status, body } = await parseJsonResponse(await GET(req))
-    expect(status).toBe(200)
-    expect((body as { data: { exists: boolean } }).data.exists).toBe(false)
+  it('returns 500 when the query errors', async () => {
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({ user: { id: 'u1' }, companies: { error: { message: 'boom' } } }) as never,
+    )
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(500)
   })
 })

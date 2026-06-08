@@ -53,6 +53,7 @@ export const POST = withRouteContext(
         payment_amount: outcome.result.paymentAmount,
         payment_id: outcome.result.paymentId,
         journal_entry_id: outcome.result.journalEntryId,
+        reconciled_transaction_id: outcome.result.reconciledTransactionId,
       },
     })
   },

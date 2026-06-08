@@ -62,7 +62,7 @@ export async function handleSkattekontoDriftDetected(
   const lines = [
     `Vi har upptäckt en differens mellan ditt skattekonto och bokföringen per ${fetchedAt}.`,
     '',
-    'Logga in på gnubok för att se beloppen och granska skattekonto-raderna:',
+    'Logga in på Accounted för att se beloppen och granska skattekonto-raderna:',
     dashboardLink,
     '',
     'Vanliga orsaker att differensen syns redan innan en åtgärd behövs:',
@@ -76,7 +76,7 @@ export async function handleSkattekontoDriftDetected(
 
   const html = `
 <p>Vi har upptäckt en differens mellan ditt skattekonto och bokföringen per ${escapeHtml(fetchedAt)}.</p>
-<p><a href="${escapeHtml(dashboardLink)}">Logga in på gnubok</a> för att se beloppen och granska skattekonto-raderna.</p>
+<p><a href="${escapeHtml(dashboardLink)}">Logga in på Accounted</a> för att se beloppen och granska skattekonto-raderna.</p>
 <p><strong>Vanliga orsaker att differensen syns redan innan en åtgärd behövs:</strong></p>
 <ul>
   <li>Anstånd — saldot förskjuts hos Skatteverket men bokföringen påverkas inte.</li>

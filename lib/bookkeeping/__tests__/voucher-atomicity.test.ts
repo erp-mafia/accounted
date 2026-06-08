@@ -16,6 +16,7 @@ vi.mock('@/lib/logger', () => ({
 }))
 
 import { commitEntry, getNextVoucherNumber, createJournalEntry } from '../engine'
+import { runWithActor } from '../actor-context-node'
 import { BookkeepingDatabaseError } from '../errors'
 
 describe('voucher number atomicity', () => {
@@ -78,6 +79,8 @@ describe('voucher number atomicity', () => {
       p_entry_id: 'entry-1',
       p_commit_method: null,
       p_rubric_version: null,
+      p_actor_type: null,
+      p_actor_label: null,
     })
 
     // from() was never called — the RPC handles everything atomically
@@ -116,9 +119,50 @@ describe('voucher number atomicity', () => {
       p_entry_id: 'entry-1',
       p_commit_method: null,
       p_rubric_version: null,
+      p_actor_type: null,
+      p_actor_label: null,
     })
     // from() called once to fetch the complete entry with lines
     expect(supabase.from).toHaveBeenCalledWith('journal_entries')
+  })
+
+  /**
+   * Actor attribution (migration 20260619120000): commitEntry forwards the
+   * surrounding runWithActor() scope to the RPC so the immutable layer can
+   * record WHO relayed the commit. Outside a scope the params stay null
+   * (asserted by the two tests above).
+   */
+  it('commitEntry forwards the runWithActor scope to the RPC', async () => {
+    const postedEntry = {
+      id: 'entry-1',
+      company_id: 'co-1',
+      voucher_number: 1,
+      status: 'posted' as JournalEntryStatus,
+      lines: [],
+    }
+    const supabase = {
+      from: vi.fn().mockImplementation(() => ({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: postedEntry, error: null }),
+          }),
+        }),
+      })),
+      rpc: vi.fn().mockResolvedValue({ data: [{ voucher_number: 1 }], error: null }),
+    }
+
+    await runWithActor({ type: 'api_key', label: 'Claude Desktop' }, () =>
+      commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1', 'api_key')
+    )
+
+    expect(supabase.rpc).toHaveBeenCalledWith('commit_journal_entry', {
+      p_company_id: 'co-1',
+      p_entry_id: 'entry-1',
+      p_commit_method: 'api_key',
+      p_rubric_version: null,
+      p_actor_type: 'api_key',
+      p_actor_label: 'Claude Desktop',
+    })
   })
 
   /**

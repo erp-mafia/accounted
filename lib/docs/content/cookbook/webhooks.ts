@@ -7,7 +7,7 @@ This is the operational companion to the [Webhooks concept page](/docs/api/webho
 ## What you'll need
 
 - A test API key with \`webhooks:manage\` scope (and \`payroll:read\` if you intend to subscribe to payroll events).
-- A receiver URL that gnubok can POST to. For local development use [smee.io](https://smee.io) or \`ngrok\` — gnubok refuses webhook URLs that resolve to private IPs (SSRF protection), so localhost won't work directly.
+- A receiver URL that Accounted can POST to. For local development use [smee.io](https://smee.io) or \`ngrok\` — Accounted refuses webhook URLs that resolve to private IPs (SSRF protection), so localhost won't work directly.
 - HTTPS only — \`http://\` URLs are rejected at registration.
 
 ## 1. Register the webhook
@@ -15,7 +15,7 @@ This is the operational companion to the [Webhooks concept page](/docs/api/webho
 The response includes the HMAC signing secret **exactly once**. Capture it immediately and store it on the receiver side as an environment variable.
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/webhooks" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -50,7 +50,7 @@ Response:
 
 ## 2. Implement signature verification
 
-Use the [Node](https://gnubok.app/docs/api/webhooks#nodejs) or [Python](https://gnubok.app/docs/api/webhooks#python) sample on the concept page. The critical detail: capture the **raw request body** before any framework JSON-parses it. Re-serialising the body produces different bytes and the signature won't match.
+Use the [Node](https://app.gnubok.se/docs/api/webhooks#nodejs) or [Python](https://app.gnubok.se/docs/api/webhooks#python) sample on the concept page. The critical detail: capture the **raw request body** before any framework JSON-parses it. Re-serialising the body produces different bytes and the signature won't match.
 
 For an Express handler, that means \`express.raw({ type: 'application/json' })\` — NOT the default \`express.json()\` middleware. For FastAPI / Flask use \`request.get_data()\`. For Cloudflare Workers use \`await request.text()\` BEFORE \`request.json()\`.
 
@@ -59,7 +59,7 @@ For an Express handler, that means \`express.raw({ type: 'application/json' })\`
 The \`:test\` verb enqueues a synthetic \`webhook.test\` delivery without driving real state. The dispatcher sends it on the next per-minute cron tick.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/test" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/test" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -82,7 +82,7 @@ X-Gnubok-Event: webhook.test
 X-Gnubok-Delivery: wh_dlv_...
 X-Gnubok-Api-Version: 2026-05-12
 
-{"id":"wh_dlv_...","type":"webhook.test","api_version":"2026-05-12","created":1715797800,"data":{"object":{"hello":"from gnubok","tested_at":"2026-05-15T12:00:00Z"}},"previous_attributes":null}
+{"id":"wh_dlv_...","type":"webhook.test","api_version":"2026-05-12","created":1715797800,"data":{"object":{"hello":"from Accounted","tested_at":"2026-05-15T12:00:00Z"}},"previous_attributes":null}
 \`\`\`
 
 If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns 4xx (other than 410) or 5xx, it goes to \`failed\` and retries on the schedule \`1m / 5m / 30m / 2h / 12h / 24h / 48h\`.
@@ -90,7 +90,7 @@ If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns
 ## 4. Inspect the delivery
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/deliveries?delivery_id=$DELIVERY_ID" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/deliveries?delivery_id=$DELIVERY_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -119,7 +119,7 @@ Response carries the captured response status and body (truncated to 4 KB), whic
 Now mark a real invoice paid (or use any of the [event-emitting endpoints](/docs/api/webhooks#event-types)). The webhook handler picks up the emission and enqueues a delivery within the same request cycle.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -148,14 +148,14 @@ async function handleEvent(event) {
 }
 \`\`\`
 
-This pattern: a unique constraint on \`delivery_id\`, an INSERT-on-conflict-do-nothing, and short-circuit when nothing was inserted. Every gnubok delivery passes through that gate at most once even if the dispatcher retries.
+This pattern: a unique constraint on \`delivery_id\`, an INSERT-on-conflict-do-nothing, and short-circuit when nothing was inserted. Every Accounted delivery passes through that gate at most once even if the dispatcher retries.
 
 ## Replaying a dead delivery
 
 When a delivery exhausts its retries it's marked \`dead\`. After fixing the receiver, replay individual deliveries with:
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/webhook-deliveries/$DELIVERY_ID/retry" \\
+curl -X POST "https://app.gnubok.se/api/v1/webhook-deliveries/$DELIVERY_ID/retry" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -171,7 +171,7 @@ After:
 …the webhook is automatically disabled (\`active=false\`, \`disabled_reason\` set). Re-enable with:
 
 \`\`\`bash
-curl -X PATCH "https://gnubok.app/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID" \\
+curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Content-Type: application/json" \\
   -d '{ "active": true }'
@@ -181,7 +181,7 @@ This clears \`disabled_at\` and \`disabled_reason\` but does NOT replay the deli
 
 ## Common pitfalls
 
-- **Re-serialising the body.** \`JSON.parse(rawBody); JSON.stringify(parsed)\` produces different bytes than gnubok sent. Always sign-check against the raw bytes.
+- **Re-serialising the body.** \`JSON.parse(rawBody); JSON.stringify(parsed)\` produces different bytes than Accounted sent. Always sign-check against the raw bytes.
 - **Forgetting the timestamp window.** Without a \`t\` check, an attacker who captured one signed payload can replay it forever. 5 minutes is the recommended tolerance.
 - **Returning 5xx for application errors.** A 5xx triggers full retries (~72h). If a payload is malformed-but-stable, return 200 and queue for internal investigation.
 - **Treating \`failed\` as terminal.** \`failed\` rows will retry; only \`delivered\` and \`dead\` are terminal. Don't alert on \`failed\` — alert when retries exhaust to \`dead\`.

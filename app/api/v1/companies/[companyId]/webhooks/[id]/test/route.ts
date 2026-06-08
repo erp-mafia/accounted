@@ -84,9 +84,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Data minimisation (Art.25(2)): the test payload deliberately omits
     // any internal identifier that has no value to the receiver. The
     // X-Gnubok-Delivery header on the outbound request already correlates
-    // to the audit trail on the gnubok side.
+    // to the audit trail on the Accounted side.
     const payload = {
-      hello: 'from gnubok',
+      hello: 'from Accounted',
       tested_at: new Date().toISOString(),
     }
 

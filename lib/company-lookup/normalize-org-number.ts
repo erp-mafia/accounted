@@ -1,7 +1,7 @@
 import { luhnValidate } from '@/lib/bankgiro/luhn'
 
 /**
- * Normalize an org number to gnubok's canonical 10-digit storage form.
+ * Normalize an org number to Accounted's canonical 10-digit storage form.
  *
  * Accepts hyphen/space-formatted input in either of the two shapes Swedish
  * users commonly type:
@@ -12,7 +12,7 @@ import { luhnValidate } from '@/lib/bankgiro/luhn'
  * check digit (the structural rule Bolagsverket and personnummer share).
  * Storing a structurally invalid org number would later be caught by
  * Skatteverket SRU and any receiving SIE4 system — refusing at the boundary
- * keeps gnubok's bookkeeping from accumulating under an unusable identifier.
+ * keeps Accounted's bookkeeping from accumulating under an unusable identifier.
  *
  * 10-digit storage matches the rest of the codebase — see
  * `lib/skatteverket/format.ts`, which converts 10→12 at export time by

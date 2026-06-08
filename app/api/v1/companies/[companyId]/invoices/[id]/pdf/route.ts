@@ -46,13 +46,13 @@ registerEndpoint({
   description:
     'Returns the invoice as application/pdf. The filename in Content-Disposition reflects the document type: faktura-<number>.pdf for sent invoices, kreditfaktura-<number>.pdf for credit notes, utkast-<id-slice>.pdf for drafts. This endpoint is byte-equivalent to the dashboard download.',
   useWhen:
-    'You need to fetch an invoice PDF for archival, forwarding to a customer outside the gnubok send flow, or attaching to an external workflow.',
+    'You need to fetch an invoice PDF for archival, forwarding to a customer outside the Accounted send flow, or attaching to an external workflow.',
   doNotUseFor:
     'Sending the invoice to the customer — use POST /invoices/{id}/send, which renders the PDF, emails it, and archives it as a verifikationsunderlag in one atomic step.',
   pitfalls: [
     'Drafts (no invoice_number yet) render with an "utkast" filename. The PDF carries no F-series number — do not treat it as a finalized invoice.',
     'PDF rendering can take several hundred milliseconds for invoices with many line items. Cache on the client if requesting repeatedly.',
-    'Credit notes embed the original invoice\'s löpnummer per ML 17 kap 22–23§ — if the original was hard-deleted (not possible via gnubok but theoretically via a manual DB edit), the reference is omitted.',
+    'Credit notes embed the original invoice\'s löpnummer per ML 17 kap 22–23§ — if the original was hard-deleted (not possible via Accounted but theoretically via a manual DB edit), the reference is omitted.',
   ],
   example: {
     response: {

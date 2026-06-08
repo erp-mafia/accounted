@@ -26,7 +26,7 @@ describe('getStructuredError', () => {
     }
     const result = getStructuredError(new FakeBookkeepingError())
     expect(result.code).toBe('ACCOUNTS_NOT_IN_CHART')
-    expect(result.remediation?.resource).toBe('gnubok://chart-of-accounts')
+    expect(result.remediation?.resource).toBe('Accounted://chart-of-accounts')
   })
 
   it('infers PERIOD_NOT_LOCKED from message text', () => {
@@ -50,7 +50,7 @@ describe('getStructuredError', () => {
     )
     expect(result.code).toBe('INSUFFICIENT_SCOPE')
     expect(result.remediation?.description).toContain('"bookkeeping:write"')
-    expect(result.remediation?.resource).toBe('gnubok://capabilities')
+    expect(result.remediation?.resource).toBe('Accounted://capabilities')
   })
 
   it('infers TRANSACTION_ALREADY_CATEGORIZED', () => {

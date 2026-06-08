@@ -35,7 +35,18 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
     mockCreateSupplierInvoiceCashEntry(...args),
 }))
 
+vi.mock('@/lib/core/documents/document-service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/core/documents/document-service')>(
+    '@/lib/core/documents/document-service'
+  )
+  return {
+    ...actual,
+    linkToJournalEntry: vi.fn(),
+  }
+})
+
 import { eventBus } from '@/lib/events'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 
 import { POST } from '../route'
 
@@ -208,6 +219,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
           vat_code: null,
           vat_rate: 0.25,
           vat_amount: 2000,
+          reverse_charge_rate: null,
           created_at: '2024-06-01T00:00:00Z',
         },
       ],
@@ -238,6 +250,88 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.journal_entry_id).toBe('je-3')
     expect(mockCreateSupplierInvoiceCashEntry).toHaveBeenCalled()
     expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('cash method: links the inbox document to the cash payment verifikat (BFL 5 kap 6 §)', async () => {
+    const supplier = makeSupplier()
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      document_id: 'doc-1',
+      supplier,
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // Duplicate-payment guard: no candidate transactions
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
+
+    mockCreateSupplierInvoiceCashEntry.mockResolvedValue({ id: 'je-cash' })
+
+    // Update invoice (CAS guard: returns matched row)
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    // Record payment
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.journal_entry_id).toBe('je-cash')
+    // The cash entry is the ONLY booking, so its underlag must hang on it.
+    expect(linkToJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'doc-1',
+      'je-cash',
+    )
+  })
+
+  it('accrual method: does NOT re-link the document at payment (stays on the registration verifikat)', async () => {
+    const supplier = makeSupplier()
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      document_id: 'doc-1',
+      registration_journal_entry_id: 'je-reg',
+      supplier,
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // Duplicate-payment guard: no candidate transactions
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-pay' })
+
+    // Update invoice (CAS guard: returns matched row)
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    // Record payment
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // The document already lives on the registration verifikat — re-linking
+    // here would move it off the primary booking.
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
   it('returns 500 when journal entry creation fails (blocking — GL must succeed for payment)', async () => {

@@ -89,6 +89,78 @@ export async function seedCompany(overrides: { isClosed?: boolean } = {}): Promi
   return { userId, companyId, fiscalPeriodId }
 }
 
+// Insert a cash account (cash_accounts row). ledger_account is unique per
+// company; is_primary defaults false to avoid the one-primary partial index.
+export async function insertCashAccount(params: {
+  companyId: string
+  ledgerAccount: string
+  currency?: string
+  iban?: string | null
+  externalUid?: string | null
+  isPrimary?: boolean
+  enabled?: boolean
+  source?: 'enable_banking' | 'manual' | 'sie_import'
+  bankConnectionId?: string | null
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.cash_accounts
+       (id, company_id, ledger_account, currency, iban, external_uid,
+        is_primary, enabled, source, bank_connection_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      id,
+      params.companyId,
+      params.ledgerAccount,
+      params.currency ?? 'SEK',
+      params.iban ?? null,
+      params.externalUid ?? null,
+      params.isPrimary ?? false,
+      params.enabled ?? true,
+      params.source ?? 'manual',
+      params.bankConnectionId ?? null,
+    ],
+  )
+  return id
+}
+
+// Insert a bank transaction row. cashAccountId/journalEntryId default null so
+// tests can exercise the backfill and the NULL-fallback scoping.
+export async function insertTransaction(params: {
+  companyId: string
+  userId: string
+  currency?: string
+  amount?: number
+  date?: string
+  description?: string
+  externalId?: string | null
+  journalEntryId?: string | null
+  cashAccountId?: string | null
+  isIgnored?: boolean
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.transactions
+       (id, company_id, user_id, currency, amount, date, description,
+        external_id, journal_entry_id, cash_account_id, is_ignored, category)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'uncategorized')`,
+    [
+      id,
+      params.companyId,
+      params.userId,
+      params.currency ?? 'SEK',
+      params.amount ?? -100,
+      params.date ?? '2026-06-01',
+      params.description ?? 'Test tx',
+      params.externalId ?? null,
+      params.journalEntryId ?? null,
+      params.cashAccountId ?? null,
+      params.isIgnored ?? false,
+    ],
+  )
+  return id
+}
+
 // Insert a draft journal entry and return its id. Uses a placeholder
 // voucher_number=0 which commit_journal_entry() will overwrite on commit.
 export async function insertDraftJournalEntry(params: {

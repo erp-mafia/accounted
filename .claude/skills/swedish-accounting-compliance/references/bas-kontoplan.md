@@ -185,7 +185,7 @@ Workflow:
 2. At declaration: netta 2610+2611+2612-2640 against 2650
 3. Payment to/from Skatteverket: 2650 <-> 1630 (skattekonto)
 
-**From 1 Apr 2026**: livsmedel moves from 2611 (12%) to 2612 (6%). Your system must handle the transition correctly based on leveransdatum.
+**From 1 Apr 2026**: livsmedel output VAT moves from 2621 (12%) to 2631 (6%). Your system must handle the transition correctly based on leveransdatum.
 
 ## 5. Mapping rules and principles
 

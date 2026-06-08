@@ -5,6 +5,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { format } from 'date-fns'
+import { isSaneDateString } from '@/lib/utils'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,7 +27,14 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
   const schema = useMemo(
     () =>
       z.object({
-        date: z.string().min(1, t('date_required')),
+        date: z
+          .string()
+          .min(1, t('date_required'))
+          // Single source of truth for the date rule, shared with the server
+          // CreateTransactionSchema: rejects the 6-digit-year corruption a
+          // native date input can emit ('202403-02-05') plus impossible /
+          // out-of-range dates.
+          .refine((s) => !s || isSaneDateString(s), t('date_invalid')),
         description: z.string().min(1, t('description_required')),
         amount: z.number().refine((n) => n !== 0, t('amount_required')),
         currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
@@ -72,7 +80,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="date">{t('date_label')}</Label>
-          <Input id="date" type="date" {...register('date')} />
+          <Input id="date" type="date" min="1900-01-01" max="2100-12-31" {...register('date')} />
           {errors.date && (
             <p className="text-sm text-destructive">{errors.date.message}</p>
           )}

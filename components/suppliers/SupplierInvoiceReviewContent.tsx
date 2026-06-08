@@ -5,6 +5,11 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
 import { formatCurrency } from '@/lib/utils'
+import {
+  resolveReverseChargeRate,
+  isReverseChargeBasisAccount,
+  generateReverseChargeBasisLines,
+} from '@/lib/bookkeeping/vat-entries'
 import type { Supplier } from '@/types'
 
 interface ReviewLineItem {
@@ -15,6 +20,9 @@ interface ReviewLineItem {
   // When set, the user typed the deductible VAT explicitly (manual override).
   // Used for bilförmån 50%, representation tak, FX-rundningar etc.
   vat_amount?: number
+  // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25). The
+  // supplier charges no VAT (vat_rate = 0); this drives the fiktiv-moms preview.
+  reverse_charge_rate?: number
 }
 
 interface SupplierInvoiceReviewContentProps {
@@ -91,20 +99,38 @@ function buildJournalPreview(
       : Math.round(item.amount * item.vat_rate * 100) / 100
 
   if (reverseCharge) {
-    // Reverse charge: fiktiv moms is always statutory base × rate, regardless
-    // of any manual override on the items themselves (matches engine).
+    // Reverse charge: the supplier charges no VAT, so the buyer self-assesses at
+    // the Swedish statutory rate (resolveReverseChargeRate — 25% huvudregel
+    // default, or the per-item reverse_charge_rate). We book BOTH the fiktiv-moms
+    // pair (2645/2647 + 2614/2624/2634) AND the basbeloppsrader (44xx/45xx +
+    // 4598), exactly as the engine does, so this preview matches the saved
+    // verifikat. ML 16 kap requires both sides reported; silent netting is
+    // prohibited (Skatteverket felkod FK004). Driving off the resolved rate (not
+    // item.vat_rate) is what makes a 0%-rate RC line book its VAT at all.
     const isDomesticRC = supplierType === 'swedish_business'
     const inputAccount = isDomesticRC ? '2647' : '2645'
+    const rcSupplierType: 'eu_business' | 'non_eu_business' | 'swedish_business' =
+      supplierType === 'non_eu_business' || supplierType === 'swedish_business'
+        ? supplierType
+        : 'eu_business'
 
+    // Base per self-assessed rate, plus the non-basis-account portion that needs
+    // parallel basbeloppsrader (items booked straight to a 44xx/45xx basis
+    // account already populate ruta 20-24 via the expense line, so they're
+    // excluded there to avoid double-counting).
     const baseByRate = new Map<number, number>()
+    const nonBasisBaseByRate = new Map<number, number>()
     for (const item of items) {
-      if (item.vat_rate > 0) {
-        const current = baseByRate.get(item.vat_rate) || 0
-        baseByRate.set(item.vat_rate, current + toSek(item.amount))
+      const rate = resolveReverseChargeRate(item)
+      const sek = toSek(item.amount)
+      baseByRate.set(rate, (baseByRate.get(rate) || 0) + sek)
+      if (!isReverseChargeBasisAccount(item.account_number)) {
+        nonBasisBaseByRate.set(rate, (nonBasisBaseByRate.get(rate) || 0) + sek)
       }
     }
 
     for (const [rate, netAmount] of baseByRate) {
+      if (netAmount <= 0) continue
       const fiktivVat = Math.round(netAmount * rate * 100) / 100
       const outputAccount = getOutputVatAccount(rate)
       lines.push({
@@ -119,6 +145,17 @@ function buildJournalPreview(
         debit: 0,
         credit: fiktivVat,
       })
+      const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
+      if (nonBasisBase > 0) {
+        for (const bl of generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)) {
+          lines.push({
+            account_number: bl.account_number,
+            description: bl.line_description ?? bl.account_number,
+            debit: bl.debit_amount,
+            credit: bl.credit_amount,
+          })
+        }
+      }
     }
 
     // Credit: 2440 at subtotal (no real VAT for reverse charge)
@@ -248,9 +285,16 @@ export function SupplierInvoiceReviewContent({
           </thead>
           <tbody>
             {items.map((item, index) => {
-              const vatAmount = item.vat_amount != null
-                ? Math.round(item.vat_amount * 100) / 100
-                : Math.round(item.amount * item.vat_rate * 100) / 100
+              // For reverse charge the supplier charges 0%, so show the
+              // self-assessed rate/amount the buyer books (matches the voucher
+              // preview below). Manual vat_amount overrides only apply to
+              // ordinary deductible VAT, never to RC self-assessment.
+              const displayRate = reverseCharge ? resolveReverseChargeRate(item) : item.vat_rate
+              const vatAmount = reverseCharge
+                ? Math.round(item.amount * displayRate * 100) / 100
+                : item.vat_amount != null
+                  ? Math.round(item.vat_amount * 100) / 100
+                  : Math.round(item.amount * item.vat_rate * 100) / 100
               return (
                 <tr key={index} className="border-b last:border-0">
                   <td className="py-2">
@@ -258,7 +302,7 @@ export function SupplierInvoiceReviewContent({
                   </td>
                   <td className="py-2">{item.description}</td>
                   <td className="py-2 text-right font-mono">{formatAmount(item.amount)}</td>
-                  <td className="py-2 text-right">{Math.round(item.vat_rate * 100)}%</td>
+                  <td className="py-2 text-right">{Math.round(displayRate * 100)}%</td>
                   <td className="py-2 text-right font-mono">{formatAmount(vatAmount)}</td>
                 </tr>
               )
@@ -268,9 +312,12 @@ export function SupplierInvoiceReviewContent({
       </div>
       <div className="sm:hidden space-y-2">
         {items.map((item, index) => {
-          const vatAmount = item.vat_amount != null
-            ? Math.round(item.vat_amount * 100) / 100
-            : Math.round(item.amount * item.vat_rate * 100) / 100
+          const displayRate = reverseCharge ? resolveReverseChargeRate(item) : item.vat_rate
+          const vatAmount = reverseCharge
+            ? Math.round(item.amount * displayRate * 100) / 100
+            : item.vat_amount != null
+              ? Math.round(item.vat_amount * 100) / 100
+              : Math.round(item.amount * item.vat_rate * 100) / 100
           return (
             <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
               <div className="flex items-center justify-between">
@@ -279,7 +326,7 @@ export function SupplierInvoiceReviewContent({
               </div>
               <div className="flex items-center justify-between text-muted-foreground">
                 <span>{formatAmount(item.amount)} kr</span>
-                <span className="text-xs">{t('review_vat_inline', { rate: Math.round(item.vat_rate * 100), amount: formatAmount(vatAmount) })}</span>
+                <span className="text-xs">{t('review_vat_inline', { rate: Math.round(displayRate * 100), amount: formatAmount(vatAmount) })}</span>
               </div>
             </div>
           )
@@ -293,7 +340,7 @@ export function SupplierInvoiceReviewContent({
           <span>{formatCurrency(subtotal, currency)}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-muted-foreground">{t('vat_label_short')}</span>
+          <span className="text-muted-foreground">{reverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}</span>
           <span>{formatCurrency(totalVat, currency)}</span>
         </div>
         <Separator />

@@ -9,19 +9,18 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
 import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
+import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import {
   Receipt,
   ArrowLeftRight,
-  ChevronDown,
   ChevronRight,
-  Landmark,
   CheckCircle2,
-  FileWarning,
   Clock,
   ArrowRight,
   MessageCircle,
 } from 'lucide-react'
-import type { Deadline, ReceiptQueueSummary, OnboardingProgress } from '@/types'
+import type { Deadline, OnboardingProgress } from '@/types'
+import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import { getBranding } from '@/lib/branding/service'
 
 const setupFreshStartKey = (companyId: string) => `erp_setup_fresh_start:${companyId}`
@@ -31,9 +30,6 @@ interface DashboardContentProps {
   summary: {
     ytd: { income: number; expenses: number; net: number }
     mtd: { income: number; expenses: number; net: number }
-    uncategorizedCount: number
-    uncategorizedIncome: number
-    uncategorizedExpenses: number
     unpaidInvoicesCount: number
     unpaidInvoicesTotal: number
     unpaidVatTotal: number
@@ -41,10 +37,12 @@ interface DashboardContentProps {
     bankBalance: number | null
     expiringBankConnections?: { id: string; bank_name: string; days_left: number }[]
     deadlines: Deadline[]
-    receiptQueue: ReceiptQueueSummary | null
-    missingUnderlagCount: number
     staleUncategorizedCount: number
   }
+  /** Unified pending-work counts from lib/worklist — same source as the sidebar badges. */
+  worklist: WorklistCounts
+  /** High-confidence transaction↔invoice matches for inline one-click confirm. */
+  suggestedMatches: SuggestedMatch[]
   onboardingProgress?: OnboardingProgress
   /**
    * False until the company has a verified agent_profile. When false the hero
@@ -55,8 +53,7 @@ interface DashboardContentProps {
   agentBuilt?: boolean
 }
 
-export default function DashboardContent({ companyId, summary, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
-  const [showAllAlerts, setShowAllAlerts] = useState(false)
+export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
   const t = useTranslations('dashboard')
 
   // The setup gate exists to nudge brand-new users into a data-import step
@@ -113,143 +110,10 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
     }).format(amount)
   }
 
-  const alertItems: React.ReactNode[] = []
-
-  if (summary.overdueInvoicesCount > 0) {
-    alertItems.push(
-      <Link key="overdue" href="/invoices?status=unpaid" className="group">
-        <Card className="h-full border-destructive/30 hover:bg-destructive/[0.03] transition-colors">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <Receipt className="h-4 w-4 text-destructive flex-shrink-0" />
-              <div>
-                <p className="font-medium text-sm">{t('overdue_invoices')}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('overdue_invoices_count', { count: summary.overdueInvoicesCount })}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
-
-  if (summary.unpaidInvoicesCount > 0 && summary.overdueInvoicesCount < summary.unpaidInvoicesCount) {
-    alertItems.push(
-      <Link key="unpaid" href="/invoices?status=unpaid" className="group">
-        <Card className="h-full border-warning/30 hover:bg-warning/[0.03] transition-colors">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <Receipt className="h-4 w-4 text-warning-foreground flex-shrink-0" />
-              <div>
-                <p className="font-medium text-sm">{t('unpaid_invoices')}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('unpaid_invoices_detail', {
-                    count: summary.unpaidInvoicesCount - summary.overdueInvoicesCount,
-                    amount: formatCurrency(summary.unpaidInvoicesTotal),
-                  })}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
-
-  if (summary.uncategorizedCount > 0) {
-    alertItems.push(
-      <Link key="transactions" href="/transactions" className="group">
-        <Card className="h-full border-warning/30 hover:bg-warning/[0.03] transition-colors">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <ArrowLeftRight className="h-4 w-4 text-warning-foreground flex-shrink-0" />
-              <div>
-                <p className="font-medium text-sm">{t('transactions')}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('uncategorized_count', { count: summary.uncategorizedCount })}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
-
-  if (summary.missingUnderlagCount > 0) {
-    alertItems.push(
-      <Link key="missing-underlag" href="/bookkeeping?missingUnderlag=true" className="group">
-        <Card className="h-full border-warning/30 hover:bg-warning/[0.03] transition-colors">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <FileWarning className="h-4 w-4 text-warning-foreground flex-shrink-0" />
-              <div>
-                <p className="font-medium text-sm">{t('missing_underlag')}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('missing_underlag_detail', { count: summary.missingUnderlagCount })}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
-
-  if (summary.staleUncategorizedCount > 0) {
-    alertItems.push(
-      <Link key="stale-transactions" href="/transactions" className="group">
-        <Card className="h-full border-destructive/30 hover:bg-destructive/[0.03] transition-colors">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <Clock className="h-4 w-4 text-destructive flex-shrink-0" />
-              <div>
-                <p className="font-medium text-sm">{t('stale_transactions')}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t('stale_transactions_detail', { count: summary.staleUncategorizedCount })}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
-
-  if (summary.expiringBankConnections && summary.expiringBankConnections.length > 0) {
-    const conn = summary.expiringBankConnections[0]
-    alertItems.push(
-      <Link key="bank-expiry" href="/settings/banking" className="group">
-        <Card className="h-full border-warning/30 hover:bg-warning/[0.03] transition-colors">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <Landmark className="h-4 w-4 text-warning-foreground flex-shrink-0" />
-              <div>
-                <p className="font-medium text-sm">{t('bank_consent_expiring')}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {conn.days_left === 1
-                    ? t('bank_consent_detail_one', { bank: conn.bank_name, days: conn.days_left })
-                    : t('bank_consent_detail_other', { bank: conn.bank_name, days: conn.days_left })}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
-
-  const MAX_VISIBLE_ALERTS = 3
-  const visibleAlerts = showAllAlerts ? alertItems : alertItems.slice(0, MAX_VISIBLE_ALERTS)
-  const hasMoreAlerts = alertItems.length > MAX_VISIBLE_ALERTS
-
-  const passedDeadlinesCount = summary.deadlines.filter(d => !d.is_completed && new Date(d.due_date) <= new Date()).length
-  const pendingReceiptsCount = summary.receiptQueue
-    ? summary.receiptQueue.pending_review_count + summary.receiptQueue.unmatched_receipts_count
-    : 0
-  const todoCount = summary.uncategorizedCount + summary.overdueInvoicesCount + pendingReceiptsCount + passedDeadlinesCount
+  // One number, one source: the worklist total plus expiring bank connections
+  // (dashboard-only, not a lib/worklist category). Must match AttGoraSection's
+  // header so the tile and the section never disagree.
+  const todoCount = worklist.total + (summary.expiringBankConnections?.length ?? 0)
 
   const slim = getBranding().navDensity === 'slim'
 
@@ -277,11 +141,12 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
         icon: Receipt,
       }
     }
-    if (summary.uncategorizedCount > 0) {
+    if (worklist.counts.book_transaction > 0) {
+      const n = worklist.counts.book_transaction
       return {
         href: '/transactions',
         title: 'Transaktioner att bokföra',
-        body: `${summary.uncategorizedCount} obokförd${summary.uncategorizedCount === 1 ? '' : 'a'} transaktion${summary.uncategorizedCount === 1 ? '' : 'er'}.`,
+        body: `${n} obokförd${n === 1 ? '' : 'a'} transaktion${n === 1 ? '' : 'er'}.`,
         cta: 'Bokför nu',
         tone: 'primary' as const,
         icon: ArrowLeftRight,
@@ -452,6 +317,15 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
         </div>
       </section>
 
+      {/* Att göra — the unified worklist. One section, every actionable item,
+          same counts as the sidebar badges (lib/worklist). */}
+      <AttGoraSection
+        worklist={worklist}
+        suggestedMatches={suggestedMatches}
+        expiringBankConnections={summary.expiringBankConnections}
+        staleUncategorizedCount={summary.staleUncategorizedCount}
+      />
+
       {/* Result — revenue / expenses (always visible) */}
       <section>
         <div className="grid md:grid-cols-2 gap-4">
@@ -486,27 +360,6 @@ export default function DashboardContent({ companyId, summary, onboardingProgres
           </Card>
         </div>
       </section>
-
-      {/* Att hantera — hidden in slim mode; the hero card already surfaces the top action */}
-      {!slim && alertItems.length > 0 && (
-        <section id="alerts-section">
-          <h2 className="font-display text-lg font-medium mb-4">{t('alerts_title')}</h2>
-          <div id="alerts-list" className="grid gap-4 md:grid-cols-2">
-            {visibleAlerts}
-          </div>
-          {hasMoreAlerts && (
-            <button
-              onClick={() => setShowAllAlerts(!showAllAlerts)}
-              aria-expanded={showAllAlerts}
-              aria-controls="alerts-list"
-              className="mt-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-            >
-              {showAllAlerts ? t('show_less') : t('show_all', { count: alertItems.length })}
-              <ChevronDown className={cn('h-3 w-3 transition-transform', showAllAlerts && 'rotate-180')} />
-            </button>
-          )}
-        </section>
-      )}
 
       {/* Upcoming deadlines */}
       {summary.deadlines && summary.deadlines.length > 0 && (

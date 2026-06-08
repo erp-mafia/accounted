@@ -6,11 +6,48 @@ import { useTranslations } from 'next-intl'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/info-tooltip'
 
 interface ConnectionRow {
   id: string
   status: string | null
   last_synced_at: string | null
+}
+
+const STALE_THRESHOLD_MS = 36 * 60 * 60 * 1000
+
+type ChipState =
+  | { kind: 'none' }
+  | { kind: 'attention'; count: number }
+  | { kind: 'stale'; mostRecent: string }
+  | { kind: 'healthy'; mostRecent: string | null }
+
+export function getChipState(rows: ConnectionRow[], now: number = Date.now()): ChipState {
+  if (rows.length === 0) return { kind: 'none' }
+
+  const needsAttention = rows.filter(
+    (r) => r.status === 'expired' || r.status === 'error',
+  )
+  if (needsAttention.length > 0) {
+    return { kind: 'attention', count: needsAttention.length }
+  }
+
+  const mostRecent = rows
+    .map((r) => r.last_synced_at)
+    .filter((s): s is string => Boolean(s))
+    .sort()
+    .pop()
+
+  if (mostRecent && now - new Date(mostRecent).getTime() > STALE_THRESHOLD_MS) {
+    return { kind: 'stale', mostRecent }
+  }
+
+  return { kind: 'healthy', mostRecent: mostRecent ?? null }
 }
 
 function useAgeFormatter() {
@@ -49,13 +86,13 @@ export default function BankSyncStatusChip() {
     }
   }, [company?.id])
 
-  if (!rows || rows.length === 0) return null
+  if (!rows) return null
 
-  const needsAttention = rows.filter(
-    (r) => r.status === 'expired' || r.status === 'error',
-  )
+  const state = getChipState(rows)
 
-  if (needsAttention.length > 0) {
+  if (state.kind === 'none') return null
+
+  if (state.kind === 'attention') {
     return (
       <Link
         href="/settings/banking"
@@ -63,32 +100,51 @@ export default function BankSyncStatusChip() {
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
-          {needsAttention.length === 1
+          {state.count === 1
             ? t('bank_sync_attention_one')
-            : t('bank_sync_attention_many', { count: needsAttention.length })}
+            : t('bank_sync_attention_many', { count: state.count })}
         </span>
       </Link>
     )
   }
 
-  const mostRecent = rows
-    .map((r) => r.last_synced_at)
-    .filter((s): s is string => Boolean(s))
-    .sort()
-    .pop()
+  if (state.kind === 'stale') {
+    return (
+      <Link
+        href="/settings/banking"
+        className="inline-flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-2.5 py-1 text-xs text-warning transition-colors hover:bg-warning/10"
+      >
+        <AlertTriangle className="h-3.5 w-3.5" />
+        <span>
+          {t('bank_sync_stale_warning')}
+          <span className="ml-1 tabular-nums opacity-70">({formatAge(state.mostRecent)})</span>
+        </span>
+      </Link>
+    )
+  }
 
+  // healthy
   return (
-    <div className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
-      <RefreshCw className="h-3.5 w-3.5" />
-      <span>
-        {t('bank_sync_auto_nightly')}
-        {mostRecent && (
-          <>
-            {t('bank_sync_last_separator')}
-            <span className="tabular-nums">{formatAge(mostRecent)}</span>
-          </>
-        )}
-      </span>
-    </div>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex cursor-help items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>
+              {t('bank_sync_auto_nightly')}
+              {state.mostRecent && (
+                <>
+                  {t('bank_sync_last_separator')}
+                  <span className="tabular-nums">{formatAge(state.mostRecent)}</span>
+                </>
+              )}
+            </span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-[320px]">
+          <div className="text-sm leading-relaxed">{t('bank_sync_latency_hint')}</div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }

@@ -26,7 +26,7 @@ import {
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -117,6 +117,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let bodyPaymentDate: string | undefined
     let exchangeRateDifference: number | undefined
     let bodyNotes: string | undefined
+    let customLines:
+      | Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description?: string }>
+      | undefined
     if (rawBody) {
       const parsed = MarkSupplierInvoicePaidSchema.safeParse(rawBody)
       if (!parsed.success) {
@@ -134,6 +137,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyPaymentDate = parsed.data.payment_date
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyNotes = parsed.data.notes
+      customLines = parsed.data.lines
     }
 
     const today = new Date().toISOString().split('T')[0]
@@ -165,7 +169,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
         is_credit_note, credited_invoice_id, payment_journal_entry_id,
         supplier:suppliers(id, name, supplier_type),
-        items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount)
+        items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate)
       `)
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -276,14 +280,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
     const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
 
-    // FX-required validation. Under accrual the registration JE used the
-    // invoice's exchange rate to compute subtotal_sek; the payment JE has to
-    // book any rate delta to 3960 / 7960 (BAS) or AP will carry a stranded
-    // 2440 balance after the bank line clears. The pitfall docs warn about
-    // this — enforce it.
+    // Route on the supplier invoice's actual booking state — if 2440 was
+    // posted at receipt, payment must clear 2440 regardless of the current
+    // accounting_method.
+    const siAlreadyBooked = !!(typed as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
+    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
+
+    // FX-required validation. Whenever the registration JE used the invoice's
+    // exchange rate to compute subtotal_sek (i.e. the SI was booked under
+    // accrual or migrated from accrual), the payment JE has to book any rate
+    // delta to 3960 / 7960 or AP will carry a stranded 2440 balance after the
+    // bank line clears. Gated on the booking state, not the current setting.
     if (
       typed.currency !== 'SEK' &&
-      accountingMethod === 'accrual' &&
+      !useCashEntry &&
       exchangeRateDifference === undefined
     ) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -328,7 +338,36 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Strict-mode: book the JE FIRST. Failure aborts before any SI mutation.
     let journalEntryId: string | null = null
     try {
-      if (accountingMethod === 'cash') {
+      if (customLines) {
+        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', ctx.log, {
+            requestId: ctx.requestId,
+            details: { totalDebit, totalCredit },
+          })
+        }
+        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, paymentDate)
+        if (!fiscalPeriodId) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
+            requestId: ctx.requestId,
+            details: { payment_date: paymentDate },
+          })
+        }
+        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
+        const desc = supplierRow?.name
+          ? `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}, ${supplierRow.name}`
+          : `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}`
+        const entry = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: paymentDate,
+          description: desc,
+          source_type: sourceType,
+          source_id: typed.id,
+          lines: customLines,
+        })
+        journalEntryId = entry?.id ?? null
+      } else if (useCashEntry) {
         const entry = await createSupplierInvoiceCashEntry(
           ctx.supabase,
           ctx.companyId!,

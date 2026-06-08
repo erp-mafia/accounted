@@ -13,7 +13,7 @@ If you've used [Stripe's API](https://docs.stripe.com/api), the shape will feel 
 All requests authenticate with a bearer token in the \`Authorization\` header:
 
 \`\`\`bash
-curl https://gnubok.app/api/v1/companies \\
+curl https://app.gnubok.se/api/v1/companies \\
   -H "Authorization: Bearer gnubok_sk_live_..."
 \`\`\`
 
@@ -29,7 +29,7 @@ Rate limit: 100 requests per minute per key, returned in \`X-RateLimit-*\` heade
 ## Base URL
 
 \`\`\`
-https://gnubok.app/api/v1
+https://app.gnubok.se/api/v1
 \`\`\`
 
 URLs include the company id explicitly:
@@ -42,7 +42,7 @@ POST /api/v1/companies/{companyId}/invoices
 A multi-company key can act on any company the underlying user is a member of — the URL is the source of truth, not a default. List the companies a key can access with:
 
 \`\`\`bash
-curl https://gnubok.app/api/v1/companies \\
+curl https://app.gnubok.se/api/v1/companies \\
   -H "Authorization: Bearer gnubok_sk_live_..."
 \`\`\`
 
@@ -84,7 +84,7 @@ Errors swap \`data\` for \`error\`:
     "message_en": "The selected period is locked.",
     "remediation": { "description": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.", "tool": "fiscal_periods.unlock" },
     "details": { "fiscal_period_id": "..." },
-    "docs_url": "https://gnubok.app/docs/api/errors#period_locked"
+    "docs_url": "https://app.gnubok.se/docs/api/errors#period_locked"
   },
   "meta": { "request_id": "req_...", "api_version": "${API_V1_VERSION}" }
 }

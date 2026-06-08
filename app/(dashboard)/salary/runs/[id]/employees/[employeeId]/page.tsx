@@ -35,6 +35,7 @@ const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
   sick_day15_plus: 'Sjuklön (dag 15+, Försäkringskassan)',
   vab: 'VAB (vård av sjukt barn)',
   parental_leave: 'Föräldraledighet',
+  unpaid_leave: 'Tjänstledighet utan lön',
   vacation: 'Semester',
   semesterersattning: 'Semesterersättning',
   traktamente_taxfree: 'Traktamente (skattefritt)',

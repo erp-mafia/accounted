@@ -1,12 +1,12 @@
-# gnubok
+# Accounted
 
 Open-source Swedish accounting software for sole traders (enskild firma) and limited companies (aktiebolag).
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
-## What is gnubok?
+## What is Accounted?
 
-gnubok implements double-entry bookkeeping compliant with Swedish accounting law (Bokforingslagen). It supports the BAS 2026 chart of accounts, handles VAT declarations (momsdeklaration), SIE import/export, and enforces 7-year document retention. Built for sole traders and limited companies operating in Sweden.
+Accounted implements double-entry bookkeeping compliant with Swedish accounting law (Bokforingslagen). It supports the BAS 2026 chart of accounts, handles VAT declarations (momsdeklaration), SIE import/export, and enforces 7-year document retention. Built for sole traders and limited companies operating in Sweden.
 
 ## Features
 
@@ -24,7 +24,7 @@ gnubok implements double-entry bookkeeping compliant with Swedish accounting law
 
 ```bash
 git clone https://github.com/erp-mafia/gnubok.git
-cd gnubok
+cd Accounted
 ./setup.sh              # Prompts for Supabase credentials, generates .env
 docker compose up -d
 ```

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
+import { isSaneDateString } from '@/lib/utils'
 
 // ============================================================
 // Shared primitives
@@ -10,6 +11,16 @@ const uuid = z.string().uuid()
 
 /** ISO date string (YYYY-MM-DD) */
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
+
+/**
+ * ISO date that must also be a real, in-range calendar date — not just the
+ * right shape. Backed by the shared `isSaneDateString` rule (also used by the
+ * transaction form) so a 6-digit year or impossible date can't slip through
+ * for user-entered dates. Use this over `isoDate` for free-text date input.
+ */
+const saneIsoDate = z
+  .string()
+  .refine(isSaneDateString, 'Invalid or out-of-range date (expected YYYY-MM-DD, year 1900–2100)')
 
 /** BAS account number — always a string of 4 digits */
 const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactly 4 digits')
@@ -208,12 +219,45 @@ export const CreateInvoiceSchema = z.object({
   // present (enforced via rot-rut-rules.validateInvoice in the API).
   deduction_personnummer: z.string().max(20).optional(),
   deduction_housing_designation: z.string().max(128).optional(),
+  // When true, save as an unnumbered draft: skip F-series allocation and the
+  // invoice.created event until the user finalizes via POST /invoices/{id}/finalize
+  // ("Granska och skapa"). An unnumbered draft is not yet an issued faktura
+  // (ML 17 kap 24§), so it can be hard-deleted with no gap in the number series.
+  save_as_draft: z.boolean().optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,
   reason: z.string().optional(),
+})
+
+// Self-billing received (mottagen självfaktura, ML 17 kap 15§). The customer
+// issued the invoice on our behalf; for us it is a sale. We store the
+// counterparty's number in external_invoice_number and never assign one from
+// our own series. No ROT/RUT (that is a B2C, own-issued concept), so the item
+// schema is the lean revenue-only shape — vat_rate is constrained to the legal
+// Swedish set so the booked output VAT is always reportable.
+export const SelfBillingInvoiceItemSchema = z.object({
+  description: z.string().min(1, 'Item description is required'),
+  quantity: z.number().positive('Quantity must be positive'),
+  unit: z.string().min(1, 'Unit is required').default('st'),
+  unit_price: z.number(),
+  vat_rate: z
+    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+    .optional(),
+})
+
+export const CreateSelfBillingInvoiceSchema = z.object({
+  customer_id: uuid,
+  external_invoice_number: z.string().min(1, 'External invoice number is required').max(64),
+  self_billing_agreement_ref: z.string().max(128).optional(),
+  invoice_date: isoDate,
+  received_date: isoDate,
+  due_date: isoDate,
+  currency: CurrencySchema,
+  notes: z.string().optional(),
+  items: z.array(SelfBillingInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
 // ============================================================
@@ -355,6 +399,16 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   // currency rounding, or POS receipts where supplier-side rounding makes the
   // VAT off by öre.
   vat_amount: z.number().min(0).optional(),
+  // Self-assessed VAT rate for omvänd skattskyldighet (reverse charge). The
+  // supplier charges no VAT (vat_rate stays 0); this is the Swedish statutory
+  // rate the buyer self-assesses at — 25% huvudregel default, 12%/6% for
+  // reduced-rated services (ML 6 kap 34 §). Must be a statutory rate.
+  reverse_charge_rate: z
+    .number()
+    .refine((r) => r === 0.06 || r === 0.12 || r === 0.25, {
+      message: 'reverse_charge_rate must be 0.06, 0.12, or 0.25',
+    })
+    .optional(),
   vat_code: z.string().optional(),
   quantity: z.number().optional(),
   unit: z.string().optional(),
@@ -402,6 +456,19 @@ export const MarkSupplierInvoicePaidSchema = z.object({
   exchange_rate_difference: z.number().optional(),
   notes: z.string().optional(),
   force: z.boolean().optional(),
+  // Which BAS account to credit for the payment. Defaults to 1930 to preserve
+  // the historical behaviour for MCP / agent callers that don't supply it.
+  payment_account: accountNumber.optional(),
+  // Optional user-edited journal entry rows. When present they override the
+  // default 2440-clearing / cash booking. Server validates balance and posts
+  // via createJournalEntry directly. source_type still derives from the
+  // routing decision so downstream payment-sync keeps working.
+  lines: z.array(z.object({
+    account_number: accountNumber,
+    debit_amount: nonNegativeAmount.default(0),
+    credit_amount: nonNegativeAmount.default(0),
+    line_description: z.string().optional(),
+  })).min(2).optional(),
 })
 
 export const UpdateSupplierInvoiceSchema = z.object({
@@ -445,9 +512,36 @@ export const CorrectJournalEntrySchema = z.object({
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
 })
 
+/**
+ * Move a posted verifikation to a different date (and thereby fiscal period)
+ * without changing its lines — fixes a booking entered with the wrong
+ * date/year. The corrected lines are copied server-side from the original.
+ */
+export const RecordateJournalEntrySchema = z.object({
+  new_entry_date: isoDate,
+})
+
 // ============================================================
 // Transaction schemas
 // ============================================================
+
+/**
+ * Manual bank-transaction creation (the "Lägg till transaktion" form).
+ *
+ * The authoritative server-side boundary for that flow. Historically the form
+ * inserted straight into Supabase from the browser with only
+ * `z.string().min(1)` on the date, which let a corrupt 6-digit year through and
+ * crashed the page on render. The form reuses `isSaneDateString` (via this
+ * schema's `saneIsoDate`) so the date rule is single-sourced across layers.
+ */
+export const CreateTransactionSchema = z.object({
+  date: saneIsoDate,
+  description: z.string().min(1, 'Description is required').max(500),
+  amount: z.number().refine((n) => n !== 0, 'Amount must not be zero'),
+  currency: CurrencySchema,
+  category: TransactionCategorySchema.optional(),
+  notes: z.string().max(2000).optional(),
+})
 
 export const CategorizeTransactionSchema = z.object({
   is_business: z.boolean(),
@@ -466,6 +560,15 @@ export const BookTransactionSchema = z.object({
   entry_date: isoDate,
   description: z.string().min(1, 'Description is required'),
   lines: z.array(CreateJournalEntryLineSchema).min(1, 'At least one line is required'),
+})
+
+/**
+ * Edit a bank transaction's title (description). Only the working label —
+ * gated server-side to unbooked, unmatched rows. Trimmed; whitespace-only is
+ * rejected by min(1). Passing the bank original restores the "not edited" tag.
+ */
+export const UpdateTransactionTitleSchema = z.object({
+  description: z.string().trim().min(1, 'Title cannot be empty').max(500),
 })
 
 export const BookInboxItemDirectlySchema = z.object({
@@ -492,6 +595,28 @@ export const MatchInvoiceSchema = z
     // specific, user-seen duplicate so an automation can't sweep through
     // force=true to bypass the guard without ever consulting the candidate.
     expected_journal_entry_id: uuid.optional(),
+    // Optional user-edited journal entry lines. When present they override
+    // the default clearing/cash booking — the route validates balance and
+    // posts via createJournalEntry directly. Source_type is still set from
+    // the routing decision (invoice_paid vs invoice_cash_payment) so
+    // downstream payment-sync continues to work.
+    lines: z.array(z.object({
+      account_number: accountNumber,
+      debit_amount: nonNegativeAmount.default(0),
+      credit_amount: nonNegativeAmount.default(0),
+      line_description: z.string().optional(),
+    })).min(2).optional(),
+    // Optional caller-supplied SEK-per-invoice-currency rate for cross-currency
+    // settlement. Used when the Riksbanken lookup returns nothing (rate not
+    // published for that date) — the dialog surfaces an input so the user can
+    // type the rate from their bank statement. Ignored when tx.currency ===
+    // invoice.currency. The .max() is a sanity ceiling against pasted garbage /
+    // scientific-notation input silently corrupting the FX-diff posting and
+    // invoice_payments.amount — no supported currency's SEK rate approaches it
+    // (USD~10.5, EUR~11.5, GBP~13.5). It is a guard rail, not a precise band;
+    // the dialog's live preview (paid_in_invoice_currency + FX gain/loss) is
+    // what catches a plausible-but-wrong decimal-shift typo before confirm.
+    manual_exchange_rate: z.number().positive().max(100000).optional(),
   })
   .refine((v) => !v.force || !!v.expected_journal_entry_id, {
     message: 'expected_journal_entry_id is required when force=true',
@@ -507,6 +632,147 @@ export const LinkInvoiceToVoucherSchema = z.object({
   journal_entry_id: uuid,
   notes: z.string().max(2000).optional(),
 })
+
+/**
+ * Supplier-invoice mirror: link an existing posted verifikat as payment for a
+ * supplier invoice. No new JE — only a supplier_invoice_payments row pointing
+ * at the supplied journal_entry_id, plus the invoice's paid/remaining advance.
+ */
+export const LinkSupplierInvoiceToVoucherSchema = z.object({
+  journal_entry_id: uuid,
+  notes: z.string().max(2000).optional(),
+})
+
+/**
+ * Bulk-book N bank transactions on the same date into one combined verifikat
+ * (samlingsverifikation per BFL 5 kap 6§). Two flows multiplexed by which
+ * field is set:
+ *
+ *   - `existing_journal_entry_id`: link the txs to an already-posted voucher
+ *     (no new JE created). The voucher's 19xx net must equal the tx sum.
+ *
+ *   - `template_id` + `mode` + `entry_description`: build a new verifikat
+ *     by applying the booking template to each tx. The route does the ratio
+ *     expansion (one_line_per_tx OR sum_per_account) and passes the final
+ *     lines to the RPC.
+ *
+ * Exactly one of the two paths must be set — enforced by superRefine.
+ */
+export const BulkBookSchema = z
+  .object({
+    tx_ids: z
+      .array(uuid)
+      .min(1, 'At least one transaction is required')
+      .max(200, 'At most 200 transactions per batch'),
+    existing_journal_entry_id: uuid.optional(),
+    template_id: uuid.optional(),
+    mode: z.enum(['one_line_per_tx', 'sum_per_account']).optional(),
+    entry_description: z.string().min(1).max(500).optional(),
+    // PR #608: manual lines path. Mutually exclusive with template_id /
+    // existing_journal_entry_id. The route passes these straight through
+    // to the RPC's p_new_entry.lines.
+    manual_lines: z
+      .array(
+        z.object({
+          account_number: accountNumber,
+          // Bound at 99,999,999 SEK per line (compliance-swarm V4.5).
+          // Real-world max is in the millions; an 8-digit ceiling catches
+          // typos (1000000 mistyped as 10000000000) before they hit the
+          // RPC, without blocking legitimate large bookings.
+          debit_amount: nonNegativeAmount.max(99_999_999, 'Line amount exceeds maximum'),
+          credit_amount: nonNegativeAmount.max(99_999_999, 'Line amount exceeds maximum'),
+          currency: z.string().min(3).max(3).default('SEK'),
+          line_description: z.string().max(200).optional(),
+        })
+      )
+      .min(2, 'A verifikat needs at least two lines')
+      .max(200)
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasExisting = !!data.existing_journal_entry_id
+    const hasTemplate = !!data.template_id
+    const hasManual = !!data.manual_lines
+    const paths = [hasExisting, hasTemplate, hasManual].filter(Boolean).length
+    if (paths !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Provide exactly one of: existing_journal_entry_id (link), template_id (template), or manual_lines (manual)',
+        path: ['existing_journal_entry_id'],
+      })
+      return
+    }
+    if (hasTemplate) {
+      if (!data.mode) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'mode is required when template_id is set',
+          path: ['mode'],
+        })
+      }
+      if (!data.entry_description) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'entry_description is required when template_id is set',
+          path: ['entry_description'],
+        })
+      }
+    }
+    if (hasManual && !data.entry_description) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'entry_description is required when manual_lines is set',
+        path: ['entry_description'],
+      })
+    }
+  })
+
+/**
+ * Allocate one bank transaction across N customer OR N supplier invoices.
+ * Backed by the match_batch_allocate PL/pgSQL RPC, which builds a single
+ * combined verifikat (samlingsverifikation) and inserts N payment rows.
+ */
+export const MatchBatchSchema = z
+  .object({
+    allocations: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('customer_invoice'),
+            invoice_id: uuid,
+            // Strictly positive — zero or negative is rejected at the schema
+            // layer (PR #603 review) so the RPC's BATCH_INVALID_AMOUNT path
+            // is only reachable from non-HTTP callers.
+            amount: z.number().positive('Allocation amount must be greater than 0'),
+          }),
+          z.object({
+            kind: z.literal('supplier_invoice'),
+            supplier_invoice_id: uuid,
+            amount: z.number().positive('Allocation amount must be greater than 0'),
+          }),
+        ]),
+      )
+      .min(1, 'At least one allocation is required')
+      // Cap at 100 to prevent DoS via unbounded FOR UPDATE locks in the RPC
+      // (PR #603 compliance review — OWASP V4.2). Domain-appropriate ceiling:
+      // a real samlingsverifikat rarely covers more than a few dozen invoices.
+      .max(100, 'At most 100 allocations per batch'),
+  })
+  .superRefine((data, ctx) => {
+    // Reject mixed customer + supplier in a single batch — semantically a
+    // single bank transfer settles invoices on one side. The RPC also guards
+    // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
+    // layer gives a cleaner 400 with a per-field path.
+    const kinds = new Set(data.allocations.map((a) => a.kind))
+    if (kinds.size > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['allocations'],
+        message: 'Allocations cannot mix customer_invoice and supplier_invoice kinds',
+      })
+    }
+  })
 
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
@@ -527,6 +793,15 @@ export const CreateTransactionFromDocumentSchema = z.object({
 
 export const MatchSupplierInvoiceSchema = z.object({
   supplier_invoice_id: uuid,
+  // Same purpose as MatchInvoiceSchema.lines — user-edited rows override
+  // the default 2440-clearing / cash booking. Route validates balance and
+  // posts via createJournalEntry; source_type still derives from routing.
+  lines: z.array(z.object({
+    account_number: accountNumber,
+    debit_amount: nonNegativeAmount.default(0),
+    credit_amount: nonNegativeAmount.default(0),
+    line_description: z.string().optional(),
+  })).min(2).optional(),
 })
 
 
@@ -749,10 +1024,27 @@ export const UpdateAccountSchema = z.object({
 export const BankLinkSchema = z.object({
   transaction_id: uuid,
   journal_entry_id: uuid,
+  // Settlement account being reconciled. The voucher must have a line on this
+  // account and the transaction must belong to it. Defaults to '1930' in the
+  // route for back-compat.
+  account_number: z
+    .string()
+    .regex(/^[0-9]{4}$/, 'Kontonummer måste vara 4 siffror')
+    .optional(),
 })
 
 export const BankUnlinkSchema = z.object({
   transaction_id: uuid,
+})
+
+/**
+ * Re-tag a mis-typed bank-account opening balance (a manual/import voucher that
+ * is really an ingående balans) as source_type='opening_balance' so bank
+ * reconciliation excludes it from the period movement. Routed to the
+ * mark_entry_as_opening_balance SECURITY DEFINER RPC, which enforces the rest.
+ */
+export const MarkOpeningBalanceSchema = z.object({
+  journal_entry_id: uuid,
 })
 
 export const RunReconciliationSchema = z.object({
@@ -1202,6 +1494,7 @@ export const AbsenceTypeSchema = z.enum([
   'pregnancy',
   'care_relative',
   'study',
+  'unpaid_leave',
   'other_leave',
 ])
 
@@ -1445,6 +1738,11 @@ const SALARY_OVERRIDE_MAX = 10_000_000
 
 export const SalaryEmployeeOverrideSchema = z
   .object({
+    // Per-run monthly salary for this employee, editable while the run is a
+    // draft. 0 is allowed (an intentional nollkörning). This is NOT a review
+    // override — it sets the base the engine uses for this month only and does
+    // not require a reason. The route gates this field to `draft` status.
+    monthly_salary: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).optional(),
     tax_withheld_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
     avgifter_amount_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
     avgifter_basis_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),

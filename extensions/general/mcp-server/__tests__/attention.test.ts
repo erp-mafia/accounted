@@ -56,7 +56,7 @@ function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: nu
   enqueue({ data: null })
 }
 
-describe('gnubok://attention', () => {
+describe('Accounted://attention', () => {
   it('returns empty summary for a brand-new company', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueEmpty(enqueue)

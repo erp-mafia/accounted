@@ -1,4 +1,4 @@
-# Contributing to gnubok
+# Contributing to Accounted
 
 Thank you for your interest in contributing to gnubok. This guide covers the development workflow, coding standards, and submission process.
 

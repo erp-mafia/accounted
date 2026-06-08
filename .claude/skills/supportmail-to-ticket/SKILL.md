@@ -1,11 +1,11 @@
 ---
 name: supportmail-to-ticket
-description: "Triage Gnubok customer support emails and turn them into GitHub issues in the erp-mafia/gnubok repo. Use this skill whenever the user invokes /supportmail-to-ticket (with or without a number argument), or asks to 'triage support mail', 'turn support emails into tickets', 'process gnubok support', 'check the support inbox and file issues', or any similar phrasing involving the Gnubok support mailbox. Also trigger this skill if the user mentions [gnubok support] emails and wants them converted into actionable work — even if they don't use the exact slash command."
+description: "Triage Accounted customer support emails and turn them into GitHub issues in the erp-mafia/gnubok repo. Use this skill whenever the user invokes /supportmail-to-ticket (with or without a number argument), or asks to 'triage support mail', 'turn support emails into tickets', 'process Accounted support', 'check the support inbox and file issues', or any similar phrasing involving the Accounted support mailbox. Also trigger this skill if the user mentions [Accounted support] emails and wants them converted into actionable work — even if they don't use the exact slash command."
 ---
 
 # supportmail-to-ticket
 
-Triage `[gnubok support]` emails from Gmail, cross-reference them against the local erp-base codebase, and draft GitHub issues for the `erp-mafia/gnubok` repo — with inline user approval before anything gets created.
+Triage `[Accounted support]` emails from Gmail, cross-reference them against the local erp-base codebase, and draft GitHub issues for the `erp-mafia/gnubok` repo — with inline user approval before anything gets created.
 
 ## Invocation
 
@@ -15,7 +15,7 @@ Primary form:
 /supportmail-to-ticket [N]
 ```
 
-- `N` = number of most recent `[gnubok support]` threads to triage. Optional. Default: `3`.
+- `N` = number of most recent `[Accounted support]` threads to triage. Optional. Default: `3`.
 - Examples: `/supportmail-to-ticket`, `/supportmail-to-ticket 10`, `/supportmail-to-ticket 1`
 
 If the user phrases the request in natural language ("triage the last 5 support mails", "check the inbox"), extract the number if present, otherwise use `3`.
@@ -36,7 +36,7 @@ Follow these five phases in order. Do not skip phase 4 (approval).
 
 Call Gmail `search_threads` with:
 
-- `query`: `subject:"[gnubok support]"`
+- `query`: `subject:"[Accounted support]"`
 - `pageSize`: the requested N (default 3)
 
 For each returned thread, call `get_thread` with `messageFormat: FULL_CONTENT` to retrieve the full body. Extract per thread:
@@ -113,7 +113,7 @@ The goal: strip anything that identifies the **specific customer or their employ
 - **Replace personal first and last names with `x`**. Example: *"Hey this is amazing. My name is Emil and I do bla bla"* → *"Hey this is amazing. My name is x and I do bla bla"*. Handles greetings (*"Hej Anna,"* → *"Hej x,"*) and signatures (*"/Lars Andersson"* → *"/x"*).
 - **Replace the customer's employer / own company name with `x`**, wherever it appears — body text, signatures, "jag jobbar på …", "vi på …", org numbers attributed to the sender, `@company.com` email domains. Also redact names of their direct clients or other companies they identify themselves through. Example: *"Jag jobbar på Capnos och behöver ta bort Capnos"* → *"Jag jobbar på x och behöver ta bort x"*.
 - **Do NOT redact** (these are not identifying — they're context):
-  - **gnubok itself**
+  - **Accounted itself**
   - **Swedish authorities / standard bodies**: Skatteverket, Bolagsverket, Försäkringskassan, Bankgirot, BFN
   - **Accounting / ERP providers and competitors**: Fortnox, Visma, Bokio, SpeedLedger, BL/Björn Lundén, Briox, etc.
   - **Banks by name**: Swedbank, SEB, Handelsbanken, Nordea, etc. (unless clearly the customer's *own* company — rare)
@@ -221,7 +221,7 @@ gh issue comment <issue-number> \
 - If `gh issue create` fails with an error mentioning an unknown label (exit code non-zero, stderr contains `"could not add label"` or `"not found"`), retry the command without that `--label` flag and tell the user which labels are missing so they can create them manually — do **not** attempt to create labels automatically.
 - You can check available labels once at the start of phase 5 with: `gh label list --repo erp-mafia/gnubok --limit 100 --json name` — useful if multiple label errors happen in a row.
 
-**Project board**: Issues are created in the `erp-mafia/gnubok` repo. The Gnubok project board (`erp-mafia/projects/...`) aggregates issues but adding to a project via `gh` requires `gh project item-add` with the project number and GraphQL scopes that may not be in the current auth token. After creating issues, output the project URL once and remind the user they may want to drag the new issues onto the board. Example wording: *"Issues created. If you want them on the Gnubok project board, you'll need to add them manually at https://github.com/orgs/erp-mafia/projects — or run `gh project item-add` if you have project scopes on your token."*
+**Project board**: Issues are created in the `erp-mafia/gnubok` repo. The Accounted project board (`erp-mafia/projects/...`) aggregates issues but adding to a project via `gh` requires `gh project item-add` with the project number and GraphQL scopes that may not be in the current auth token. After creating issues, output the project URL once and remind the user they may want to drag the new issues onto the board. Example wording: *"Issues created. If you want them on the Accounted project board, you'll need to add them manually at https://github.com/orgs/erp-mafia/projects — or run `gh project item-add` if you have project scopes on your token."*
 
 ### Phase 6 — Summary
 

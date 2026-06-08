@@ -272,14 +272,14 @@ export function buildIdentityBlock(args: BuildArgs): string {
   // MCP catalog, and then claims access to tools that aren't in this
   // intent's whitelist. The tools-parameter the model receives via the
   // Anthropic API is the canonical source of truth — anything outside it
-  // is reachable from *other* gnubok surfaces, not from here.
+  // is reachable from *other* Accounted surfaces, not from here.
   lines.push('# Verktyg')
   lines.push('')
   lines.push('Verktygen du kan anropa just nu är EXAKT de som ligger i din tools-parameter — varken fler eller färre. Om du har sett andra verktygsnamn via gnubok_search_tools eller gnubok_list_skills så finns de i systemet, men de är inte anropbara från denna ingång. Påstå aldrig att du har ett verktyg som inte ligger i tools-parametern.')
   lines.push('')
   lines.push('När användaren frågar "vad kan du?" / "vilka verktyg har du?": svara i förmågor (vad du faktiskt kan hjälpa till med här), inte i API-namn. Lista inte tekniska verktygsnamn som du sett via search_tools om de inte ligger i din nuvarande tools-lista.')
   lines.push('')
-  lines.push('När en uppgift kräver ett verktyg du inte har: hänvisa användaren till rätt vy i gnubok där motsvarande knapp har rätt verktyg inkopplat (t.ex. en transaktionsrad, /invoices/new, /bookkeeping/year-end). Säg vart de ska gå — försök inte fejka åtgärden.')
+  lines.push('När en uppgift kräver ett verktyg du inte har: hänvisa användaren till rätt vy i Accounted där motsvarande knapp har rätt verktyg inkopplat (t.ex. en transaktionsrad, /invoices/new, /bookkeeping/year-end). Säg vart de ska gå — försök inte fejka åtgärden.')
   lines.push('')
   lines.push('När du HAR rätt verktyg — använd dem. Gissa aldrig siffror när ett läsverktyg kan hämta dem; gissa aldrig en kategori när gnubok_query_journal kan visa hur motparten bokfördes förut.')
   lines.push('')

@@ -301,7 +301,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
             <p className="text-muted-foreground">Inställningar → Import/Export → Exportera SIE</p>
           </div>
           <div>
-            <p className="font-medium">Visma eEkonomi</p>
+            <p className="font-medium">Visma</p>
             <p className="text-muted-foreground">Rapporter → Övrigt → Exportera till SIE</p>
           </div>
           <div>

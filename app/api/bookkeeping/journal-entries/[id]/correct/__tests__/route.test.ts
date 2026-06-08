@@ -5,6 +5,10 @@ import {
   createMockRouteParams,
   makeJournalEntry,
 } from '@/tests/helpers'
+import {
+  JournalEntryNotBalancedError,
+  CannotCorrectNonPostedError,
+} from '@/lib/bookkeeping/errors'
 
 const mockCreateClient = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
@@ -112,10 +116,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines)
   })
 
-  it('returns 400 when correctEntry throws for unbalanced lines', async () => {
-    mockCorrectEntry.mockRejectedValue(
-      new Error('Corrected entry is not balanced: debits (1000) != credits (500)')
-    )
+  it('maps an unbalanced-correction engine error to the canonical envelope (400)', async () => {
+    mockCorrectEntry.mockRejectedValue(new JournalEntryNotBalancedError(1000, 500, 'correction'))
 
     const lines = [
       { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
@@ -127,14 +129,14 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
       body: { lines },
     })
     const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('not balanced')
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_BALANCED')
   })
 
-  it('returns 400 when entry is not found or not posted', async () => {
-    mockCorrectEntry.mockRejectedValue(new Error('Can only correct posted entries'))
+  it('maps a not-posted engine error to the canonical envelope (400)', async () => {
+    mockCorrectEntry.mockRejectedValue(new CannotCorrectNonPostedError('draft'))
 
     const lines = [
       { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
@@ -146,9 +148,9 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
       body: { lines },
     })
     const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Can only correct posted entries')
+    expect(body.error.code).toBe('CANNOT_CORRECT_NON_POSTED')
   })
 })

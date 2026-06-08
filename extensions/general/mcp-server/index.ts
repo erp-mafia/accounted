@@ -1,5 +1,6 @@
 import type { Extension } from '@/lib/extensions/types'
 import { handleMcpRequest, tools as mcpTools } from './server'
+import { isForbiddenOrigin, forbiddenOriginResponse } from './origin-guard'
 import { registerAgentTools } from '@/lib/agent/tools/registry'
 import type { AgentTool } from '@/lib/agent/tools/types'
 
@@ -24,14 +25,19 @@ export const mcpServerExtension: Extension = {
       method: 'POST',
       path: '/mcp',
       skipAuth: true, // Auth handled via API key in the handler
-      handler: handleMcpRequest,
+      handler: async (request: Request) => {
+        // MCP spec MUST: validate Origin (DNS-rebinding defense). See origin-guard.ts.
+        if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
+        return handleMcpRequest(request)
+      },
     },
     // MCP Streamable HTTP also needs GET for SSE and DELETE for session termination
     {
       method: 'GET',
       path: '/mcp',
       skipAuth: true,
-      handler: async () => {
+      handler: async (request: Request) => {
+        if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
         return new Response('Authorization required', {
           status: 401,
@@ -45,7 +51,11 @@ export const mcpServerExtension: Extension = {
       method: 'DELETE',
       path: '/mcp',
       skipAuth: true,
-      handler: async () => new Response(null, { status: 204 }), // Stateless — no sessions to terminate
+      // Stateless — no sessions to terminate
+      handler: async (request: Request) => {
+        if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
+        return new Response(null, { status: 204 })
+      },
     },
   ],
 

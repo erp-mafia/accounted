@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger } from '@/lib/logger'
@@ -43,12 +43,20 @@ export async function POST(request: Request) {
   })
   if (!rl.ok) return rl.response!
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized', requestId }, { status: 401 })
-  }
+  // Can't use withRouteContext (see above — no company yet), so call requireAuth
+  // directly: the documented stopgap that still enforces MFA. A no-op for the
+  // anonymous users this route serves (they have no second factor), but keeps
+  // the route on the same auth path as the rest of the API.
+  //
+  // GDPR Art.32 compensating controls for this anonymous, low-auth write path:
+  // (1) anonymous-only — authenticated users are rejected below (403); (2) the
+  // /24 rate limit above (5/h); (3) all seeded data is synthetic demo content
+  // (fabricated names, example.com emails, documentation-reserved org numbers),
+  // not real personal data; (4) writes are scoped to the caller's own freshly
+  // created sandbox company, RLS-isolated from every other tenant.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { user, supabase } = auth
 
   if (!user.is_anonymous) {
     return NextResponse.json(
@@ -467,7 +475,7 @@ export async function POST(request: Request) {
     if (jelError) throw jelError
 
     // 11. Create transactions
-    const { error: txError } = await supabase
+    const { data: txRows, error: txError } = await supabase
       .from('transactions')
       .insert([
         // Categorized expenses
@@ -496,7 +504,12 @@ export async function POST(request: Request) {
           company_id: companyId,
           date: toDateStr(fiveDaysAgo),
           description: 'SJ BILJETT',
-          amount: -2500,
+          // > 4 000 kr categorized business expense with no attached underlag,
+          // so gnubok_vat_close_check surfaces a non-empty blocker list.
+          // (BFL 5 kap 6–7§ require every affärshändelse to be documented with
+          // underlag; the 4 000 kr cut-off is the tool's own high-value
+          // heuristic, not a statutory threshold.)
+          amount: -4500,
           category: 'expense_travel',
           is_business: true,
           merchant_name: 'SJ',
@@ -553,8 +566,16 @@ export async function POST(request: Request) {
           is_business: null,
         },
       ])
+      .select('id, description')
 
     if (txError) throw txError
+
+    // Lookup so the pre-staged categorize_transaction operation below can
+    // reference a real, uncategorized transaction by id (descriptions are
+    // unique in this seed set).
+    const txMap = Object.fromEntries(
+      (txRows ?? []).map(t => [t.description as string, t.id as string])
+    )
 
     // 12. Create deadlines
     const momsDeadline = new Date(today)
@@ -764,10 +785,55 @@ export async function POST(request: Request) {
     // top-up path all use the same helper).
     await ensureSandboxAgentProfile(supabase, companyId)
 
-    // 16. Pre-staged pending_operations so /pending isn't empty.
+    // 16. Inbox item backing the pre-staged supplier-invoice approval below.
+    // commitCreateSupplierInvoiceFromInbox does an idempotency + FK lookup
+    // against invoice_inbox_items by inbox_item_id before it creates anything,
+    // so the "Godkänn" path can only succeed if a real inbox row exists.
+    // status is constrained to 'received' | 'error' (migration 20260504180000).
+    const { data: inboxRow, error: inboxError } = await supabase
+      .from('invoice_inbox_items')
+      .insert({
+        user_id: userId,
+        company_id: companyId,
+        status: 'received',
+        source: 'upload',
+        matched_supplier_id: supplierMap['Demokafé AB'],
+        extracted_data: {
+          supplier: { name: 'Demokafé AB' },
+          invoice: {
+            invoiceNumber: 'INKOMMANDE-2026-001',
+            invoiceDate: toDateStr(fiveDaysAgo),
+            dueDate: toDateStr(sevenDaysFromNow),
+            currency: 'SEK',
+            vatTreatment: 'reduced_12',
+          },
+          totals: { subtotal: 240, vat: 28.80, total: 268.80 },
+          lineItems: [
+            {
+              description: 'Kundmöte Demokafé (representation)',
+              quantity: 1,
+              unit: 'st',
+              unit_price: 240,
+              line_total: 240,
+              account_number: '5810',
+              vat_rate: 12,
+              vat_amount: 28.80,
+            },
+          ],
+        },
+      })
+      .select('id')
+      .single()
+
+    if (inboxError) throw inboxError
+
+    // 17. Pre-staged pending_operations so /pending isn't empty.
     // These are the kind of operation the AI agent would stage; pre-seeded
     // here so the user can see the approval queue UI (preview, period
-    // status, risk level) without having to invoke the disabled AI.
+    // status, risk level) without having to invoke the disabled AI. Each
+    // params blob must be executor-complete — the commit executors in
+    // lib/pending-operations/commit.ts validate required fields on "Godkänn",
+    // so a display-only preview with a hollow params object fails to save.
     // actor_type='agent_chat' + risk_level on the row itself is required by
     // pending_operations_chat_insert (the only RLS policy that lets a
     // user-scoped client INSERT into this table).
@@ -786,14 +852,37 @@ export async function POST(request: Request) {
           // of colliding with the Demokafé '88245' already booked above
           // (BFL 5 kap — each affärshändelse must be recorded exactly once).
           title: 'Registrera leverantörsfaktura — Demokafé (representation, nytt underlag)',
+          // Mirrors what gnubok_create_supplier_invoice_from_inbox would stage:
+          // every field commitCreateSupplierInvoiceFromInbox requires
+          // (inbox_item_id, supplier_id, supplier_invoice_number, invoice_date,
+          // finite subtotal/vat_amount/total, and a non-empty items array).
           params: {
+            inbox_item_id: inboxRow.id,
             supplier_id: supplierMap['Demokafé AB'],
+            document_id: null,
             supplier_invoice_number: 'INKOMMANDE-2026-001',
             invoice_date: toDateStr(fiveDaysAgo),
             due_date: toDateStr(sevenDaysFromNow),
-            total: 268.80,
+            currency: 'SEK',
+            exchange_rate: null,
+            vat_treatment: 'reduced_12',
+            subtotal: 240,
             vat_amount: 28.80,
-            account_number: '5810',
+            total: 268.80,
+            notes: 'Representation – kundmöte (demo)',
+            items: [
+              {
+                line_number: 1,
+                description: 'Kundmöte Demokafé (representation)',
+                quantity: 1,
+                unit: 'st',
+                unit_price: 240,
+                line_total: 240,
+                account_number: '5810',
+                vat_rate: 12,
+                vat_amount: 28.80,
+              },
+            ],
           },
           preview_data: {
             // Representation @ 12% VAT (café meal), 240 SEK excl. VAT for
@@ -816,9 +905,13 @@ export async function POST(request: Request) {
           actor_type: 'agent_chat',
           risk_level: 'low',
           title: 'Bokför insättning — bankgiro',
+          // commitCategorizeTransaction needs a real uncategorized
+          // transaction_id + a category that resolves to an account mapping.
+          // income_services → 3001 (Försäljning tjänster 25%), matching the
+          // preview's 1930 / 2611 / 3001 split for the 1 200 kr deposit.
           params: {
-            account_number: '3001',
-            is_business: true,
+            transaction_id: txMap['INSÄTTNING BANKGIRO'],
+            category: 'income_services',
             vat_treatment: 'standard_25',
           },
           preview_data: {

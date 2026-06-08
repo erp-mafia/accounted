@@ -22,7 +22,7 @@ import { formatCurrency } from '@/lib/utils'
 // Reject is always one-click.
 //
 // The card posts to the existing /api/pending-operations/<id>/{commit,reject}
-// endpoints — same surface the gnubok "Förslag" page uses, so there is
+// endpoints — same surface the Accounted "Förslag" page uses, so there is
 // exactly one approval source of record.
 //
 // Structured preview: when the staged envelope carries a preview object, we
@@ -228,7 +228,7 @@ export default function ApprovalCard({
       }
     }
     // The server's `message` field (e.g. "Operation staged for review …
-    // Open the gnubok web app to approve or reject it.") was written for
+    // Open the Accounted web app to approve or reject it.") was written for
     // MCP clients without an inline approval surface. Inside the in-app
     // chat it's redundant noise — the agent already narrated the why
     // above the card. We keep it accessible via aria-description for

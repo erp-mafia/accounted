@@ -256,6 +256,10 @@ export interface CompanySettings {
    */
   default_voucher_series_per_source_type: Partial<Record<JournalEntrySourceType, string>>
 
+  // Most recently picked BAS account for supplier invoice payments — used to
+  // default the mark-paid dialog so repeat payments don't force re-picking.
+  last_supplier_payment_account: string | null
+
   // Invoice PDF settings
   ore_rounding: boolean
   invoice_show_ocr: boolean
@@ -398,9 +402,22 @@ export interface Transaction {
   bank_connection_id: string | null
   external_id: string | null  // For deduplication
 
+  // The cash account (cash_accounts row) this transaction settled on. Drives
+  // per-account bank reconciliation isolation and the correct bank leg when
+  // booking. Null on legacy/unresolved rows — callers fall back to currency.
+  // See 20260606120000_transactions_cash_account_id.sql.
+  cash_account_id: string | null
+
   // Details
   date: string
-  description: string
+  description: string  // Mutable working title — user-editable while unbooked (see PATCH /api/transactions/[id])
+  // Bank/PSD2 description captured at ingest, normalized (empty/whitespace and
+  // the legacy "Unknown" sentinel map to the Swedish neutral). Never overwritten
+  // by user title edits; source for the dedup bridge and the "restore original"
+  // action. Null only for rows predating the column.
+  original_description: string | null
+  // Set when the user has overridden the title; null = still the bank original.
+  title_edited_at: string | null
   amount: number  // Positive = income, negative = expense
   currency: Currency
 
@@ -439,6 +456,11 @@ export interface Transaction {
 
   // Reconciliation
   reconciliation_method: ReconciliationMethod | null
+
+  // User has chosen to suppress this transaction from the bank reconciliation
+  // view without booking it. See migration
+  // 20260529140000_transactions_is_ignored.sql for the rationale.
+  is_ignored: boolean
 
   // Import tracking
   import_source: string | null
@@ -635,6 +657,10 @@ export interface SupplierInvoiceItem {
   vat_code: string | null
   vat_rate: number
   vat_amount: number
+  // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25), null
+  // for non-RC lines. The supplier charges no VAT so vat_rate stays 0; this
+  // rate drives the fiktiv-moms + basbelopp booking. See the booking engine.
+  reverse_charge_rate: number | null
 
   created_at: string
 }
@@ -735,6 +761,21 @@ export interface Invoice {
 
   // Conversion tracking (proforma -> invoice)
   converted_from_id: string | null
+
+  // Self-billing received (mottagen självfaktura, ML 17 kap 15§). When
+  // `is_self_billed` is true the customer issued the invoice on our behalf;
+  // for us it is a sale. The counterparty's number lives in
+  // `external_invoice_number` and our own `invoice_number` stays null so we
+  // never consume our löpnummerserie (BFL 5 kap 6§).
+  is_self_billed?: boolean
+  external_invoice_number?: string | null
+  self_billing_agreement_ref?: string | null
+  received_date?: string | null
+
+  // Verifikation produced when the invoice was booked (registration entry).
+  // Lets the payment flow detect an already-booked sale and clear 1510 rather
+  // than re-recognising revenue.
+  journal_entry_id?: string | null
 
   // Payment tracking
   paid_at: string | null
@@ -943,6 +984,9 @@ export interface CreateSupplierInvoiceItemInput {
   vat_rate?: number
   // Manual override. See CreateSupplierInvoiceItemSchema for rationale.
   vat_amount?: number
+  // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25). When
+  // set, the engine books fiktiv moms at this rate while vat_rate stays 0.
+  reverse_charge_rate?: number
   vat_code?: string
   // Legacy fields (backward compat, ignored when amount is set)
   quantity?: number
@@ -963,6 +1007,9 @@ export interface CreateInvoiceInput {
   deduction_personnummer?: string
   /** Fastighetsbeteckning. Required when any item carries deduction_type === 'rot'. */
   deduction_housing_designation?: string
+  /** Save as an unnumbered draft (no F-number, no invoice.created) until the
+   *  user finalizes via "Granska & skapa". Lets the draft be hard-deleted. */
+  save_as_draft?: boolean
   items: CreateInvoiceItemInput[]
 }
 
@@ -1520,6 +1567,9 @@ export type PendingOperationType =
   | 'run_currency_revaluation'
   // Stream 1 Phase 1: SIE import (export is read-only)
   | 'import_sie'
+  // SIE undo: hard-deletes the import's journal entries and releases the
+  // (company_id, file_hash) slot. Recovery for botched imports.
+  | 'undo_sie_import'
   // Stream 1 Phase 1: voucher gap explanations
   | 'explain_voucher_gap'
   // Stream 1 Phase 1: transaction reversal
@@ -1548,6 +1598,15 @@ export type PendingOperationType =
   | 'generate_agi'
   // Mark invoice paid by linking an existing posted verifikat (no new JE)
   | 'link_invoice_voucher'
+  // Supplier-side mirror: mark a leverantörsfaktura paid by linking an existing
+  // posted verifikat that debits 2440 (no new JE)
+  | 'link_supplier_invoice_voucher'
+  // PR #603/#607: allocate 1 bank tx across N customer or supplier invoices
+  | 'match_batch_allocate'
+  // PR #606/#610: bulk-book N bank txs into 1 combined verifikat
+  | 'bulk_book_transactions'
+  // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
+  | 'link_transaction_journal_entry'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'
@@ -2869,7 +2928,7 @@ export type SalaryLineItemType =
   | 'gross_deduction_pension' | 'gross_deduction_other'
   | 'benefit_car' | 'benefit_housing' | 'benefit_meals' | 'benefit_wellness' | 'benefit_bike' | 'benefit_other'
   | 'sick_karens' | 'sick_day2_14' | 'sick_day15_plus'
-  | 'vab' | 'parental_leave' | 'vacation' | 'semesterersattning'
+  | 'vab' | 'parental_leave' | 'unpaid_leave' | 'vacation' | 'semesterersattning'
   | 'traktamente_taxfree' | 'traktamente_taxable'
   | 'mileage_taxfree' | 'mileage_taxable'
   | 'net_deduction_advance' | 'net_deduction_union' | 'net_deduction_benefit_payment'

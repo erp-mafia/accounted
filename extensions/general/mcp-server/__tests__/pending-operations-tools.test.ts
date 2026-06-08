@@ -107,11 +107,48 @@ describe('gnubok_approve_pending_operation', () => {
     // commit options always include commitMethod; userEmail is added when
     // the supabase mock supports auth.admin.getUserById (it doesn't here, so
     // the resolution silently fails and we fall back to just commitMethod).
-    expect(commitSpy.mock.calls[0][4]).toMatchObject({ commitMethod: 'user_accept' })
+    // An api_key actor records 'api_key' in the immutable layer — MCP-relayed
+    // acknowledgment, not a first-party human session (vision §8 P0-1).
+    // The actor option drives the runWithActor() scope inside
+    // commitPendingOperation so EVERY journal commit in the op is attributed
+    // (committed_actor_* + audit_log, migration 20260619120000).
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({
+      commitMethod: 'api_key',
+      actor: { type: 'api_key' },
+    })
     expect(result.status).toBe('committed')
     expect(result.operation_id).toBe('op-1')
     expect(result.data?.invoice_id).toBe('inv-1')
   })
+
+  // No 'mcp_oauth' row: handleMcpRequest hardcodes actor.type='api_key' for
+  // ALL MCP traffic (the OAuth connector's access_token is a minted API key),
+  // so 'api_key' is the only agent-credential value a live request produces.
+  it.each([
+    { actorType: 'api_key', expected: 'api_key' },
+    { actorType: 'user', expected: 'user_accept' },
+  ] as const)(
+    'records commit_method=$expected when the approving actor is $actorType',
+    async ({ actorType, expected }) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+      enqueue({ data: op, error: null }) // fetch
+      commitSpy.mockResolvedValue({ status: 'committed' })
+
+      await approveTool.execute(
+        { operation_id: 'op-1' },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: actorType }
+      )
+
+      expect(commitSpy.mock.calls[0][4]).toMatchObject({
+        commitMethod: expected,
+        actor: { type: actorType },
+      })
+    }
+  )
 
   it('refuses to approve a risk_level=high op without confirmed=true', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()

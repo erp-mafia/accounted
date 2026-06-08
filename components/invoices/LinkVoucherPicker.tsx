@@ -17,19 +17,36 @@ interface VoucherCandidate {
   voucher_number: number | null
   entry_date: string
   description: string
-  ar_credit_amount: number
+  // Customer side returns ar_credit_amount; supplier side returns ap_debit_amount.
+  // The picker treats them interchangeably — same UX, opposite sign convention.
+  ar_credit_amount?: number
+  ap_debit_amount?: number
   currency: string
-  ar_line_currency: string | null
+  ar_line_currency?: string | null
+  ap_line_currency?: string | null
   period_locked: boolean
   confidence: number
   match_reason: string
 }
+
+/**
+ * Linking mode determines which API surface the picker hits and which side
+ * of the BAS chart the candidates are searched against (151x credits vs 2440
+ * debits). The user-facing UX is identical; only the data path differs.
+ */
+export type VoucherPickerMode = 'customer_invoice' | 'supplier_invoice'
 
 interface LinkVoucherPickerProps {
   invoiceId: string
   invoiceCurrency: string
   onLinked: () => void
   onCancel: () => void
+  /** Defaults to 'customer_invoice' for back-compat with existing call sites. */
+  mode?: VoucherPickerMode
+}
+
+function candidateAmount(c: VoucherCandidate): number {
+  return c.ar_credit_amount ?? c.ap_debit_amount ?? 0
 }
 
 function voucherLabel(c: VoucherCandidate): string {
@@ -54,9 +71,17 @@ export default function LinkVoucherPicker({
   invoiceCurrency,
   onLinked,
   onCancel,
+  mode = 'customer_invoice',
 }: LinkVoucherPickerProps) {
   const { toast } = useToast()
   const t = useTranslations('invoice_link_voucher')
+
+  const apiBase =
+    mode === 'supplier_invoice'
+      ? `/api/supplier-invoices/${invoiceId}`
+      : `/api/invoices/${invoiceId}`
+  const errorContext: 'invoice' | 'supplier_invoice' =
+    mode === 'supplier_invoice' ? 'supplier_invoice' : 'invoice'
 
   const [candidates, setCandidates] = useState<VoucherCandidate[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -69,7 +94,7 @@ export default function LinkVoucherPicker({
     async function load() {
       setLoading(true)
       try {
-        const response = await fetch(`/api/invoices/${invoiceId}/voucher-candidates`)
+        const response = await fetch(`${apiBase}/voucher-candidates`)
         if (!response.ok) {
           if (cancelled) return
           setCandidates([])
@@ -88,7 +113,7 @@ export default function LinkVoucherPicker({
     return () => {
       cancelled = true
     }
-  }, [invoiceId])
+  }, [apiBase])
 
   const filtered = useMemo(() => {
     if (!candidates) return [] as VoucherCandidate[]
@@ -110,7 +135,7 @@ export default function LinkVoucherPicker({
     if (!selected) return
     setSubmitting(true)
     try {
-      const response = await fetch(`/api/invoices/${invoiceId}/link-to-voucher`, {
+      const response = await fetch(`${apiBase}/link-to-voucher`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ journal_entry_id: selected.journal_entry_id }),
@@ -120,19 +145,25 @@ export default function LinkVoucherPicker({
         toast({
           title: t('link_failed_title'),
           description: getErrorMessage(body, {
-            context: 'invoice',
+            context: errorContext,
             statusCode: response.status,
           }),
           variant: 'destructive',
         })
         return
       }
-      toast({ title: t('link_success_title'), variant: 'success' })
+      const body = await response.json().catch(() => null)
+      const reconciledTxId = body?.data?.reconciled_transaction_id ?? null
+      toast({
+        title: t('link_success_title'),
+        description: reconciledTxId ? t('link_success_tx_reconciled') : undefined,
+        variant: 'success',
+      })
       onLinked()
     } catch (err) {
       toast({
         title: t('link_failed_title'),
-        description: getErrorMessage(err, { context: 'invoice' }),
+        description: getErrorMessage(err, { context: errorContext }),
         variant: 'destructive',
       })
     } finally {
@@ -199,7 +230,7 @@ export default function LinkVoucherPicker({
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-sm font-medium tabular-nums">
-                        {formatCurrency(c.ar_credit_amount, invoiceCurrency)}
+                        {formatCurrency(candidateAmount(c), invoiceCurrency)}
                       </p>
                     </div>
                   </div>
@@ -215,7 +246,7 @@ export default function LinkVoucherPicker({
           <p className="text-sm">
             {t('confirmation', {
               voucher: voucherLabel(selected),
-              amount: formatCurrency(selected.ar_credit_amount, invoiceCurrency),
+              amount: formatCurrency(candidateAmount(selected), invoiceCurrency),
             })}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">{t('no_new_je_note')}</p>

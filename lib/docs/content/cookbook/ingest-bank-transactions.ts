@@ -1,6 +1,6 @@
 export const COOKBOOK_INGEST_BANK_MD = `# Cookbook — ingest and categorise bank transactions
 
-> Push a bank statement file into gnubok, get AI-assisted category suggestions, commit the categorisations, and match payments against open invoices. End-to-end transaction-to-booking pipeline.
+> Push a bank statement file into Accounted, get AI-assisted category suggestions, commit the categorisations, and match payments against open invoices. End-to-end transaction-to-booking pipeline.
 
 This is the operational companion to the [Transactions reference](/docs/api/reference/transactions) and the [Imports reference](/docs/api/reference/imports). Use it for the first integration where transactions enter the system from a bank source.
 
@@ -15,7 +15,7 @@ This is the operational companion to the [Transactions reference](/docs/api/refe
 \`POST /imports/bank\` accepts multipart upload. Format detection is automatic; the response includes the matched parser. The endpoint kicks off an async operation — you'll poll for the result.
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/imports/bank" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/imports/bank" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -F "file=@statement-2026-04.csv" \\
@@ -41,7 +41,7 @@ Response is a 202 with the operation handle:
 Polling is the simplest pattern; subscribe to the \`operation.completed\` event ([cookbook](/docs/api/cookbook/webhooks)) for the push variant. The operation lifecycle is \`queued → running → succeeded | failed | cancelled\`.
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/operations/$OPERATION_ID" \\
+curl "https://app.gnubok.se/api/v1/operations/$OPERATION_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -74,7 +74,7 @@ Note the dedup: rows that match an existing transaction on \`(date, amount, desc
 After ingest the rows are in \`transactions\` but uncategorised (\`account_number: null\`, \`category: null\`). List them:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/transactions?status=uncategorized&period=2026-04&limit=50" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions?status=uncategorized&period=2026-04&limit=50" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -106,7 +106,7 @@ Response (cursor-paginated, oldest-first):
 \`POST /transactions/{id}/suggest-categories\` returns ranked guesses based on the description, counterparty history, and your booking-template library:
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/suggest-categories" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/suggest-categories" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -140,7 +140,7 @@ Confidence ≥ 0.85 is generally safe to auto-apply; below that surface to the u
 \`POST /transactions/{id}/categorize\` stages the booking. Dry-run first to see the verifikation preview:
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/categorize?dry_run=true" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/categorize?dry_run=true" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -177,7 +177,7 @@ Drop \`?dry_run=true\` and reuse the same \`Idempotency-Key\` to commit. The res
 For a backlog, use \`POST /transactions/batch-categorize\` (up to 100 transactions per call, dry-runnable, partial-success on commit):
 
 \`\`\`bash
-curl "https://gnubok.app/api/v1/companies/$COMPANY_ID/transactions/batch-categorize" \\
+curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/batch-categorize" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -209,7 +209,7 @@ Response shape — every item has its own \`ok\` flag:
 When a transaction is a customer payment, match it to the open invoice via \`POST /transactions/{id}/match-invoice\` instead of \`categorize\`. The engine posts the payment voucher (debit 1930, credit 1510) AND marks the invoice paid in a single transaction.
 
 \`\`\`bash
-curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/match-invoice" \\
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/match-invoice" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\

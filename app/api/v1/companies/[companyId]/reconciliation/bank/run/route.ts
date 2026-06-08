@@ -21,6 +21,10 @@ const RunRequest = z
   .object({
     date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    // Settlement account (BAS code) to reconcile against, e.g. '1930' (SEK) or
+    // '1932' (EUR). Defaults to '1930'. Required for multi-account companies to
+    // reconcile anything other than their primary SEK account.
+    account_number: z.string().regex(/^\d{4}$/).optional(),
   })
   // Bound the window so a key with no explicit range can't trigger an
   // unbounded join across years. 366 days covers a full räkenskapsår + a
@@ -67,6 +71,7 @@ registerEndpoint({
     'Creating new journal entries — this only links bank transactions to existing GL lines. Matching to invoices — use `:match-invoice` or `:match-supplier-invoice` for explicit invoice payments.',
   pitfalls: [
     'date_from / date_to default to the company\'s full bank history if omitted. Specify a window for predictable performance.',
+    'account_number defaults to 1930. Multi-account companies must pass the BAS code of the account they are reconciling (e.g. 1932 for a EUR account), or it silently reconciles 1930.',
     'Idempotency-Key is mandatory.',
     'matches.confidence is between 0 and 1; the matcher only applies matches above the internal threshold (currently ~0.85).',
   ],
@@ -110,11 +115,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const body = parsed.data
 
+    // Resolve the settlement account to its cash account (currency + id) so the
+    // matcher scopes transactions to this exact account, not every same-currency
+    // account. The default '1930' is exempt from the existence check — it falls
+    // back to currency-only scoping, matching the status endpoint and the
+    // pre-feature behaviour. A non-default unknown account is rejected.
+    const accountNumber = body.account_number ?? '1930'
+    const { data: cashAccount } = await ctx.supabase
+      .from('cash_accounts')
+      .select('id, currency, is_primary')
+      .eq('company_id', ctx.companyId!)
+      .eq('ledger_account', accountNumber)
+      .maybeSingle()
+    if (!cashAccount && accountNumber !== '1930') {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: [{ field: 'account_number', message: 'Okänt kassakonto för det här företaget' }],
+        },
+      })
+    }
+
     let result
     try {
       result = await runReconciliation(ctx.supabase, ctx.companyId!, ctx.userId, {
         dateFrom: body.date_from,
         dateTo: body.date_to,
+        accountNumber,
+        currency: (cashAccount?.currency as string | undefined) ?? 'SEK',
+        cashAccountId: cashAccount?.id as string | undefined,
+        // Only the primary account claims unassigned (NULL cash_account_id) rows.
+        includeUnassigned: Boolean(cashAccount?.is_primary),
         dryRun: ctx.dryRun,
       })
     } catch (err) {

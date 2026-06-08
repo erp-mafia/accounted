@@ -24,6 +24,10 @@ export const GET = withRouteContext(
     const periodType = searchParams.get('periodType') as VatPeriodType | null
     const yearStr = searchParams.get('year')
     const periodStr = searchParams.get('period')
+    // For yearly (helårsmoms) the period is the räkenskapsår, not the calendar
+    // year; the client passes the selected fiscal period so an extended year is
+    // covered in full. Ignored for monthly/quarterly (calendar periods).
+    const fiscalPeriodId = searchParams.get('fiscal_period_id') ?? undefined
 
     if (!periodType || !yearStr || !periodStr) {
       return errorResponseFromCode('VAT_REPORT_MISSING_PARAMS', log, { requestId })
@@ -83,11 +87,14 @@ export const GET = withRouteContext(
     try {
       const declaration = await calculateVatDeclaration(
         supabase, companyId!, periodType, year, period, accountingMethod,
+        { fiscalPeriodId },
       )
 
       return NextResponse.json({
         data: {
           ...declaration,
+          // For yearly the authoritative span is declaration.period.start/end
+          // (the räkenskapsår). The label stays a coarse "Helår {year}".
           periodLabel: formatPeriodLabel(periodType, year, period),
         },
       })

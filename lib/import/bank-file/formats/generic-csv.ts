@@ -186,6 +186,153 @@ export function getCSVPreview(content: string, delimiter: string = ',', rows: nu
   )
 }
 
+/** Column indices suggested for the manual mapping UI. -1 = not resolved. */
+export interface SuggestedColumnMapping {
+  date: number
+  description: number
+  amount: number
+  balance: number
+}
+
+// A cell that looks like a date in one of the formats the importer accepts.
+const SUGGEST_DATE_PATTERNS = [
+  /^\d{4}-\d{2}-\d{2}$/,
+  /^\d{2}[./]\d{2}[./]\d{4}$/,
+  /^\d{4}\/\d{2}\/\d{2}$/,
+  /^\d{8}$/,
+]
+
+/** Pick the best date column by header label, preferring transaction date over value date. */
+function pickDateHeader(headers: string[]): number {
+  const tiers: Array<(h: string) => boolean> = [
+    (h) => h.includes('transaktionsdatum'),
+    (h) => h.includes('reskontradatum'),
+    (h) => /bokf(ö|o)ringsda(g|tum)/.test(h),
+    (h) => h === 'datum' || h === 'date',
+  ]
+  for (const match of tiers) {
+    const idx = headers.findIndex((h) => match(h) && !h.includes('valuta'))
+    if (idx >= 0) return idx
+  }
+  return headers.findIndex((h) => (h.includes('datum') || h.includes('date')) && !h.includes('valuta'))
+}
+
+/** Pick the best description column by header label. */
+function pickDescriptionHeader(headers: string[]): number {
+  const keywords = ['text', 'beskrivning', 'description', 'rubrik', 'meddelande', 'referens', 'mottagare', 'namn']
+  for (const kw of keywords) {
+    const idx = headers.findIndex((h) => h === kw || h.includes(kw))
+    if (idx >= 0) return idx
+  }
+  return -1
+}
+
+/** Per-column value statistics across the sampled data rows. */
+function analyzeColumns(dataRows: string[][], colCount: number) {
+  const acc = Array.from({ length: colCount }, () => ({ numeric: 0, date: 0, negative: 0, nonEmpty: 0 }))
+  for (const row of dataRows.slice(0, 20)) {
+    for (let i = 0; i < colCount; i++) {
+      const raw = (row[i] ?? '').trim()
+      if (!raw) continue
+      acc[i].nonEmpty++
+      if (SUGGEST_DATE_PATTERNS.some((re) => re.test(raw))) acc[i].date++
+      const cleaned = normalizeMinusSign(raw).replace(/\s/g, '')
+      if (/^-?\d+([.,]\d+)?$/.test(cleaned)) {
+        acc[i].numeric++
+        if (cleaned.startsWith('-')) acc[i].negative++
+      }
+    }
+  }
+  return acc.map((s) => ({
+    isDate: s.nonEmpty > 0 && s.date / s.nonEmpty >= 0.5,
+    isNumeric: s.nonEmpty > 0 && s.numeric / s.nonEmpty >= 0.5,
+    hasNegative: s.negative > 0,
+  }))
+}
+
+/**
+ * Suggest date / description / amount / balance column indices for the manual
+ * CSV mapping UI.
+ *
+ * When a header row is available, columns are matched by their label first
+ * (belopp → amount, saldo → balance, …) so a trailing running-balance column is
+ * never mistaken for the amount — the original positional heuristic walked the
+ * row right-to-left and grabbed Saldo as the amount on the common
+ * `…;Belopp;Saldo` layout. Falls back to value-based heuristics on the sample
+ * data for any column the labels don't resolve; there the amount guess
+ * explicitly skips the balance column and prefers a column carrying negative
+ * values (real transaction amounts swing negative, a running balance usually
+ * does not).
+ *
+ * @param headers Header labels, or null when the file has no header row.
+ * @param dataRows Sample data rows already split into cells.
+ */
+export function suggestColumnMapping(
+  headers: string[] | null,
+  dataRows: string[][]
+): SuggestedColumnMapping {
+  const result: SuggestedColumnMapping = { date: -1, description: -1, amount: -1, balance: -1 }
+
+  const colCount = Math.max(
+    headers?.length ?? 0,
+    ...dataRows.slice(0, 10).map((r) => r.length),
+    0
+  )
+  if (colCount === 0) return result
+
+  // 1. Label-based matching when we have a header row.
+  if (headers) {
+    const hdr = headers.map((h) => h.trim().toLowerCase().replace(/"/g, ''))
+    result.date = pickDateHeader(hdr)
+    result.balance = hdr.findIndex((h) => h.includes('saldo') || h.includes('balance'))
+    result.amount = hdr.findIndex(
+      (h, i) => i !== result.balance && (h === 'belopp' || h.includes('belopp') || h.includes('amount'))
+    )
+    result.description = pickDescriptionHeader(hdr)
+  }
+
+  // 2. Value-based fallback for anything the labels didn't resolve.
+  const stats = analyzeColumns(dataRows, colCount)
+
+  if (result.date === -1) {
+    result.date = stats.findIndex((s) => s.isDate)
+  }
+
+  if (result.amount === -1 || result.balance === -1) {
+    const numericCols = stats
+      .map((s, i) => ({ i, s }))
+      .filter(({ i, s }) => i !== result.date && s.isNumeric)
+
+    if (result.amount === -1) {
+      const candidates = numericCols.filter(({ i }) => i !== result.balance)
+      const negative = candidates.find(({ s }) => s.hasNegative)
+      result.amount = (negative ?? candidates[0])?.i ?? -1
+    }
+
+    if (result.balance === -1) {
+      // Remaining numeric column (typically the trailing running balance).
+      const remaining = numericCols.filter(({ i }) => i !== result.amount)
+      result.balance = remaining.length ? remaining[remaining.length - 1].i : -1
+    }
+  }
+
+  if (result.description === -1) {
+    result.description = stats.findIndex(
+      (s, i) => i !== result.date && i !== result.amount && i !== result.balance && !s.isNumeric && !s.isDate
+    )
+    if (result.description === -1) {
+      for (let i = 0; i < colCount; i++) {
+        if (i !== result.date && i !== result.amount && i !== result.balance) {
+          result.description = i
+          break
+        }
+      }
+    }
+  }
+
+  return result
+}
+
 /**
  * Generic CSV format definition (used for format detection)
  * Always returns false for detect() since it's a fallback requiring user mapping

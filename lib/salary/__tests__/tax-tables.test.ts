@@ -4,6 +4,7 @@ import {
   calculateJamkningTax,
   calculateSidoinkomstTax,
   fetchTaxTableRates,
+  fetchKommunTaxRates,
   clearTaxTableCache,
   TaxTableUnavailableError,
 } from '../tax-tables'
@@ -143,5 +144,69 @@ describe('fetchTaxTableRates fallback behavior', () => {
 
     // Only one API attempt despite two calls — second hit the cache
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('fetchKommunTaxRates', () => {
+  const originalFetch = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  function row(kommun: string, rate: string) {
+    return { kommun, 'summa, exkl. kyrkoavgift': rate }
+  }
+
+  it('pages through every församling row and dedupes to one entry per kommun', async () => {
+    // The dataset returns one row per församling. Page 1 is full (so the loop
+    // continues); page 2 is short (so it stops). Göteborg only appears on page 2
+    // — the bug this guards against was a single 500-row page dropping it.
+    const page1 = Array.from({ length: 500 }, () => row('STOCKHOLM', '30.62'))
+    const page2 = [
+      row('GÖTEBORG', '32.892'),
+      row('GÖTEBORG', '33.50'), // duplicate församling — must not override the first
+      row('UPPLANDS VÄSBY', '32.042'),
+    ]
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ resultCount: 503, results: page1 }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ resultCount: 503, results: page2 }) } as Response)
+    globalThis.fetch = fetchSpy
+
+    const result = await fetchKommunTaxRates(2026)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    // Second call must advance the offset past the first page.
+    expect((fetchSpy.mock.calls[1][0] as string)).toContain('_offset=500')
+
+    const goteborg = result.find((r) => r.kommun === 'Göteborg')
+    expect(goteborg).toBeDefined()
+    expect(goteborg!.totalRate).toBe(32.892)
+    expect(goteborg!.tableNumber).toBe(33) // 32.892 → round → 33
+
+    // Deduped: Stockholm appears once despite 500 rows.
+    expect(result.filter((r) => r.kommun === 'Stockholm')).toHaveLength(1)
+    expect(result.find((r) => r.kommun === 'Stockholm')!.tableNumber).toBe(31) // 30.62 → 31
+  })
+
+  it('normalizes Skatteverket uppercase names to title case', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ resultCount: 2, results: [row('UPPLANDS VÄSBY', '32.042'), row('MALMÖ', '32.10')] }),
+    } as Response)
+    globalThis.fetch = fetchSpy
+
+    const result = await fetchKommunTaxRates(2026)
+    const names = result.map((r) => r.kommun)
+
+    expect(names).toContain('Upplands Väsby')
+    expect(names).toContain('Malmö')
+  })
+
+  it('throws when the API returns a non-ok status', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502 } as Response)
+    await expect(fetchKommunTaxRates(2026)).rejects.toThrow(/502/)
   })
 })

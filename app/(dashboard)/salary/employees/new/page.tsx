@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ArrowLeft, Save } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5">*</span>
@@ -22,11 +23,15 @@ export default function NewEmployeePage() {
   const [saving, setSaving] = useState(false)
   const [employmentType, setEmploymentType] = useState('employee')
   const [salaryType, setSalaryType] = useState('monthly')
-  const [fSkattStatus, setFSkattStatus] = useState('a_skatt')
-  const [isSidoinkomst, setIsSidoinkomst] = useState(false)
+  const [personnummer, setPersonnummer] = useState('')
   const [vacationRule, setVacationRule] = useState('procentregeln')
-
-  const requiresTaxTable = fSkattStatus === 'a_skatt' && !isSidoinkomst
+  const [tax, setTax] = useState<EmployeeTaxValue>({
+    f_skatt_status: 'a_skatt',
+    is_sidoinkomst: false,
+    tax_table_number: null,
+    tax_column: 1,
+    tax_municipality: '',
+  })
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -36,18 +41,19 @@ export default function NewEmployeePage() {
     const body = {
       first_name: form.get('first_name') as string,
       last_name: form.get('last_name') as string,
-      personnummer: (form.get('personnummer') as string).replace(/\D/g, ''),
+      personnummer: personnummer.replace(/\D/g, ''),
       employment_type: employmentType,
       employment_start: form.get('employment_start') as string,
+      employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
       salary_type: salaryType,
       monthly_salary: salaryType === 'monthly' ? (parseFloat(form.get('monthly_salary') as string) || undefined) : undefined,
       hourly_rate: salaryType === 'hourly' ? (parseFloat(form.get('hourly_rate') as string) || undefined) : undefined,
-      f_skatt_status: fSkattStatus,
-      is_sidoinkomst: isSidoinkomst,
-      tax_table_number: parseInt(form.get('tax_table_number') as string) || undefined,
-      tax_column: parseInt(form.get('tax_column') as string) || 1,
-      tax_municipality: form.get('tax_municipality') as string || undefined,
+      f_skatt_status: tax.f_skatt_status,
+      is_sidoinkomst: tax.is_sidoinkomst,
+      tax_table_number: tax.tax_table_number ?? undefined,
+      tax_column: tax.tax_column,
+      tax_municipality: tax.tax_municipality || undefined,
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,
@@ -109,7 +115,15 @@ export default function NewEmployeePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="personnummer">Personnummer (12 siffror)<RequiredMark /></Label>
-                <Input id="personnummer" name="personnummer" placeholder="ÅÅÅÅMMDDNNNN" required maxLength={13} />
+                <Input
+                  id="personnummer"
+                  name="personnummer"
+                  placeholder="ÅÅÅÅMMDDNNNN"
+                  required
+                  maxLength={13}
+                  value={personnummer}
+                  onChange={(e) => setPersonnummer(e.target.value)}
+                />
                 <p className="text-xs text-muted-foreground">Krypteras vid lagring</p>
               </div>
               <div className="space-y-2">
@@ -173,6 +187,10 @@ export default function NewEmployeePage() {
                 <Input id="employment_start" name="employment_start" type="date" required />
               </div>
               <div className="space-y-2">
+                <Label htmlFor="employment_end">Slutdatum</Label>
+                <Input id="employment_end" name="employment_end" type="date" />
+              </div>
+              <div className="space-y-2">
                 <Label htmlFor="employment_degree">Sysselsättningsgrad (%)</Label>
                 <Input id="employment_degree" name="employment_degree" type="number" defaultValue="100" min="1" max="100" />
               </div>
@@ -215,67 +233,7 @@ export default function NewEmployeePage() {
         </Card>
 
         {/* Tax */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Skatt</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="f_skatt_status">Skatteform</Label>
-                <Select value={fSkattStatus} onValueChange={setFSkattStatus}>
-                  <SelectTrigger id="f_skatt_status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="a_skatt">A-skatt</SelectItem>
-                    <SelectItem value="f_skatt">F-skatt</SelectItem>
-                    <SelectItem value="fa_skatt">FA-skatt</SelectItem>
-                    <SelectItem value="not_verified">Ej verifierad</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-end pb-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={isSidoinkomst}
-                    onChange={(e) => setIsSidoinkomst(e.target.checked)}
-                    className="rounded border-border"
-                  />
-                  Sidoinkomst (30% skatteavdrag)
-                </label>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="tax_table_number">
-                  Skattetabell (29-42){requiresTaxTable && <RequiredMark />}
-                </Label>
-                <Input
-                  id="tax_table_number"
-                  name="tax_table_number"
-                  type="number"
-                  min="29"
-                  max="42"
-                  required={requiresTaxTable}
-                />
-                <p className="text-xs text-muted-foreground">Baseras på folkbokföringskommun</p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tax_column">Kolumn (1-6)</Label>
-                <Input id="tax_column" name="tax_column" type="number" defaultValue="1" min="1" max="6" />
-                <p className="text-xs text-muted-foreground">1 = standard under 66 år</p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tax_municipality">
-                  Folkbokföringskommun{requiresTaxTable && <RequiredMark />}
-                </Label>
-                <Input id="tax_municipality" name="tax_municipality" required={requiresTaxTable} />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <EmployeeTaxCard personnummer={personnummer} onChange={setTax} />
 
         {/* Vacation */}
         <Card>

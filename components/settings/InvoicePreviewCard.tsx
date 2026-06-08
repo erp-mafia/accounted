@@ -63,6 +63,12 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (customerError) throw customerError
         if (cancelled) return
 
+        // Non-momsregistrerade säljare ska inte få en exempel-rad med 25 %
+        // VAT — förhandsvisningen är hårdkodad sample-data, inte ett val
+        // användaren gjort, så vi följer settings.vat_registered direkt här
+        // (till skillnad från /invoices/new som låter användaren välja och
+        // bara varnar vid submit).
+        const previewVatRate = settings.vat_registered === false ? 0 : 25
         const response = await fetch('/api/invoices/preview-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -77,7 +83,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
                 quantity: 1,
                 unit: 'st',
                 unit_price: 1000,
-                vat_rate: 25,
+                vat_rate: previewVatRate,
               },
             ],
           }),
@@ -147,11 +153,24 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         )}
 
         {!isLoading && !error && blobUrl && (
-          <iframe
-            src={blobUrl}
+          // <object> + type="application/pdf" invokes Chrome's PDF plugin
+          // directly. <iframe> went through Chrome's frame pipeline first
+          // and intermittently surfaced "Det här innehållet har blockerats"
+          // even with a permissive CSP. See AttachmentPreviewSheet.tsx for
+          // the same workaround on journal entry attachments.
+          <object
+            data={blobUrl}
+            type="application/pdf"
             title={t('iframe_title')}
             className="w-full h-[70vh] rounded-lg border border-border"
-          />
+          >
+            <p className="p-4 text-sm text-muted-foreground">
+              {t('error')}:{' '}
+              <a href={blobUrl} target="_blank" rel="noreferrer" className="underline">
+                {t('iframe_title')}
+              </a>
+            </p>
+          </object>
         )}
       </DialogContent>
     </Dialog>

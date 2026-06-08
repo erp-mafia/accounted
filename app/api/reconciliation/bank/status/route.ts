@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   // produces nonsense.
   const { data: cashAccount } = await supabase
     .from('cash_accounts')
-    .select('currency')
+    .select('id, currency, is_primary')
     .eq('company_id', companyId)
     .eq('ledger_account', accountNumber)
     .maybeSingle()
@@ -36,6 +36,11 @@ export async function GET(request: Request) {
   }
 
   const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
+  const cashAccountId = cashAccount?.id as string | undefined
+  // Only the primary account claims unassigned (NULL cash_account_id) rows.
+  // A secondary same-currency account (e.g. a 1931 savings account) must not, or
+  // 1930's unassigned rows inflate its bank total and show a bogus difference.
+  const includeUnassigned = Boolean(cashAccount?.is_primary)
 
   const status = await getReconciliationStatus(
     supabase,
@@ -44,6 +49,8 @@ export async function GET(request: Request) {
     dateTo,
     accountNumber,
     currency,
+    cashAccountId,
+    includeUnassigned,
   )
 
   return NextResponse.json({ data: status })

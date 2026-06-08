@@ -658,3 +658,31 @@ describe('entry_id resolution — voucher refs and hallucinated UUIDs', () => {
     ).rejects.toThrow(new RegExp(`id=${hallucinated}`))
   })
 })
+
+describe('agent memory tools — agent:write scope gate', () => {
+  const rememberFact = tools.find((t) => t.name === 'gnubok_remember_fact')
+  const forgetFact = tools.find((t) => t.name === 'gnubok_forget_fact')
+
+  it('registers the memory write tools mapped to agent:write', async () => {
+    const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')
+    expect(rememberFact).toBeDefined()
+    expect(forgetFact).toBeDefined()
+    expect(TOOL_SCOPE_MAP.gnubok_remember_fact).toBe('agent:write')
+    expect(TOOL_SCOPE_MAP.gnubok_forget_fact).toBe('agent:write')
+  })
+
+  // Mirror the server's enforcement: a tool is blocked when it has a required
+  // scope the key does not hold (server.ts: `requiredScope && !hasScope(...)`).
+  it('denies a key without agent:write and allows one with it', async () => {
+    const { TOOL_SCOPE_MAP, hasScope } = await import('@/lib/auth/api-keys')
+    const required = TOOL_SCOPE_MAP.gnubok_remember_fact
+
+    const without = ['agent:read', 'reports:read'] as never[]
+    const isDenied = !!required && !hasScope(without, required)
+    expect(isDenied).toBe(true)
+
+    const withWrite = ['agent:read', 'agent:write'] as never[]
+    const isAllowed = !required || hasScope(withWrite, required)
+    expect(isAllowed).toBe(true)
+  })
+})

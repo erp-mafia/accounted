@@ -778,6 +778,104 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 }
 
 /**
+ * Wording that identifies a voucher as the year's opening balance
+ * (ingående balans). Shared between the parser's OB-voucher candidate
+ * detection below and the importer's isLikelyOpeningBalance tagging
+ * (lib/import/sie-import.ts) so the two checks can never drift apart.
+ */
+export const OPENING_BALANCE_DESCRIPTION_RE = /ing[åa]ende balans|ing[åa]ende saldo|opening balance/i
+
+/**
+ * Vouchers mentioning share capital are never treated as opening balances —
+ * a share-capital deposit dated on the FY start is a real bank movement.
+ */
+export const SHARE_CAPITAL_DESCRIPTION_RE = /aktiekapital/i
+
+/**
+ * Determine if an account is balance sheet (class 1-2) or P&L (class 3-8)
+ */
+export function isBalanceSheetAccount(accountNumber: string): boolean {
+  const firstDigit = parseInt(accountNumber.charAt(0), 10)
+  return firstDigit >= 1 && firstDigit <= 2
+}
+
+/**
+ * Format a Date to "YYYY-MM-DD" using LOCAL components.
+ * parseSIEDate() builds local-time Dates, so toISOString() would shift the
+ * day across the UTC boundary in non-UTC timezones — never use it here.
+ */
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+/**
+ * True when the file contains a voucher that looks like the year's opening
+ * balance: dated on the fiscal-year start, only balance-sheet accounts,
+ * IB wording in the description and no share-capital mention.
+ *
+ * Raw-file mirror of the importer's isLikelyOpeningBalance check
+ * (lib/import/sie-import.ts), but deliberately MORE eager: it runs on
+ * source account numbers with no knowledge of account mappings, so a
+ * candidate containing an unmapped line still counts here even though the
+ * importer would later skip that voucher as unmapped. In that residual case
+ * no IB is created at all — the user falls back to the manual
+ * "Märk som ingående balans" action in Bankavstämning.
+ */
+export function hasOpeningBalanceVoucherCandidate(parsed: ParsedSIEFile): boolean {
+  const fyStart = parsed.stats.fiscalYearStart
+  if (!fyStart) return false
+
+  return parsed.vouchers.some(
+    (v) =>
+      v.lines.length > 0 &&
+      formatLocalDate(v.date) === fyStart.slice(0, 10) &&
+      v.lines.every((l) => isBalanceSheetAccount(l.account)) &&
+      OPENING_BALANCE_DESCRIPTION_RE.test(v.description || '') &&
+      !SHARE_CAPITAL_DESCRIPTION_RE.test(v.description || '')
+  )
+}
+
+/**
+ * Resolve the opening balances the import should actually book (issue #675).
+ *
+ * Some systems export no #IB 0 records at all — the current year's IB exists
+ * only implicitly via the SIE continuity invariant IB(year 0) = UB(year -1).
+ * Every IB consumer goes through this helper so the precedence below is the
+ * single source of truth:
+ *
+ *   1. Explicit #IB 0 records — trusted as-is, never merged with #UB -1.
+ *   2. An opening-balance #VER candidate — the voucher itself serves as IB
+ *      during voucher import (tagged source_type 'opening_balance');
+ *      deriving from #UB -1 as well would double-count every
+ *      balance-sheet account.
+ *   3. #UB -1 records, re-labeled to yearIndex 0 and filtered to
+ *      balance-sheet accounts (result accounts must always open at zero).
+ *   4. Nothing — the file genuinely carries no opening balances.
+ */
+export function getEffectiveOpeningBalances(parsed: ParsedSIEFile): {
+  balances: SIEBalance[]
+  derivedFromPriorYearUB: boolean
+} {
+  const explicit = parsed.openingBalances.filter((b) => b.yearIndex === 0)
+  if (explicit.length > 0) {
+    return { balances: explicit, derivedFromPriorYearUB: false }
+  }
+
+  if (hasOpeningBalanceVoucherCandidate(parsed)) {
+    return { balances: [], derivedFromPriorYearUB: false }
+  }
+
+  const derived = parsed.closingBalances
+    .filter((b) => b.yearIndex === -1 && isBalanceSheetAccount(b.account))
+    .map((b) => ({ ...b, yearIndex: 0 }))
+
+  return { balances: derived, derivedFromPriorYearUB: derived.length > 0 }
+}
+
+/**
  * Validate a parsed SIE file
  */
 export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
@@ -866,10 +964,18 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
     )
   }
 
-  // Check opening balance is balanced (for balance sheet accounts)
-  const ibTotal = parsed.openingBalances
-    .filter((b) => b.yearIndex === 0)
-    .reduce((sum, b) => sum + b.amount, 0)
+  // Check opening balance is balanced (for balance sheet accounts).
+  // Uses the effective set so files without #IB 0 — where IB is derived from
+  // #UB -1 (issue #675) — still get the 2099-adjustment heads-up.
+  const effectiveIB = getEffectiveOpeningBalances(parsed)
+
+  if (effectiveIB.derivedFromPriorYearUB) {
+    warnings.push(
+      'Filen saknar ingående balanser (#IB) för aktuellt räkenskapsår — de härleds från föregående års utgående balans (#UB -1) vid import.'
+    )
+  }
+
+  const ibTotal = effectiveIB.balances.reduce((sum, b) => sum + b.amount, 0)
 
   if (Math.abs(ibTotal) > 0.01) {
     warnings.push(`Ingående balanser balanserar inte (differens: ${ibTotal.toFixed(2)} kr). En automatisk justeringspost mot konto 2099 skapas vid import.`)

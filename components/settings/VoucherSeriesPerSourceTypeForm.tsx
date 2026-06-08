@@ -15,7 +15,7 @@ import { Loader2 } from 'lucide-react'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
 
-const SERIES_OPTIONS = 'ABCDEFG'.split('')
+const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 // Subset of source_types presented to the user. The DB column accepts every
 // JournalEntrySourceType, but several values (storno, correction, etc.) are

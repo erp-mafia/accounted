@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Year-End Close (Bokslut) — gnubok
+const body = `# Year-End Close (Bokslut) — Accounted
 
 The annual close. Irreversible. Legally significant. Always staged for human approval.
 

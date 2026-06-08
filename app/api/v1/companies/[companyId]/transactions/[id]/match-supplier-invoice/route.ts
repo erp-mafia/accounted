@@ -15,7 +15,7 @@ import {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -42,7 +42,7 @@ registerEndpoint({
   doNotUseFor:
     'Categorizing a direct supplier expense without an invoice — use `:categorize`. Matching to a customer invoice — use `:match-invoice`. Bulk auto-match — `POST /reconciliation/bank/run`.',
   pitfalls: [
-    'Cash-method companies cannot match across currencies (MATCH_SI_CASH_FX_UNSUPPORTED) — switch to accrual or book FX manually.',
+    'Cash-method companies can settle a foreign invoice in full (booked at the payment-date rate); only a PARTIAL cash-method payment across currencies is rejected (MATCH_SI_CASH_FX_UNSUPPORTED) — pay in full, switch to accrual, or book manually.',
     'Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.',
     'Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.',
     'Idempotency-Key is mandatory.',
@@ -103,7 +103,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     }
-    const { supplier_invoice_id } = parsed.data
+    const { supplier_invoice_id, lines: customLines } = parsed.data
     const txLog = ctx.log.child({ transactionId: txId, supplierInvoiceId: supplier_invoice_id })
 
     const { data: transaction, error: fetchTxErr } = await ctx.supabase
@@ -182,19 +182,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const txAmountAbs = Math.abs(transaction.amount)
     const paymentAmountInvoiceCurrency =
       transaction.currency === invoice.currency ? txAmountAbs : invoice.remaining_amount
-    const actualBankSek =
+    // SEK that actually left the bank, when known. A foreign transaction with
+    // no stored amount_sek is `null` here — the raw foreign amount must never
+    // stand in (treating 19 USD as 19 SEK books "19 kr" on a ~175 kr payment).
+    const bankSekStored =
       transaction.currency === 'SEK'
         ? txAmountAbs
         : transaction.amount_sek != null
           ? Math.abs(transaction.amount_sek)
-          : txAmountAbs
+          : null
     const invoiceFxRate = invoice.exchange_rate ?? null
-    const originalBookedSek =
+    // SEK the invoice was booked at for this payment portion (null if the
+    // invoice is foreign and carries no exchange_rate).
+    const bookedSek =
       invoice.currency === 'SEK'
         ? paymentAmountInvoiceCurrency
         : invoiceFxRate && invoiceFxRate > 0
           ? Math.round(paymentAmountInvoiceCurrency * invoiceFxRate * 100) / 100
-          : actualBankSek
+          : null
+    // Prefer the stored bank SEK; fall back to the invoice's booked SEK (right
+    // magnitude, FX diff 0); last resort the raw amount.
+    const actualBankSek = bankSekStored ?? bookedSek ?? txAmountAbs
+    const originalBookedSek = bookedSek ?? actualBankSek
     const exchangeRateDifference =
       Math.round((originalBookedSek - actualBankSek) * 100) / 100
     const paymentAmountSek =
@@ -209,7 +218,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .single()
     const accountingMethod = settings?.accounting_method || 'accrual'
 
-    if (accountingMethod === 'cash' && exchangeRateDifference !== 0) {
+    // Route on the supplier invoice's actual booking state. An invoice
+    // booked at receipt (registration_journal_entry_id set) must clear
+    // 2440 regardless of the company's current setting.
+    const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
+    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
+
+    // Full settlement = the bank amount pays off the whole remaining balance.
+    // Cross-currency always settles the remaining (paymentAmountInvoiceCurrency
+    // is clamped to invoice.remaining_amount above).
+    const fullSettlement =
+      transaction.currency !== invoice.currency ||
+      txAmountAbs >= invoice.remaining_amount - 0.005
+
+    // Under kontantmetoden the expense is recognised AT PAYMENT (payment-date
+    // rate), so a full foreign-currency settlement has no kursdifferens — the
+    // builder translates the whole entry to the actual bank SEK (settledBankSek)
+    // below, leaving 1930 equal to the bank line. Only a PARTIAL cash-method
+    // payment across rates can't be modelled cleanly (the builder books the
+    // full invoice), so that narrow case stays blocked.
+    if (useCashEntry && exchangeRateDifference !== 0 && !fullSettlement) {
       return v1ErrorResponseFromCode('MATCH_SI_CASH_FX_UNSUPPORTED', txLog, {
         requestId: ctx.requestId,
         details: {
@@ -224,7 +252,36 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // payment JE can't be created. See the parallel comment in match-invoice.
     let journalEntryId: string | null = null
     try {
-      if (accountingMethod === 'cash') {
+      if (customLines) {
+        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
+            requestId: ctx.requestId,
+            details: { totalDebit, totalCredit },
+          })
+        }
+        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
+        if (!fiscalPeriodId) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+            requestId: ctx.requestId,
+            details: { payment_date: transaction.date },
+          })
+        }
+        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
+        const desc = invoice.supplier?.name
+          ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
+          : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
+        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: desc,
+          source_type: sourceType,
+          source_id: invoice.id,
+          lines: customLines,
+        })
+        if (je) journalEntryId = je.id
+      } else if (useCashEntry) {
         const je = await createSupplierInvoiceCashEntry(
           ctx.supabase,
           ctx.companyId!,
@@ -233,6 +290,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           (invoice.items || []) as SupplierInvoiceItem[],
           transaction.date,
           invoice.supplier?.supplier_type || 'swedish_business',
+          undefined, // supplierName (unchanged default)
+          undefined, // paymentAccount (unchanged default 1930)
+          // Pin a foreign-currency settlement to the payment-date rate so 1930
+          // equals the bank movement. No-op for SEK / same-rate settlements.
+          exchangeRateDifference !== 0 && fullSettlement ? actualBankSek : undefined,
         )
         if (je) journalEntryId = je.id
       } else {

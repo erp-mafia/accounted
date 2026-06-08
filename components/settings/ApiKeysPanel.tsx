@@ -18,9 +18,10 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown } from 'lucide-react'
+import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
+import { STAGING_SCOPES } from '@/lib/auth/api-keys'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
 
 const branding = getBranding()
@@ -88,6 +89,12 @@ const SCOPE_GROUPS: ScopeGroup[] = [
     labelKey: 'group_pending_operations',
     read: { scope: 'pending_operations:read', labelKey: 'scope_pending_operations_read', tools: 1 },
     write: { scope: 'pending_operations:approve', labelKey: 'scope_pending_operations_approve', tools: 2 },
+  },
+  {
+    domain: 'agent',
+    labelKey: 'group_agent',
+    read: { scope: 'agent:read', labelKey: 'scope_agent_read', tools: 1 },
+    write: { scope: 'agent:write', labelKey: 'scope_agent_write', tools: 2 },
   },
   {
     domain: 'documents',
@@ -230,6 +237,7 @@ export function ApiKeysPanel() {
   const t = useTranslations('settings_api_keys')
   const { toast } = useToast()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
+  const { dialogProps: sodDialogProps, confirm: confirmSod } = useDestructiveConfirm()
 
   const [keys, setKeys] = useState<ApiKey[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -241,6 +249,16 @@ export function ApiKeysPanel() {
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
   const [copied, setCopied] = useState(false)
+
+  // Segregation-of-duties: a single key that both stages bookkeeping (any
+  // STAGING_SCOPES member) AND can approve it (pending_operations:approve)
+  // lets an automated agent commit financial postings with no human in the
+  // loop. We warn inline and require an explicit confirm before submitting
+  // with acknowledge_sod — the route returns 409 API_KEY_SOD_CONFLICT
+  // otherwise (default create ticks all scopes, so this path is the norm).
+  const sodConflictScope = STAGING_SCOPES.find((s) => newKeyScopes.has(s)) ?? null
+  const hasSodConflict =
+    newKeyScopes.has('pending_operations:approve') && sodConflictScope !== null
 
   const fetchKeys = useCallback(async () => {
     try {
@@ -261,12 +279,28 @@ export function ApiKeysPanel() {
   }, [fetchKeys])
 
   async function handleCreate() {
+    // SoD: require an explicit, auditable acknowledgement before minting a key
+    // that can both stage and approve postings.
+    if (hasSodConflict) {
+      const ok = await confirmSod({
+        title: t('sod_dialog_title'),
+        description: t('sod_dialog_description'),
+        confirmLabel: t('sod_confirm'),
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+
     setIsCreating(true)
     try {
       const res = await fetch('/api/settings/api-keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newKeyName || t('default_key_name'), scopes: Array.from(newKeyScopes) }),
+        body: JSON.stringify({
+          name: newKeyName || t('default_key_name'),
+          scopes: Array.from(newKeyScopes),
+          ...(hasSodConflict ? { acknowledge_sod: true } : {}),
+        }),
       })
       const json = await res.json()
 
@@ -559,6 +593,15 @@ export function ApiKeysPanel() {
                   </div>
                 ))}
               </div>
+              {hasSodConflict && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-foreground"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                  <p className="leading-snug">{t('sod_warning')}</p>
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>
@@ -574,6 +617,7 @@ export function ApiKeysPanel() {
       </Dialog>
 
       <DestructiveConfirmDialog {...revokeDialogProps} />
+      <DestructiveConfirmDialog {...sodDialogProps} />
 
       {/* Show key once dialog */}
       <Dialog open={showKeyDialog} onOpenChange={(open) => {

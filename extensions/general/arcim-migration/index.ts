@@ -15,13 +15,13 @@ import {
 } from './lib/provider-client'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
+import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport, saveMappings } from '@/lib/import/sie-import'
-import { BAS_REFERENCE, getBASReference } from '@/lib/bookkeeping/bas-reference'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import { FortnoxClient } from '@/lib/providers/fortnox/client'
 import type { ProviderName } from '@/lib/providers/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -62,7 +62,7 @@ function translateOAuthError(error: string, description: string | null): string 
  * Provider Migration extension
  *
  * Migrates bookkeeping data from external Swedish accounting systems
- * (Fortnox, Visma, Bokio, Björn Lundén, Briox) into gnubok by talking
+ * (Fortnox, Visma, Bokio, Björn Lundén, Briox) into Accounted by talking
  * directly to each provider's API.
  *
  * Bookkeeping data (accounts, balances, vouchers) is imported via SIE
@@ -832,6 +832,7 @@ export const arcimMigrationExtension: Extension = {
             importOpeningBalances: boolean
             importTransactions: boolean
             voucherSeries?: string
+            updateAccountNames?: boolean
           }
         }
 
@@ -855,92 +856,9 @@ export const arcimMigrationExtension: Extension = {
             }, { status: 400 })
           }
 
-          // Auto-activate mapped BAS accounts not yet in user's chart (same as manual upload)
-          const mappedAccountNumbers = [
-            ...new Set(mappings.filter((m: import('@/lib/import/types').AccountMapping) => m.targetAccount).map((m: import('@/lib/import/types').AccountMapping) => m.targetAccount)),
-          ]
-
-          const allCompanyAccounts = await fetchAllRows(({ from, to }) =>
-            supabase
-              .from('chart_of_accounts')
-              .select('account_number')
-              .eq('company_id', companyId)
-              .range(from, to)
-          )
-          const existingNumbers = new Set(allCompanyAccounts.map((a: { account_number: string }) => a.account_number))
-
-          const mappingNameLookup = new Map<string, string>()
-          for (const m of mappings) {
-            if (m.targetAccount) {
-              mappingNameLookup.set(m.targetAccount, m.targetName || m.sourceName)
-            }
-          }
-
-          const accountsToActivate = mappedAccountNumbers
-            .filter((num) => !existingNumbers.has(num))
-            .map((num) => {
-              const ref = getBASReference(num)
-              if (ref) {
-                return {
-                  user_id: user.id,
-                  company_id: companyId,
-                  account_number: ref.account_number,
-                  account_name: ref.account_name,
-                  account_class: ref.account_class,
-                  account_group: ref.account_group,
-                  account_type: ref.account_type,
-                  normal_balance: ref.normal_balance,
-                  plan_type: 'full_bas' as const,
-                  is_active: true,
-                  is_system_account: false,
-                  description: ref.description,
-                  sru_code: ref.sru_code,
-                  sort_order: parseInt(ref.account_number),
-                }
-              }
-
-              const accountClass = parseInt(num.charAt(0), 10)
-              const accountGroup = num.substring(0, 2)
-              const accountName = mappingNameLookup.get(num) || `Konto ${num}`
-              const accountType =
-                accountClass === 1 ? 'asset'
-                  : accountClass === 2 ? 'liability'
-                    : accountClass === 3 ? 'revenue'
-                      : 'expense'
-              const normalBalance =
-                accountClass <= 1 || accountClass >= 4 ? 'debit' : 'credit'
-
-              return {
-                user_id: user.id,
-                company_id: companyId,
-                account_number: num,
-                account_name: accountName,
-                account_class: accountClass,
-                account_group: accountGroup,
-                account_type: accountType,
-                normal_balance: normalBalance,
-                plan_type: 'full_bas' as const,
-                is_active: true,
-                is_system_account: false,
-                description: accountName,
-                sru_code: null,
-                sort_order: parseInt(num),
-              }
-            })
-
-          if (accountsToActivate.length > 0) {
-            const { error: activateError } = await supabase
-              .from('chart_of_accounts')
-              .insert(accountsToActivate)
-
-            if (activateError) {
-              return NextResponse.json({
-                error: `Failed to activate accounts: ${activateError.message}`,
-              }, { status: 500 })
-            }
-            log.info(`Auto-activated ${accountsToActivate.length} accounts`)
-          }
-
+          // Account creation (and #KONTO renames) happen inside
+          // executeSIEImport via syncMappedAccounts — the auto-activate block
+          // that used to live here was a duplicate of that logic.
           await saveMappings(supabase, user.id, mappings)
 
           const result = await executeSIEImport(supabase, companyId, user.id, parsed, mappings, {
@@ -950,6 +868,9 @@ export const arcimMigrationExtension: Extension = {
             importOpeningBalances: options.importOpeningBalances,
             importTransactions: options.importTransactions,
             voucherSeries: options.voucherSeries,
+            // Default ON: re-syncs keep account names current with the source
+            // system (idempotent — equal names are a no-op in the rename pass).
+            updateAccountNames: options.updateAccountNames ?? true,
             // Fortnox re-sync semantics: a prior completed import for the
             // same fiscal year is automatically replaced (its imported
             // entries are cancelled) so the user can pull updated data
@@ -1001,6 +922,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers = true,
           importSalesInvoices = true,
           importSupplierInvoices = true,
+          reconcileVouchers = true,
         } = await request.json() as {
           consentId: string
           importCompanyInfo?: boolean
@@ -1008,6 +930,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers?: boolean
           importSalesInvoices?: boolean
           importSupplierInvoices?: boolean
+          reconcileVouchers?: boolean
         }
 
         if (!consentId) {
@@ -1022,6 +945,30 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
+          // ── Guard: a completed SIE import is required before entity import ──
+          // Every provider except Fortnox exposes ONLY entity data (customers,
+          // suppliers, invoices) via API — never the general ledger. Fortnox pulls
+          // the GL itself via SIE-over-API. Importing entities without the
+          // SIE-derived ledger (kontoplan, ingående balanser, verifikationer)
+          // would leave an incomplete bokföring under BFL: a subledger with no
+          // chart of accounts and no opening balances, so every subsequent posting
+          // and balance is wrong. The wizard surfaces this as an advisory banner,
+          // but it must be enforced here so the rule cannot be bypassed by a direct
+          // API call, a skipped wizard step, or a stale client.
+          if (consent.provider !== 'fortnox') {
+            const { count: completedSieImports } = await supabase
+              .from('sie_imports')
+              .select('id', { count: 'exact', head: true })
+              .eq('company_id', companyId)
+              .eq('status', 'completed')
+
+            if (!completedSieImports || completedSieImports < 1) {
+              return errorResponseFromCode('PROVIDER_SIE_IMPORT_REQUIRED', moduleLog, {
+                details: { provider: consent.provider },
+              })
+            }
+          }
+
           log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
 
           const results = await executeMigration({
@@ -1034,6 +981,7 @@ export const arcimMigrationExtension: Extension = {
             importSuppliers,
             importSalesInvoices,
             importSupplierInvoices,
+            reconcileVouchers,
           })
 
           log.info('Migration completed:', results)
@@ -1050,6 +998,60 @@ export const arcimMigrationExtension: Extension = {
               reason: error instanceof Error ? error.message : 'unknown',
               classified: classified ?? 'unclassified',
             },
+          })
+        }
+      },
+    },
+
+    // ── Reconcile supplier invoices to GL payment vouchers ────────
+    // Re-runnable maintenance endpoint. The migration runs this automatically as
+    // its final step, but SIE (the GL) and entity import are two separate HTTP
+    // requests whose order is UI-driven — so if the GL lands after the entity
+    // import, or a company was migrated before this feature existed, call this to
+    // auto-link settled supplier invoices to their existing vouchers. Pass
+    // { dryRun: true } to preview the plan (incl. items needing manual review)
+    // without writing.
+    {
+      method: 'POST',
+      path: '/reconcile',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        const log = ctx?.log ?? console
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const companyId = ctx?.companyId ?? user.id
+
+        let dryRun = false
+        try {
+          const body = (await request.json()) as { dryRun?: boolean }
+          dryRun = body?.dryRun === true
+        } catch {
+          // empty body is fine — default to a real run
+        }
+
+        try {
+          const result = await reconcileSupplierInvoiceVouchers({
+            supabase,
+            companyId,
+            userId: user.id,
+            dryRun,
+          })
+          log.info('arcim reconcile completed', {
+            companyId,
+            dryRun,
+            autoLinked: result.autoLinked,
+            ambiguous: result.ambiguous,
+            unmatched: result.unmatched,
+          })
+          return NextResponse.json({ success: true, dryRun, result })
+        } catch (error) {
+          log.error('arcim reconcile failed', error as Error)
+          return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
+            details: { reason: error instanceof Error ? error.message : 'unknown' },
           })
         }
       },

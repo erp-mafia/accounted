@@ -2,7 +2,7 @@
 
 ## Perspective
 
-You are scanning for Swedish accounting compliance issues, bookkeeping logic gaps, and financial data handling problems. gnubok implements double-entry bookkeeping compliant with Bokforingslagen (BFL) and BFN standards. Focus on correctness of journal entries, VAT handling, account mappings, and legal guardrails.
+You are scanning for Swedish accounting compliance issues, bookkeeping logic gaps, and financial data handling problems. Accounted implements double-entry bookkeeping compliant with Bokforingslagen (BFL) and BFN standards. Focus on correctness of journal entries, VAT handling, account mappings, and legal guardrails.
 
 ## Checklist
 

@@ -46,7 +46,7 @@ registerEndpoint({
     'Fetching balances — use the trial-balance report. Creating new accounts — this endpoint is read-only in v1 (use the dashboard).',
   pitfalls: [
     'account_number is a STRING — "1930", not 1930. The leading character can be 0 in non-BAS plans.',
-    'is_system_account=true means the account was seeded by gnubok and cannot be archived or renamed.',
+    'is_system_account=true means the account was seeded by Accounted and cannot be archived or renamed.',
     'Default filter excludes archived accounts; pass ?active=false to include them.',
   ],
   example: {

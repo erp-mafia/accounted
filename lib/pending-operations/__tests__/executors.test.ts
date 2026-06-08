@@ -303,6 +303,58 @@ describe('commitPendingOperation: import_sie', () => {
       warnings: ['minor warning'],
     })
     expect(parseSIEFile).toHaveBeenCalledWith('#FLAGGA 0\n')
+    // Operations staged before update_account_names existed (params without
+    // the key) must default to true — Boolean(undefined) would flip it off.
+    expect(executeSIEImport).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.anything(),
+      [],
+      expect.objectContaining({ updateAccountNames: true })
+    )
+  })
+
+  it('passes update_account_names: false through to executeSIEImport', async () => {
+    vi.mocked(parseSIEFile).mockReturnValueOnce({} as never)
+    vi.mocked(executeSIEImport).mockResolvedValueOnce({
+      success: true,
+      importId: 'imp-2',
+      fiscalPeriodId: 'fp-1',
+      openingBalanceEntryId: null,
+      journalEntriesCreated: 1,
+      journalEntryIds: ['je-1'],
+      errors: [],
+      warnings: [],
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    const op = makePendingOp({
+      operation_type: 'import_sie',
+      params: {
+        file_content: '#FLAGGA 0\n',
+        filename: 'test.sie',
+        mappings: [],
+        create_fiscal_period: true,
+        import_opening_balances: true,
+        import_transactions: true,
+        update_account_names: false,
+      },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(executeSIEImport).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.anything(),
+      [],
+      expect.objectContaining({ updateAccountNames: false })
+    )
   })
 
   it('rejects when required params are missing', async () => {

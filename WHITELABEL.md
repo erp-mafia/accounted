@@ -1,6 +1,6 @@
 # Whitelabel fork checklist
 
-gnubok is whitelabel-friendly: every user-visible brand reference reads from a single `BrandingService` (`lib/branding/service.ts`). If you don't override anything, the app behaves exactly like upstream gnubok. To run your own brand on top of gnubok, fork the repo and override the values you care about.
+Accounted is whitelabel-friendly: every user-visible brand reference reads from a single `BrandingService` (`lib/branding/service.ts`). If you don't override anything, the app behaves exactly like upstream gnubok. To run your own brand on top of Accounted, fork the repo and override the values you care about.
 
 ## Quick start
 
@@ -33,7 +33,7 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 
 | Env var | Field | Default |
 |---|---|---|
-| `NEXT_PUBLIC_BRANDING_APP_NAME` | `appName` | `Gnubok` |
+| `NEXT_PUBLIC_BRANDING_APP_NAME` | `appName` | `Accounted` |
 | `NEXT_PUBLIC_BRANDING_APP_DESCRIPTION` | `appDescription` | `Ekonomihantering` |
 | `BRANDING_LEGAL_ENTITY` | `legalEntity` | `Arcim` |
 | `BRANDING_SUPPORT_EMAIL` | `supportEmail` | `support@gnubok.se` |
@@ -152,7 +152,7 @@ jobs:
           gh pr create \
             --base main \
             --head "${{ steps.merge.outputs.branch }}" \
-            --title "Sync from upstream gnubok" \
+            --title "Sync from upstream Accounted" \
             --body "Automated weekly sync from \`erp-mafia/gnubok@main\`."
 
       - name: Report conflict

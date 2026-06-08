@@ -2,7 +2,7 @@ import type { McpPrompt } from './types'
 
 /**
  * Single-action prompts. Each one is a Swedish slash-shortcut that directs
- * the model to call exactly one gnubok tool and report a short answer.
+ * the model to call exactly one Accounted tool and report a short answer.
  */
 export const prompts: McpPrompt[] = [
   {

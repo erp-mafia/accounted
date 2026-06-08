@@ -219,6 +219,56 @@ describe('POST /api/invoices (create invoice)', () => {
     )
   })
 
+  it('saves an unnumbered draft without a number or event when save_as_draft is true', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+
+    mockGetVatRules.mockReturnValue({
+      treatment: 'standard_25',
+      rate: 25,
+      momsRuta: '10',
+      reverseChargeText: null,
+    })
+    mockCalculateVat.mockReturnValue(2500)
+    mockGetAvailableVatRates.mockReturnValue([
+      { rate: 25, label: '25%', treatment: 'standard_25' },
+      { rate: 12, label: '12%', treatment: 'reduced_12' },
+      { rate: 6, label: '6%', treatment: 'reduced_6' },
+      { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
+    ])
+
+    // Fetch customer
+    enqueue({ data: customer, error: null })
+    // Insert invoice (stays unnumbered — the allocation step is skipped)
+    enqueue({ data: createdInvoice, error: null })
+    // Insert items
+    enqueue({ data: null, error: null })
+    // Fetch complete invoice (still unnumbered; no generate_invoice_number RPC)
+    enqueue({ data: { ...createdInvoice, invoice_number: null, customer, items: [] }, error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        save_as_draft: true,
+        items: [{ description: 'Consulting', quantity: 10, unit: 'tim', unit_price: 1000 }],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ data: { invoice_number: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.invoice_number).toBeNull()
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'invoice.created' })
+    )
+  })
+
   it('rolls back invoice when items insertion fails', async () => {
     const customer = makeCustomer({ id: VALID_UUID })
     const createdInvoice = makeInvoice({ id: 'inv-1' })

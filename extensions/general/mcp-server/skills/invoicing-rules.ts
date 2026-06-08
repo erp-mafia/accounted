@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Invoicing Rules — gnubok
+const body = `# Invoicing Rules — Accounted
 
 How to send a Swedish-compliant invoice from start to finish.
 
@@ -67,7 +67,7 @@ If the customer doesn't exist:
 
 When in doubt for an invoice issued on or after 1 April 2026, classify the supply per the above rather than defaulting to one rate for "restaurang/hotell".
 
-Use \`getAvailableVatRates(customerType, vatNumberValidated)\` semantics — gnubok handles this. Per-line override possible via \`vat_rate\` on each item.
+Use \`getAvailableVatRates(customerType, vatNumberValidated)\` semantics — Accounted handles this. Per-line override possible via \`vat_rate\` on each item.
 
 ### Step 3 — Create the invoice
 
@@ -108,16 +108,16 @@ For consumer-targeted services (RUT: städning, RUT) or construction (ROT):
   - **2025 May–Dec**: enhanced 50 % rate (still 50 000 SEK ceiling). Reverts to 30 % from 2026 unless extended.
   - When in doubt for an invoice issued in May 2025 or later, default to the current Skatteverket-published rate rather than the 30 % baseline.
 
-This data goes on the invoice; gnubok's invoice template renders it automatically when set on the customer.
+This data goes on the invoice; Accounted's invoice template renders it automatically when set on the customer.
 
 ## Peppol / e-invoicing (B2G)
 
-Swedish authorities require e-invoices via Peppol BIS Billing 3.0 (Lag 2018:1277). For private B2B, the buyer's preference governs but Peppol is preferred. gnubok renders an EN 16931-compliant XML on demand.
+Swedish authorities require e-invoices via Peppol BIS Billing 3.0 (Lag 2018:1277). For private B2B, the buyer's preference governs but Peppol is preferred. Accounted renders an EN 16931-compliant XML on demand.
 
 ## Critical rules
 
 - **Invoice numbers are sequential and gap-free.** Allocated atomically at approval. If you change your mind, use \`gnubok_credit_invoice\`, never delete or skip a number — Skatteverket will audit.
-- **F-skatt notation is mandatory** for B2B services. gnubok adds it automatically when company settings have F-skatt = true.
+- **F-skatt notation is mandatory** for B2B services. Accounted adds it automatically when company settings have F-skatt = true.
 - **Currency:** SEK is default but the invoice itself can be issued in any of SEK/EUR/USD/GBP/NOK/DKK. The bookkeeping JE is always in SEK at issue-date Riksbanken rate.
 
 ## Common errors

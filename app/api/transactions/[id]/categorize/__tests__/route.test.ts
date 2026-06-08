@@ -41,6 +41,19 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
 const mockSaveUserMappingRule = vi.fn()
 vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
   saveUserMappingRule: (...args: unknown[]) => mockSaveUserMappingRule(...args),
+  // Mirror the real implementation: rewrite a 1930 bank leg to the settlement
+  // account, no-op when the settlement account is 1930.
+  applySettlementAccount: (
+    result: { debit_account?: string; credit_account?: string },
+    bankAccount: string,
+  ) =>
+    bankAccount === '1930'
+      ? result
+      : {
+          ...result,
+          debit_account: result.debit_account === '1930' ? bankAccount : result.debit_account,
+          credit_account: result.credit_account === '1930' ? bankAccount : result.credit_account,
+        },
 }))
 
 vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({

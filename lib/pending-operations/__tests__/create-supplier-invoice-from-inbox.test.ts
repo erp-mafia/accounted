@@ -277,6 +277,59 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('persists document_id on the supplier_invoices row (so it can carry to the payment verifikat under cash method)', async () => {
+    let capturedInsert: Record<string, unknown> | null = null
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const originalFrom = supabase.from
+    ;(supabase as { from: unknown }).from = vi.fn().mockImplementation((table: string) => {
+      if (table === 'supplier_invoices') {
+        return {
+          insert: (row: Record<string, unknown>) => {
+            capturedInsert = row
+            return {
+              select: () => ({
+                single: () =>
+                  Promise.resolve({
+                    data: makeSupplierInvoice({ id: 'inv-cash', supplier_invoice_number: 'INV-100' }),
+                    error: null,
+                  }),
+              }),
+            }
+          },
+        }
+      }
+      return (originalFrom as (t: string) => unknown)(table)
+    })
+
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    }) // inbox fetch
+    enqueue({
+      data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
+      error: null,
+    }) // supplier fetch
+    enqueue({ data: 42, error: null }) // arrival number
+    // supplier_invoices insert handled by the override above
+    enqueue({ data: null, error: null }) // items insert
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings → cash
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(),
+    )
+
+    expect(result.status).toBe('committed')
+    // The inbox document id from the staged params must land on the row so
+    // mark-paid can attach it to the kontantmetoden cash verifikat.
+    expect(capturedInsert).toMatchObject({ document_id: 'doc-1' })
+  })
+
   it('rolls back the parent invoice when item insert fails (no orphan supplier_invoices row)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })

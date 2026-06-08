@@ -59,5 +59,4 @@ const isAvailable = ENABLED_EXTENSION_IDS.has('my-extension')
 
 ```typescript
 const { data, save, remove, getByKey } = useExtensionData('general', 'my-extension')
-const { totals, monthly, totalNet } = useAccountTotals({ from, to, monthly: true })
 ```

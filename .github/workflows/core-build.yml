@@ -6,7 +6,7 @@ jobs:
   core-only:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -19,8 +19,20 @@ jobs:
       - name: Reset extensions config
         run: echo '{"extensions":[]}' > extensions.config.json
       - run: npm run setup:extensions
+      - name: Lint ratchet (no new ESLint errors)
+        # `npm run lint` was never wired into CI, so ~60 legacy errors
+        # accumulated. This ratchet (sibling of check:guards) fails only when
+        # a PR ADDS an error beyond scripts/checks/eslint-baseline.json; the
+        # baseline ratchets down as legacy errors get fixed.
+        run: npm run check:lint
       - run: npm run build
       - run: npm test
+      - name: Antipattern ratchet (no new MFA-bypassing routes / naive öre-rounding)
+        # Fails only if a PR ADDS a route that hand-rolls supabase.auth.getUser()
+        # instead of the MFA-enforcing guard, or a new Math.round(x*100)/100.
+        # Baseline lives in scripts/checks/antipatterns-baseline.json and ratchets
+        # down as the A1 (route auth) and D1 (rounding) migrations land.
+        run: npm run check:guards
       - name: Check no core imports from extensions
         run: |
           VIOLATIONS=$(grep -r "from '@/extensions/" lib/ app/api/ components/ --include="*.ts" --include="*.tsx" \

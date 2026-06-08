@@ -231,7 +231,15 @@ export async function createInvoiceJournalEntry(
   userId: string,
   invoice: Invoice,
   entityType: EntityType = 'enskild_firma',
-  customerName?: string
+  customerName?: string,
+  /**
+   * Overrides for non-standard sales that still book identically to a customer
+   * invoice. Used by self-billing received (mottagen självfaktura): the
+   * verifikation should read "Självfaktura <external number>" rather than
+   * "Kundfaktura <our number>", and the number tag must be the counterparty's
+   * external number because the row has no own `invoice_number`.
+   */
+  options?: { descriptionPrefix?: string; numberOverride?: string | null }
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
   if (!fiscalPeriodId) {
@@ -241,7 +249,7 @@ export async function createInvoiceJournalEntry(
 
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
-  const tag = invoiceTag(invoice)
+  const tag = options?.numberOverride ?? invoiceTag(invoice)
 
   // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
   const creditLines: CreateJournalEntryLineInput[] = []
@@ -314,7 +322,12 @@ export async function createInvoiceJournalEntry(
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: invoice.invoice_date,
-    description: buildInvoiceDescription('Kundfaktura', invoice.invoice_number, customerName, invoice.id),
+    description: buildInvoiceDescription(
+      options?.descriptionPrefix ?? 'Kundfaktura',
+      options?.numberOverride ?? invoice.invoice_number,
+      customerName,
+      invoice.id,
+    ),
     source_type: 'invoice_created',
     source_id: invoice.id,
     lines,

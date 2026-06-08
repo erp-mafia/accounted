@@ -25,7 +25,7 @@ interface Props {
   className?: string
 }
 
-const STORAGE_KEY_PREFIX = 'gnubok:report-range-preset:'
+const STORAGE_KEY_PREFIX = 'Accounted:report-range-preset:'
 
 const PRESETS: Preset[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter', 'custom']
 

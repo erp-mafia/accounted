@@ -1,6 +1,6 @@
 import type { Skill } from './types'
 
-const body = `# Bank Reconciliation — gnubok
+const body = `# Bank Reconciliation — Accounted
 
 Reconcile the company's bank statements against the bookkeeping ledger so that the cash position in the books matches the bank. Run at month-end and before VAT close.
 
@@ -58,7 +58,7 @@ and matching balances. If the balances still disagree:
 
 ### Step 5 — Document the reconciliation
 
-For each fiscal period, gnubok stores the reconciliation state automatically.
+For each fiscal period, Accounted stores the reconciliation state automatically.
 For a printed audit trail (BFL 8 kap), generate the supplier ledger and AR
 ledger after reconciliation:
 

@@ -6,7 +6,8 @@ import WelcomeGate from '@/components/onboarding/WelcomeGate'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
-import type { Deadline, ReceiptQueueSummary, OnboardingProgress } from '@/types'
+import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
+import type { Deadline, OnboardingProgress } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,16 +52,6 @@ export default async function DashboardPage() {
   const today = now.toISOString().split('T')[0]
   const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-  // Source types that require supporting documents
-  const needsDocSourceTypes = [
-    'manual',
-    'bank_transaction',
-    'supplier_invoice_registered',
-    'supplier_invoice_paid',
-    'supplier_invoice_cash_payment',
-    'import',
-  ]
-
   // Fetch all data in parallel
   const [
     { data: settings },
@@ -69,22 +60,16 @@ export default async function DashboardPage() {
     { count: receiptCount },
     { count: transactionCount },
     { data: journalLines },
-    { data: transactions },
     { data: unpaidInvoices },
     { data: bankConnections },
     { data: deadlines },
-    { count: pendingReviewCount },
-    { count: unmatchedReceiptsCount },
-    { count: unmatchedTransactionsCount },
-    { count: postedEntriesCount },
-    { data: entriesWithDocs },
-    { data: recentReceiptActivity },
     { count: sieImportCount },
     { count: staleUncategorizedCount },
-    { count: uncategorizedCount },
     { count: skatteverketTokenCount },
     { data: agentProfile },
-    { data: noDocRequiredEntries },
+    { count: postedEntriesCount },
+    worklist,
+    suggestedMatches,
   ] = await Promise.all([
     supabase.from('company_settings').select('*').eq('company_id', companyId).single(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -96,26 +81,23 @@ export default async function DashboardPage() {
       .eq('journal_entry.status', 'posted')
       .eq('journal_entry.company_id', companyId)
       .gte('journal_entry.entry_date', startOfYearStr),
-    supabase.from('transactions').select('amount, amount_sek, is_business').eq('company_id', companyId).gte('date', startOfYearStr),
     supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status').eq('company_id', companyId).in('status', ['sent', 'overdue']).is('credited_invoice_id', null),
     supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
     supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false)
       .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),
-    supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'extracted'),
-    supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'confirmed').is('matched_transaction_id', null),
-    supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).lt('amount', 0).is('receipt_id', null),
-    supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted').in('source_type', needsDocSourceTypes),
-    supabase.from('document_attachments').select('journal_entry_id').eq('company_id', companyId).eq('is_current_version', true).not('journal_entry_id', 'is', null),
-    supabase.from('receipts').select('created_at').eq('company_id', companyId).eq('status', 'confirmed').order('created_at', { ascending: false }).limit(30),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
-    supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('journal_entry_id', null).not('is_business', 'eq', false).lt('date', new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),
-    supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('is_business', null),
+    supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('journal_entry_id', null).eq('is_ignored', false).is('is_business', null).lt('date', new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),
     // Skatteverket tokens are user-scoped (one BankID identity per user) but
     // carry the active company_id; either filter would work — we use user_id
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
     supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
-    supabase.from('journal_entry_no_doc_required').select('journal_entry_id').eq('company_id', companyId),
+    // Any posted entry counts as "company has been used" for the hasData gate.
+    supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted'),
+    // Pending-work counts + suggested matches come from lib/worklist — the
+    // same source as the sidebar badges, so the numbers can never diverge.
+    getWorklistCounts(supabase, companyId),
+    listSuggestedMatches(supabase, companyId, 5),
   ])
 
   // If onboarding is not complete, redirect to onboarding
@@ -204,16 +186,6 @@ export default async function DashboardPage() {
   const ytdTotals = calculateTotals(journalLines, startOfYearStr)
   const mtdTotals = calculateTotals(journalLines, startOfMonthStr)
 
-  const uncategorizedTxns = (transactions || []).filter(
-    (t) => t.is_business === null
-  )
-  const uncategorizedIncome = uncategorizedTxns
-    .filter((t) => t.amount > 0)
-    .reduce((sum, t) => sum + Number(t.amount_sek || t.amount), 0)
-  const uncategorizedExpenses = uncategorizedTxns
-    .filter((t) => t.amount < 0)
-    .reduce((sum, t) => sum + Math.abs(Number(t.amount_sek || t.amount)), 0)
-
   // Mirror the per-invoice öresavrundning rule used on the invoice list/detail
   // pages: sum the displayed (rounded) SEK amount per invoice so the dashboard
   // total matches what the user sees on the invoice list when the setting is on.
@@ -262,45 +234,6 @@ export default async function DashboardPage() {
       ),
     }))
 
-  const entriesWithDocsSet = new Set(
-    (entriesWithDocs || []).map((d) => d.journal_entry_id)
-  )
-
-  // Exempted entries that *also* have a doc are already excluded by entriesWithDocsSet,
-  // so subtracting only the exempt-without-doc set avoids double-counting.
-  let exemptedWithoutDoc = 0
-  for (const row of (noDocRequiredEntries || []) as { journal_entry_id: string }[]) {
-    if (!entriesWithDocsSet.has(row.journal_entry_id)) exemptedWithoutDoc++
-  }
-
-  const missingUnderlagCount = Math.max(
-    0,
-    (postedEntriesCount || 0) - entriesWithDocsSet.size - exemptedWithoutDoc
-  )
-
-  let streakCount = 0
-  if (recentReceiptActivity && recentReceiptActivity.length > 0) {
-    const todayDate = new Date()
-    todayDate.setHours(0, 0, 0, 0)
-
-    const activityDates = new Set(
-      recentReceiptActivity.map((r) => new Date(r.created_at).toISOString().split('T')[0])
-    )
-
-    const checkDate = new Date(todayDate)
-    while (activityDates.has(checkDate.toISOString().split('T')[0])) {
-      streakCount++
-      checkDate.setDate(checkDate.getDate() - 1)
-    }
-  }
-
-  const receiptQueue: ReceiptQueueSummary = {
-    unmatched_receipts_count: unmatchedReceiptsCount || 0,
-    unmatched_transactions_count: unmatchedTransactionsCount || 0,
-    pending_review_count: pendingReviewCount || 0,
-    streak_count: streakCount,
-  }
-
   return (
     <DashboardContent
       companyId={companyId}
@@ -308,9 +241,6 @@ export default async function DashboardPage() {
       summary={{
         ytd: ytdTotals,
         mtd: mtdTotals,
-        uncategorizedCount: uncategorizedCount || 0,
-        uncategorizedIncome,
-        uncategorizedExpenses,
         unpaidInvoicesCount: (unpaidInvoices || []).length,
         unpaidInvoicesTotal: unpaidTotal,
         unpaidVatTotal,
@@ -318,10 +248,10 @@ export default async function DashboardPage() {
         bankBalance,
         expiringBankConnections,
         deadlines: (deadlines || []) as Deadline[],
-        receiptQueue,
-        missingUnderlagCount,
         staleUncategorizedCount: staleUncategorizedCount || 0,
       }}
+      worklist={worklist}
+      suggestedMatches={suggestedMatches}
       onboardingProgress={onboardingProgress}
     />
   )

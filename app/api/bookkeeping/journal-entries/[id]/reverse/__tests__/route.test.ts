@@ -5,6 +5,7 @@ import {
   createMockRouteParams,
   makeJournalEntry,
 } from '@/tests/helpers'
+import { EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
 
 // Mock dependencies before imports
 const mockCreateClient = vi.fn()
@@ -76,16 +77,18 @@ describe('POST /api/bookkeeping/journal-entries/[id]/reverse', () => {
     expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1')
   })
 
-  it('returns 400 when engine throws', async () => {
-    mockReverseEntry.mockRejectedValue(new Error('Entry already reversed'))
+  it('maps a typed concurrent-reversal error to the canonical envelope (409)', async () => {
+    // reverseEntry throws the typed error on a concurrent storno; the wrapper
+    // routes it through errorResponse() → 409 + { error: { code, ... } }.
+    mockReverseEntry.mockRejectedValue(new EntryAlreadyReversedError())
 
     const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', {
       method: 'POST',
     })
     const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(400)
-    expect(body.error).toBe('Entry already reversed')
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ENTRY_ALREADY_REVERSED')
   })
 })

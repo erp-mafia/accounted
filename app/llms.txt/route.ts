@@ -1,5 +1,5 @@
 /**
- * /llms.txt — agent-discoverable index of the gnubok API.
+ * /llms.txt — agent-discoverable index of the Accounted API.
  *
  * Convention adopted by Stripe, Anthropic, and other agent-facing platforms:
  * a plain-text Markdown file at the doc root that points LLM crawlers and
@@ -15,17 +15,17 @@ import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
 export async function GET(_request: Request) {
   const base = getCanonicalBaseUrl()
 
-  const body = `# gnubok API
+  const body = `# Accounted API
 
 > Swedish double-entry bookkeeping as a public REST API. API version ${API_V1_VERSION}.
 
-This API lets agents and integrations do anything the gnubok dashboard can do —
+This API lets agents and integrations do anything the Accounted dashboard can do —
 read transactions, create invoices, mark them paid, run VAT reports, file year-end
 declarations, ingest SIE files, and subscribe to webhooks for state changes.
 
 ## Quickstart
 
-1. Create an API key in the gnubok dashboard at /settings/api.
+1. Create an API key in the Accounted dashboard at /settings/api.
 2. Authenticate with \`Authorization: Bearer gnubok_sk_<live|test>_<random>\`.
 3. List companies the key can access: \`GET ${base}/api/v1/companies\`.
 4. Use the returned \`id\` as \`{companyId}\` in subsequent paths.

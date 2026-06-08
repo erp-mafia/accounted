@@ -18,7 +18,7 @@ export default async function SelectCompanyPage() {
     redirect('/login')
   }
 
-  // Existing gnubok memberships.
+  // Existing Accounted memberships.
   const { data: memberships } = await supabase
     .from('company_members')
     .select(`
@@ -123,14 +123,14 @@ export default async function SelectCompanyPage() {
     (r) => r.positionEnd == null,
   )
 
-  // Drop TIC roles that already appear in the user's gnubok memberships —
-  // those render via the "Your gnubok companies" section above instead.
+  // Drop TIC roles that already appear in the user's Accounted memberships —
+  // those render via the "Your Accounted companies" section above instead.
   const rolesNotAlreadyMine = activeRoles.filter(
     (r) => !memberOrgNumbers.has(r.companyRegistrationNumber.replace(/[\s-]/g, '')),
   )
 
   // Cross-reference remaining TIC org numbers against the global companies
-  // table to detect "exists in gnubok, user not a member" cases. Use the
+  // table to detect "exists in Accounted, user not a member" cases. Use the
   // service client — RLS filters out companies the user isn't a member of,
   // which is exactly the data we need. Scoped to the specific org numbers.
   let externallyOwnedOrgs = new Set<string>()

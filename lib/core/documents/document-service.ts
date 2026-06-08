@@ -305,6 +305,21 @@ export async function linkToJournalEntry(
   journalEntryId: string,
   journalEntryLineId?: string
 ): Promise<DocumentAttachment> {
+  // The document is company-filtered below, but the journal entry id arrives
+  // from the client and the FK only requires existence — verify it belongs to
+  // the same company so a crafted id can't anchor a document to another
+  // tenant's verifikation. (RLS hides foreign rows either way; this makes the
+  // rejection explicit instead of a confusing downstream state.)
+  const { data: entry, error: entryError } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (entryError || !entry) {
+    throw new Error('Failed to link document: journal entry not found')
+  }
 
   const { data, error } = await supabase
     .from('document_attachments')

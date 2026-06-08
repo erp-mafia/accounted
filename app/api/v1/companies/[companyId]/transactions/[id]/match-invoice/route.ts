@@ -26,10 +26,11 @@ import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
 } from '@/lib/bookkeeping/invoice-entries'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import type { EntityType, Invoice, Transaction } from '@/types'
@@ -123,7 +124,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     }
-    const { invoice_id, force, expected_journal_entry_id } = parsed.data
+    const { invoice_id, force, expected_journal_entry_id, lines: customLines } = parsed.data
     const txLog = ctx.log.child({ transactionId: txId, invoiceId: invoice_id })
 
     const { data: transaction, error: fetchTxErr } = await ctx.supabase
@@ -265,6 +266,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const paidAmount = transaction.amount
+
+    // Overshoot guard + paid/remaining math — shared with the dashboard and
+    // agent (commit) paths via planInvoicePayment. Without this, the public API
+    // silently overpaid an invoice (recording paid_amount > total, over-crediting
+    // AR). Runs BEFORE the storno + strict-mode JE creation, so a rejected match
+    // touches no state.
+    const payment = planInvoicePayment(invoice, paidAmount)
+    if (!payment.ok) {
+      return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+        requestId: ctx.requestId,
+        details: payment.details,
+      })
+    }
+    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+
     if (transaction.journal_entry_id) {
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, transaction.journal_entry_id)
@@ -288,17 +305,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     const now = new Date().toISOString()
-    const paidAmount = transaction.amount
-    const newPaidAmount =
-      Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
-    const currentRemaining =
-      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-    const newRemaining = Math.max(
-      0,
-      Math.round((currentRemaining - paidAmount) * 100) / 100,
-    )
-    const isFullyPaid = newRemaining <= 0
-    const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
 
     const { data: settings } = await ctx.supabase
       .from('company_settings')
@@ -309,15 +315,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entityType: EntityType =
       (settings?.entity_type as EntityType) || 'enskild_firma'
 
-    // Reject cash-method partial payments. Under kontantmetoden, utgående
-    // moms must be reported in the period of actual receipt (ML 13 kap 8 §);
-    // the partial-payment branch below uses createInvoicePaymentJournalEntry
-    // (the accrual-style 1510/1930 clearing entry), which doesn't model the
-    // per-installment moms event. Rather than silently over-report moms,
-    // refuse the operation and document the constraint. Full payments
-    // (isFullyPaid=true) flow through createInvoiceCashEntry which IS the
-    // correct kontantmetod path.
-    if (accountingMethod === 'cash' && !isFullyPaid) {
+    // The JE shape is driven by the INVOICE'S booking state, not the
+    // company's current setting. If the invoice already has a JE (Dr 1510
+    // posted at send), the match must clear 1510 — otherwise the receivable
+    // stays orphaned and 30xx + 26xx get double-counted. The current
+    // accounting_method only governs the cash-method fast path for
+    // invoices that were never booked.
+    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
+    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    // Reject cash-method partial payments ONLY for pure kontantmetoden
+    // invoices (no prior JE). Under kontantmetoden utgående moms must be
+    // reported in the period of actual receipt (ML 13 kap 8 §); the
+    // partial-payment branch uses the accrual-style clearing entry which
+    // doesn't model the per-installment moms event. When the invoice was
+    // already booked under accrual, the clearing entry IS the correct
+    // partial path regardless of the company's current setting.
+    if (!invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', txLog, {
         requestId: ctx.requestId,
         details: {
@@ -340,7 +354,36 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // strictly worse than a clean failure to retry.
     let journalEntryId: string | null = null
     try {
-      if (accountingMethod === 'cash' && isFullyPaid) {
+      if (customLines) {
+        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
+            requestId: ctx.requestId,
+            details: { totalDebit, totalCredit },
+          })
+        }
+        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
+        if (!fiscalPeriodId) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+            requestId: ctx.requestId,
+            details: { payment_date: transaction.date },
+          })
+        }
+        const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: desc,
+          source_type: sourceType,
+          source_id: invoice.id,
+          lines: customLines,
+        })
+        journalEntryId = je?.id ?? null
+      } else if (useCashEntry) {
         const je = await createInvoiceCashEntry(
           ctx.supabase,
           ctx.companyId!,
@@ -436,8 +479,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // The "intäkt bokförs vid slutbetalning" note only applies to genuine
+    // kontantmetoden partials — never-booked invoices. When the invoice was
+    // booked under accrual, the clearing entry handles the partial cleanly
+    // and the note would be misleading.
     const paymentNotes =
-      accountingMethod === 'cash' && !isFullyPaid
+      !invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid
         ? 'Kontantmetoden: intäkt bokförs vid slutbetalning'
         : null
 

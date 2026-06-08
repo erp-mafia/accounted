@@ -136,7 +136,7 @@ export interface EnrichmentData {
 }
 
 // ---------------------------------------------------------------------------
-// Complete endpoint request/response (gnubok internal)
+// Complete endpoint request/response (Accounted internal)
 // ---------------------------------------------------------------------------
 
 export interface BankIdCompleteRequest {

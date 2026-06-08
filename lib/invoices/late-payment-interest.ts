@@ -54,7 +54,7 @@ const LATE_PAYMENT_PREMIUM = 0.08 // 8 procentenheter per Räntelagen §6
  *
  * If the requested date is before the earliest entry in the table we fall
  * back to the earliest entry (this is a defensive measure — should never
- * happen in practice since gnubok was launched after 2022).
+ * happen in practice since Accounted was launched after 2022).
  */
 export function getReferensrantaAt(date: string): number {
   // Walk newest-first so the first match wins.

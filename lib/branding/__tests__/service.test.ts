@@ -43,7 +43,7 @@ describe('branding service', () => {
     const b = getBranding()
     expect(b.appName).toBe('Accounted')
     expect(b.appDescription).toBe('Ekonomihantering')
-    expect(b.legalEntity).toBe('Arcim')
+    expect(b.legalEntity).toBe('Arcim Technology AB')
     expect(b.supportEmail).toBe('support@gnubok.se')
     expect(b.privacyEmail).toBe('privacy@gnubok.se')
     expect(b.securityEmail).toBe('security@arcim.io')
@@ -128,7 +128,7 @@ describe('branding service', () => {
     registerBrandingService({ appName: 'Holdio' })
     const b = getBranding()
     expect(b.appName).toBe('Holdio')
-    expect(b.legalEntity).toBe('Arcim')
+    expect(b.legalEntity).toBe('Arcim Technology AB')
     expect(b.supportEmail).toBe('support@gnubok.se')
   })
 

@@ -28,6 +28,8 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { closePeriod, lockPeriod, unlockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -40,9 +42,12 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
+import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
-import { executeSIEImport } from '@/lib/import/sie-import'
+import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { getEmailService } from '@/lib/email/service'
@@ -101,14 +106,29 @@ export interface CommitOptions {
   userEmail?: string
   /**
    * commit_method recorded on any journal_entries created by this operation.
-   * Must match the CHECK constraint on journal_entries.commit_method:
-   * 'user_accept' | 'bulk_accept' | 'timing_ceiling' | 'migration' | 'legacy'.
-   * Single-approval route passes 'user_accept' (default); bulk-approval passes
-   * 'bulk_accept'. Defaults to 'user_accept' since the dispatcher is only
-   * invoked from human-approval paths after agent auto-commit was removed
-   * (migration 20260505190027_drop_agent_auto_commit).
+   * Must match the CHECK constraint on journal_entries.commit_method
+   * (migration 20260618120001): 'user_accept' | 'bulk_accept' |
+   * 'timing_ceiling' | 'migration' | 'legacy' | 'agent' | 'api_key'.
+   *
+   * Web-UI single-approval passes 'user_accept'; bulk-approval passes
+   * 'bulk_accept'. MCP approvals pass the relaying credential — 'api_key'
+   * (gnubok-mcp bridge) or 'agent' (OAuth connector) — so the immutable layer
+   * records that the acknowledgment was agent-relayed rather than a
+   * first-party human session (agent_first_vision.md §8 P0-1). Every path is
+   * still human-approval-gated; agent auto-commit was removed in
+   * 20260505190027_drop_agent_auto_commit.
    */
-  commitMethod?: 'user_accept' | 'bulk_accept'
+  commitMethod?: 'user_accept' | 'bulk_accept' | 'agent' | 'api_key'
+  /**
+   * WHO is relaying this approval (api_key with the key's display name, plain
+   * user, agent_chat, …). Propagated to every journal-entry commit made by the
+   * operation via the runWithActor() AsyncLocalStorage scope — unlike
+   * commitMethod, which only the create_voucher executor threads explicitly —
+   * and stamped onto journal_entries.committed_actor_* plus the audit_log
+   * COMMIT row by the commit_journal_entry RPC (migration 20260619120000).
+   * Omitted → NULL attribution, identical to pre-attribution behaviour.
+   */
+  actor?: CommitActor
 }
 
 // ── Helper: ensure fiscal period covers the date ──────────────────
@@ -661,15 +681,21 @@ async function commitMarkInvoicePaid(
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null
 
+  // Route on invoice state, not the company's current accounting_method —
+  // an invoice booked at send under accrual must clear 1510 here even if
+  // the company has since switched to kontantmetoden.
+  const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
+  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
+
   if (isRealInvoice) {
-    if (accountingMethod === 'accrual') {
-      const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name
+    if (useCashEntry) {
+      const je = await createInvoiceCashEntry(
+        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name
       )
       journalEntryId = je?.id ?? null
     } else {
-      const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name
+      const je = await createInvoicePaymentJournalEntry(
+        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name
       )
       journalEntryId = je?.id ?? null
     }
@@ -709,8 +735,22 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.status === 'sent' || invoice.status === 'paid' || invoice.status === 'overdue') {
+  // partially_paid/credited imply the invoice was already issued too — the
+  // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
+  if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
     return { error: 'Invoice has already been sent', status: 409 }
+  }
+  // A cancelled invoice keeps its F-series number for ML 17 kap 24§ compliance
+  // but is not a valid faktura — sending it would silently re-activate it (the
+  // status flip below has no guard) and deliver a "MAKULERAD" PDF as if live.
+  // Mirrors the send route's guard (audit C17 — this agent path lacked it).
+  if (invoice.status === 'cancelled') {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_CANCELLED')?.message_sv ??
+        'Makulerade fakturor kan inte skickas. Skapa en ny faktura istället.',
+      status: 400,
+    }
   }
 
   const customer = invoice.customer as Customer
@@ -721,12 +761,6 @@ async function commitSendInvoice(
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
-  try {
-    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
-  } catch (err) {
-    return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
-  }
-
   const items = (invoice.items as InvoiceItem[]).sort(
     (a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order
   )
@@ -736,6 +770,47 @@ async function commitSendInvoice(
     const { data: orig } = await supabase
       .from('invoices').select('invoice_number').eq('id', invoice.credited_invoice_id).single()
     if (orig) originalInvoiceNumber = orig.invoice_number
+  }
+
+  // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
+  // number, so a render failure can't leave a numbered-but-never-issued
+  // invoice (an F-series gap if the draft is later abandoned). Skipped when
+  // the row is already numbered (retry path) — we'd render twice for no gain.
+  // Mirrors the send route (audit C17 — this agent path assigned the number
+  // first and rendered unguarded).
+  const isFreshAllocation = !invoice.invoice_number
+  if (isFreshAllocation) {
+    try {
+      const preflight = prepareInvoicePdfRender(company as CompanySettings)
+      await renderToBuffer(
+        InvoicePDF({
+          invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
+          customer,
+          items,
+          company: company as CompanySettings,
+          originalInvoiceNumber,
+          branding: preflight.branding,
+        })
+      )
+    } catch (err) {
+      log.error('preflight PDF render failed before invoice number assignment (agent send)', err as Error, {
+        companyId,
+        userId,
+        invoiceId,
+      })
+      return {
+        error:
+          getErrorEntry('INVOICE_SEND_PDF_RENDER_FAILED')?.message_sv ??
+          'Fakturans PDF kunde inte skapas. Kontrollera fakturarader och kunduppgifter och försök igen.',
+        status: 500,
+      }
+    }
+  }
+
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
   }
 
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens
@@ -891,18 +966,29 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
+  // Overshoot guard + paid/remaining math — shared with the dashboard and v1
+  // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
+  // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
+  // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
+  // match leaves the transaction untouched and never burns a voucher number.
+  const paidAmount = transaction.amount
+  const payment = planInvoicePayment(invoice, paidAmount)
+  if (!payment.ok) {
+    return {
+      error:
+        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
+        'Transaktionsbeloppet är större än fakturans återstående belopp.',
+      status: 400,
+    }
+  }
+  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+
   if (transaction.journal_entry_id) {
     await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
     await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
   }
 
   const now = new Date().toISOString()
-  const paidAmount = transaction.amount
-  const newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
-  const currentRemaining = invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount || 0))
-  const newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
-  const isFullyPaid = newRemaining <= 0
-  const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
 
   const { data: settings } = await supabase
     .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
@@ -910,9 +996,14 @@ async function commitMatchTransactionInvoice(
   const accountingMethod = settings?.accounting_method || 'accrual'
   const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
+  // Route on invoice state, not the company's current setting. Mirror of
+  // the match-invoice route fix — see that handler for the full rationale.
+  const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
+  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
   let journalEntryId: string | null = null
   try {
-    if (accountingMethod === 'cash' && isFullyPaid) {
+    if (useCashEntry) {
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name
       )
@@ -1022,6 +1113,50 @@ async function commitLinkInvoiceVoucher(
       payment_amount: outcome.result.paymentAmount,
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
+    },
+  }
+}
+
+async function commitLinkSupplierInvoiceVoucher(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const supplierInvoiceId = params.supplier_invoice_id as string | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const notes = (params.notes as string | undefined) ?? undefined
+
+  if (!supplierInvoiceId || !journalEntryId) {
+    return { error: 'supplier_invoice_id and journal_entry_id are required', status: 400 }
+  }
+
+  const outcome = await linkSupplierInvoiceToVoucher(supabase, userId, companyId, {
+    supplierInvoiceId,
+    journalEntryId,
+    notes,
+  })
+
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    // 404/409 are auto-rejected by the dispatcher (the user can re-stage with
+    // adjusted inputs); 400 surfaces as a normal failure so the UI can explain.
+    return {
+      error: entry?.message_en ?? outcome.code,
+      status: entry?.httpStatus ?? 500,
+    }
+  }
+
+  return {
+    data: {
+      invoice_status: outcome.result.invoiceStatus,
+      paid_amount: outcome.result.paidAmount,
+      remaining_amount: outcome.result.remainingAmount,
+      payment_amount: outcome.result.paymentAmount,
+      payment_id: outcome.result.paymentId,
+      journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
     },
   }
 }
@@ -1550,6 +1685,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       total_sek: totalSek,
       paid_amount: 0,
       remaining_amount: totalRounded,
+      document_id: documentId,
       notes,
     })
     .select()
@@ -1602,6 +1738,11 @@ async function commitCreateSupplierInvoiceFromInbox(
       vat_code: null,
       vat_rate: vatRate,
       vat_amount: vatAmt,
+      // For reverse charge the buyer self-assesses VAT; carry an explicit
+      // statutory rate when staged, else null (engine defaults to 25%).
+      reverse_charge_rate: reverseCharge
+        ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
+        : null,
     }
   })
 
@@ -1665,6 +1806,27 @@ async function commitCreateSupplierInvoiceFromInbox(
             })
           }
         }
+      } else {
+        // createSupplierInvoiceRegistrationEntry returns null ONLY when no
+        // fiscal period covers invoice_date (every other failure throws into
+        // the catch below). Without this branch the inbox item gets linked to
+        // an unbooked supplier invoice — the same 2440/2641 orphan the catch
+        // guards against. Roll back (items first, see FK note below) and return
+        // an actionable error instead of silently "succeeding".
+        await supabase
+          .from('supplier_invoice_items')
+          .delete()
+          .eq('supplier_invoice_id', invoice.id)
+        await supabase
+          .from('supplier_invoices')
+          .delete()
+          .eq('id', invoice.id)
+          .eq('company_id', companyId)
+        return {
+          error:
+            'Det finns inget räkenskapsår som täcker fakturadatumet. Lägg upp räkenskapsåret först, eller ändra fakturadatumet.',
+          status: 400,
+        }
       }
     } catch (err) {
       // Roll back: orphan supplier_invoices row without its registration JE
@@ -1707,11 +1869,14 @@ async function commitCreateSupplierInvoiceFromInbox(
   }
 
   // Terminal state for the inbox row: created_supplier_invoice_id is the
-  // dedup key for next time this inbox item is touched. status='confirmed'
-  // removes it from the "needs action" filter in the UI.
+  // dedup key for next time this inbox item is touched, and it's what the UI
+  // and list_unmatched_documents use to drop the row out of "needs action".
+  // Do NOT write status here — the status CHECK only allows received|error
+  // (migration 20260504180000); writing 'confirmed' makes Postgres reject the
+  // whole UPDATE, so the link column never lands and the item stays unresolved.
   const { error: linkInboxErr } = await supabase
     .from('invoice_inbox_items')
-    .update({ created_supplier_invoice_id: invoice.id, status: 'confirmed' })
+    .update({ created_supplier_invoice_id: invoice.id })
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
 
@@ -2114,6 +2279,10 @@ async function commitImportSie(
   const importOpeningBalances = Boolean(params.import_opening_balances)
   const importTransactions = Boolean(params.import_transactions)
   const voucherSeries = params.voucher_series as string | undefined
+  // Default true (not Boolean(...) — operations staged before this param
+  // existed must keep the file's account names, matching the UI default).
+  const updateAccountNames =
+    params.update_account_names === undefined ? true : Boolean(params.update_account_names)
 
   if (!fileContent || !filename || !Array.isArray(mappings)) {
     return { error: 'file_content, filename, and mappings are required', status: 400 }
@@ -2134,6 +2303,7 @@ async function commitImportSie(
       importOpeningBalances,
       importTransactions,
       voucherSeries,
+      updateAccountNames,
     })
 
     if (!result.success) {
@@ -2152,6 +2322,30 @@ async function commitImportSie(
   } catch (err) {
     if (isBookkeepingError(err)) throw err
     return { error: err instanceof Error ? err.message : 'SIE import failed', status: 500 }
+  }
+}
+
+async function commitUndoSieImport(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const importId = params.import_id as string
+
+  if (!importId) {
+    return { error: 'import_id is required', status: 400 }
+  }
+
+  const result = await undoSIEImport(supabase, companyId, importId)
+  if (!result.success) {
+    return { error: result.error ?? 'SIE undo failed', status: 400 }
+  }
+
+  return {
+    data: {
+      import_id: importId,
+      deleted_entries: result.deletedEntries,
+    },
   }
 }
 
@@ -2222,6 +2416,64 @@ async function commitCreateVoucher(
     fiscalPeriodId = resolved
   }
 
+  // source_type is derived here — never trust params.source_type. The MCP tool
+  // stages a typed boolean (is_opening_balance), not a raw source_type string,
+  // so a tampered or future direct-staging path can't inject
+  // 'bank'/'invoice'/etc. and corrupt audit attribution. The default is
+  // 'manual'. We only upgrade to 'opening_balance' after independently
+  // re-validating the entry genuinely looks like an ingående balans — this
+  // matters because bank reconciliation excludes an IB from the period movement
+  // ONLY when source_type='opening_balance' (lib/reconciliation/bank-reconciliation.ts);
+  // a mislabelled 'manual' IB shows up as a phantom reconciliation difference.
+  let sourceType: JournalEntrySourceType = 'manual'
+  if (params.is_opening_balance === true) {
+    // Constraint 1: every line must be a balance-sheet account (BAS class 1 or
+    // 2). Mirrors the canonical opening-balance flow which rejects P&L accounts
+    // (app/api/import/opening-balance/execute/route.ts). Inlined to avoid
+    // coupling this executor to the SIE-import module.
+    const nonBalanceSheet = lines
+      .map((l) => l.account_number)
+      .filter((num) => {
+        const cls = parseInt(num.charAt(0), 10)
+        return !(cls === 1 || cls === 2)
+      })
+    if (nonBalanceSheet.length > 0) {
+      return {
+        error:
+          `Ingående balans får bara innehålla balanskonton (klass 1–2). ` +
+          `Dessa konton hör inte hemma i en IB: ${[...new Set(nonBalanceSheet)].join(', ')}. ` +
+          `Bokför resultatkonton som en vanlig verifikation utan is_opening_balance.`,
+        status: 400,
+      }
+    }
+
+    // Constraint 2: the entry must be dated on the fiscal period's first day —
+    // an IB opens the period (same as the canonical flow, which dates the entry
+    // on period.period_start). We fetch period_start here because the resolved
+    // fiscalPeriodId may have come from either the explicit param or a date
+    // lookup; either way the date must line up exactly.
+    const { data: period, error: periodErr } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, name')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (periodErr || !period) {
+      return { error: 'Räkenskapsperioden hittades inte.', status: 404 }
+    }
+    if (entryDate !== period.period_start) {
+      return {
+        error:
+          `En ingående balans måste dateras på räkenskapsårets första dag ` +
+          `(${period.period_start}). Angivet datum: ${entryDate}. ` +
+          `Ändra datumet eller bokför som en vanlig verifikation utan is_opening_balance.`,
+        status: 400,
+      }
+    }
+
+    sourceType = 'opening_balance'
+  }
+
   try {
     const entry = await createJournalEntry(
       supabase,
@@ -2231,18 +2483,16 @@ async function commitCreateVoucher(
         fiscal_period_id: fiscalPeriodId,
         entry_date: entryDate,
         description,
-        // source_type is hardcoded — never trust params.source_type. The MCP
-        // tool stages 'manual', but a future direct-staging path could
-        // otherwise inject 'bank'/'invoice'/etc. and corrupt audit attribution.
-        source_type: 'manual' as JournalEntrySourceType,
+        source_type: sourceType,
         voucher_series: (params.voucher_series as string) || undefined,
         notes: (params.notes as string) || undefined,
         lines,
       },
-      // commit_method records HOW it was committed, not who staged it. MCP-
-      // staged ops still go through human approval, so 'user_accept' (or
-      // 'bulk_accept' from the bulk route) is the correct value. The DB CHECK
-      // constraint rejects anything else (migration 20260420120001).
+      // commit_method records HOW it was committed, not who staged it.
+      // Web routes pass 'user_accept'/'bulk_accept'; the MCP approve path
+      // passes 'api_key'/'agent' so agent-relayed acknowledgments are
+      // distinguishable in the immutable layer. The DB CHECK constraint
+      // rejects anything else (migrations 20260420120001, 20260618120001).
       opts.commitMethod ?? 'user_accept'
     )
 
@@ -2265,9 +2515,12 @@ async function commitCreateVoucher(
       // zero-rows-updated result and surfaces a structured warning. We also
       // require .eq('created_supplier_invoice_id', null) so a concurrent
       // create_supplier_invoice_from_inbox doesn't get clobbered either.
+      // Only the link column is written — the status CHECK allows received|error
+      // (migration 20260504180000), so writing 'confirmed' here would fail the
+      // whole UPDATE and silently leave the inbox item in "needs action".
       const { data: updatedRows, error: linkInboxErr } = await supabase
         .from('invoice_inbox_items')
-        .update({ created_journal_entry_id: entry.id, status: 'confirmed' })
+        .update({ created_journal_entry_id: entry.id })
         .eq('id', inboxItemId)
         .eq('company_id', companyId)
         .is('created_journal_entry_id', null)
@@ -2580,6 +2833,197 @@ async function commitGenerateAgi(
   }
 }
 
+// ── Multi-tx commit handlers (PRs #603/#606/#608/#610) ────────────
+//
+// Both wrap their SQL RPC. The RPCs do all the heavy lifting (locking,
+// balance/period checks, journal entry creation, voucher number,
+// payment/junction rows, doc inheritance). The commit handlers just
+// shape params, call the RPC, and translate the structured error code
+// or success payload into an ExecutorResult.
+
+async function commitMatchBatchAllocate(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Trust boundary (compliance-swarm V8.2.1, A.8.2):
+  // Tenant isolation is enforced authoritatively inside the SQL RPC
+  // `match_batch_allocate` (supabase/migrations/20260601122000_*.sql):
+  //   - `transactions` row fetched WHERE id = p_tx_id AND company_id = p_company_id
+  //   - `invoices` and `supplier_invoices` rows fetched WHERE id = ? AND company_id = p_company_id
+  //   - `auth.uid()` resolves the caller; membership checked against
+  //     `company_members.company_id = p_company_id`
+  // The MCP execute() handler additionally pre-checks the same IDs to
+  // surface clean errors before staging. This commit handler is a thin
+  // pass-through by design — re-querying here would triple the same
+  // check without adding security.
+  const txId = params.transaction_id as string
+  const allocations = params.allocations
+  if (!txId) return { error: 'transaction_id is required', status: 400 }
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    return { error: 'allocations is required (non-empty array)', status: 400 }
+  }
+  const { data, error } = await supabase.rpc('match_batch_allocate', {
+    p_tx_id: txId,
+    p_allocations: allocations,
+    p_company_id: companyId,
+  })
+  if (error) {
+    // Sanitised log (A.8.11, CC7.2): only error code + message, no
+    // payload — error.details can echo invoice IDs, amounts, etc.
+    log.error('match_batch_allocate RPC error', {
+      code: (error as { code?: string }).code,
+      message: error.message,
+    })
+    return { error: error.message || 'Database error', status: 500 }
+  }
+  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
+  if (!result || !result.ok) {
+    return {
+      error: result?.code || 'match_batch_allocate failed',
+      status: 400,
+      data: result?.details as Record<string, unknown> | undefined,
+    }
+  }
+  // Structured audit-trail entry on success (compliance-swarm V16). Tx
+  // count + JE id + the source tx id only — no amounts, no
+  // counterparty identifiers, no descriptions. txId is included
+  // intentionally so the audit trail can join successful commits back
+  // to the source bank tx without a separate query; it's not PII on
+  // its own (just an internal UUID, scoped to companyId already logged).
+  log.info('match_batch_allocate committed', {
+    companyId,
+    operationType: 'match_batch_allocate',
+    journalEntryId: result.journal_entry_id,
+    txId,
+    allocationCount: allocations.length,
+  })
+  return { data: result as unknown as Record<string, unknown>, status: 200 }
+}
+
+async function commitBulkBookTransactions(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Trust boundary (compliance-swarm V8.2.1, A.8.2):
+  // Tenant isolation + chart-of-accounts validation are enforced
+  // authoritatively inside the SQL RPC `bulk_book_transactions`
+  // (supabase/migrations/20260602121000_*.sql):
+  //   - All `transactions` rows fetched WHERE id = ANY(p_tx_ids) AND
+  //     company_id = p_company_id (line ~115).
+  //   - `journal_entries` row (link-existing branch) fetched WHERE id =
+  //     p_existing_journal_entry_id AND company_id = p_company_id.
+  //   - Every account_number in p_new_entry.lines validated against
+  //     `chart_of_accounts` filtered by company_id + is_active (PR #610
+  //     round 2 added this allowlist).
+  //   - `auth.uid()` resolves the caller; membership checked against
+  //     `company_members.company_id = p_company_id`.
+  // The MCP execute() handler additionally pre-checks tx ownership +
+  // JE ownership at stage time to surface clean errors. This commit
+  // handler is a thin pass-through by design.
+  const txIds = params.tx_ids
+  const existingJeId = (params.existing_journal_entry_id as string | null | undefined) ?? null
+  const newEntry = (params.new_entry as Record<string, unknown> | null | undefined) ?? null
+  if (!Array.isArray(txIds) || txIds.length === 0) {
+    return { error: 'tx_ids is required (non-empty array)', status: 400 }
+  }
+  if ((existingJeId == null) === (newEntry == null)) {
+    return {
+      error: 'Provide exactly one of existing_journal_entry_id or new_entry',
+      status: 400,
+    }
+  }
+  const { data, error } = await supabase.rpc('bulk_book_transactions', {
+    p_tx_ids: txIds,
+    p_existing_journal_entry_id: existingJeId,
+    p_new_entry: newEntry,
+    p_company_id: companyId,
+  })
+  if (error) {
+    // Sanitised log (A.8.11, CC7.2): only error code + message.
+    log.error('bulk_book_transactions RPC error', {
+      code: (error as { code?: string }).code,
+      message: error.message,
+    })
+    return { error: error.message || 'Database error', status: 500 }
+  }
+  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string; mode?: string; linked_tx_count?: number; docs_linked?: number }
+  if (!result || !result.ok) {
+    return {
+      error: result?.code || 'bulk_book_transactions failed',
+      status: 400,
+      data: result?.details as Record<string, unknown> | undefined,
+    }
+  }
+  // Structured audit-trail entry on success (compliance-swarm V16).
+  log.info('bulk_book_transactions committed', {
+    companyId,
+    operationType: 'bulk_book_transactions',
+    journalEntryId: result.journal_entry_id,
+    mode: result.mode,
+    txCount: result.linked_tx_count,
+    docsLinked: result.docs_linked,
+  })
+  return { data: result as unknown as Record<string, unknown>, status: 200 }
+}
+
+async function commitLinkTransactionJournalEntry(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const transactionId = params.transaction_id as string | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const invoiceId = (params.invoice_id as string | undefined) ?? undefined
+
+  if (!transactionId || !journalEntryId) {
+    return { error: 'transaction_id and journal_entry_id are required', status: 400 }
+  }
+
+  const outcome = await linkTransactionToJournalEntry(supabase, userId, companyId, {
+    transactionId,
+    journalEntryId,
+    invoiceId,
+  })
+
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    const httpStatus = entry?.httpStatus ?? 500
+    return {
+      error: entry?.message_en ?? outcome.code,
+      status: httpStatus,
+      data: outcome.details as Record<string, unknown> | undefined,
+    }
+  }
+
+  // Structured audit-trail entry on success (compliance-swarm V16, SOC 2 CC4.1).
+  // Mirrors commitMatchBatchAllocate / commitBulkBookTransactions — IDs only,
+  // no amounts or counterparty PII. invoiceId is logged as boolean to avoid
+  // leaking which invoices are touched while still distinguishing the two
+  // code paths (link-only vs link+settle).
+  log.info('link_transaction_journal_entry committed', {
+    companyId,
+    operationType: 'link_transaction_journal_entry',
+    transactionId: outcome.result.transactionId,
+    journalEntryId: outcome.result.journalEntryId,
+    settledInvoice: outcome.result.invoiceId != null,
+  })
+
+  return {
+    data: {
+      transaction_id: outcome.result.transactionId,
+      journal_entry_id: outcome.result.journalEntryId,
+      voucher_label: outcome.result.voucherLabel,
+      invoice_id: outcome.result.invoiceId,
+      invoice_status: outcome.result.invoiceStatus,
+      paid_amount: outcome.result.paidAmount,
+      remaining_amount: outcome.result.remainingAmount,
+    },
+  }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -2588,8 +3032,25 @@ async function commitGenerateAgi(
  *
  * Used by both the human-approval route and the auto-commit path. Status row
  * transitions are applied here so the two callers stay consistent.
+ *
+ * When opts.actor is set, the entire executor runs inside a runWithActor()
+ * scope so EVERY journal-entry commit the operation makes — regardless of
+ * which entry generator produced it — carries actor attribution into
+ * journal_entries.committed_actor_* and the audit_log COMMIT row via
+ * commitEntry() → commit_journal_entry RPC (migration 20260619120000).
  */
 export async function commitPendingOperation(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  pendingOp: PendingOperation,
+  opts: CommitOptions = {}
+): Promise<CommitResult> {
+  const run = () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts)
+  return opts.actor ? runWithActor(opts.actor, run) : run()
+}
+
+async function commitPendingOperationInner(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
@@ -2655,6 +3116,9 @@ export async function commitPendingOperation(
       case 'link_invoice_voucher':
         result = await commitLinkInvoiceVoucher(supabase, userId, companyId, pendingOp.params)
         break
+      case 'link_supplier_invoice_voucher':
+        result = await commitLinkSupplierInvoiceVoucher(supabase, userId, companyId, pendingOp.params)
+        break
       case 'close_period':
         result = await commitClosePeriod(supabase, userId, companyId, pendingOp.params)
         break
@@ -2700,6 +3164,9 @@ export async function commitPendingOperation(
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
         break
+      case 'undo_sie_import':
+        result = await commitUndoSieImport(supabase, companyId, pendingOp.params)
+        break
       case 'create_voucher':
         result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params, opts)
         break
@@ -2717,6 +3184,15 @@ export async function commitPendingOperation(
         break
       case 'generate_agi':
         result = await commitGenerateAgi(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'match_batch_allocate':
+        result = await commitMatchBatchAllocate(supabase, companyId, pendingOp.params)
+        break
+      case 'bulk_book_transactions':
+        result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)
+        break
+      case 'link_transaction_journal_entry':
+        result = await commitLinkTransactionJournalEntry(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {

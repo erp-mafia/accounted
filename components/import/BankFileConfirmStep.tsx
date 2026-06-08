@@ -14,6 +14,7 @@ import {
   Link2,
   Calendar,
   Landmark,
+  AlertTriangle,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -37,8 +38,9 @@ export default function BankFileConfirmStep({
   onBack,
   isLoading,
 }: BankFileConfirmStepProps) {
-  const { transactions, stats, date_from, date_to } = parseResult
+  const { transactions, stats, date_from, date_to, issues } = parseResult
   const refsCount = transactions.filter((t) => t.reference).length
+  const warnings = issues.filter((i) => i.severity === 'warning')
 
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [selectedAccount, setSelectedAccount] = useState('1930')
@@ -102,6 +104,11 @@ export default function BankFileConfirmStep({
                 <span className="text-xs">Transaktioner</span>
               </div>
               <p className="text-xl font-display font-medium tabular-nums">{stats.parsed_rows}</p>
+              {stats.skipped_rows > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {stats.skipped_rows} rader hoppades över
+                </p>
+              )}
             </div>
 
             <div className="p-4 bg-muted/50 rounded-lg">
@@ -171,6 +178,36 @@ export default function BankFileConfirmStep({
           )}
         </CardContent>
       </Card>
+
+      {/* Skipped rows — surfaced here because the manual-mapping path skips the
+          preview step where these warnings would otherwise be shown. */}
+      {warnings.length > 0 && (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-warning" />
+              {warnings.length} {warnings.length === 1 ? 'rad' : 'rader'} hoppades över
+            </CardTitle>
+            <CardDescription>
+              Dessa rader kunde inte läsas och importeras inte. Kontrollera att inga transaktioner saknas.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {warnings.slice(0, 10).map((issue, i) => (
+                <p key={i} className="text-xs text-muted-foreground">
+                  Rad {issue.row}: {issue.message}
+                </p>
+              ))}
+              {warnings.length > 10 && (
+                <p className="text-xs text-muted-foreground font-medium">
+                  …och {warnings.length - 10} till
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">

@@ -1,13 +1,5 @@
-'use client'
-
-import { BookingTemplatesPanel } from '@/components/settings/BookingTemplatesPanel'
-import { CounterpartyTemplatesPanel } from '@/components/settings/CounterpartyTemplatesPanel'
+import { TemplatesSettingsContent } from '@/components/settings/sections/TemplatesSettingsContent'
 
 export default function TemplatesSettingsPage() {
-  return (
-    <div className="space-y-8">
-      <BookingTemplatesPanel />
-      <CounterpartyTemplatesPanel />
-    </div>
-  )
+  return <TemplatesSettingsContent />
 }

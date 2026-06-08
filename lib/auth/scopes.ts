@@ -103,7 +103,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/fiscal-periods/:id/year-end': 'bookkeeping:write',
   'POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances': 'bookkeeping:write',
   'POST /api/v1/companies/:companyId/fiscal-periods/:id/currency-revaluation': 'bookkeeping:write',
-  // Compliance check (gnubok's defensible edge).
+  // Compliance check (Accounted's defensible edge).
   'GET /api/v1/companies/:companyId/compliance/check': 'compliance:read',
   // Phase 4 PR-3 — Documents (multipart).
   'POST /api/v1/companies/:companyId/documents': 'documents:write',

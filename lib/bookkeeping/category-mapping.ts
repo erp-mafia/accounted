@@ -40,14 +40,14 @@ const PRIVATE_ACCOUNTS: Record<EntityType, string> = {
 const EXPENSE_ACCOUNTS: Record<string, string> = {
   expense_equipment: '5410',           // Förbrukningsinventarier
   expense_software: '5420',            // Programvaror
-  expense_travel: '5800',              // Resekostnader
+  expense_travel: '5890',              // Övriga resekostnader (5800 är gruppkonto)
   expense_office: '6110',              // Kontorsförbrukning
   expense_marketing: '5910',           // Annonsering
   expense_professional_services: '6530', // Redovisningstjänster
   expense_representation: '6071',      // Representation, avdragsgill
   expense_consumables: '5460',         // Förbrukningsvaror
   expense_vehicle: '5611',             // Drivmedel bil
-  expense_telecom: '6200',             // Telefon och internet
+  expense_telecom: '6230',             // Datakommunikation (6200 är gruppkonto)
   expense_bank_fees: '6570',           // Bankavgifter
   expense_card_fees: '6570',           // Kortavgifter
   expense_currency_exchange: '7960',   // Valutakursförluster
@@ -58,7 +58,7 @@ const EXPENSE_ACCOUNTS: Record<string, string> = {
 const INCOME_ACCOUNTS: Record<string, string> = {
   income_services: '3001',  // Försäljning tjänster 25%
   income_products: '3001',  // Försäljning varor 25% moms
-  income_other: '3900',     // Övriga rörelseintäkter
+  income_other: '3999',     // Övriga rörelseintäkter (3900 är gruppkonto)
 }
 
 /**
@@ -78,8 +78,8 @@ function getExpenseAccount(category: string, entityType: EntityType = 'enskild_f
  * 3001=25%, 3002=12%, 3003=6%, 3305=Export, 3308=EU services, 3004=Exempt.
  */
 function getIncomeAccount(category: string, vatTreatment?: VatTreatment): string {
-  // income_other always maps to 3900 regardless of VAT treatment
-  if (category === 'income_other') return '3900'
+  // income_other always maps to 3999 regardless of VAT treatment (3900 är gruppkonto)
+  if (category === 'income_other') return '3999'
 
   if (vatTreatment) {
     switch (vatTreatment) {
@@ -93,7 +93,7 @@ function getIncomeAccount(category: string, vatTreatment?: VatTreatment): string
   }
 
   // No vatTreatment provided — fall back to static mapping
-  return INCOME_ACCOUNTS[category] || '3900'
+  return INCOME_ACCOUNTS[category] || '3999'
 }
 
 /**
@@ -194,7 +194,7 @@ export function getCategoryAccountMapping(
   } else {
     return {
       debitAccount: BANK_ACCOUNT,
-      creditAccount: '3900',
+      creditAccount: '3999',
       vatTreatment: null,
       vatDebitAccount: null,
       vatCreditAccount: null,
@@ -326,7 +326,7 @@ export function getDefaultAccountForCategory(
   }
 
   if (category.startsWith('income_')) {
-    return INCOME_ACCOUNTS[category] || '3900'
+    return INCOME_ACCOUNTS[category] || '3999'
   }
 
   // uncategorized

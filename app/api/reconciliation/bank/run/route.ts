@@ -28,30 +28,36 @@ export async function POST(request: Request) {
 
   const accountNumber = account_number ?? '1930'
 
-  // Defense-in-depth: only allow account numbers the company has registered as
-  // a cash account. Applies uniformly including '1930' — the cash_accounts
-  // backfill seeds 1930 for every company that had a SEK PSD2 account, and the
-  // AccountPickerDialog seeds it for new companies on first connection.
+  // Defense-in-depth: reject a non-default account the company hasn't
+  // registered as a cash account. The default '1930' is exempt — when no
+  // cash_accounts row exists it falls back to currency-only scoping
+  // (cashAccountId undefined), so a company reconciling its primary SEK account
+  // without a row behaves exactly as before this feature. Matches the status
+  // endpoint, which is likewise lenient for '1930'.
   const { data: cashAccount } = await supabase
     .from('cash_accounts')
-    .select('currency')
+    .select('id, currency, is_primary')
     .eq('company_id', companyId)
     .eq('ledger_account', accountNumber)
     .maybeSingle()
 
-  if (!cashAccount) {
+  if (!cashAccount && accountNumber !== '1930') {
     return NextResponse.json(
       { error: 'Okänt kassakonto för det här företaget' },
       { status: 400 },
     )
   }
-  const currency = (cashAccount.currency as string | undefined) ?? 'SEK'
+  const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
 
   const result = await runReconciliation(supabase, companyId, user.id, {
     dateFrom: date_from,
     dateTo: date_to,
     accountNumber,
     currency,
+    cashAccountId: cashAccount?.id as string | undefined,
+    // Only the primary account claims unassigned (NULL cash_account_id) rows —
+    // a secondary same-currency account must scope strictly to its own id.
+    includeUnassigned: Boolean(cashAccount?.is_primary),
     dryRun: dry_run ?? false,
   })
 

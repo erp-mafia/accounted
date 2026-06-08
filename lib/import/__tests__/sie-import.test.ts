@@ -1024,7 +1024,7 @@ describe('importVouchers — per-voucher series preservation', () => {
   it('preserves original source series/number on each imported entry, even across skipped vouchers', async () => {
     const { supabase, journalEntryInserts } = buildCapturingSupabase()
     // A2 is an empty voucher (no lines) — will be skipped. A1 and A3 survive.
-    // Gnubok assigns target numbers 1 and 2 (contiguous), but source_voucher_number
+    // Accounted assigns target numbers 1 and 2 (contiguous), but source_voucher_number
     // must preserve the SIE originals (1 and 3) so traceability is not lost.
     const parsed = makeParsedFile({
       vouchers: [
@@ -1071,5 +1071,171 @@ describe('importVouchers — per-voucher series preservation', () => {
 
     expect(journalEntryInserts[0].source_voucher_series).toBeNull()
     expect(journalEntryInserts[0].source_voucher_number).toBe(1)
+  })
+
+  describe('opening-balance voucher tagging vs derived IB (issue #675)', () => {
+    const obMap = new Map([
+      ['1930', '1930'],
+      ['2010', '2010'],
+    ])
+
+    it('tags a qualifying OB voucher opening_balance even when #UB -1 records exist', async () => {
+      // Precedence 2 beats 3: the OB-voucher candidate makes
+      // getEffectiveOpeningBalances yield no balances, so hasCurrentYearIb is
+      // false and the voucher keeps serving as the IB. Without that yield, a
+      // derived IB entry AND this voucher would both book the same amounts.
+      const { supabase, journalEntryInserts } = buildCapturingSupabase()
+      const parsed = makeParsedFile({
+        openingBalances: [],
+        closingBalances: [
+          { yearIndex: -1, account: '1930', amount: 37400.78 },
+          { yearIndex: -1, account: '2010', amount: -37400.78 },
+        ],
+        vouchers: [
+          {
+            series: 'A',
+            number: 1,
+            date: new Date(2024, 0, 1),
+            description: 'Ingående balans',
+            lines: [
+              { account: '1930', amount: 37400.78 },
+              { account: '2010', amount: -37400.78 },
+            ],
+          },
+        ],
+      })
+
+      const result = await importVouchers(
+        supabase,
+        'company-1',
+        'user-1',
+        'period-1',
+        parsed,
+        obMap,
+        'A',
+      )
+
+      expect(result.created).toBe(1)
+      expect(journalEntryInserts[0].source_type).toBe('opening_balance')
+    })
+
+    it('keeps an FY-start voucher without IB wording as import when IB is derived from #UB -1', async () => {
+      const { supabase, journalEntryInserts } = buildCapturingSupabase()
+      const parsed = makeParsedFile({
+        openingBalances: [],
+        closingBalances: [
+          { yearIndex: -1, account: '1930', amount: 37400.78 },
+          { yearIndex: -1, account: '2010', amount: -37400.78 },
+        ],
+        vouchers: [
+          {
+            series: 'A',
+            number: 1,
+            date: new Date(2024, 0, 1),
+            description: 'Omföring',
+            lines: [
+              { account: '1930', amount: 1000 },
+              { account: '2010', amount: -1000 },
+            ],
+          },
+        ],
+      })
+
+      await importVouchers(
+        supabase,
+        'company-1',
+        'user-1',
+        'period-1',
+        parsed,
+        obMap,
+        'A',
+      )
+
+      expect(journalEntryInserts[0].source_type).toBe('import')
+    })
+  })
+})
+
+describe('IB derivation from #UB -1 (issue #675)', () => {
+  const derivedOverrides: Partial<ParsedSIEFile> = {
+    openingBalances: [],
+    closingBalances: [
+      { yearIndex: -1, account: '1930', amount: 37400.78 },
+      { yearIndex: -1, account: '2440', amount: -37400.78 },
+      { yearIndex: 0, account: '1930', amount: 160406.0 },
+      { yearIndex: 0, account: '2440', amount: -160406.0 },
+    ],
+  }
+
+  describe('generateImportPreview', () => {
+    it('computes opening balance totals from the derived set', () => {
+      const parsed = makeParsedFile(derivedOverrides)
+      const preview = generateImportPreview(parsed, [
+        makeMapping('1930', '1930'),
+        makeMapping('2440', '2440'),
+      ])
+
+      // Derived from #UB -1: 37400.78 debit / 37400.78 credit. This is also
+      // what enables the IB toggle in ImportReviewStep (openingBalanceTotal > 0).
+      expect(preview.openingBalanceTotal).toBe(37400.78)
+      expect(preview.trialBalance.totalDebit).toBe(37400.78)
+      expect(preview.trialBalance.totalCredit).toBe(37400.78)
+      expect(preview.trialBalance.isBalanced).toBe(true)
+    })
+
+    it('appends an info issue explaining the derivation without mutating parsed.issues', () => {
+      const parsed = makeParsedFile(derivedOverrides)
+      const preview = generateImportPreview(parsed, [makeMapping('1930', '1930')])
+
+      const infoMessages = preview.issues.filter((i) => i.severity === 'info')
+      expect(infoMessages.map((i) => i.message).join(' ')).toMatch(/härleds från föregående års utgående balans/i)
+      expect(parsed.issues).toHaveLength(0)
+    })
+
+    it('does not append the derivation issue when explicit #IB 0 exists', () => {
+      const parsed = makeParsedFile()
+      const preview = generateImportPreview(parsed, [makeMapping('1930', '1930')])
+
+      expect(preview.issues).toHaveLength(0)
+    })
+  })
+
+  describe('validateIBBalance', () => {
+    it('builds journal lines from the derived #UB -1 set', () => {
+      const parsed = makeParsedFile(derivedOverrides)
+      const accountMap = new Map([
+        ['1930', '1930'],
+        ['2440', '2440'],
+      ])
+
+      const result = validateIBBalance(parsed, accountMap)
+
+      expect(result.lines).toEqual([
+        { account_number: '1930', debit_amount: 37400.78, credit_amount: 0, line_description: 'IB 1930' },
+        { account_number: '2440', debit_amount: 0, credit_amount: 37400.78, line_description: 'IB 2440' },
+      ])
+      expect(result.roundingAdjustment).toBe(0)
+      expect(result.fileImbalance).toBe(0)
+    })
+
+    it('reports the imbalance when the derived set carries an unallocated prior-year result', () => {
+      const parsed = makeParsedFile({
+        openingBalances: [],
+        closingBalances: [
+          { yearIndex: -1, account: '1930', amount: 37400.78 },
+          { yearIndex: -1, account: '2440', amount: -30000.0 },
+        ],
+      })
+      const accountMap = new Map([
+        ['1930', '1930'],
+        ['2440', '2440'],
+      ])
+
+      const result = validateIBBalance(parsed, accountMap)
+
+      // 37400.78 − 30000.00 → diff booked to 2099 by createOpeningBalanceEntry
+      expect(result.roundingAdjustment).toBe(7400.78)
+      expect(result.fileImbalance).toBe(7400.78)
+    })
   })
 })

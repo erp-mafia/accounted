@@ -24,7 +24,7 @@ export interface MemberCompany {
 
 export interface TicPickerCompany {
   role: EnrichmentCompanyRole
-  /** 'new' = not in gnubok, can set up. 'exists' = in gnubok but user is not a member. */
+  /** 'new' = not in Accounted, can set up. 'exists' = in Accounted but user is not a member. */
   status: 'new' | 'exists'
 }
 
@@ -190,28 +190,16 @@ export default function BankIdCompanyPicker({
                 const entityLabel = humanTicEntityType(role.legalEntityType)
                 const mappable = mapEntityType(role.legalEntityType) !== null
 
-                if (status === 'exists') {
-                  return (
-                    <li key={cleaned}>
-                      <div className="w-full rounded-lg border bg-muted/20 p-4 text-left opacity-70">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-medium text-sm truncate">{role.legalName}</p>
-                            <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                              {cleaned} · {entityLabel}
-                            </p>
-                          </div>
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground flex-shrink-0">
-                            {t('already_in_app', { appName: branding.appName.toLowerCase() })}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground/70 mt-2">
-                          {t('ask_admin_invite')}
-                        </p>
-                      </div>
-                    </li>
-                  )
-                }
+                // Companies already in gnubok under another account are still
+                // offered for setup — org-number reuse is allowed (a director
+                // may keep a separate test copy). Keep a muted note so the
+                // "also already in {app}" context isn't lost.
+                const existsNote =
+                  status === 'exists' ? (
+                    <p className="text-xs text-muted-foreground/70 mt-2">
+                      {t('already_in_app', { appName: branding.appName.toLowerCase() })}
+                    </p>
+                  ) : null
 
                 if (!mappable) {
                   return (
@@ -236,6 +224,7 @@ export default function BankIdCompanyPicker({
                             {t('setup_manually')}
                           </span>
                         </div>
+                        {existsNote}
                       </Link>
                     </li>
                   )
@@ -263,6 +252,7 @@ export default function BankIdCompanyPicker({
                         </div>
                         <ArrowRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       </div>
+                      {existsNote}
                     </button>
                   </li>
                 )

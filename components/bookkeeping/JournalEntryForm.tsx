@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -82,6 +82,7 @@ export default function JournalEntryForm({
   const { toast } = useToast()
   const { company } = useCompany()
   const t = useTranslations('journal_form')
+  const locale = useLocale()
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().split('T')[0])
@@ -105,6 +106,10 @@ export default function JournalEntryForm({
   const [foreignAmount, setForeignAmount] = useState('')
   const [periodMismatch, setPeriodMismatch] = useState<'no_period' | 'wrong_period' | null>(null)
   const [showCreatePeriod, setShowCreatePeriod] = useState(false)
+  // Month (YYYY-MM) of the most recently posted voucher this session. Used to
+  // flag, at the review step, when the user is about to book into a different
+  // month — guards against accidentally posting to the wrong month.
+  const [lastPostedMonth, setLastPostedMonth] = useState<string | null>(null)
   // Per-account saldo as of entryDate, keyed by account_number.
   // undefined = not fetched, null = fetch in flight.
   const [accountBalances, setAccountBalances] = useState<Record<string, number | null>>({})
@@ -112,6 +117,11 @@ export default function JournalEntryForm({
   // user typed in the combobox so we can prefill the dialog.
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string>('')
+  // Per-row refs to the debit inputs so we can auto-advance focus there once an
+  // account is committed on a row. Two layouts render simultaneously (mobile
+  // cards + desktop table); we focus whichever one is actually visible.
+  const desktopDebitRefs = useRef<(HTMLInputElement | null)[]>([])
+  const mobileDebitRefs = useRef<(HTMLInputElement | null)[]>([])
 
   const isForeign = entryCurrency !== 'SEK'
 
@@ -321,29 +331,71 @@ export default function JournalEntryForm({
       updated[index].debit_amount = ''
     }
 
-    // Auto-fill line description from account name when selecting an account
+    // Auto-fill line description from account name when selecting an account.
+    // NOTE: we intentionally do NOT auto-fill a balancing amount here — that was
+    // surprising when splitting across several lines. The balancing amount is
+    // now opt-in via double-clicking a debit/credit field (handleFillBalance).
     if (field === 'account_number' && value) {
       const account = accounts.find((a) => a.account_number === value)
       if (account) {
         updated[index].line_description = account.account_name
       }
-
-      // Auto-fill balancing amount when both amount fields are empty
-      if (!updated[index].debit_amount && !updated[index].credit_amount) {
-        const otherLines = updated.filter((_, i) => i !== index)
-        const otherDebit = otherLines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-        const otherCredit = otherLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-        const diff = Math.round((otherCredit - otherDebit) * 100) / 100
-        if (diff > 0) {
-          updated[index].debit_amount = diff.toFixed(2)
-        } else if (diff < 0) {
-          updated[index].credit_amount = Math.abs(diff).toFixed(2)
-        }
-      }
     }
 
     setLines(updated)
   }
+
+  // Outstanding imbalance from every line except `excludeIndex`.
+  // Positive => debit side is short (a debit on the target row balances it);
+  // negative => credit side is short.
+  const computeBalancingDiff = useCallback(
+    (excludeIndex: number) => {
+      const others = lines.filter((_, i) => i !== excludeIndex)
+      const d = others.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+      const c = others.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+      return Math.round((c - d) * 100) / 100
+    },
+    [lines]
+  )
+
+  // Opt-in balancing: double-click a debit/credit field to fill the amount that
+  // makes the voucher balance. No-op if already balanced or if the balancing
+  // entry belongs on the other side.
+  const handleFillBalance = (index: number, side: 'debit' | 'credit') => {
+    const diff = computeBalancingDiff(index)
+    const fill = side === 'debit' ? diff : -diff
+    if (fill <= 0) return
+    updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+  }
+
+  // Move focus to a row's debit input. Deferred a frame so it runs after any
+  // re-render (e.g. the auto-appended trailing row). offsetParent is null for
+  // display:none elements, so this picks whichever layout is currently visible.
+  const focusDebit = useCallback((index: number) => {
+    requestAnimationFrame(() => {
+      const d = desktopDebitRefs.current[index]
+      const m = mobileDebitRefs.current[index]
+      const target = d && d.offsetParent !== null ? d : m && m.offsetParent !== null ? m : (d ?? m)
+      target?.focus()
+      target?.select?.()
+    })
+  }, [])
+
+  // Keep exactly one trailing blank row so the user never has to click "Lägg
+  // till rad": once the last row is started (account or amount), append a fresh
+  // blank below it. Applies uniformly to typed, templated and copied lines.
+  // The guard lives inside the functional updater so chained updates see each
+  // other's result — making it idempotent and safe under StrictMode's dev-only
+  // double-invoke (no runaway append, no double blank row).
+  useEffect(() => {
+    setLines((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last) return prev
+      const trailingBlank =
+        last.account_number === '' && last.debit_amount === '' && last.credit_amount === ''
+      return trailingBlank ? prev : [...prev, { ...BLANK_LINE }]
+    })
+  }, [lines])
 
   // Only lines with both an account and a non-zero amount end up in the submit
   // payload (see the filter in handleConfirm). Compute totals and balance from
@@ -381,6 +433,24 @@ export default function JournalEntryForm({
   const computedSekAmount = isForeign && rate > 0 && computedForeignAmount > 0
     ? Math.round(computedForeignAmount * rate * 100) / 100
     : 0
+
+  // Month/period safety signals surfaced at the review step (not as a blocking
+  // dialog on every date change — that would add friction to routine entry).
+  const monthLabel = useCallback(
+    (ym: string) => {
+      const [y, m] = ym.split('-').map(Number)
+      if (!y || !m) return ym
+      return new Date(y, m - 1, 1).toLocaleDateString(locale === 'en' ? 'en-GB' : 'sv-SE', {
+        month: 'long',
+        year: 'numeric',
+      })
+    },
+    [locale]
+  )
+  const entryMonth = entryDate.slice(0, 7)
+  const monthChanged = lastPostedMonth != null && entryMonth !== lastPostedMonth
+  const selectedPeriodObj = periods.find((p) => p.id === selectedPeriod)
+  const selectedPeriodLocked = !!(selectedPeriodObj?.locked_at || selectedPeriodObj?.is_closed)
 
   const handleTemplateApply = (templateLines: FormLine[], templateDescription: string) => {
     setLines(templateLines)
@@ -498,6 +568,7 @@ export default function JournalEntryForm({
         title: t('toast_created_title'),
         description: t('toast_created_description', { voucher: formatVoucher(result.data ?? {}) }),
       })
+      setLastPostedMonth(entryDate.slice(0, 7))
       setShowReview(false)
       setDescription('')
       setNotes('')
@@ -752,6 +823,7 @@ export default function JournalEntryForm({
                   value={line.account_number}
                   accounts={accounts}
                   onChange={(num) => updateLine(index, 'account_number', num)}
+                  onCommit={() => focusDebit(index)}
                   onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
                 />
               </div>
@@ -774,9 +846,12 @@ export default function JournalEntryForm({
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{t('col_debit')}</Label>
                 <Input
+                  ref={(el) => { mobileDebitRefs.current[index] = el }}
                   type="number"
                   value={line.debit_amount}
                   onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                  onDoubleClick={() => handleFillBalance(index, 'debit')}
+                  title={t('fill_balance_tooltip')}
                   placeholder="0,00"
                   className="text-right"
                   inputMode="decimal"
@@ -790,6 +865,8 @@ export default function JournalEntryForm({
                   type="number"
                   value={line.credit_amount}
                   onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                  onDoubleClick={() => handleFillBalance(index, 'credit')}
+                  title={t('fill_balance_tooltip')}
                   placeholder="0,00"
                   className="text-right"
                   inputMode="decimal"
@@ -863,6 +940,7 @@ export default function JournalEntryForm({
                     value={line.account_number}
                     accounts={accounts}
                     onChange={(num) => updateLine(index, 'account_number', num)}
+                    onCommit={() => focusDebit(index)}
                     onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
                     className="h-8"
                   />
@@ -877,9 +955,12 @@ export default function JournalEntryForm({
                 </td>
                 <td className="py-1.5 px-1">
                   <Input
+                    ref={(el) => { desktopDebitRefs.current[index] = el }}
                     type="number"
                     value={line.debit_amount}
                     onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                    onDoubleClick={() => handleFillBalance(index, 'debit')}
+                    title={t('fill_balance_tooltip')}
                     placeholder="0,00"
                     className="text-right h-8"
                     inputMode="decimal"
@@ -892,6 +973,8 @@ export default function JournalEntryForm({
                     type="number"
                     value={line.credit_amount}
                     onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                    onDoubleClick={() => handleFillBalance(index, 'credit')}
+                    title={t('fill_balance_tooltip')}
                     placeholder="0,00"
                     className="text-right h-8"
                     inputMode="decimal"
@@ -962,6 +1045,7 @@ export default function JournalEntryForm({
             entityType={company?.entity_type}
           />
         </div>
+        <p className="mt-1.5 text-xs text-muted-foreground">{t('fill_balance_hint')}</p>
       </div>
 
       {/* Document attachments */}
@@ -1055,6 +1139,22 @@ export default function JournalEntryForm({
         }
         warningText={embedded ? '' : t('review_warning')}
       >
+        {(monthChanged || selectedPeriodLocked) && (
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
+            <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-warning-foreground space-y-0.5">
+              {monthChanged && (
+                <p className="font-medium">
+                  {t('review_month_changed', {
+                    prev: monthLabel(lastPostedMonth as string),
+                    current: monthLabel(entryMonth),
+                  })}
+                </p>
+              )}
+              {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
+            </div>
+          </div>
+        )}
         <JournalEntryReviewContent
           periodName={periods.find((p) => p.id === selectedPeriod)?.name || ''}
           entryDate={entryDate}

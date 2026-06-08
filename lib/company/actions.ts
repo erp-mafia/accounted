@@ -1,40 +1,10 @@
 'use server'
 
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/server'
 import { setActiveCompany } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
-
-/**
- * Check whether an org number is already registered in any non-archived
- * gnubok company. Uses the service role because RLS hides rows the caller
- * isn't a member of — and "other users' duplicates" is exactly what we
- * need to detect. Returns null when `orgNumber` is empty/malformed. Throws
- * if the underlying query fails — callers must not silently treat that as
- * "no duplicate," or the whole guard gets bypassed on transient DB errors.
- */
-async function findExistingCompanyByOrgNumber(
-  orgNumber: string | null | undefined,
-): Promise<{ id: string; name: string } | null> {
-  const cleaned = normalizeOrgNumber(orgNumber)
-  if (!cleaned) return null
-
-  const service = createServiceClient()
-  const { data, error } = await service
-    .from('companies')
-    .select('id, name')
-    .eq('org_number', cleaned)
-    .is('archived_at', null)
-    .limit(1)
-    .maybeSingle()
-
-  if (error) {
-    throw new Error(`Duplicate-org lookup failed: ${error.message}`)
-  }
-
-  return data ?? null
-}
 
 export async function switchCompany(companyId: string): Promise<{ error?: string }> {
   const supabase = await createClient()
@@ -113,11 +83,11 @@ async function createCompanyFromOnboardingImpl(params: {
 
   const companyName = (params.settings.company_name as string | undefined) || 'Mitt företag'
 
-  // Duplicate-org guard. We don't have a DB unique constraint on
-  // companies.org_number (can't add one safely without cleaning up any
-  // existing duplicates first), so enforce uniqueness at the application
-  // boundary. Must run before the create RPC so we don't leave a ghost
-  // company if the duplicate is detected mid-flow.
+  // Org-number format validation. We intentionally do NOT enforce
+  // uniqueness: the same org number may legitimately appear on multiple
+  // companies (a separate test copy of your real company, or a consultant
+  // and the owner each tracking the same entity). Tenant isolation
+  // (RLS + company_id) is the real boundary — not org-number uniqueness.
   //
   // normalizeOrgNumber returns null for malformed input — we refuse rather
   // than storing a value that would break SIE/SRU exports later.
@@ -125,20 +95,6 @@ async function createCompanyFromOnboardingImpl(params: {
   const cleanedOrgNumber = normalizeOrgNumber(rawOrgNumber)
   if (rawOrgNumber && rawOrgNumber.trim() && !cleanedOrgNumber) {
     return { error: 'org_number_invalid' }
-  }
-  if (cleanedOrgNumber) {
-    try {
-      const existing = await findExistingCompanyByOrgNumber(cleanedOrgNumber)
-      if (existing) {
-        return { error: 'org_number_exists' }
-      }
-    } catch (err) {
-      // Guard must fail closed: if we can't confirm uniqueness, don't create
-      // a company. A silent pass-through would let transient DB errors
-      // through as duplicates (exactly the bug Greptile flagged).
-      console.error('[createCompanyFromOnboarding] duplicate-org lookup failed', err)
-      return { error: 'Kunde inte verifiera organisationsnummer. Försök igen.' }
-    }
   }
 
   // 1. Create company + owner membership atomically via RPC

@@ -30,6 +30,11 @@ export type CoreEvent =
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   // Invoicing
   | { type: 'invoice.created'; payload: { invoice: Invoice; userId: string; companyId: string } }
+  // Hard delete of an un-finalized, unnumbered draft (no F-series number was
+  // consumed). Carries only the identifiers — the row is gone — so the audit
+  // log can record who removed which draft and when. Numbered drafts are
+  // makulerade instead and surface via the journal, not this event.
+  | { type: 'invoice.draft_deleted'; payload: { invoiceId: string; userId: string; companyId: string } }
   | { type: 'invoice.sent'; payload: { invoice: Invoice; userId: string; companyId: string } }
   | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }
@@ -138,7 +143,8 @@ export type CoreEvent =
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
   // MCP telemetry — fired from the MCP dispatcher.
-  // Persisted to event_log (30-day TTL) for hot-tool / error-rate / latency analytics.
+  // Persisted to event_log (180-day TTL for mcp.*/agent.* rows, vs 30 days for
+  // delivery events) for hot-tool / error-rate / latency analytics.
   // Intentionally lightweight: no args, no result body — only metadata.
   | { type: 'mcp.tool_called'; payload: {
       tool: string                                  // e.g. 'gnubok_create_invoice'
@@ -151,6 +157,9 @@ export type CoreEvent =
       isError: boolean                              // matches the JSON-RPC tool-result isError flag returned to the client
       errorCode: string | null                      // structured error code from tool-result.toToolError when applicable
       errorKind: 'execution' | 'scope_denied' | 'unknown_tool' | null
+      errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
+                                                    // Raw material for clustering real agent failures into curated gotchas —
+                                                    // errorCode alone can't distinguish "period locked" from "unbalanced".
       requestId: string | number | null             // JSON-RPC request id (helps correlate with client-side logs)
       userId: string
       companyId: string
@@ -174,7 +183,7 @@ export type CoreEvent =
   // get loaded by agents. `kind` discriminates by URI scheme so we can
   // GROUP BY skill vs widget vs data without parsing URIs.
   | { type: 'mcp.resource_read'; payload: {
-      uri: string                                   // e.g. 'gnubok://skill/month-end-close'
+      uri: string                                   // e.g. 'Accounted://skill/month-end-close'
       kind: 'widget' | 'skill' | 'data' | 'unknown'
       success: boolean
       errorCode: string | null
@@ -206,6 +215,21 @@ export type CoreEvent =
       outcome: 'success' | 'abandoned' | 'failed'
       stepsCompleted: number | null                 // null when not tracked granularly
       durationMs: number | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+    }}
+  // Fires on EVERY successful gnubok_load_skill — all tiers, unlike
+  // mcp.workflow_started which fires only for workflow-tier skills. Records
+  // WHICH skill/atom bodies agents actually pull, the denominator needed to
+  // correlate a loaded atom with downstream tool-error rates (a skill can
+  // make the model worse — measure, don't assume).
+  | { type: 'mcp.skill_loaded'; payload: {
+      slug: string                                  // e.g. 'modifier/holding-ab', 'month-end-close'
+      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+      sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
       actorId: string | null
       actorLabel: string | null

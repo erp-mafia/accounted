@@ -133,6 +133,15 @@ export const POST = withRouteContext(
     const accountingMethod = settings?.accounting_method || 'accrual'
     const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
+    // Drive the JE shape from the invoice's actual booking state, not from
+    // the current accounting_method setting. If the invoice was booked at
+    // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510 —
+    // otherwise the receivable orphans and 30xx + VAT double-count. Only
+    // when there is no prior JE (pure kontantmetoden) do we recognise
+    // revenue + VAT here.
+    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
+    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
+
     const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
     let journalEntryId: string | null = null
 
@@ -155,7 +164,7 @@ export const POST = withRouteContext(
               details: { paymentDate },
             })
           }
-          const sourceType = accountingMethod === 'accrual' ? 'invoice_paid' : 'invoice_cash_payment'
+          const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
           const input: CreateJournalEntryInput = {
             fiscal_period_id: fiscalPeriodId,
             entry_date: paymentDate,
@@ -168,16 +177,16 @@ export const POST = withRouteContext(
           }
           const journalEntry = await createJournalEntry(supabase, companyId!, user.id, input)
           journalEntryId = journalEntry?.id ?? null
-        } else if (accountingMethod === 'accrual') {
-          const journalEntry = await createInvoicePaymentJournalEntry(
-            supabase, companyId!, user.id, invoice as Invoice, paymentDate,
-            exchangeRateDifference, invoice.customer?.name,
-          )
-          journalEntryId = journalEntry?.id ?? null
-        } else {
+        } else if (useCashEntry) {
           const journalEntry = await createInvoiceCashEntry(
             supabase, companyId!, user.id, invoice as Invoice, paymentDate,
             entityType, invoice.customer?.name,
+          )
+          journalEntryId = journalEntry?.id ?? null
+        } else {
+          const journalEntry = await createInvoicePaymentJournalEntry(
+            supabase, companyId!, user.id, invoice as Invoice, paymentDate,
+            exchangeRateDifference, invoice.customer?.name,
           )
           journalEntryId = journalEntry?.id ?? null
         }

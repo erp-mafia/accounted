@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
-import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
   Loader2,
@@ -75,6 +75,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<InvoiceReminder[]>([])
+  // Payment history backing the new Betalningsstatus card. Fetched alongside
+  // the invoice itself so the card stays in sync with paid_amount /
+  // remaining_amount on the invoice row.
+  const [payments, setPayments] = useState<
+    Array<{
+      id: string
+      payment_date: string
+      amount: number
+      currency: string
+      journal_entry_id: string | null
+      voucher_series: string | null
+      voucher_number: number | null
+    }>
+  >([])
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
@@ -87,7 +101,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isDownloading, setIsDownloading] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
+  const [isFinalizing, setIsFinalizing] = useState(false)
+  const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
+  const [vatRegistered, setVatRegistered] = useState<boolean>(true)
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
@@ -126,14 +144,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
     setInvoice(data as InvoiceWithRelations)
 
-    // Fetch the öresavrundning setting so the detail view matches the PDF.
+    // Fetch the öresavrundning + VAT-registration settings so the detail view
+    // matches the PDF (pdf-template.tsx:792 hides org_number / personnummer
+    // for private customers, and :876 suppresses the moms row when the seller
+    // is not VAT-registered and the invoice carries no VAT).
     if (data.company_id) {
       const { data: settings } = await supabase
         .from('company_settings')
-        .select('ore_rounding')
+        .select('ore_rounding, vat_registered')
         .eq('company_id', data.company_id)
         .maybeSingle()
       setOreRounding(settings?.ore_rounding ?? true)
+      if (typeof settings?.vat_registered === 'boolean') {
+        setVatRegistered(settings.vat_registered)
+      }
     }
 
     // Fetch reminders for this invoice
@@ -145,6 +169,40 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
     if (reminderData) {
       setReminders(reminderData as InvoiceReminder[])
+    }
+
+    // Fetch payment history for the Betalningsstatus card. Joins the
+    // journal_entries row to get voucher_series + voucher_number so each
+    // payment row can link to its verifikat. Manual payments (no tx, no
+    // JE) still surface with the amount + date.
+    const { data: paymentData } = await supabase
+      .from('invoice_payments')
+      .select(
+        'id, payment_date, amount, currency, journal_entry_id, journal_entries(voucher_series, voucher_number)',
+      )
+      .eq('invoice_id', id)
+      .order('payment_date', { ascending: true })
+
+    if (paymentData) {
+      type PaymentRow = {
+        id: string
+        payment_date: string
+        amount: number
+        currency: string
+        journal_entry_id: string | null
+        journal_entries: { voucher_series: string | null; voucher_number: number | null } | null
+      }
+      setPayments(
+        (paymentData as unknown as PaymentRow[]).map((p) => ({
+          id: p.id,
+          payment_date: p.payment_date,
+          amount: p.amount,
+          currency: p.currency,
+          journal_entry_id: p.journal_entry_id,
+          voucher_series: p.journal_entries?.voucher_series ?? null,
+          voucher_number: p.journal_entries?.voucher_number ?? null,
+        })),
+      )
     }
 
     // If this invoice is credited, find the credit note
@@ -318,6 +376,68 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloading(false)
   }
 
+  // Open the finalize dialog and peek the next F-number so the user can see
+  // which number they'll get before committing. Read-only (peek_next_invoice_number);
+  // the real number is allocated atomically on confirm and may differ by one if
+  // another invoice is created in between.
+  async function openFinalizeDialog() {
+    setNextNumberPreview(null)
+    setShowFinalizeDialog(true)
+    try {
+      const r = await fetch('/api/invoices/next-number?document_type=invoice')
+      if (r.ok) {
+        const json = await r.json()
+        const preview = json?.data?.preview
+        // Only show a value that looks like a real invoice number. Guards the
+        // preview against an unexpected/oversized API response being rendered
+        // verbatim — a short alphanumeric token (optional series prefix), never
+        // free-form text.
+        setNextNumberPreview(
+          typeof preview === 'string' && /^[A-Za-z0-9-]{1,32}$/.test(preview) ? preview : null
+        )
+      }
+    } catch {
+      // Best-effort preview; the dialog still works without it.
+    }
+  }
+
+  // "Granska & skapa" — finalize an unnumbered draft into a real invoice:
+  // allocate the F-number and emit invoice.created. After this the invoice
+  // behaves like any draft (send / makulera), no longer hard-deletable.
+  async function finalizeInvoice() {
+    if (!invoice) return
+
+    setIsFinalizing(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/finalize`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error?.message || t('fallback_try_again'))
+      }
+
+      toast({
+        title: t('finalized_toast_title'),
+        description: t('finalized_toast_description', { number: data.data?.invoice_number ?? '' }),
+      })
+
+      setShowFinalizeDialog(false)
+      fetchInvoice()
+    } catch (error) {
+      toast({
+        title: t('finalize_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsFinalizing(false)
+    }
+  }
+
   async function deleteInvoice() {
     if (!invoice) return
 
@@ -330,15 +450,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       if (!response.ok) {
         const data = await response.json()
-        throw new Error(data.error || t('cancel_failed_fallback'))
+        throw new Error(data.error?.message || t('cancel_failed_fallback'))
       }
 
-      toast({
-        title: t('cancelled_toast_title'),
-        description: invoice.invoice_number
-          ? t('cancelled_with_number', { number: invoice.invoice_number })
-          : t('cancelled_draft'),
-      })
+      // Unnumbered drafts are hard deleted ("Ta bort"); numbered drafts are
+      // makulerade and keep their number in the series.
+      toast(
+        invoice.invoice_number
+          ? {
+              title: t('cancelled_toast_title'),
+              description: t('cancelled_with_number', { number: invoice.invoice_number }),
+            }
+          : {
+              title: t('removed_toast_title'),
+              description: t('removed_toast_description'),
+            }
+      )
 
       router.push('/invoices')
     } catch (error) {
@@ -372,6 +499,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isProforma = docType === 'proforma'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  // An unnumbered draft is one saved via "Spara som utkast" that hasn't been
+  // finalized — no F-number yet, so it can still be reviewed-and-created or
+  // hard-deleted. Once finalized it gets a number and behaves like any draft.
+  const isUnnumberedDraft = invoice.status === 'draft' && !invoice.invoice_number && isRealInvoice
+  // A numbered draft is issued-but-unsent ("Ej skickad"), distinct from an
+  // unnumbered draft ("Utkast"). Display-only — the DB status stays 'draft'.
+  const isUnsentNumberedInvoice = invoice.status === 'draft' && !!invoice.invoice_number && isRealInvoice
+  const displayStatusVariant = isUnsentNumberedInvoice ? 'outline' : statusVariant
+  const displayStatusLabel = isUnsentNumberedInvoice ? t('status_unsent') : statusLabel(invoice.status)
+  // Self-billing invoices we received: the document is the counterparty's, so
+  // there is no own PDF to render and no send step — it arrives already booked.
+  const isSelfBilled = !!invoice.is_self_billed
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -382,15 +521,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</h1>
+              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '—')}</h1>
               {isProforma && (
                 <Badge variant="secondary" className="bg-primary/10 text-primary">{t('badge_proforma')}</Badge>
               )}
               {isDeliveryNote && (
                 <Badge variant="secondary" className="bg-success/10 text-success">{t('badge_delivery_note')}</Badge>
               )}
-              <Badge variant={statusVariant as 'default' | 'secondary' | 'destructive'}>
-                {statusLabel(invoice.status)}
+              {isSelfBilled && (
+                <Badge variant="outline">{t('badge_self_billed')}</Badge>
+              )}
+              <Badge variant={displayStatusVariant as 'default' | 'secondary' | 'destructive' | 'outline'}>
+                {displayStatusLabel}
               </Badge>
             </div>
             <p className="text-muted-foreground">
@@ -418,7 +560,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('convert_to_invoice')}
             </Button>
           )}
-          {invoice.status === 'draft' && !isDeliveryNote && (
+          {isUnnumberedDraft && (
+            <Button
+              onClick={openFinalizeDialog}
+              disabled={isFinalizing || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('finalize_action')}
+            </Button>
+          )}
+          {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
             customerHasEmail ? (
               <Button
                 onClick={() => openSendDialog('email')}
@@ -461,14 +613,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('mark_as_paid')}
             </Button>
           )}
-          <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
-            {isDownloading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
-            {t('download_pdf')}
-          </Button>
+          {/* No own PDF for a received self-billing invoice — the verifikationsunderlag is the document the customer sent us. */}
+          {!isSelfBilled && (
+            <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
+              {isDownloading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              {t('download_pdf')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -481,10 +636,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           <CardContent>
             <div className="space-y-2">
               <p className="font-medium text-lg">{customer.name}</p>
-              {customer.org_number && (
+              {customer.customer_type !== 'individual' && customer.org_number && (
                 <p className="text-muted-foreground">{t('org_number_label', { value: customer.org_number })}</p>
               )}
-              {customer.vat_number && (
+              {customer.customer_type !== 'individual' && customer.vat_number && (
                 <p className="text-muted-foreground">{t('vat_number_label', { value: customer.vat_number })}</p>
               )}
               <div className="flex flex-wrap gap-4 pt-2 text-sm text-muted-foreground">
@@ -577,6 +732,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     .sort(([a], [b]) => b - a)
 
                   if (entries.length === 0) {
+                    if (vatRegistered === false && invoice.vat_amount === 0) {
+                      return null
+                    }
                     return (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">{t('vat_label')}</span>
@@ -648,9 +806,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('invoice_number_label')}</span>
-                <span className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</span>
+                <span className="text-muted-foreground">{isSelfBilled ? t('external_number_label') : t('invoice_number_label')}</span>
+                <span className={cn('font-medium', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '—')}</span>
               </div>
+              {isSelfBilled && (invoice as Invoice).self_billing_agreement_ref && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('agreement_ref_label')}</span>
+                  <span className="font-medium">{(invoice as Invoice).self_billing_agreement_ref}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('invoice_date_label')}</span>
                 <span>{formatDate(invoice.invoice_date)}</span>
@@ -730,24 +894,119 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </CardContent>
           </Card>
 
-          {/* Payment info */}
-          {invoice.status === 'paid' && invoice.paid_at && (
+          {/* Betalningsstatus card. Shows for both `paid` and `partially_paid`
+              so the user always sees how much has been paid + what remains +
+              the individual payment events. Previously only the `paid` case
+              had a card, leaving partially-paid invoices without any visible
+              paid_amount/remaining_amount — surfaced by user feedback after
+              PR #614. */}
+          {(invoice.status === 'paid' || invoice.status === 'partially_paid') && (
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-success">
-                  <CheckCircle className="h-5 w-5" />
-                  {t('paid_card_title')}
+                <CardTitle
+                  className={cn(
+                    'flex items-center gap-2',
+                    invoice.status === 'paid' && 'text-success',
+                    invoice.status === 'partially_paid' && 'text-warning-foreground',
+                  )}
+                >
+                  {invoice.status === 'paid' ? (
+                    <CheckCircle className="h-5 w-5" />
+                  ) : (
+                    <AlertTriangle className="h-5 w-5" />
+                  )}
+                  {invoice.status === 'paid'
+                    ? t('paid_card_title')
+                    : t('payment_status_card_title')}
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">
-                  {t('paid_received_at', { date: formatDate(invoice.paid_at) })}
-                </p>
-                {invoice.paid_amount && (
-                  <p className="text-lg font-bold mt-2">
-                    {formatCurrency(invoice.paid_amount, invoice.currency)}
+              <CardContent className="space-y-4">
+                {/* Paid / remaining summary. Right-aligned tabular nums so
+                    the two columns scan cleanly. Same SEK / invoice.currency
+                    formatter as the items table. */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                      {t('payment_status_paid_label')}
+                    </p>
+                    <p className="font-display text-xl tabular-nums mt-1">
+                      {formatCurrency(invoice.paid_amount ?? 0, invoice.currency)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                      {t('payment_status_remaining_label')}
+                    </p>
+                    <p
+                      className={cn(
+                        'font-display text-xl tabular-nums mt-1',
+                        invoice.status === 'partially_paid' && 'text-warning-foreground',
+                      )}
+                    >
+                      {formatCurrency(
+                        invoice.remaining_amount ??
+                          Math.max(0, invoice.total - (invoice.paid_amount ?? 0)),
+                        invoice.currency,
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {invoice.status === 'paid' && invoice.paid_at && (
+                  <p className="text-sm text-muted-foreground">
+                    {t('paid_received_at', { date: formatDate(invoice.paid_at) })}
                   </p>
                 )}
+
+                {/* Payment history. Each row links to its verifikat when one
+                    exists. Compact list — dates and amounts tabular-nums for
+                    column alignment, the voucher link sits to the right with
+                    a small chevron. */}
+                <div className="space-y-2">
+                  <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                    {t('payment_status_payments_heading')}
+                  </p>
+                  {payments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {t('payment_status_empty')}
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-border -mx-2">
+                      {payments.map((p) => {
+                        const voucherLabel =
+                          p.voucher_series && p.voucher_number != null
+                            ? `${p.voucher_series}-${p.voucher_number}`
+                            : null
+                        return (
+                          <li
+                            key={p.id}
+                            className="flex items-center justify-between gap-3 px-2 py-2 text-sm transition-colors hover:bg-secondary/60 rounded"
+                          >
+                            <span className="tabular-nums text-muted-foreground">
+                              {formatDate(p.payment_date)}
+                            </span>
+                            <span className="font-medium tabular-nums flex-1 text-right">
+                              {formatCurrency(p.amount, p.currency)}
+                            </span>
+                            {p.journal_entry_id && voucherLabel ? (
+                              <Link
+                                href={`/bookkeeping/${p.journal_entry_id}`}
+                                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                              >
+                                {t('payment_status_view_voucher', { label: voucherLabel })}
+                                <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                {t('payment_status_view_voucher_unlinked')}
+                              </span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </div>
               </CardContent>
             </Card>
           )}
@@ -919,60 +1178,84 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   </>
                 )}
                 {!isProforma && invoice.status === 'draft' && (
-                  <>
-                    {!isDeliveryNote && customerHasEmail ? (
-                      <>
-                        <Button
-                          className="w-full"
-                          onClick={() => openSendDialog('email')}
-                        >
-                          <Mail className="mr-2 h-4 w-4" />
-                          {t('send_via_email')}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          className="w-full text-muted-foreground"
-                          onClick={() => openSendDialog('manual')}
-                        >
-                          <Send className="mr-2 h-4 w-4" />
-                          {t('mark_sent_manually')}
-                        </Button>
-                        <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
-                          {t('send_manual_hint_with_email')}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        {!isDeliveryNote && (
-                          <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-2 dark:bg-yellow-950/30 dark:border-yellow-800">
-                            <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
-                            <p className="text-xs text-yellow-700 dark:text-yellow-400">
-                              {t('no_customer_email_warning')}
-                            </p>
-                          </div>
-                        )}
-                        <Button
-                          className="w-full"
-                          onClick={() => openSendDialog('manual')}
-                        >
-                          <Send className="mr-2 h-4 w-4" />
-                          {t('mark_sent_manually')}
-                        </Button>
-                        <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
-                          {t('send_manual_hint_no_email')}
-                        </p>
-                      </>
-                    )}
-                    <Button
-                      variant="outline"
-                      className="w-full text-destructive hover:text-destructive"
-                      onClick={() => setShowDeleteDialog(true)}
-                      disabled={isDeleting}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      {t('delete_draft')}
-                    </Button>
-                  </>
+                  isUnnumberedDraft ? (
+                    <>
+                      {/* Unnumbered draft (saved via "Spara som utkast"): review
+                          and create it, or remove it without a trace. */}
+                      <Button
+                        className="w-full"
+                        onClick={openFinalizeDialog}
+                        disabled={isFinalizing}
+                      >
+                        <FileText className="mr-2 h-4 w-4" />
+                        {t('finalize_action')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setShowDeleteDialog(true)}
+                        disabled={isDeleting}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t('remove_action')}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      {!isDeliveryNote && customerHasEmail ? (
+                        <>
+                          <Button
+                            className="w-full"
+                            onClick={() => openSendDialog('email')}
+                          >
+                            <Mail className="mr-2 h-4 w-4" />
+                            {t('send_via_email')}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="w-full text-muted-foreground"
+                            onClick={() => openSendDialog('manual')}
+                          >
+                            <Send className="mr-2 h-4 w-4" />
+                            {t('mark_sent_manually')}
+                          </Button>
+                          <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
+                            {t('send_manual_hint_with_email')}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          {!isDeliveryNote && (
+                            <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-2 dark:bg-yellow-950/30 dark:border-yellow-800">
+                              <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
+                              <p className="text-xs text-yellow-700 dark:text-yellow-400">
+                                {t('no_customer_email_warning')}
+                              </p>
+                            </div>
+                          )}
+                          <Button
+                            className="w-full"
+                            onClick={() => openSendDialog('manual')}
+                          >
+                            <Send className="mr-2 h-4 w-4" />
+                            {t('mark_sent_manually')}
+                          </Button>
+                          <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
+                            {t('send_manual_hint_no_email')}
+                          </p>
+                        </>
+                      )}
+                      <Button
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setShowDeleteDialog(true)}
+                        disabled={isDeleting}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t('delete_draft')}
+                      </Button>
+                    </>
+                  )
                 )}
                 {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && (
                   <>
@@ -1006,12 +1289,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      {/* Cancel confirmation dialog. The invoice transitions to status='cancelled'
-          and the F-series number is retained so the sequence stays gap-free. */}
+      {/* Remove/cancel confirmation. A numbered draft is makulerad (status flips
+          to 'cancelled', number retained for a gap-free series); an unnumbered
+          draft is hard deleted since it never entered the number series. */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('delete_dialog_title')}</DialogTitle>
+            <DialogTitle>{invoice.invoice_number ? t('delete_dialog_title') : t('remove_dialog_title')}</DialogTitle>
             <DialogDescription>
               {invoice.invoice_number ? (
                 <>
@@ -1024,7 +1308,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </>
               ) : (
                 <>
-                  {t('delete_dialog_desc_no_number')}
+                  {t('remove_dialog_desc')}
                 </>
               )}
             </DialogDescription>
@@ -1035,7 +1319,33 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
             <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
               {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {t('delete_dialog_confirm')}
+              {invoice.invoice_number ? t('delete_dialog_confirm') : t('remove_dialog_confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Finalize confirmation — "Granska & skapa". Allocates the F-number and
+          turns the unnumbered draft into a real, issued invoice. */}
+      <Dialog open={showFinalizeDialog} onOpenChange={setShowFinalizeDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('finalize_dialog_title')}</DialogTitle>
+            <DialogDescription>{t('finalize_dialog_desc')}</DialogDescription>
+          </DialogHeader>
+          {nextNumberPreview && (
+            <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-4 py-3">
+              <span className="text-sm text-muted-foreground">{t('finalize_dialog_number_label')}</span>
+              <span className="text-base font-medium tabular-nums">{nextNumberPreview}</span>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} disabled={isFinalizing}>
+              {t('finalize_dialog_cancel')}
+            </Button>
+            <Button onClick={finalizeInvoice} disabled={isFinalizing}>
+              {isFinalizing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('finalize_dialog_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

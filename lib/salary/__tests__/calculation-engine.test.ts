@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { calculateSalary, calculateKarensavdrag, calculateSjuklon, calculateAvgifterRate, calculateVacationAccrual } from '../calculation-engine'
+import {
+  calculateSalary,
+  calculateKarensavdrag,
+  calculateSjuklon,
+  calculateAvgifterRate,
+  calculateVacationAccrual,
+  prorateBaseSalaryForPeriod,
+} from '../calculation-engine'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
 
@@ -381,6 +388,173 @@ describe('calculateSalary', () => {
     const expectedCost = Math.round((40000 + expectedAvgifter + expectedVacation + expectedVacationAvgifter) * 100) / 100
 
     expect(result.totalEmployerCost).toBe(expectedCost)
+  })
+})
+
+// ============================================================
+// Partial-month employment proration
+// ============================================================
+//
+// May 2026 calendar (Mon-Fri only):
+//   May 1 (Fri), May 4-8 (5), May 11-15 (5), May 18-22 (5), May 25-29 (5)
+//   → 21 workdays total in May.
+// An employee hired May 15 (Fri) works May 15, 18-22, 25-29 → 11 workdays.
+// 11 / 21 ≈ 0.5238 → 40 000 SEK × 0.5238 ≈ 20 952,38 SEK.
+
+describe('partial-month employment proration', () => {
+  it('prorates base salary for an employee hired mid-month', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        employmentStart: '2026-05-15',
+        employmentEnd: null,
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    // 40 000 × 11 / 21 = 20 952,38 (rounded via engine's r())
+    expect(result.grossSalary).toBeCloseTo(20952.38, 2)
+  })
+
+  it('prorates base salary for an employee terminated mid-month', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        employmentStart: '2020-01-01',
+        employmentEnd: '2026-05-15',
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    // May 1, 4-8, 11-15 = 11 workdays → 40 000 × 11 / 21
+    expect(result.grossSalary).toBeCloseTo(20952.38, 2)
+  })
+
+  it('does not prorate when the employee covers the full period', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        employmentStart: '2024-01-01',
+        employmentEnd: null,
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    expect(result.grossSalary).toBe(40000)
+  })
+
+  it('returns 0 gross when employment does not overlap the period', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        employmentStart: '2026-06-01',
+        employmentEnd: null,
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    expect(result.grossSalary).toBe(0)
+  })
+
+  it('combines employment proration with employment_degree', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        employmentDegree: 50,
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        employmentStart: '2026-05-15',
+        employmentEnd: null,
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    // 40 000 × 50% × 11 / 21 = 20 000 × 11 / 21 ≈ 10 476,19
+    expect(result.grossSalary).toBeCloseTo(10476.19, 2)
+  })
+
+  it('skips proration when period bounds are missing (backward compat)', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        employmentStart: '2026-05-15',
+        employmentEnd: null,
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    expect(result.grossSalary).toBe(40000)
+  })
+
+  it('subtracts unpaid_leave once on top of proration (no double-counting)', () => {
+    // 40 000 × 11/21 (mid-month hire) − 2 × 40 000/21 (two unpaid days)
+    //   = 20 952,38 − 3 809,52
+    //   = 17 142,86
+    const result = calculateSalary(
+      makeBasicInput({
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        employmentStart: '2026-05-15',
+        employmentEnd: null,
+        lineItems: [
+          {
+            itemType: 'unpaid_leave',
+            amount: -3809.52, // = 2 × Math.round((40000/21) * 100) / 100
+            isTaxable: true,
+            isAvgiftBasis: true,
+            isVacationBasis: false,
+            isGrossDeduction: false,
+            isNetDeduction: false,
+          },
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    expect(result.grossSalary).toBeCloseTo(17142.86, 2)
+  })
+})
+
+describe('prorateBaseSalaryForPeriod', () => {
+  it('returns 1 when all dates are missing', () => {
+    expect(prorateBaseSalaryForPeriod(undefined, undefined, undefined, undefined)).toBe(1)
+  })
+
+  it('returns 1 when employment fully covers the period', () => {
+    expect(
+      prorateBaseSalaryForPeriod('2020-01-01', null, '2026-05-01', '2026-05-31'),
+    ).toBe(1)
+  })
+
+  it('returns 11/21 for May 2026 mid-month hire on the 15th', () => {
+    const ratio = prorateBaseSalaryForPeriod(
+      '2026-05-15',
+      null,
+      '2026-05-01',
+      '2026-05-31',
+    )
+    expect(ratio).toBeCloseTo(11 / 21, 6)
+  })
+
+  it('returns 0 when employment ends before the period starts', () => {
+    expect(
+      prorateBaseSalaryForPeriod('2020-01-01', '2026-04-30', '2026-05-01', '2026-05-31'),
+    ).toBe(0)
+  })
+
+  it('returns 0 when employment starts after the period ends', () => {
+    expect(
+      prorateBaseSalaryForPeriod('2026-06-01', null, '2026-05-01', '2026-05-31'),
+    ).toBe(0)
   })
 })
 

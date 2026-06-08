@@ -42,7 +42,7 @@ type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden'
 
 const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token' }[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth' },
-  { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth' },
+  { id: 'visma', name: 'Visma', authType: 'oauth' },
   { id: 'bokio', name: 'Bokio', authType: 'token' },
   { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token' },
   { id: 'briox', name: 'Briox', authType: 'token' },
@@ -140,7 +140,7 @@ interface SIEFileStatus {
   alreadyImported: boolean
   importedAt: string | null
   // New (period-based) detection. When present, this fiscal year already has a
-  // completed import in gnubok and a re-sync will replace it (cancelling the
+  // completed import in Accounted and a re-sync will replace it (cancelling the
   // imported journal entries; user-created entries are untouched).
   previousImport: {
     importedAt: string | null
@@ -349,16 +349,24 @@ function ProviderStep({
               {ARCIM_PROVIDERS.map((provider) => {
                 const comingSoon = COMING_SOON_PROVIDERS.has(provider.id)
                 const alreadyConnected = activeConsents.some(c => c.provider === provider.id)
+                // Non-Fortnox providers only expose entity data (customers,
+                // suppliers, invoices) via API — the ledger must arrive via SIE
+                // first. Gate the connection entry until a completed SIE import
+                // exists so users don't authenticate into a flow that can't
+                // import anything yet. The /migrate route enforces this
+                // server-side regardless; this is just the matching UX.
+                const needsSieFirst = !hasSieImport && provider.id !== 'fortnox'
+                const isDisabled = comingSoon || alreadyConnected || needsSieFirst
                 return (
                   <button
                     key={provider.id}
-                    disabled={comingSoon || alreadyConnected}
+                    disabled={isDisabled}
                     className={`relative flex items-center gap-4 rounded-lg border p-4 text-left transition-all ${
-                      comingSoon || alreadyConnected
+                      isDisabled
                         ? 'cursor-not-allowed border-border/50 opacity-60'
                         : 'border-border hover:border-primary/50 hover:bg-accent/50 active:scale-[0.98]'
                     }`}
-                    onClick={() => !comingSoon && !alreadyConnected && onSelect(provider.id)}
+                    onClick={() => !isDisabled && onSelect(provider.id)}
                   >
                     <img
                       src={PROVIDER_LOGOS[provider.id]}
@@ -378,9 +386,20 @@ function ProviderStep({
                             Ansluten
                           </span>
                         )}
+                        {needsSieFirst && !comingSoon && !alreadyConnected && (
+                          <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">
+                            SIE krävs först
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {alreadyConnected ? 'Använd "Synka igen" ovan' : provider.authType === 'oauth' ? 'Anslut via inloggning' : 'Anslut med API-nyckel'}
+                        {alreadyConnected
+                          ? 'Använd "Synka igen" ovan'
+                          : needsSieFirst
+                            ? 'Importera SIE-fil först'
+                            : provider.authType === 'oauth'
+                              ? 'Anslut via inloggning'
+                              : 'Anslut med API-nyckel'}
                       </p>
                     </div>
                   </button>

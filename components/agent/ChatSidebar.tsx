@@ -81,13 +81,13 @@ export default function ChatSidebar({ initialConversations }: Props) {
   // conversation pane runs nearly edge-to-edge.
   const [collapsed, setCollapsed] = useState(true)
   useEffect(() => {
-    const stored = localStorage.getItem('gnubok:chat-sidebar-collapsed')
+    const stored = localStorage.getItem('Accounted:chat-sidebar-collapsed')
     if (stored === 'false') setCollapsed(false)
   }, [])
   const toggleCollapsed = () => {
     setCollapsed(c => {
       const next = !c
-      try { localStorage.setItem('gnubok:chat-sidebar-collapsed', next ? 'true' : 'false') } catch {}
+      try { localStorage.setItem('Accounted:chat-sidebar-collapsed', next ? 'true' : 'false') } catch {}
       return next
     })
   }

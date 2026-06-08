@@ -129,7 +129,9 @@ export async function generateARLedger(
     // Add invoice detail (always — even if unconvertible, so it's visible)
     entry.invoices.push({
       invoice_id: inv.id,
-      invoice_number: inv.invoice_number || '',
+      // Self-billing invoices we received have no own number — show the
+      // counterparty's external number instead.
+      invoice_number: inv.invoice_number || inv.external_invoice_number || '',
       invoice_date: inv.invoice_date || '',
       due_date: inv.due_date,
       total,

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { parseSIEFile, validateSIEFile, detectEncoding, decodeBuffer } from '../sie-parser'
+import {
+  parseSIEFile,
+  validateSIEFile,
+  detectEncoding,
+  decodeBuffer,
+  getEffectiveOpeningBalances,
+  hasOpeningBalanceVoucherCandidate,
+} from '../sie-parser'
 
 // --- SIE content fixtures ---
 
@@ -1088,5 +1095,197 @@ describe('parseSIEFile — silent-failure diagnostic warnings', () => {
       (i) => i.severity === 'warning' && (i.tag === 'IB' || i.tag === 'VER')
     )
     expect(spurious).toHaveLength(0)
+  })
+})
+
+describe('getEffectiveOpeningBalances — derive IB from #UB -1 (issue #675)', () => {
+  // Issue #675 (ro66an): some systems export no #IB 0 records — the current
+  // year's IB exists only via the continuity invariant IB(0) = UB(-1).
+  const SIE_NO_IB0 = [
+    '#FLAGGA 0',
+    '#SIETYP 4',
+    '#FNAMN "Continuity AB"',
+    '#RAR 0 20240101 20241231',
+    '#RAR -1 20230101 20231231',
+    '#KONTO 1930 "Företagskonto"',
+    '#KONTO 2010 "Eget kapital"',
+    '#IB -1 1930 9483.08',
+    '#UB 0 1930 160406.00',
+    '#UB -1 1930 37400.78',
+    '#UB -1 2010 -37400.78',
+  ].join('\n')
+
+  it('derives current-year IB from #UB -1 when no #IB 0 exists (issue example)', () => {
+    const parsed = parseSIEFile(SIE_NO_IB0)
+    const { balances, derivedFromPriorYearUB } = getEffectiveOpeningBalances(parsed)
+
+    expect(derivedFromPriorYearUB).toBe(true)
+    expect(balances).toEqual([
+      { yearIndex: 0, account: '1930', amount: 37400.78 },
+      { yearIndex: 0, account: '2010', amount: -37400.78 },
+    ])
+  })
+
+  it('never uses #IB -1 (previous year IB) as the derivation source', () => {
+    const parsed = parseSIEFile(SIE_NO_IB0)
+    const { balances } = getEffectiveOpeningBalances(parsed)
+
+    expect(balances.some((b) => b.amount === 9483.08)).toBe(false)
+  })
+
+  it('returns explicit #IB 0 untouched when present — #UB -1 is never merged in', () => {
+    const content = [
+      SIE_NO_IB0,
+      '#IB 0 1930 37400.78',
+      '#IB 0 2010 -37400.78',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+    const { balances, derivedFromPriorYearUB } = getEffectiveOpeningBalances(parsed)
+
+    expect(derivedFromPriorYearUB).toBe(false)
+    expect(balances).toHaveLength(2)
+    expect(balances.every((b) => b.yearIndex === 0)).toBe(true)
+  })
+
+  it('yields to an opening-balance voucher candidate — no derivation (precedence 2 beats 3)', () => {
+    // The voucher serves as IB during import (tagged source_type
+    // 'opening_balance'); deriving from #UB -1 as well would double-count.
+    // Also the timezone regression test: the voucher date is a local-time
+    // Date, so a toISOString()-based comparison would miss the FY start on
+    // machines west or east of UTC and wrongly re-enable derivation.
+    const content = [
+      SIE_NO_IB0,
+      '#VER A 1 20240101 "Ingående balans"',
+      '{',
+      '#TRANS 1930 {} 37400.78',
+      '#TRANS 2010 {} -37400.78',
+      '}',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+
+    expect(hasOpeningBalanceVoucherCandidate(parsed)).toBe(true)
+
+    const { balances, derivedFromPriorYearUB } = getEffectiveOpeningBalances(parsed)
+    expect(derivedFromPriorYearUB).toBe(false)
+    expect(balances).toEqual([])
+  })
+
+  it('does not treat a share-capital voucher on FY start as an OB candidate', () => {
+    const content = [
+      SIE_NO_IB0,
+      '#VER A 1 20240101 "Insättning aktiekapital ingående balans"',
+      '{',
+      '#TRANS 1930 {} 25000.00',
+      '#TRANS 2081 {} -25000.00',
+      '}',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+
+    expect(hasOpeningBalanceVoucherCandidate(parsed)).toBe(false)
+    expect(getEffectiveOpeningBalances(parsed).derivedFromPriorYearUB).toBe(true)
+  })
+
+  it('does not treat a voucher with P&L lines as an OB candidate', () => {
+    const content = [
+      SIE_NO_IB0,
+      '#VER A 1 20240101 "Ingående balans"',
+      '{',
+      '#TRANS 1930 {} 1000.00',
+      '#TRANS 3001 {} -1000.00',
+      '}',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+
+    expect(hasOpeningBalanceVoucherCandidate(parsed)).toBe(false)
+    expect(getEffectiveOpeningBalances(parsed).derivedFromPriorYearUB).toBe(true)
+  })
+
+  it('does not treat an IB-worded voucher on another date as an OB candidate', () => {
+    const content = [
+      SIE_NO_IB0,
+      '#VER A 1 20240315 "Ingående balans"',
+      '{',
+      '#TRANS 1930 {} 1000.00',
+      '#TRANS 2010 {} -1000.00',
+      '}',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+
+    expect(hasOpeningBalanceVoucherCandidate(parsed)).toBe(false)
+    expect(getEffectiveOpeningBalances(parsed).derivedFromPriorYearUB).toBe(true)
+  })
+
+  it('filters P&L accounts out of the derived set (result accounts open at zero)', () => {
+    const content = [
+      SIE_NO_IB0,
+      '#UB -1 3001 -5000.00',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+    const { balances } = getEffectiveOpeningBalances(parsed)
+
+    expect(balances.some((b) => b.account === '3001')).toBe(false)
+    expect(balances).toHaveLength(2)
+  })
+
+  it('returns nothing when neither #IB 0 nor #UB -1 exists', () => {
+    const content = [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#FNAMN "First Year AB"',
+      '#RAR 0 20240101 20241231',
+      '#KONTO 1930 "Företagskonto"',
+      '#IB -1 1930 9483.08',
+      '#UB 0 1930 160406.00',
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+    const { balances, derivedFromPriorYearUB } = getEffectiveOpeningBalances(parsed)
+
+    expect(derivedFromPriorYearUB).toBe(false)
+    expect(balances).toEqual([])
+  })
+
+  it('carries quantity along on derived balances', () => {
+    const content = [
+      SIE_NO_IB0.replace('#UB -1 1930 37400.78', '#UB -1 1930 37400.78 5'),
+    ].join('\n')
+    const parsed = parseSIEFile(content)
+    const { balances } = getEffectiveOpeningBalances(parsed)
+
+    expect(balances.find((b) => b.account === '1930')?.quantity).toBe(5)
+  })
+
+  describe('validateSIEFile with derived IB', () => {
+    it('warns that IB will be derived from #UB -1', () => {
+      const parsed = parseSIEFile(SIE_NO_IB0)
+      const validation = validateSIEFile(parsed)
+
+      expect(validation.valid).toBe(true)
+      expect(validation.warnings.join(' ')).toMatch(/härleds från föregående års utgående balans/i)
+    })
+
+    it('runs the imbalance check on the derived set (unallocated prior-year result)', () => {
+      const content = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#FNAMN "Obalans AB"',
+        '#RAR 0 20240101 20241231',
+        '#KONTO 1930 "Företagskonto"',
+        // Derived IB sums to +37400.78 — prior-year result never allocated
+        '#UB -1 1930 37400.78',
+      ].join('\n')
+      const parsed = parseSIEFile(content)
+      const validation = validateSIEFile(parsed)
+
+      expect(validation.warnings.join(' ')).toMatch(/balanserar inte/i)
+      expect(validation.warnings.join(' ')).toMatch(/37400\.78/)
+    })
+
+    it('does not warn about derivation when explicit #IB 0 exists', () => {
+      const content = [SIE_NO_IB0, '#IB 0 1930 37400.78', '#IB 0 2010 -37400.78'].join('\n')
+      const parsed = parseSIEFile(content)
+      const validation = validateSIEFile(parsed)
+
+      expect(validation.warnings.join(' ')).not.toMatch(/härleds från föregående års utgående balans/i)
+    })
   })
 })

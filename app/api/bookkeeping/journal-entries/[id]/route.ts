@@ -6,6 +6,7 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createLogger } from '@/lib/logger'
+import { syncInvoiceStatusFromPaymentEntry } from '@/lib/bookkeeping/payment-sync'
 
 const logger = createLogger('journal-entries')
 
@@ -56,6 +57,18 @@ export async function DELETE(
 
   const companyId = await requireCompanyId(supabase, user.id)
 
+  // Read source_type/source_id BEFORE deleting so we can revert the linked
+  // invoice/supplier_invoice status afterwards. The GL row gets cancelled by
+  // delete_last_voucher but the invoice's paid status lives outside the GL
+  // and would otherwise stay stuck on "paid" after the user deletes the
+  // payment voucher.
+  const { data: entryBefore } = await supabase
+    .from('journal_entries')
+    .select('id, source_type, source_id')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single()
+
   const { data, error } = await supabase.rpc('delete_last_voucher', {
     p_company_id: companyId,
     p_entry_id: id,
@@ -67,6 +80,14 @@ export async function DELETE(
       { error: getErrorMessage(error, { context: 'journal_entry', statusCode: 400 }) },
       { status: 400 }
     )
+  }
+
+  if (entryBefore) {
+    try {
+      await syncInvoiceStatusFromPaymentEntry(supabase, companyId, entryBefore)
+    } catch (syncError) {
+      logger.warn('payment status sync failed after delete', { entryId: id, error: syncError })
+    }
   }
 
   await eventBus.emit({

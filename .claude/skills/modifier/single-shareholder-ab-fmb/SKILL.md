@@ -23,7 +23,7 @@ version: 1
 ## When this applies
 
 The active company is an aktiebolag where one natural person owns > 50% of
-the shares. This is the most common form among Gnubok's AB users. The owner
+the shares. This is the most common form among Accounted's AB users. The owner
 is typically also a full-time anställd in the company and "verksam i betydande
 omfattning" — which triggers 3:12-reglerna (53 kap. IL).
 

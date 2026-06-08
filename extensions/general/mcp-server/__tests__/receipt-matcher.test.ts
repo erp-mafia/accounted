@@ -226,8 +226,8 @@ describe('MCP Receipt Matcher', () => {
 
       // Data resources (added in Stream 3 Phase 1) should also be listed.
       const uris = result.resources.map((r: { uri: string }) => r.uri)
-      expect(uris).toContain('gnubok://company/current')
-      expect(uris).toContain('gnubok://capabilities')
+      expect(uris).toContain('Accounted://company/current')
+      expect(uris).toContain('Accounted://capabilities')
     })
   })
 

@@ -86,4 +86,34 @@ describe('ensureInvoiceNumber', () => {
       ensureInvoiceNumber(supabase as never, 'company-1', invoice)
     ).rejects.toThrow('no value returned')
   })
+
+  it('returns the external number for a self-billed invoice without touching the RPC', async () => {
+    // A received self-billing invoice carries the counterparty's number; we must
+    // never consume our own löpnummerserie (BFL 5 kap 6§).
+    const invoice = {
+      id: 'inv-1',
+      invoice_number: null,
+      is_self_billed: true,
+      external_invoice_number: 'KUND-55012',
+    }
+
+    const result = await ensureInvoiceNumber(supabase as never, 'company-1', invoice)
+
+    expect(result).toBe('KUND-55012')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('throws when a self-billed invoice is missing the external number', async () => {
+    const invoice = {
+      id: 'inv-1',
+      invoice_number: null,
+      is_self_billed: true,
+      external_invoice_number: null,
+    }
+
+    await expect(
+      ensureInvoiceNumber(supabase as never, 'company-1', invoice)
+    ).rejects.toThrow('missing external_invoice_number')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
 })

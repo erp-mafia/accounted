@@ -30,6 +30,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // entry is created or modified. Sits next to match_transaction_invoice
   // semantically — both attach an existing booking to an invoice.
   link_invoice_voucher: 'medium',
+  // Supplier-side mirror of link_invoice_voucher: link an existing posted
+  // verifikat (Dr 2440) as payment for a leverantörsfaktura. Reversible by
+  // deleting the supplier_invoice_payments row and reverting status; no journal
+  // entry is created or modified.
+  link_supplier_invoice_voucher: 'medium',
   create_invoice: 'medium', // creates as draft; sending is a separate op
   create_transaction: 'medium', // ingests an uncategorized row; reversible by delete
   // Supplier master data carries payment-routing fields (IBAN, BIC, bankgiro,
@@ -61,6 +66,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // but not the irreversible tier that year-end close / period lock occupy.
   post_annual_depreciation: 'medium',
   import_sie: 'high',
+  // Hard-deletes the import's journal entries + resets voucher sequences.
+  // Same destructive reach as replace_sie_import; never auto-commit.
+  undo_sie_import: 'high',
   explain_voucher_gap: 'medium',
   uncategorize_transaction: 'medium',
   approve_supplier_invoice: 'high',
@@ -89,6 +97,22 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // staged.
   create_salary_run: 'medium',
   generate_agi: 'high',
+
+  // ── Multi-tx flows (PRs #603/#606/#608/#610) ───────────────────────
+  // Allocate 1 bank tx across N customer or supplier invoices into one
+  // combined verifikat. Reversible via storno + invoice_payments delete,
+  // so 'medium' (same tier as match_transaction_invoice — its single-
+  // invoice counterpart).
+  match_batch_allocate: 'medium',
+  // Bulk-book N bank txs into 1 verifikat. The create-new branch posts
+  // a verifikat with caller-supplied lines (template-expanded or manual),
+  // the same compliance-critical surface as create_voucher. 'high'.
+  bulk_book_transactions: 'high',
+  // Link a single bank tx to an already-posted verifikat (no new JE created).
+  // Reversible by clearing transactions.journal_entry_id and deleting any
+  // invoice_payments row — sits next to link_invoice_voucher semantically;
+  // both attach an existing booking to a different entity.
+  link_transaction_journal_entry: 'medium',
 }
 
 export function getRiskLevel(operationType: string): RiskLevel {

@@ -188,7 +188,7 @@ export function buildReferenceOverviewMd(): string {
   const lines: string[] = []
   lines.push('# API reference')
   lines.push('')
-  lines.push(`> Every endpoint exposed by the gnubok REST API, grouped by resource. Auto-generated from the same Zod registry that powers the [OpenAPI 3.1 spec](/api/v1/openapi.json), the MCP tool surface, and runtime validators — there is no separate doc-source to keep in sync.`)
+  lines.push(`> Every endpoint exposed by the Accounted REST API, grouped by resource. Auto-generated from the same Zod registry that powers the [OpenAPI 3.1 spec](/api/v1/openapi.json), the MCP tool surface, and runtime validators — there is no separate doc-source to keep in sync.`)
   lines.push('')
   lines.push('## Resources')
   lines.push('')

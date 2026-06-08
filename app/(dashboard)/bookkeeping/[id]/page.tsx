@@ -8,13 +8,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy } from 'lucide-react'
+import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
+import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -33,6 +40,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCorrection, setShowCorrection] = useState(false)
+  const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
@@ -178,10 +186,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const foreignTotal = hasForeignCurrency ? Math.abs(Number(foreignLines[0].amount_in_currency) || 0) : 0
   const foreignExchangeRate = hasForeignCurrency ? (Number(foreignLines[0].exchange_rate) || null) : null
 
-  const canCorrect =
-    entry.status === 'posted' &&
-    entry.source_type !== 'storno' &&
-    entry.source_type !== 'correction'
+  // A correction is itself a regular posted verifikation and can be corrected
+  // again (BFL 5 kap. 5 § — the chain just grows). Storno entries are pure
+  // reversals and cannot be corrected directly; the user walks to the latest
+  // correction (or the original) and corrects that one.
+  const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno'
 
   // Include current entry in the chain for the visualization
   const fullChain = [entry, ...chain]
@@ -237,17 +246,31 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               </Button>
             )}
             {canCorrect && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
-                onClick={() => setShowCorrection(true)}
-                disabled={!canWrite}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
-                {t('edit_entry')}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    disabled={!canWrite}
+                    title={!canWrite ? t('read_only_tooltip') : undefined}
+                  >
+                    {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                    {t('correct_menu')}
+                    <ChevronDown className="ml-2 h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setShowCorrection(true)}>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {t('correct_lines')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setShowRecordate(true)}>
+                    <CalendarClock className="mr-2 h-4 w-4" />
+                    {t('correct_date')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
             {entry.status === 'posted' && (
               <Button
@@ -573,6 +596,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           onOpenChange={setShowCorrection}
           onCorrected={() => {
             setShowCorrection(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Recordate (move to correct date) dialog */}
+      {showRecordate && entry && (
+        <RecordateEntryDialog
+          entry={entry}
+          open={showRecordate}
+          onOpenChange={setShowRecordate}
+          onMoved={() => {
+            setShowRecordate(false)
             fetchData()
           }}
         />

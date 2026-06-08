@@ -24,9 +24,11 @@ import {
   Loader2,
   Lock,
   AlertTriangle,
+  Inbox,
 } from 'lucide-react'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
+import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 
 interface DocumentRecord {
   id: string
@@ -71,6 +73,7 @@ export default function JournalEntryAttachments({
   const [loading, setLoading] = useState(true)
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
+  const [showInboxPicker, setShowInboxPicker] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([])
 
   // Docs listed here are filtered by journal_entry_id, so every row is bound
@@ -215,15 +218,26 @@ export default function JournalEntryAttachments({
         <h4 className="text-sm font-medium">
           {t('title')} {documents.length > 0 && `(${documents.length})`}
         </h4>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => setShowUpload(!showUpload)}
-        >
-          <Plus className="h-3 w-3 mr-1" />
-          {t('add')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setShowInboxPicker(true)}
+          >
+            <Inbox className="h-3 w-3 mr-1" />
+            {t('choose_from_inbox')}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setShowUpload(!showUpload)}
+          >
+            <Plus className="h-3 w-3 mr-1" />
+            {t('add')}
+          </Button>
+        </div>
       </div>
 
       {showUpload && (
@@ -402,6 +416,13 @@ export default function JournalEntryAttachments({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <InboxDocumentPicker
+        open={showInboxPicker}
+        onClose={() => setShowInboxPicker(false)}
+        journalEntryId={journalEntryId}
+        onLinked={fetchDocuments}
+      />
     </div>
   )
 }

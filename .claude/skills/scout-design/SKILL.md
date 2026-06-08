@@ -1,6 +1,6 @@
 ---
 name: scout-design
-description: "Scan a specific area of the app for design issues and improvement opportunities, then create Linear tickets for approved findings. Usage: /scout-design <area> (e.g., /scout-design settings, /scout-design bookkeeping). Evaluates against the gnubok design system for consistency, missing states, animation gaps, accessibility, and visual polish."
+description: "Scan a specific area of the app for design issues and improvement opportunities, then create Linear tickets for approved findings. Usage: /scout-design <area> (e.g., /scout-design settings, /scout-design bookkeeping). Evaluates against the Accounted design system for consistency, missing states, animation gaps, accessibility, and visual polish."
 ---
 
 # Scout Design
@@ -31,11 +31,11 @@ Read ALL files in the resolved scope (pages + components). For each file, evalua
 **Consistency & Design System**
 - Are spacing values consistent (using Tailwind scale, not arbitrary values)?
 - Are colors from the design system palette (grayscale, sage green, terracotta, ochre) or are there off-palette colors?
-- Are font sizes/weights consistent with the typography system (Fraunces for headings, Geist for body)?
+- Are font sizes/weights consistent with the typography system (Hedvig Letters Serif for display headings, Geist for body)?
 - Are `tabular-nums` applied to all financial/numeric data?
 - Are shadcn/ui components used where appropriate, or are there custom implementations that should use shadcn?
 - Are icon sizes consistent (15px nav, larger for empty states)?
-- Are border styles consistent (subtle, 60% opacity)?
+- Are borders full-opacity `border-border` on cards/surfaces (no opacity-suffixed border classes like `border-border/60`)?
 
 **Loading & Empty States**
 - Does the page/component have a loading state? (skeleton, spinner, or shimmer)
@@ -50,7 +50,7 @@ Read ALL files in the resolved scope (pages + components). For each file, evalua
 **Animation & Motion**
 - Are list items stagger-animated on entry?
 - Do interactive elements have hover/active transitions?
-- Are transitions using appropriate easing (spring for feedback, ease for reveals)?
+- Are transitions using the project default (`transition-colors duration-150`) without spring/overshoot?
 - Is `prefers-reduced-motion` respected?
 - Are there abrupt state changes that would benefit from a transition?
 

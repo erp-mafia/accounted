@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { generateApiKey, DEFAULT_SCOPES, validateScopes } from '@/lib/auth/api-keys'
+import {
+  generateApiKey,
+  DEFAULT_SCOPES,
+  validateScopes,
+  findStageApproveConflict,
+} from '@/lib/auth/api-keys'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
@@ -38,11 +43,13 @@ export const POST = withRouteContext(
 
     let name = 'Unnamed key'
     let scopes: ApiKeyScope[] = DEFAULT_SCOPES
+    let acknowledgeSod = false
     try {
       const body = await request.json()
       if (body.name && typeof body.name === 'string') {
         name = body.name.slice(0, 100)
       }
+      acknowledgeSod = body.acknowledge_sod === true
       const parsed = validateScopes(body.scopes)
       if (parsed) {
         scopes = parsed
@@ -55,6 +62,22 @@ export const POST = withRouteContext(
     } catch {
       // Empty body — use defaults.
     }
+
+    // Segregation of duties: warn + require explicit acknowledgement (not block)
+    // when a single key both stages bookkeeping AND can approve it. Surfacing a
+    // 409 lets the UI raise an explicit confirm dialog and the agent inform the
+    // user before re-POSTing with acknowledge_sod: true.
+    const conflictingScope = findStageApproveConflict(scopes)
+    if (conflictingScope && !acknowledgeSod) {
+      return errorResponseFromCode('API_KEY_SOD_CONFLICT', log, {
+        requestId,
+        details: {
+          conflicting_scope: conflictingScope,
+          approve_scope: 'pending_operations:approve',
+        },
+      })
+    }
+    const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
 
     const { count } = await supabase
       .from('api_keys')
@@ -80,6 +103,9 @@ export const POST = withRouteContext(
         key_prefix: prefix,
         name,
         scopes,
+        ...(sodAcknowledgedAt
+          ? { sod_acknowledged_at: sodAcknowledgedAt, sod_acknowledged_by: user.id }
+          : {}),
       })
       .select('id, key_prefix, name, scopes, created_at')
       .single()
@@ -89,6 +115,21 @@ export const POST = withRouteContext(
       return errorResponseFromCode('API_KEY_CREATE_FAILED', log, {
         requestId,
         details: { reason: error.message },
+      })
+    }
+
+    if (sodAcknowledgedAt) {
+      // High-risk security event: the creator self-attested the stage+approve
+      // combination. The durable record is the sod_acknowledged_* pair on the
+      // key row; this structured entry additionally lands the acceptance in
+      // the logging pipeline (ASVS V16.1.1 / SOC 2 CC6.1).
+      log.warn('api_key.sod_acknowledged', {
+        keyId: data.id,
+        keyPrefix: data.key_prefix,
+        conflictingScope,
+        scopes,
+        acknowledgedBy: user.id,
+        companyId,
       })
     }
 

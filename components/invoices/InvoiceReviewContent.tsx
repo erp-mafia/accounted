@@ -32,6 +32,9 @@ interface InvoiceReviewContentProps {
   numberPreview?: string | null
   /** Mirrors `company_settings.ore_rounding`. Defaults to true to match `getDisplayTotal`. */
   oreRounding?: boolean
+  /** Mirrors `company_settings.vat_registered`. When false and the invoice carries
+   *  no VAT, the moms row is suppressed to match the PDF (pdf-template.tsx:876). */
+  vatRegistered?: boolean
 }
 
 export function InvoiceReviewContent({
@@ -48,6 +51,7 @@ export function InvoiceReviewContent({
   notes,
   numberPreview,
   oreRounding,
+  vatRegistered,
 }: InvoiceReviewContentProps) {
   const t = useTranslations('invoice_review')
   const rounding = getDisplayTotal({ total, currency }, { ore_rounding: oreRounding ?? true })
@@ -161,7 +165,7 @@ export function InvoiceReviewContent({
               <span>{formatCurrency(vat, currency)}</span>
             </div>
           ))}
-        {Array.from(vatByRate.values()).every((vat) => vat === 0) && (
+        {Array.from(vatByRate.values()).every((vat) => vat === 0) && !(vatRegistered === false && vatAmount === 0) && (
           <div className="flex justify-between">
             <span className="text-muted-foreground">{t('vat_label')}</span>
             <span>{formatCurrency(0, currency)}</span>

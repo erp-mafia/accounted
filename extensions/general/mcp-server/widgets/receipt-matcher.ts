@@ -11,7 +11,7 @@ export const RECEIPT_MATCHER_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Kvittomatchning — gnubok</title>
+<title>Kvittomatchning — Accounted</title>
 <style>
   :root {
     --bg: #fafafa;

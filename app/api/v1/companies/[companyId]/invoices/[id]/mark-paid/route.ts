@@ -240,6 +240,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
       'enskild_firma') as EntityType
 
+    // The JE shape is driven by the invoice's actual booking state, not the
+    // company's current accounting_method. An invoice that was booked at send
+    // under accrual (Dr 1510) must be cleared at payment regardless of where
+    // the setting sits today — otherwise the receivable orphans and 30xx +
+    // VAT double-count. Only true kontantmetoden invoices (never booked)
+    // recognise revenue + VAT here.
+    const invoiceAlreadyBooked = !!(typed as { journal_entry_id?: string | null }).journal_entry_id
+    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
+
     // Compute the would-be payment amount. Default path (no customLines):
     // use remaining_amount, not total — protects against over-crediting AR
     // when a concurrent partial payment slips through the pre-flight check
@@ -363,7 +372,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             input,
           )
           journalEntryId = entry?.id ?? null
-        } else if (accountingMethod === 'cash') {
+        } else if (useCashEntry) {
           const entry = await createInvoiceCashEntry(
             ctx.supabase,
             ctx.companyId!,

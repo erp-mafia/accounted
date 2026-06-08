@@ -19,11 +19,22 @@ import {
   AlertCircle,
   ArrowUpRight,
   ArrowDownRight,
+  FileSearch,
   FileText,
   Link2,
   Loader2,
+  MoreHorizontal,
+  Pencil,
+  Split,
   Trash2,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 // True when the AI tier is active — gates user-facing strings that promise
@@ -47,8 +58,17 @@ interface TransactionInboxCardProps {
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   /** Open the manual picker — routes to customer or supplier picker by amount sign. */
   onOpenMatchInvoicePicker: (transaction: TransactionWithInvoice) => void
+  /** Open the split-payment allocator (1 tx → N invoices) — same direction
+   *  detection as the single-pick picker. Optional so legacy callers stay
+   *  source-compatible. */
+  onOpenSplitMatch?: (transaction: TransactionWithInvoice) => void
+  /** Open the existing-verifikat matcher — link the bank tx to an already-booked
+   *  voucher (salary, Fortnox import, manual entry) with no new bokföring. */
+  onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
+  /** Open the edit-title dialog. Only wired for editable (unbooked/unmatched) rows. */
+  onEditTitle?: (transaction: TransactionWithInvoice) => void
   onToggleSelect: (id: string) => void
   onAnimationComplete?: (id: string) => void
 }
@@ -61,8 +81,11 @@ export default function TransactionInboxCard({
   isSelected,
   onOpenMatchDialog,
   onOpenMatchInvoicePicker,
+  onOpenSplitMatch,
+  onOpenMatchVoucher,
   onOpenCategoryDialog,
   onDelete,
+  onEditTitle,
   onToggleSelect,
   onAnimationComplete,
 }: TransactionInboxCardProps) {
@@ -74,7 +97,7 @@ export default function TransactionInboxCard({
   // upload POST succeeds, without waiting for the parent to refetch. The
   // next parent refresh will sync; in the meantime the user sees the
   // correct visual state immediately. Same hook handles agent-chat uploads
-  // via the gnubok:transaction-document-linked window event (AgentChat
+  // via the Accounted:transaction-document-linked window event (AgentChat
   // dispatches it after /api/agent/upload returns).
   const [optimisticDocumentId, setOptimisticDocumentId] = useState<string | null>(null)
   useEffect(() => {
@@ -83,8 +106,8 @@ export default function TransactionInboxCard({
       if (!detail || detail.transaction_id !== transaction.id || !detail.document_id) return
       setOptimisticDocumentId(detail.document_id)
     }
-    window.addEventListener('gnubok:transaction-document-linked', onLinked)
-    return () => window.removeEventListener('gnubok:transaction-document-linked', onLinked)
+    window.addEventListener('Accounted:transaction-document-linked', onLinked)
+    return () => window.removeEventListener('Accounted:transaction-document-linked', onLinked)
   }, [transaction.id])
   const attachedDocumentId =
     optimisticDocumentId ?? (transaction as { document_id?: string | null }).document_id ?? null
@@ -103,6 +126,11 @@ export default function TransactionInboxCard({
   const isUncategorized = transaction.is_business === null && !transaction.journal_entry_id
   const showCheckbox = isBatchMode && isUncategorized
   const isDeletable = !transaction.journal_entry_id
+  // Title is editable only on a mutable staging row — not booked and not
+  // confirmed-matched. Mirrors the server-side gate in PATCH /api/transactions/[id].
+  const isTitleEditable =
+    !transaction.journal_entry_id && !transaction.invoice_id && !transaction.supplier_invoice_id
+  const originalName = transaction.original_description
 
   // Primary action: invoice/supplier-invoice match keeps the 1-click shortcut;
   // otherwise the user opens the template picker.
@@ -177,6 +205,22 @@ export default function TransactionInboxCard({
   const invoiceMatchLabel = isIncome
     ? 'Matcha mot kundfaktura'
     : 'Matcha mot leverantörsfaktura'
+
+  const splitMatchLabel = isIncome
+    ? 'Dela inbetalningen på flera fakturor'
+    : 'Dela utbetalningen på flera leverantörsfakturor'
+
+  // Secondary row actions are collapsed into a single ⋯ overflow menu to keep
+  // the inbox row uncluttered. Bokför + the invoice-match button stay inline.
+  // "Matcha mot befintlig verifikation" — link to an already-booked voucher.
+  // Available on any unbooked row (income or expense), independent of whether an
+  // invoice match was auto-detected: the user may want to point the bank line at
+  // an existing salary/Fortnox/manual voucher instead of confirming a payment.
+  const showMatchVoucherItem = isDeletable && !!onOpenMatchVoucher
+  const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
+  const showEditItem = isTitleEditable && !!onEditTitle
+  const showDeleteItem = isDeletable && !!onDelete
+  const showOverflowMenu = showMatchVoucherItem || showSplitItem || showEditItem || showDeleteItem
 
   return (
     <motion.div
@@ -264,20 +308,74 @@ export default function TransactionInboxCard({
                     Per-transaction agent help has moved to Dokumentinkorgen:
                     match the underlag to the transaction and ask from there,
                     where the receipt/invoice is in view. */}
-                {isDeletable && onDelete && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-muted-foreground hover:text-destructive"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDelete(transaction.id)
-                    }}
-                    aria-label={t('delete_aria')}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                {/* Secondary actions (split, edit, delete) collapse into a ⋯
+                    overflow menu so the row stays uncluttered. */}
+                {showOverflowMenu && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 text-muted-foreground hover:text-foreground"
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={t('more_actions_aria')}
+                        title={t('more_actions_aria')}
+                        disabled={isProcessing || isDisabled}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-[14rem]">
+                      {showMatchVoucherItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenMatchVoucher!(transaction)
+                          }}
+                        >
+                          <FileSearch className="h-4 w-4" />
+                          {t('match_voucher_btn')}
+                        </DropdownMenuItem>
+                      )}
+                      {showSplitItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenSplitMatch!(transaction)
+                          }}
+                        >
+                          <Split className="h-4 w-4" />
+                          {splitMatchLabel}
+                        </DropdownMenuItem>
+                      )}
+                      {showEditItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onEditTitle!(transaction)
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                          {t('edit_title_aria')}
+                        </DropdownMenuItem>
+                      )}
+                      {showDeleteItem && (
+                        <>
+                          {(showMatchVoucherItem || showSplitItem || showEditItem) && <DropdownMenuSeparator />}
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onDelete!(transaction.id)
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            {t('delete_aria')}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
               </>
             )}
@@ -290,6 +388,18 @@ export default function TransactionInboxCard({
         </div>
         <DataListMeta className="mt-1">
           <span className="tabular-nums">{formatDate(transaction.date)}</span>
+          {transaction.title_edited_at && (
+            <>
+              <DataListMetaSeparator />
+              <Badge
+                variant="secondary"
+                className="h-4 px-1.5 py-0 text-[10px]"
+                title={originalName ? t('original_name_tooltip', { name: originalName }) : undefined}
+              >
+                {t('edited_badge')}
+              </Badge>
+            </>
+          )}
           {skvCounterpartDate && (
             <>
               <DataListMetaSeparator />

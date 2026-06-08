@@ -162,12 +162,12 @@ export default function BookkeepingPage() {
           <TabsTrigger value="accounts">{t('tab_accounts')}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="journal" className="space-y-4">
+        <TabsContent value="journal" forceMount className="space-y-4">
           <FiscalYearSelector value={periodId} onChange={setPeriodId} />
           <JournalEntryList key={`${refreshKey}-${periodId ?? 'all'}`} periodId={periodId ?? undefined} />
         </TabsContent>
 
-        <TabsContent value="new-entry">
+        <TabsContent value="new-entry" forceMount>
           {isLoadingCopy ? (
             <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -202,7 +202,7 @@ export default function BookkeepingPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="accounts">
+        <TabsContent value="accounts" forceMount>
           <ChartOfAccountsManager />
         </TabsContent>
       </Tabs>

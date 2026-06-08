@@ -237,8 +237,13 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       expect.objectContaining({ id: VALID_ID_1 }),
       // commit_method must be 'bulk_accept' so any journal_entries created
       // during bulk approval are tagged distinctly from single-approval ones
-      // (BFNAR 2013:2 behandlingshistorik).
-      { userEmail: 'test@test.se', commitMethod: 'bulk_accept' }
+      // (BFNAR 2013:2 behandlingshistorik). The actor option attributes the
+      // commits to the approving user (migration 20260619120000).
+      {
+        userEmail: 'test@test.se',
+        commitMethod: 'bulk_accept',
+        actor: { type: 'user', label: 'test@test.se' },
+      }
     )
   })
 

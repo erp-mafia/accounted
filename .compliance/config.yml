@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../.claude/skills/compliance-swarm/.compliance/config.schema.yml
 
-# Bootstrap config for gnubok itself. Threshold starts at "critical" so the
+# Bootstrap config for Accounted itself. Threshold starts at "critical" so the
 # advisory PR check warns loudly without blocking merges. Tighten to "high"
 # once findings are triaged and suppressions are in place.
 

@@ -26,7 +26,7 @@ interface EstimateResponse {
   within_limit: boolean
 }
 
-const LAST_DOWNLOAD_STORAGE_KEY = 'gnubok:last-backup-download'
+const LAST_DOWNLOAD_STORAGE_KEY = 'Accounted:last-backup-download'
 
 export function BackupDownloadForm() {
   const t = useTranslations('settings_backup_download')

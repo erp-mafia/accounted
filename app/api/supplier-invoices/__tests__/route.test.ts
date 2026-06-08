@@ -305,6 +305,45 @@ describe('POST /api/supplier-invoices', () => {
     expect((body.error as unknown as { code: string }).code).toBe('SI_CREATE_FAILED')
   })
 
+  it('rolls back and returns SI_CREATE_NO_FISCAL_PERIOD when invoice_date is outside every fiscal period', async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-1', invoice_date: '2099-06-01' })
+
+    // Fetch supplier
+    enqueue({ data: supplier, error: null })
+    // RPC get_next_arrival_number
+    enqueue({ data: 9 })
+    // Insert invoice
+    enqueue({ data: createdInvoice, error: null })
+    // Insert items
+    enqueue({ data: null, error: null })
+    // Fetch company settings → accrual, so a registration JE is attempted
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // Engine returns null because no fiscal period covers 2099-06-01
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue(null)
+    // Rollback: delete the orphan invoice (items cascade)
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-NOFY',
+        invoice_date: '2099-06-01',
+        due_date: '2099-07-01',
+        items: [{ description: 'Material', quantity: 1, unit_price: 8000, account_number: '4010' }],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_NO_FISCAL_PERIOD')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
+    // The orphan must be rolled back — the delete is the 6th queued call.
+    expect(mockSupabase.from).toHaveBeenCalledWith('supplier_invoices')
+  })
+
   it('returns 409 with credit chain on duplicate supplier_invoice_number for credited original', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
 
