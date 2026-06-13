@@ -13,6 +13,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
+  | 'PROVIDER_LICENSE_MISSING'
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_UNREACHABLE'
   | 'PROVIDER_UPSTREAM_ERROR'
@@ -205,4 +206,29 @@ export function classifyProviderError(error: unknown): ProviderCallErrorCode | n
   if (isNetworkError(error)) return 'PROVIDER_UNREACHABLE'
 
   return null
+}
+
+/**
+ * True when a provider token/OAuth failure means the integration license is
+ * missing or inactive — NOT an ordinary expired/revoked grant.
+ *
+ * Fortnox answers its token endpoint with `error_missing_license` when the
+ * customer's Fortnox account no longer carries the integration license. The
+ * stored refresh token cannot be revived by re-authorizing: re-auth loops until
+ * the customer re-orders the "Fortnox Integration" add-on. Distinguishing this
+ * from a plain dead token lets callers say "activate the license, then
+ * reconnect" instead of a bare "reconnect" that just fails again.
+ *
+ * Matches on the raw provider message string because the underlying refresh
+ * helpers bake the body into the Error message; deliberately does NOT match
+ * `invalid_grant` (that IS a revivable reconnect → PROVIDER_AUTH_EXPIRED).
+ */
+export function isMissingLicenseError(message: string): boolean {
+  const haystack = message.toLowerCase()
+  return (
+    haystack.includes('error_missing_license') ||
+    haystack.includes('missing_license') ||
+    haystack.includes('missing license') ||
+    haystack.includes('not have enough licenses')
+  )
 }

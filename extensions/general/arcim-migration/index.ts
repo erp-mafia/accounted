@@ -56,6 +56,40 @@ function translateOAuthError(error: string, description: string | null): string 
 }
 
 /**
+ * Build a provider OAuth authorization URL bound to an EXISTING consent id.
+ * Used by both first-time connect and reconnect (token revival): the callback
+ * runs exchangeAuthToken(consentId, …) which upserts the fresh tokens keyed by
+ * consent_id, so re-running OAuth against the same consent overwrites a dead
+ * refresh-token pair in place — no disconnect/recreate needed.
+ */
+async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): Promise<string> {
+  const otc = await generateOtc(consentId)
+
+  // Prefer a provider-specific redirect override (e.g. VISMA_REDIRECT_URI) when
+  // set — lets dev environments route through a single registered URI rather
+  // than registering every ngrok URL on the OAuth client. Falls back to
+  // NEXT_PUBLIC_APP_URL + the canonical callback path.
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || ''
+  const providerRedirectEnv =
+    provider === 'visma'
+      ? process.env.VISMA_REDIRECT_URI
+      : provider === 'fortnox'
+        ? process.env.FORTNOX_REDIRECT_URI
+        : undefined
+  const callbackUrl =
+    providerRedirectEnv && providerRedirectEnv.trim().length > 0
+      ? providerRedirectEnv
+      : `${appUrl}/api/extensions/ext/arcim-migration/callback`
+
+  // Encode consentId + provider in state so the callback rebinds to this consent
+  const statePayload = JSON.stringify({ otc: otc.code, consentId, provider })
+  const stateEncoded = Buffer.from(statePayload).toString('base64url')
+
+  const { url } = await getAuthUrl(provider, stateEncoded, callbackUrl)
+  return url
+}
+
+/**
  * Provider Migration extension
  *
  * Migrates bookkeeping data from external Swedish accounting systems
@@ -158,10 +192,11 @@ export const arcimMigrationExtension: Extension = {
 
         const companyId = ctx?.companyId ?? user.id
 
-        const { provider, companyName, orgNumber } = await request.json() as {
+        const { provider, companyName, orgNumber, reconnect } = await request.json() as {
           provider: ArcimProvider
           companyName?: string
           orgNumber?: string
+          reconnect?: boolean
         }
 
         if (!provider) {
@@ -180,8 +215,43 @@ export const arcimMigrationExtension: Extension = {
         try {
           const { createServiceClient: createSvc } = await import('@/lib/supabase/server')
 
-          // Reuse existing accepted consent if one exists for this provider
           const existingConsents = await listConsents(companyId)
+
+          // Reconnect: an existing connection's stored tokens are dead (refresh
+          // failed → PROVIDER_AUTH_EXPIRED). Re-run auth against the SAME consent
+          // so fresh tokens overwrite the dead pair in place — no disconnect, no
+          // duplicate consent, import history preserved. Bypasses the
+          // alreadyConnected short-circuit below (which would otherwise skip the
+          // auth that's the whole point here).
+          if (reconnect) {
+            const stale = existingConsents.find(
+              c => c.provider === provider && (c.status === 0 || c.status === 1),
+            )
+            if (stale) {
+              if (ctx?.settings) {
+                await ctx.settings.set('consent_id', stale.id)
+                await ctx.settings.set('provider', provider)
+              }
+              if (providerInfo.authType === 'oauth') {
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider)
+                return NextResponse.json({
+                  consentId: stale.id,
+                  authType: 'oauth',
+                  authUrl,
+                  reconnect: true,
+                })
+              }
+              // Token-based providers re-authorize by re-entering credentials
+              return NextResponse.json({
+                consentId: stale.id,
+                authType: 'token',
+                reconnect: true,
+              })
+            }
+            // No existing consent to revive — fall through to a normal connect.
+          }
+
+          // Reuse existing accepted consent if one exists for this provider
           const accepted = existingConsents.find(c => c.provider === provider && c.status === 1)
 
           if (accepted) {
@@ -205,7 +275,11 @@ export const arcimMigrationExtension: Extension = {
             for (const p of pending) {
               const { data: tokens } = await svc
                 .from('provider_consent_tokens')
-                .select('id')
+                // consent_id is the PK — there is no `id` column. Selecting `id`
+                // errors silently (only `data` is read), so `tokens` was always
+                // null and the reuse branch below never fired, deleting valid
+                // status-0 consents as "abandoned".
+                .select('consent_id')
                 .eq('consent_id', p.id)
                 .limit(1)
               if (tokens && tokens.length > 0) {
@@ -242,37 +316,12 @@ export const arcimMigrationExtension: Extension = {
           }
 
           if (providerInfo.authType === 'oauth') {
-            // Generate OTC for OAuth flow
-            const otc = await generateOtc(consent.id)
-
-            // Build the OAuth callback URL. Prefer a provider-specific override
-            // (e.g. VISMA_REDIRECT_URI) when set — this lets dev environments
-            // route through a single registered URI (production) rather than
-            // requiring every ngrok URL to be registered on the OAuth client.
-            // Falls back to NEXT_PUBLIC_APP_URL + the canonical callback path.
-            const appUrl = process.env.NEXT_PUBLIC_APP_URL || ''
-            const providerRedirectEnv =
-              provider === 'visma'
-                ? process.env.VISMA_REDIRECT_URI
-                : provider === 'fortnox'
-                  ? process.env.FORTNOX_REDIRECT_URI
-                  : undefined
-            const callbackUrl =
-              providerRedirectEnv && providerRedirectEnv.trim().length > 0
-                ? providerRedirectEnv
-                : `${appUrl}/api/extensions/ext/arcim-migration/callback`
-
-            // Encode consentId + provider in state
-            const statePayload = JSON.stringify({ otc: otc.code, consentId: consent.id, provider })
-            const stateEncoded = Buffer.from(statePayload).toString('base64url')
-
-            const { url } = await getAuthUrl(provider, stateEncoded, callbackUrl)
+            const authUrl = await buildArcimOAuthUrl(consent.id, provider)
 
             return NextResponse.json({
               consentId: consent.id,
               authType: 'oauth',
-              authUrl: url,
-              otcCode: otc.code,
+              authUrl,
             })
           } else {
             // Token-based providers: consent is ready for direct use

@@ -9,9 +9,15 @@ vi.mock('@/lib/providers/briox/oauth', () => ({
   refreshBrioxToken: vi.fn(),
 }));
 
+vi.mock('@/lib/providers/fortnox/oauth', () => ({
+  refreshFortnoxToken: vi.fn(),
+}));
+
 import { createServiceClient } from '@/lib/supabase/server';
 import { refreshBrioxToken } from '@/lib/providers/briox/oauth';
+import { refreshFortnoxToken } from '@/lib/providers/fortnox/oauth';
 import { resolveConsent } from '../resolve-consent';
+import { ProviderCallError } from '../with-provider-call';
 
 const consentRow = { id: 'c1', company_id: 'co1', provider: 'briox', status: 1 };
 
@@ -52,7 +58,7 @@ describe('resolveConsent — Briox token refresh concurrency', () => {
   it('persists the rotated pair when the guarded update wins the race', async () => {
     mock.enqueue({ data: [consentRow] }); // consent lookup
     mock.enqueue({ data: [expiredTokens] }); // expired token row
-    mock.enqueue({ data: [{ id: 't1' }] }); // guarded update matched 1 row
+    mock.enqueue({ data: [{ consent_id: 'c1' }] }); // guarded update matched 1 row (PK is consent_id, not id)
 
     const result = await resolveConsent('co1', 'c1');
 
@@ -97,5 +103,64 @@ describe('resolveConsent — Briox token refresh concurrency', () => {
       status: 500,
       message: expect.stringContaining('re-enter the credentials'),
     });
+  });
+
+  it('rethrows a dead refresh token as PROVIDER_AUTH_EXPIRED so callers prompt reconnect', async () => {
+    mock.enqueue({ data: [consentRow] }); // consent lookup
+    mock.enqueue({ data: [expiredTokens] }); // expired token row
+
+    // Mirrors Fortnox's `400 invalid_grant`: the raw helper throws a plain
+    // Error whose status lives only in the message string. resolveConsent must
+    // still classify it as an expired connection, not let it fall through to a
+    // generic 500 at the route.
+    vi.mocked(refreshBrioxToken).mockRejectedValueOnce(
+      new Error('Briox token refresh failed: 400 {"error":"invalid_grant"}'),
+    );
+
+    const err = await resolveConsent('co1', 'c1').catch((e) => e);
+
+    expect(err).toBeInstanceOf(ProviderCallError);
+    expect(err.code).toBe('PROVIDER_AUTH_EXPIRED');
+    expect(err.provider).toBe('briox');
+  });
+
+  it('maps Fortnox error_missing_license to PROVIDER_LICENSE_MISSING (not a revivable reconnect)', async () => {
+    const fortnoxConsent = { id: 'c2', company_id: 'co1', provider: 'fortnox', status: 1 };
+    mock.enqueue({ data: [fortnoxConsent] }); // consent lookup
+    mock.enqueue({ data: [expiredTokens] }); // expired token row
+
+    // Fortnox answers the token endpoint with error_missing_license when the
+    // customer's integration license has lapsed. Re-auth can't revive it — the
+    // license must be re-ordered first — so it gets its own code rather than the
+    // generic "reconnect" PROVIDER_AUTH_EXPIRED.
+    vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(
+      new Error(
+        'Fortnox token refresh failed: 401 {"error":"error_missing_license","error_description":"The client credentials are invalid"}',
+      ),
+    );
+
+    const err = await resolveConsent('co1', 'c2').catch((e) => e);
+
+    expect(err).toBeInstanceOf(ProviderCallError);
+    expect(err.code).toBe('PROVIDER_LICENSE_MISSING');
+    expect(err.provider).toBe('fortnox');
+  });
+
+  it('keeps a Fortnox invalid_grant as PROVIDER_AUTH_EXPIRED (revivable by reconnect)', async () => {
+    const fortnoxConsent = { id: 'c2', company_id: 'co1', provider: 'fortnox', status: 1 };
+    mock.enqueue({ data: [fortnoxConsent] }); // consent lookup
+    mock.enqueue({ data: [expiredTokens] }); // expired token row
+
+    // A plain expired/revoked grant IS revivable by reconnecting — it must not
+    // be mis-mapped to the license code.
+    vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(
+      new Error('Fortnox token refresh failed: 400 {"error":"invalid_grant"}'),
+    );
+
+    const err = await resolveConsent('co1', 'c2').catch((e) => e);
+
+    expect(err).toBeInstanceOf(ProviderCallError);
+    expect(err.code).toBe('PROVIDER_AUTH_EXPIRED');
+    expect(err.provider).toBe('fortnox');
   });
 });

@@ -5,6 +5,7 @@ import { refreshFortnoxToken } from './fortnox/oauth';
 import { refreshVismaToken } from './visma/oauth';
 import { refreshBrioxToken } from './briox/oauth';
 import { refreshBjornLundenToken } from './bjornlunden/oauth';
+import { ProviderCallError, isMissingLicenseError } from './with-provider-call';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('providers/resolve-consent');
@@ -98,15 +99,48 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
 
     let refreshed: TokenResponse;
 
-    if (consent.provider === 'fortnox') {
-      refreshed = await refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string);
-    } else if (consent.provider === 'briox') {
-      // Briox /tokenrefresh wants the (expired) access token alongside the
-      // refresh token; no app-level config involved. Both tokens rotate —
-      // the new refresh_token is persisted below.
-      refreshed = await refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string);
-    } else {
-      refreshed = await refreshVismaToken(getOAuthConfig(consent.provider as string), tokens.refresh_token as string);
+    // A failed refresh is categorically an expired/revoked connection: the
+    // providers rotate refresh tokens and a dead one (e.g. Fortnox `400
+    // invalid_grant`) can never be replayed — retrying is pointless. Surface it
+    // as PROVIDER_AUTH_EXPIRED so callers (preview/sie-data/migrate) report
+    // "reconnect" (401) instead of a generic 500 that invites a useless retry.
+    // The raw helpers throw plain Errors with the status only in the message
+    // string, so classifyProviderError can't see it downstream — we map here,
+    // at the boundary that knows this is a refresh.
+    try {
+      if (consent.provider === 'fortnox') {
+        refreshed = await refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string);
+      } else if (consent.provider === 'briox') {
+        // Briox /tokenrefresh wants the (expired) access token alongside the
+        // refresh token; no app-level config involved. Both tokens rotate —
+        // the new refresh_token is persisted below.
+        refreshed = await refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string);
+      } else {
+        refreshed = await refreshVismaToken(getOAuthConfig(consent.provider as string), tokens.refresh_token as string);
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      // A missing/inactive integration license (Fortnox `error_missing_license`)
+      // is NOT a revivable token: re-authorizing loops until the customer
+      // re-orders the license. Surface it as its own code so the caller shows
+      // "activate the license, then reconnect" instead of a bare reconnect.
+      const code = isMissingLicenseError(reason)
+        ? 'PROVIDER_LICENSE_MISSING'
+        : 'PROVIDER_AUTH_EXPIRED';
+      log.error(
+        `Failed to refresh ${consent.provider} token for consent ${consentId} — ` +
+        (code === 'PROVIDER_LICENSE_MISSING'
+          ? 'the integration license is missing/inactive'
+          : 'the connection must be re-authorized'),
+        { reason },
+      );
+      throw new ProviderCallError(
+        code,
+        consent.provider as string,
+        code === 'PROVIDER_LICENSE_MISSING'
+          ? `${consent.provider} integration license missing/inactive; the customer must re-order it before reconnecting`
+          : `Token refresh failed for ${consent.provider}; the connection must be re-authorized`,
+      );
     }
 
     const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
@@ -126,7 +160,12 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       })
       .eq('consent_id', consentId)
       .eq('token_expires_at', tokens.token_expires_at as string)
-      .select('id');
+      // consent_id is the table's PRIMARY KEY — there is no `id` column.
+      // Selecting `id` here makes Postgres reject the whole statement
+      // ("column provider_consent_tokens.id does not exist"), which surfaces as
+      // updateError and is misreported as "rotated tokens could not be saved"
+      // AFTER the provider already rotated — permanently breaking the consent.
+      .select('consent_id');
 
     if (updateError) {
       // The provider has ALREADY rotated the tokens but we failed to persist

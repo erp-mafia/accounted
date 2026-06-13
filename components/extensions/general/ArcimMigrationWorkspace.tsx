@@ -68,6 +68,16 @@ function apiErrorMessage(data: unknown, fallback: string): string {
   return fallback
 }
 
+/** Pull the structured error `code` from an envelope, if present. */
+function apiErrorCode(data: unknown): string | null {
+  const err = (data as { error?: unknown } | null)?.error
+  if (err && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code
+    if (typeof code === 'string' && code) return code
+  }
+  return null
+}
+
 interface SkipReasons {
   duplicate?: number
   inactive?: number
@@ -632,12 +642,18 @@ function PreviewStep({
   preview,
   isLoading,
   error,
+  authExpired,
+  licenseMissing,
+  onReconnect,
   onContinue,
   onBack,
 }: {
   preview: PreviewData | null
   isLoading: boolean
   error: string | null
+  authExpired: boolean
+  licenseMissing: boolean
+  onReconnect: () => void
   onContinue: () => void
   onBack: () => void
 }) {
@@ -663,13 +679,26 @@ function PreviewStep({
             <>
               <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-                <p className="text-sm text-muted-foreground">{error}</p>
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">{error}</p>
+                  {authExpired && (
+                    <Button size="sm" className="min-h-9" onClick={onReconnect} disabled={isLoading}>
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      Återanslut {providerName}
+                    </Button>
+                  )}
+                </div>
               </div>
-              <FallbackPrompt
-                message="Du kan också importera din bokföringsdata manuellt via en SIE-fil."
-                linkHref="/import?mode=sie"
-                linkLabel="Ladda upp SIE-fil"
-              />
+              {/* License-missing keeps the SIE fallback visible: re-auth loops
+                  until the customer re-orders the Fortnox Integration license,
+                  so a manual SIE import is the reliable escape hatch. */}
+              {(!authExpired || licenseMissing) && (
+                <FallbackPrompt
+                  message="Du kan också importera din bokföringsdata manuellt via en SIE-fil."
+                  linkHref="/import?mode=sie"
+                  linkLabel="Ladda upp SIE-fil"
+                />
+              )}
             </>
           )}
 
@@ -1654,6 +1683,14 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
   // Preview state
   const [preview, setPreview] = useState<PreviewData | null>(null)
+  // Set when a preview/sync fails because the provider connection expired
+  // (dead refresh token → PROVIDER_AUTH_EXPIRED). Drives the "Återanslut"
+  // affordance so the user can re-authorize in place instead of disconnecting.
+  const [authExpired, setAuthExpired] = useState(false)
+  // Set when the failure is specifically a missing/inactive Fortnox integration
+  // license (PROVIDER_LICENSE_MISSING). Re-auth alone can't fix it, so the SIE
+  // fallback stays available alongside the "Återanslut" CTA.
+  const [licenseMissing, setLicenseMissing] = useState(false)
 
   // SIE data state (held between mapping and execution steps)
   const [sieData, setSieData] = useState<SIEData | null>(null)
@@ -1707,17 +1744,30 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
     setStep('preview')
     setIsLoading(true)
     setError(null)
+    setAuthExpired(false)
+    setLicenseMissing(false)
+    setConsentId(cId)
 
     try {
       const res = await fetch(`/api/extensions/ext/arcim-migration/preview?consentId=${cId}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
+        // A dead connection (expired/revoked refresh token) is recoverable in
+        // place — flag it so the UI offers "Återanslut" instead of a dead end.
+        // A missing Fortnox integration license shows the same CTA but keeps the
+        // SIE fallback, because re-auth loops until the license is re-ordered.
+        const code = apiErrorCode(data)
+        if (code === 'PROVIDER_AUTH_EXPIRED' || code === 'PROVIDER_LICENSE_MISSING') {
+          setAuthExpired(true)
+        }
+        if (code === 'PROVIDER_LICENSE_MISSING') {
+          setLicenseMissing(true)
+        }
         throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
       }
 
       const data = await res.json()
       setPreview(data)
-      setConsentId(cId)
 
       // If SIE is not available, disable SIE import by default
       if (!data.sieAvailable) {
@@ -1779,6 +1829,55 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
     setSieData(null)
     await loadPreview(existingConsentId)
   }, [loadPreview])
+
+  // Re-authorize a dead connection in place. Re-runs provider auth against the
+  // SAME consent so fresh tokens overwrite the expired pair — no disconnect.
+  // OAuth providers open the login popup (the existing postMessage listener
+  // reloads the preview on success); token providers drop to the credential
+  // form. Triggered from the "Återanslut" CTA after a sync hits
+  // PROVIDER_AUTH_EXPIRED.
+  const handleReconnect = useCallback(async (provider: ArcimProvider, existingConsentId: string) => {
+    setError(null)
+    setAuthExpired(false)
+    setLicenseMissing(false)
+    setIsLoading(true)
+    setSelectedProvider(provider)
+
+    try {
+      const res = await fetch('/api/extensions/ext/arcim-migration/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, reconnect: true }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
+      }
+
+      const data = await res.json()
+      setConsentId(data.consentId ?? existingConsentId)
+      setAuthType(data.authType)
+
+      if (data.authType === 'oauth' && data.authUrl) {
+        // Open immediately — this runs inside the button's click handler, so
+        // the popup is a trusted user gesture and won't be blocked.
+        const w = 600
+        const h = 700
+        const left = window.screenX + (window.outerWidth - w) / 2
+        const top = window.screenY + (window.outerHeight - h) / 2
+        window.open(data.authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+        setAuthUrl(data.authUrl)
+      } else if (data.authType === 'token') {
+        // Re-enter credentials for token-based providers
+        setStep('connect')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Kunde inte återansluta')
+      setAuthExpired(true)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
 
   // Disconnect an existing consent
   const handleDisconnect = useCallback(async (consentIdToDelete: string) => {
@@ -2163,6 +2262,11 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
           preview={preview}
           isLoading={isLoading}
           error={error}
+          authExpired={authExpired}
+          licenseMissing={licenseMissing}
+          onReconnect={() => {
+            if (selectedProvider && consentId) handleReconnect(selectedProvider, consentId)
+          }}
           onContinue={handlePreviewContinue}
           onBack={() => setStep('provider')}
         />
