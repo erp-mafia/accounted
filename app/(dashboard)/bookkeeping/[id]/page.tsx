@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock } from 'lucide-react'
+import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -27,6 +27,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { JournalEntry, JournalEntryLine } from '@/types'
+import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
 export default function JournalEntryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -46,6 +47,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [isCommitting, setIsCommitting] = useState(false)
   const [isLastInSeries, setIsLastInSeries] = useState(false)
   const [attachmentCount, setAttachmentCount] = useState(0)
+  const [references, setReferences] = useState<UnderlagReference[]>([])
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
@@ -54,16 +56,27 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     setIsLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/chain`)
-      if (!res.ok) {
-        const { error: msg } = await res.json()
+      const [chainRes, refsRes] = await Promise.all([
+        fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
+        fetch(`/api/bookkeeping/journal-entries/${id}/references`),
+      ])
+      if (!chainRes.ok) {
+        const { error: msg } = await chainRes.json()
         setError(msg || t('error_load_failed'))
         return
       }
-      const { data } = await res.json()
+      const { data } = await chainRes.json()
       setEntry(data.entry)
       setChain(data.chain)
       setIsLastInSeries(data.is_last_in_series ?? false)
+      // Underlag references (linked invoices) — best-effort; the verifikat still
+      // renders if this fails, it just falls back to documents-only.
+      if (refsRes.ok) {
+        const { data: refData } = await refsRes.json()
+        setReferences(refData?.references ?? [])
+      } else {
+        setReferences([])
+      }
     } catch {
       setError(t('error_load_failed'))
     } finally {
@@ -405,19 +418,27 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <CardTitle className="text-sm font-medium text-muted-foreground">{t('attachments_title')}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
-            <div className="flex items-center gap-2">
-              {attachmentCount > 0 ? (
-                <>
-                  <Paperclip className="h-4 w-4 text-muted-foreground" />
-                  <span>{t('attachments_count', { count: attachmentCount })}</span>
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="h-4 w-4 text-warning-foreground" />
-                  <span className="text-muted-foreground">{t('no_attachments')}</span>
-                </>
-              )}
-            </div>
+            {attachmentCount === 0 && references.length === 0 ? (
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-warning-foreground" />
+                <span className="text-muted-foreground">{t('no_attachments')}</span>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {attachmentCount > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Paperclip className="h-4 w-4 text-muted-foreground" />
+                    <span>{t('attachments_count', { count: attachmentCount })}</span>
+                  </div>
+                )}
+                {references.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Link2 className="h-4 w-4 text-muted-foreground" />
+                    <span>{t('references_count', { count: references.length })}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -569,6 +590,31 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <CardTitle className="text-sm font-medium">{t('attachments_title')}</CardTitle>
         </CardHeader>
         <CardContent>
+          {references.length > 0 && (
+            <div className="mb-4 space-y-2">
+              <div>
+                <h4 className="text-sm font-medium">{t('references_title')}</h4>
+                <p className="text-xs text-muted-foreground">{t('references_subtitle')}</p>
+              </div>
+              <ul className="space-y-1">
+                {references.map((ref) => (
+                  <li key={`${ref.type}-${ref.id}`}>
+                    <Link
+                      href={ref.type === 'invoice' ? `/invoices/${ref.id}` : `/supplier-invoices/${ref.id}`}
+                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50 hover:bg-secondary/60 transition-colors"
+                    >
+                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="truncate">
+                        {ref.type === 'invoice'
+                          ? t('reference_invoice', { number: ref.number })
+                          : t('reference_supplier_invoice', { number: ref.number })}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <JournalEntryAttachments
             journalEntryId={entry.id}
             onCountChange={setAttachmentCount}
