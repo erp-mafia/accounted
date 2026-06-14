@@ -47,7 +47,8 @@ export async function generateIncomeStatement(
       '38': 'Aktiverat arbete',
       '39': 'Övriga rörelseintäkter',
     },
-    'credit' // Revenue has credit normal balance
+    'credit', // Revenue has credit normal balance
+    'Övriga intäkter',
   )
 
   // Expense sections (class 4-7)
@@ -62,10 +63,12 @@ export async function generateIncomeStatement(
       '45': 'Inköp utlandet',
       '46': 'Underentreprenader och legoarbeten',
       '47': 'Erhållna rabatter',
+      '48': 'Andra produktionskostnader',
       '49': 'Lagerförändringar',
       '50': 'Lokalkostnader',
       '51': 'Fastighetskostnader',
       '52': 'Hyra av tillgångar',
+      '53': 'Energikostnader',
       '54': 'Förbrukningsinventarier',
       '55': 'Reparation och underhåll',
       '56': 'Transportkostnader',
@@ -78,6 +81,7 @@ export async function generateIncomeStatement(
       '63': 'Försäkringar och riskkostnader',
       '64': 'Förvaltningskostnader',
       '65': 'Övriga externa tjänster',
+      '67': 'Särskilt för ideella föreningar och stiftelser',
       '68': 'Inhyrd personal',
       '69': 'Övriga kostnader',
       '70': 'Löner kollektivanställda',
@@ -90,7 +94,8 @@ export async function generateIncomeStatement(
       '78': 'Avskrivningar',
       '79': 'Övriga rörelsekostnader',
     },
-    'debit' // Expenses have debit normal balance
+    'debit', // Expenses have debit normal balance
+    'Övriga kostnader',
   )
 
   // Financial sections (class 8) — exclude 8999 "Årets resultat".
@@ -112,7 +117,8 @@ export async function generateIncomeStatement(
       '88': 'Bokslutsdispositioner',
       '89': 'Skatter och årets resultat',
     },
-    'mixed'
+    'mixed',
+    'Övriga finansiella poster',
   )
 
   const totalRevenue = revenueSections.reduce((sum, s) => sum + s.subtotal, 0)
@@ -132,31 +138,29 @@ export async function generateIncomeStatement(
 }
 
 /**
- * Build report sections from trial balance rows
+ * Build report sections from trial balance rows.
+ *
+ * Every row is assigned to exactly one section: either a known 2-digit group
+ * (from `groupLabels`) or the `fallbackTitle` catch-all for any group not in
+ * the map. The catch-all is what keeps the report complete — without it, an
+ * account whose group code is missing from `groupLabels` (e.g. 53xx
+ * energikostnader, 48xx, 67xx) would be silently dropped from both the
+ * breakdown and the computed subtotal/total/net_result.
  */
 function buildSections(
   rows: TrialBalanceRow[],
   groupLabels: Record<string, string>,
-  normalBalance: 'debit' | 'credit' | 'mixed'
+  normalBalance: 'debit' | 'credit' | 'mixed',
+  fallbackTitle: string
 ): IncomeStatementSection[] {
-  const sections: IncomeStatementSection[] = []
-
-  for (const [groupCode, title] of Object.entries(groupLabels)) {
-    const groupRows = rows.filter((r) => r.account_number.startsWith(groupCode))
-    if (groupRows.length === 0) continue
-
+  const makeSection = (title: string, groupRows: TrialBalanceRow[]): IncomeStatementSection => {
     const sectionRows = groupRows.map((r) => {
-      let amount: number
-      if (normalBalance === 'credit') {
-        // Revenue: credit - debit (positive = revenue)
-        amount = r.closing_credit - r.closing_debit
-      } else if (normalBalance === 'debit') {
-        // Expense: debit - credit (positive = expense)
-        amount = r.closing_debit - r.closing_credit
-      } else {
-        // Mixed: net balance (financial items)
-        amount = r.closing_credit - r.closing_debit
-      }
+      // Expenses (debit) use debit - credit; revenue (credit) and financial
+      // (mixed) use credit - debit.
+      const amount =
+        normalBalance === 'debit'
+          ? r.closing_debit - r.closing_credit
+          : r.closing_credit - r.closing_debit
 
       return {
         account_number: r.account_number,
@@ -167,12 +171,27 @@ function buildSections(
 
     const subtotal = sectionRows.reduce((sum, r) => sum + r.amount, 0)
 
-    sections.push({
+    return {
       title,
       rows: sectionRows.filter((r) => Math.abs(r.amount) > 0.005),
       subtotal: Math.round(subtotal * 100) / 100,
-    })
+    }
   }
+
+  const sections: IncomeStatementSection[] = []
+  const matched = new Set<string>()
+
+  for (const [groupCode, title] of Object.entries(groupLabels)) {
+    const groupRows = rows.filter((r) => r.account_number.startsWith(groupCode))
+    if (groupRows.length === 0) continue
+    for (const r of groupRows) matched.add(r.account_number)
+    sections.push(makeSection(title, groupRows))
+  }
+
+  // Catch-all: any row whose 2-digit group is not in groupLabels. Guarantees no
+  // account is ever excluded from the subtotal/total/net_result.
+  const orphans = rows.filter((r) => !matched.has(r.account_number))
+  if (orphans.length > 0) sections.push(makeSection(fallbackTitle, orphans))
 
   return sections
 }

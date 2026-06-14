@@ -289,4 +289,71 @@ describe('generateIncomeStatement', () => {
     expect(report.financial_sections).toEqual([])
     expect(report.total_revenue).toBe(40000)
   })
+
+  it('includes energikostnader (group 53, e.g. 5310) in expenses and net_result — regression', async () => {
+    // Regression: group '53' was missing from the expense label map, so 53xx
+    // accounts (energy costs like 5310 El för drift) were silently dropped from
+    // total_expenses and net_result. The Resultatrapport (which sums all class
+    // 3–8 rows directly) stayed correct, which is how the discrepancy surfaced.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 100000, closing_debit: 0 }),
+        makeRow({ account_number: '5310', account_name: 'El för drift', account_class: 5, closing_debit: 18000, closing_credit: 0 }),
+      ],
+      totalDebit: 18000,
+      totalCredit: 100000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.total_expenses).toBe(18000) // was 0 before the fix
+    expect(report.net_result).toBe(82000) // was 100000 before the fix
+    const expenseAccounts = report.expense_sections.flatMap((s) => s.rows.map((r) => r.account_number))
+    expect(expenseAccounts).toContain('5310')
+  })
+
+  it('routes accounts from every unmapped group (48, 53, 67) into a catch-all, never dropping them', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 100000, closing_debit: 0 }),
+        makeRow({ account_number: '4810', account_name: 'Energi råvara', account_class: 4, closing_debit: 1000, closing_credit: 0 }),
+        makeRow({ account_number: '5310', account_name: 'El för drift', account_class: 5, closing_debit: 2000, closing_credit: 0 }),
+        makeRow({ account_number: '6710', account_name: 'Lämnade bidrag', account_class: 6, closing_debit: 3000, closing_credit: 0 }),
+      ],
+      totalDebit: 6000,
+      totalCredit: 100000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    // All three expense accounts must be counted, regardless of label coverage.
+    expect(report.total_expenses).toBe(6000)
+    expect(report.net_result).toBe(94000)
+    const expenseAccounts = report.expense_sections.flatMap((s) => s.rows.map((r) => r.account_number))
+    expect(expenseAccounts).toEqual(expect.arrayContaining(['4810', '5310', '6710']))
+  })
+
+  it('total_expenses equals the signed sum of every class 4–7 row (no silent drops)', async () => {
+    // Structural invariant guarding the whole class of "missing group label"
+    // bug: the sum of expense-section subtotals must equal Σ(debit - credit)
+    // over all class 4–7 rows, mixing mapped (50, 70) and unmapped (48, 53, 67)
+    // groups.
+    const rows = [
+      makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 8000, closing_credit: 0 }),
+      makeRow({ account_number: '5310', account_name: 'El för drift', account_class: 5, closing_debit: 2500, closing_credit: 0 }),
+      makeRow({ account_number: '4810', account_name: 'Energi', account_class: 4, closing_debit: 1500, closing_credit: 0 }),
+      makeRow({ account_number: '6710', account_name: 'Bidrag', account_class: 6, closing_debit: 500, closing_credit: 0 }),
+      makeRow({ account_number: '7010', account_name: 'Löner', account_class: 7, closing_debit: 40000, closing_credit: 0 }),
+    ]
+    mockTrialBalance.mockResolvedValue({ rows, totalDebit: 52500, totalCredit: 0, isBalanced: false })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    const expectedTotal = rows.reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
+    const sectionSum = report.expense_sections.reduce((sum, s) => sum + s.subtotal, 0)
+    expect(report.total_expenses).toBe(expectedTotal) // 52500
+    expect(Math.round(sectionSum * 100) / 100).toBe(expectedTotal)
+  })
 })
