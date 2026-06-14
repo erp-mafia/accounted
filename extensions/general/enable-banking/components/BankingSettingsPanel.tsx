@@ -165,6 +165,52 @@ export default function BankingSettingsPanel() {
     }
   }
 
+  // Re-authorize an existing connection in place — no disconnect required.
+  // Posts to /connect with the existing connection_id so the server reuses the
+  // same row (revoking the dead session, issuing fresh authorization), then
+  // hands off to the bank's consent screen. The OAuth callback drives the row
+  // back through account selection to active.
+  async function handleReconnect(connection: BankConnection) {
+    if (connectingRef.current) return
+    connectingRef.current = true
+    setIsConnecting(true)
+    setConnectingBankName(connection.bank_name)
+
+    try {
+      const country = (connection.provider as string)?.split('-').pop()?.toUpperCase() || 'SE'
+      const response = await fetch('/api/extensions/ext/enable-banking/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connection_id: connection.id,
+          aspsp_name: connection.bank_name,
+          aspsp_country: country,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error)
+      }
+
+      window.location.href = data.authorization_url
+    } catch (error) {
+      console.error('[enable-banking] Reconnect flow failed', {
+        message: error instanceof Error ? error.message : String(error),
+        connectionId: connection.id,
+      })
+      toast({
+        title: 'Fel',
+        description: error instanceof Error ? error.message : 'Kunde inte förnya anslutningen',
+        variant: 'destructive',
+      })
+      connectingRef.current = false
+      setIsConnecting(false)
+      setConnectingBankName(null)
+    }
+  }
+
   async function handleSyncTransactions(connectionId: string) {
     setSyncingConnectionId(connectionId)
 
@@ -214,6 +260,9 @@ export default function BankingSettingsPanel() {
         variant: 'destructive',
       })
       setShowCsvFallback(true)
+      // Refresh so a now-expired connection (e.g. closed PSD2 session) moves
+      // into "Åtgärd krävs" and surfaces the "Förnya anslutning" button.
+      fetchConnections()
     }
 
     setSyncingConnectionId(null)
@@ -382,7 +431,7 @@ export default function BankingSettingsPanel() {
                 connection={connection}
                 onSync={handleSyncTransactions}
                 onDisconnect={handleDisconnectBank}
-                onReconnect={handleConnectBank}
+                onReconnect={handleReconnect}
                 onManageAccounts={() => setPickerConnectionId(connection.id)}
                 isSyncing={syncingConnectionId === connection.id}
               />

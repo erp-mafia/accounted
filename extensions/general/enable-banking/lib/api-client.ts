@@ -181,6 +181,58 @@ class TransactionsFetchError extends Error {
   }
 }
 
+/**
+ * Normalized signatures (uppercase, non-alphanumerics stripped) of the
+ * responses Enable Banking — or the upstream ASPSP via Enable Banking's
+ * envelope — returns when the PSD2 session can no longer be used: the consent
+ * was closed, expired, or invalidated bank-side. Spelling and casing vary by
+ * bank (CLOSED_SESSION, EXPIRED_SESSION, SESSION_EXPIRED / session_expired,
+ * INVALID_SESSION, SESSION_NOT_FOUND, WRONG_SESSION_STATUS, and the plain
+ * "Session is closed" message), so we match the whole family. A dead session
+ * is unrecoverable by retrying — the user must re-authorize.
+ */
+const SESSION_DEAD_NEEDLES = [
+  'CLOSEDSESSION', // CLOSED_SESSION
+  'SESSIONCLOSED', // "session closed"
+  'SESSIONISCLOSED', // "Session is closed"
+  'SESSIONEXPIRED', // SESSION_EXPIRED / session_expired
+  'EXPIREDSESSION', // EXPIRED_SESSION
+  'INVALIDSESSION', // INVALID_SESSION
+  'SESSIONNOTFOUND', // SESSION_NOT_FOUND
+  'WRONGSESSIONSTATUS', // WRONG_SESSION_STATUS
+] as const
+
+/**
+ * Whether a failed transactions response signals a dead PSD2 session (vs. a
+ * transient error or a config-level auth failure). Only 401/403 with a
+ * session-expiry signal in the body counts — a bare 401 "Unauthorized" is an
+ * app-credential problem, not a closed consent, and must NOT be misread as
+ * "reconnect the bank". The match is deterministic: normalize the body and
+ * test for any known session-dead needle.
+ */
+export function isSessionExpiredResponse(status: number, body: string): boolean {
+  if (status !== 401 && status !== 403) return false
+  const normalized = body.toUpperCase().replace(/[^A-Z0-9]/g, '')
+  return SESSION_DEAD_NEEDLES.some(needle => normalized.includes(needle))
+}
+
+/**
+ * Thrown when a transactions fetch fails because the PSD2 session is dead
+ * (closed/expired/invalid). Distinct from TransactionsFetchError so the sync
+ * handler can flip the connection to 'expired' and prompt re-authorization
+ * instead of surfacing a raw error the user can't act on. Carries the status
+ * and raw body for logging. See isSessionExpiredResponse for the codes covered.
+ */
+export class SessionExpiredError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(`Bank session expired (${status}): ${body}`)
+    this.name = 'SessionExpiredError'
+  }
+}
+
 // API Helper
 
 async function authenticatedFetch(
@@ -521,6 +573,9 @@ export async function getAccountTransactions(
       strategy,
       hasContinuationKey: !!continuationKey,
     })
+    if (isSessionExpiredResponse(response.status, body)) {
+      throw new SessionExpiredError(response.status, body)
+    }
     throw new TransactionsFetchError(response.status, body)
   }
 
@@ -771,6 +826,9 @@ export async function getAllTransactionsWithRaw(
         page,
         hasContinuationKey: !!continuationKey,
       })
+      if (isSessionExpiredResponse(response.status, body)) {
+        throw new SessionExpiredError(response.status, body)
+      }
       throw new Error(`Failed to get transactions (${response.status}): ${body}`)
     }
 

@@ -23,7 +23,7 @@ interface BankConnectionStatusProps {
   connection: BankConnection
   onSync: (connectionId: string) => void
   onDisconnect: (connectionId: string) => void
-  onReconnect?: (bank: { name: string; country: string }) => void
+  onReconnect?: (connection: BankConnection) => void
   onManageAccounts?: (connectionId: string) => void
   isSyncing?: boolean
 }
@@ -132,21 +132,18 @@ export function BankConnectionStatus({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {isConnectionExpired && onReconnect && (
+          {(isConnectionExpired || isConnectionError) && onReconnect && (
             <Button
               variant="outline"
               size="sm"
-              onClick={() => onReconnect({
-                name: connection.bank_name,
-                country: (connection.provider as string)?.split('-').pop()?.toUpperCase() || 'SE',
-              })}
+              onClick={() => onReconnect(connection)}
             >
               Förnya anslutning
             </Button>
           )}
           {isConnectionError && (
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
               onClick={() => onSync(connection.id)}
               disabled={isSyncing}

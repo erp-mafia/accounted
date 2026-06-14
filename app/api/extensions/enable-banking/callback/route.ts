@@ -49,12 +49,14 @@ export async function GET(request: Request) {
       try {
         const supabase = await createServiceClient()
 
-        // Fetch connection details for logging before updating
+        // Fetch connection details for logging before updating. Match by
+        // oauth_state across pending/expired/error so an in-place reconnect
+        // (which stays 'expired' during the round-trip) is also handled.
         const { data: pendingConn } = await supabase
           .from('bank_connections')
           .select('id, user_id, bank_name')
           .eq('oauth_state', state)
-          .eq('status', 'pending')
+          .in('status', ['pending', 'expired', 'error'])
           .single()
 
         if (pendingConn) {
@@ -66,9 +68,16 @@ export async function GET(request: Request) {
             error_description: errorDescription,
           })
 
+          // If the bank reports a session-expiry during authorization itself,
+          // mark the row 'expired' (not generic 'error') so the settings panel
+          // surfaces the reconnect button rather than a dead-end error state.
+          const isSessionExpiry = /session.?expired|expired.?session|closed.?session|session.?closed|invalid.?session|session.?not.?found/i.test(
+            `${error} ${errorDescription ?? ''}`
+          )
+
           await supabase
             .from('bank_connections')
-            .update({ status: 'error', error_message: errorMessage, oauth_state: null })
+            .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: errorMessage, oauth_state: null })
             .eq('id', pendingConn.id)
 
           // Include bank name and error code in redirect so the UI can offer PSU type retry
@@ -102,12 +111,16 @@ export async function GET(request: Request) {
   const supabase = await createServiceClient()
 
   try {
-    // Look up pending connection by oauth_state (CSRF-safe)
+    // Look up the connection awaiting this callback by oauth_state (CSRF-safe).
+    // oauth_state is a single-use random token cleared after use, so it uniquely
+    // identifies the row regardless of status. Accept 'expired'/'error' too: an
+    // in-place reconnect keeps the row in 'expired' during the round-trip (so
+    // the nightly stale-'pending' cleanup can't delete an established row).
     const { data: pendingConnection, error: findError } = await supabase
       .from('bank_connections')
       .select('id, user_id, company_id')
       .eq('oauth_state', state)
-      .eq('status', 'pending')
+      .in('status', ['pending', 'expired', 'error'])
       .single()
 
     if (findError || !pendingConnection) {
@@ -278,7 +291,7 @@ export async function GET(request: Request) {
         .from('bank_connections')
         .update({ status: 'error', error_message: error instanceof Error ? error.message : 'Connection failed', oauth_state: null })
         .eq('oauth_state', state)
-        .eq('status', 'pending')
+        .in('status', ['pending', 'expired', 'error'])
     } catch (cleanupError) {
       console.error('[enable-banking] Callback cleanup failed', {
         cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),

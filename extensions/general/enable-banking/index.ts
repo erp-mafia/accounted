@@ -5,6 +5,7 @@ import {
   getASPSPs,
   deleteSession,
   isSandboxMode,
+  SessionExpiredError,
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
@@ -102,9 +103,14 @@ export const enableBankingExtension: Extension = {
         }
         const companyId = ctx.companyId
 
-        const { aspsp_name, aspsp_country, psu_type: explicitPsuType } = await request.json()
+        const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId } = await request.json()
 
-        if (!aspsp_name || !aspsp_country) {
+        // Reconnect mode: re-authorize an EXISTING connection in place (no
+        // disconnect required). The aspsp identity falls back to the stored row
+        // when the client omits it, so a closed/expired session can be renewed
+        // with one click. A fresh connect still needs the bank name + country.
+        const isReconnect = !!reconnectId
+        if (!isReconnect && (!aspsp_name || !aspsp_country)) {
           return NextResponse.json(
             { error: 'aspsp_name and aspsp_country are required' },
             { status: 400 }
@@ -112,6 +118,37 @@ export const enableBankingExtension: Extension = {
         }
 
         try {
+          // For reconnect, load the existing connection up front (company-scoped)
+          // so we can revoke its dead session and reuse its bank identity.
+          let existing:
+            | { id: string; bank_name: string; provider: string; session_id: string | null }
+            | null = null
+          if (isReconnect) {
+            const { data, error: findErr } = await supabase
+              .from('bank_connections')
+              .select('id, bank_name, provider, session_id')
+              .eq('id', reconnectId)
+              .eq('company_id', companyId)
+              .single()
+            if (findErr || !data) {
+              return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
+            }
+            existing = data
+          }
+
+          // Resolve the aspsp identity: prefer what the client sent, fall back to
+          // the stored connection (the provider slug ends with the country code,
+          // e.g. "nordea-se").
+          const resolvedAspspName = aspsp_name || existing?.bank_name
+          const resolvedAspspCountry =
+            aspsp_country || existing?.provider?.split('-').pop()?.toUpperCase() || 'SE'
+          if (!resolvedAspspName) {
+            return NextResponse.json(
+              { error: 'aspsp_name and aspsp_country are required' },
+              { status: 400 }
+            )
+          }
+
           // Detect PSU type: explicit override > company entity_type > default 'business'
           let psuType: 'personal' | 'business' = 'business'
           if (explicitPsuType === 'personal' || explicitPsuType === 'business') {
@@ -129,49 +166,53 @@ export const enableBankingExtension: Extension = {
 
           log.info('[enable-banking] Starting bank connection', {
             user_id: user.id,
-            bank: aspsp_name,
-            country: aspsp_country,
+            bank: resolvedAspspName,
+            country: resolvedAspspCountry,
             psu_type: psuType,
+            reconnect: isReconnect,
           })
 
           // Reject if there's already a recent pending connection for this user+bank
-          // to prevent double-click race conditions that confuse the bank's consent flow
-          const { data: recentPending } = await supabase
-            .from('bank_connections')
-            .select('id, created_at')
-            .eq('company_id', companyId)
-            .eq('bank_name', aspsp_name)
-            .eq('status', 'pending')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
+          // to prevent double-click race conditions that confuse the bank's consent
+          // flow. Skipped for reconnect — that deliberately re-authorizes a known row.
+          if (!isReconnect) {
+            const { data: recentPending } = await supabase
+              .from('bank_connections')
+              .select('id, created_at')
+              .eq('company_id', companyId)
+              .eq('bank_name', resolvedAspspName)
+              .eq('status', 'pending')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
 
-          if (recentPending) {
-            const pendingAge = Date.now() - new Date(recentPending.created_at).getTime()
-            const STALE_THRESHOLD_MS = 30 * 1000 // 30 seconds — long enough to cover the redirect handoff, short enough that an abandoned attempt doesn't block the user
+            if (recentPending) {
+              const pendingAge = Date.now() - new Date(recentPending.created_at).getTime()
+              const STALE_THRESHOLD_MS = 30 * 1000 // 30 seconds — long enough to cover the redirect handoff, short enough that an abandoned attempt doesn't block the user
 
-            if (pendingAge < STALE_THRESHOLD_MS) {
-              log.info('[enable-banking] Rejecting duplicate connect — recent pending exists', {
-                existing_id: recentPending.id,
+              if (pendingAge < STALE_THRESHOLD_MS) {
+                log.info('[enable-banking] Rejecting duplicate connect — recent pending exists', {
+                  existing_id: recentPending.id,
+                  age_ms: pendingAge,
+                })
+                return NextResponse.json(
+                  { error: 'En anslutning pågår redan. Vänta och försök igen.' },
+                  { status: 409 }
+                )
+              }
+
+              // Clean up stale pending connections (older than threshold)
+              log.info('[enable-banking] Cleaning up stale pending connections', {
+                stale_id: recentPending.id,
                 age_ms: pendingAge,
               })
-              return NextResponse.json(
-                { error: 'En anslutning pågår redan. Vänta och försök igen.' },
-                { status: 409 }
-              )
+              await supabase
+                .from('bank_connections')
+                .update({ status: 'error', error_message: 'Superseded by new connection attempt', oauth_state: null })
+                .eq('company_id', companyId)
+                .eq('bank_name', resolvedAspspName)
+                .eq('status', 'pending')
             }
-
-            // Clean up stale pending connections (older than threshold)
-            log.info('[enable-banking] Cleaning up stale pending connections', {
-              stale_id: recentPending.id,
-              age_ms: pendingAge,
-            })
-            await supabase
-              .from('bank_connections')
-              .update({ status: 'error', error_message: 'Superseded by new connection attempt', oauth_state: null })
-              .eq('company_id', companyId)
-              .eq('bank_name', aspsp_name)
-              .eq('status', 'pending')
           }
 
           const redirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/extensions/enable-banking/callback`
@@ -180,20 +221,73 @@ export const enableBankingExtension: Extension = {
           const oauthState = crypto.randomUUID()
 
           const { url, authorization_id } = await startAuthorization(
-            aspsp_name,
-            aspsp_country,
+            resolvedAspspName,
+            resolvedAspspCountry,
             redirectUrl,
             oauthState,
             psuType
           )
+
+          if (isReconnect && existing) {
+            // Best-effort revoke the dead consent at Enable Banking. A
+            // closed/expired session is often already gone, so a failure here is
+            // expected and non-fatal — the new authorization supersedes it.
+            if (existing.session_id) {
+              try {
+                await deleteSession(existing.session_id)
+              } catch (revokeError) {
+                log.info('[enable-banking] Old session revoke skipped (likely already expired)', {
+                  message: revokeError instanceof Error ? revokeError.message : String(revokeError),
+                  connection_id: existing.id,
+                })
+              }
+            }
+
+            // Reuse the SAME row: the OAuth callback finds it by oauth_state and
+            // drives it back to pending_selection → active. Keeping the row means
+            // existing transactions and the cash_accounts mirror stay linked.
+            //
+            // Deliberately keep status 'expired' (NOT 'pending') during the
+            // round-trip: this row's created_at is old, and the cron deletes
+            // stale 'pending' rows after 1h — a reconnect must not be eligible
+            // for that. Staying 'expired' also keeps it visible in "Åtgärd
+            // krävs" so an abandoned reconnect is recoverable. The callback's
+            // oauth_state lookup accepts 'expired' to complete the flow.
+            const { error: updateError } = await supabase
+              .from('bank_connections')
+              .update({
+                authorization_id,
+                oauth_state: oauthState,
+                status: 'expired',
+                session_id: null,
+                error_message: null,
+              })
+              .eq('id', existing.id)
+              .eq('company_id', companyId)
+
+            if (updateError) {
+              log.error('[enable-banking] Database error updating connection for reconnect', {
+                errorMessage: updateError.message,
+                errorCode: updateError.code,
+                connection_id: existing.id,
+                user_id: user.id,
+              })
+              throw new Error(`Failed to update connection: ${updateError.message}`)
+            }
+
+            return NextResponse.json({
+              connection_id: existing.id,
+              authorization_url: url,
+            })
+          }
 
           const { data: connection, error } = await supabase
             .from('bank_connections')
             .insert({
               company_id: companyId,
               user_id: user.id,
-              provider: `${aspsp_name.toLowerCase().replace(/\s+/g, '-')}-${aspsp_country.toLowerCase()}`,
-              bank_name: aspsp_name,
+              provider: `${resolvedAspspName.toLowerCase().replace(/\s+/g, '-')}-${resolvedAspspCountry.toLowerCase()}`,
+              bank_name: resolvedAspspName,
               authorization_id,
               oauth_state: oauthState,
               status: 'pending',
@@ -207,7 +301,7 @@ export const enableBankingExtension: Extension = {
               errorCode: error.code,
               errorDetails: error.details,
               user_id: user.id,
-              bank: aspsp_name,
+              bank: resolvedAspspName,
             })
             throw new Error(`Failed to store connection: ${error.message}`)
           }
@@ -420,6 +514,31 @@ export const enableBankingExtension: Extension = {
             connectionStatus: connection.status,
             bankName: connection.bank_name,
           })
+
+          // A dead PSD2 session (closed/expired/invalid consent) can't be fixed
+          // by retrying — the user must re-authorize. Flip the connection to
+          // 'expired' so the UI surfaces the reconnect affordance, and tell the
+          // client re-auth is required (reauth_required) so it can offer a
+          // one-click "Förnya anslutning" instead of a dead-end error. No
+          // disconnect needed: /connect reconnects this same connection in place.
+          if (error instanceof SessionExpiredError) {
+            const reauthMessage = 'Bankanslutningen har löpt ut. Förnya anslutningen för att fortsätta synka.'
+            await supabase
+              .from('bank_connections')
+              .update({ status: 'expired', error_message: reauthMessage })
+              .eq('id', connection.id)
+              .eq('company_id', companyId)
+            return NextResponse.json(
+              {
+                error: reauthMessage,
+                code: 'SESSION_EXPIRED',
+                reauth_required: true,
+                connection_id: connection.id,
+              },
+              { status: 409 }
+            )
+          }
+
           return NextResponse.json(
             { error: error instanceof Error ? error.message : 'Sync failed' },
             { status: 500 }

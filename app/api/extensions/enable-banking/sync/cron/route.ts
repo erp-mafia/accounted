@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { syncAccountTransactions } from '@/extensions/general/enable-banking/lib/sync'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
-import { isConsentExpiringSoon, getDaysUntilExpiry } from '@/extensions/general/enable-banking/lib/api-client'
+import { isConsentExpiringSoon, getDaysUntilExpiry, SessionExpiredError } from '@/extensions/general/enable-banking/lib/api-client'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateConsentExpiryEmailHtml,
@@ -266,10 +266,19 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         lastSyncedAt: connection.last_synced_at,
       })
 
-      // Persist error status on sync failure
+      // A dead PSD2 session (closed/expired/invalid consent) is a re-auth
+      // condition, not a transient failure — flip it to 'expired' (same state
+      // the consent-elapsed branch uses) so the UI offers a reconnect instead
+      // of a retry. Other errors stay 'error'.
+      const isSessionDead = error instanceof SessionExpiredError
+      const failureStatus = isSessionDead ? 'expired' : 'error'
+      const failureMessage = isSessionDead
+        ? 'Bankanslutningen har löpt ut. Förnya anslutningen för att fortsätta synka.'
+        : message
+
       await supabase
         .from('bank_connections')
-        .update({ status: 'error', error_message: message })
+        .update({ status: failureStatus, error_message: failureMessage })
         .eq('id', connection.id)
 
       results.push({
@@ -279,7 +288,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         imported: 0,
         duplicates: 0,
         errors: 1,
-        status: 'error',
+        status: failureStatus,
       })
     }
   }
