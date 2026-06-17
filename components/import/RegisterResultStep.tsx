@@ -12,10 +12,12 @@ export type RegisterResult = {
   skipped: number
   failed: number
   errors: { row_index: number; name: string; reason: string }[]
+  /** Non-fatal notes (e.g. dropped revenue-account overrides on article import). */
+  warnings?: string[]
 }
 
 interface RegisterResultStepProps {
-  entity: 'customers' | 'suppliers'
+  entity: 'customers' | 'suppliers' | 'articles'
   result: RegisterResult
   onNewImport: () => void
 }
@@ -32,6 +34,12 @@ const ENTITY_COPY = {
     failTitle: 'Importen misslyckades',
     listLabel: 'Visa alla leverantörer',
     listHref: '/suppliers',
+  },
+  articles: {
+    successTitle: 'Artiklar importerade',
+    failTitle: 'Importen misslyckades',
+    listLabel: 'Visa alla artiklar',
+    listHref: '/articles',
   },
 } as const
 
@@ -87,6 +95,23 @@ export default function RegisterResultStep({
                   <li key={i} className="px-3 py-2 text-sm">
                     <span className="font-medium">Rad {e.row_index}: {e.name}</span>
                     <span className="text-muted-foreground"> — {e.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Warnings (non-fatal — e.g. dropped revenue-account overrides) */}
+        {result.warnings && result.warnings.length > 0 && (
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium">Att notera</h4>
+            <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {result.warnings.map((w, i) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <AlertTriangle className="h-3.5 w-3.5 text-warning mt-0.5 shrink-0" />
+                    <span>{w}</span>
                   </li>
                 ))}
               </ul>

@@ -1,6 +1,6 @@
 'use client'
 
-import { Download, FileSpreadsheet, FileText } from 'lucide-react'
+import { Download, FileSpreadsheet, FileText, Table } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -9,10 +9,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { ReportExportFormat } from '@/lib/reports/catalog'
+
+/** pdf/xlsx for reports; csv is additionally used by register exports. */
+export type ExportMenuFormat = 'pdf' | 'xlsx' | 'csv'
 
 export interface ReportExportItem {
-  format: ReportExportFormat
+  format: ExportMenuFormat
   href: string
 }
 
@@ -50,10 +52,16 @@ export function ReportExportMenu({
               >
                 {item.format === 'pdf' ? (
                   <FileText className="h-4 w-4 mr-2" />
+                ) : item.format === 'csv' ? (
+                  <Table className="h-4 w-4 mr-2" />
                 ) : (
                   <FileSpreadsheet className="h-4 w-4 mr-2" />
                 )}
-                {item.format === 'pdf' ? t('download_pdf') : t('download_excel')}
+                {item.format === 'pdf'
+                  ? t('download_pdf')
+                  : item.format === 'csv'
+                    ? t('download_csv')
+                    : t('download_excel')}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

@@ -39,6 +39,7 @@ import RegisterUploadStep from '@/components/import/RegisterUploadStep'
 import RegisterColumnMappingStep, { type RegisterColumnSpec } from '@/components/import/RegisterColumnMappingStep'
 import CustomersEditStep from '@/components/import/CustomersEditStep'
 import SuppliersEditStep from '@/components/import/SuppliersEditStep'
+import ArticlesEditStep from '@/components/import/ArticlesEditStep'
 import RegisterResultStep, { type RegisterResult } from '@/components/import/RegisterResultStep'
 import type {
   CustomerImportParseResult,
@@ -50,6 +51,11 @@ import type {
   AnnotatedSupplierRow,
   DetectedSupplierColumns,
 } from '@/lib/import/suppliers/types'
+import type {
+  ArticleImportParseResult,
+  AnnotatedArticleRow,
+  DetectedArticleColumns,
+} from '@/lib/import/articles/types'
 
 // SIE import components
 import SIEUploadStep from '@/components/import/SIEUploadStep'
@@ -1569,15 +1575,259 @@ function SuppliersFlow() {
 }
 
 // ============================================================
+// Articles Flow (entity = "articles" inside CSVDataImportWizard)
+// ============================================================
+
+const ARTICLE_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedArticleColumns>[] = [
+  { key: 'name_col', label: 'Benämning', required: true },
+  { key: 'article_number_col', label: 'Artikelnummer', required: false },
+  { key: 'type_col', label: 'Typ (vara/tjänst)', required: false },
+  { key: 'unit_col', label: 'Enhet', required: false },
+  { key: 'price_col', label: 'Pris exkl moms', required: false },
+  { key: 'vat_rate_col', label: 'Moms (%)', required: false },
+  { key: 'revenue_account_col', label: 'Försäljningskonto', required: false },
+  { key: 'cost_price_col', label: 'Inköpspris', required: false },
+  { key: 'ean_col', label: 'EAN', required: false },
+  { key: 'housework_type_col', label: 'ROT/RUT-arbetstyp', required: false },
+  { key: 'name_en_col', label: 'Benämning (engelska)', required: false },
+  { key: 'notes_col', label: 'Anteckning', required: false },
+]
+
+function ArticlesFlow() {
+  const { toast } = useToast()
+
+  const [step, setStep] = useState<RegisterStep>('upload')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [parseResult, setParseResult] = useState<ArticleImportParseResult | null>(null)
+  const [executeResult, setExecuteResult] = useState<RegisterResult | null>(null)
+
+  const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
+  const steps: RegisterStep[] = needsMapping
+    ? ['upload', 'column_mapping', 'edit', 'result']
+    : ['upload', 'edit', 'result']
+  const currentStepIndex = steps.indexOf(step)
+  const progress = ((currentStepIndex + 1) / steps.length) * 100
+
+  const handleFileSelect = useCallback(async (selectedFile: File) => {
+    setError(null)
+    setIsLoading(true)
+    setFile(selectedFile)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+
+      const res = await fetch('/api/import/articles/parse', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        return
+      }
+
+      const result = data.data as ArticleImportParseResult
+      setParseResult(result)
+
+      if (result.rows.length === 0) {
+        setError('Inga giltiga artiklar hittades. Kontrollera att filen innehåller en benämningskolumn.')
+        return
+      }
+
+      toast({
+        title: 'Fil analyserad',
+        description: `${result.rows.length} artiklar hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
+      })
+
+      setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [toast])
+
+  const handleColumnMappingConfirm = useCallback(async (
+    mapping: Record<keyof DetectedArticleColumns, number | null>,
+  ) => {
+    if (!file) return
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const overrides: DetectedArticleColumns = {
+        name_col: mapping.name_col ?? 0,
+        article_number_col: mapping.article_number_col,
+        name_en_col: mapping.name_en_col,
+        type_col: mapping.type_col,
+        unit_col: mapping.unit_col,
+        price_col: mapping.price_col,
+        vat_rate_col: mapping.vat_rate_col,
+        revenue_account_col: mapping.revenue_account_col,
+        cost_price_col: mapping.cost_price_col,
+        ean_col: mapping.ean_col,
+        housework_type_col: mapping.housework_type_col,
+        notes_col: mapping.notes_col,
+        confidence: 1,
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('column_overrides', JSON.stringify(overrides))
+
+      const res = await fetch('/api/import/articles/parse', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen med de valda kolumnerna')
+        return
+      }
+
+      setParseResult(data.data)
+      setStep('edit')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [file])
+
+  const handleExecute = useCallback(async (
+    rows: AnnotatedArticleRow[],
+    updateDuplicates: boolean,
+  ) => {
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const res = await fetch('/api/import/articles/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: rows.map(({ duplicate_match: _dup, is_valid: _v, validation_errors: _ve, ...rest }) => rest),
+          update_duplicates: updateDuplicates,
+        }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        return
+      }
+
+      setExecuteResult(data.data as RegisterResult)
+      setStep('result')
+
+      const r = data.data as RegisterResult
+      toast({
+        title: r.success ? 'Artiklar importerade' : 'Importen slutfördes med fel',
+        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
+        variant: r.success ? 'default' : 'destructive',
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [toast])
+
+  const handleNewImport = () => {
+    setStep('upload')
+    setFile(null)
+    setParseResult(null)
+    setExecuteResult(null)
+    setError(null)
+  }
+
+  const initialMapping = parseResult
+    ? columnsToMapping<keyof DetectedArticleColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, ARTICLE_COLUMN_SPECS)
+    : null
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="sm:hidden text-primary font-medium">
+                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
+              </span>
+              {steps.map((s, i) => (
+                <span
+                  key={s}
+                  className={cn(
+                    'hidden sm:inline',
+                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
+                  )}
+                >
+                  {REGISTER_STEP_LABELS[s]}
+                </span>
+              ))}
+            </div>
+            <Progress value={progress} className="h-2" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {step === 'upload' && (
+        <RegisterUploadStep
+          entity="articles"
+          onFileSelect={handleFileSelect}
+          isLoading={isLoading}
+          error={error}
+        />
+      )}
+
+      {step === 'column_mapping' && parseResult && initialMapping && (
+        <RegisterColumnMappingStep<keyof DetectedArticleColumns>
+          headers={parseResult.headers}
+          previewRows={parseResult.preview_rows}
+          specs={ARTICLE_COLUMN_SPECS}
+          initial={initialMapping}
+          onConfirm={handleColumnMappingConfirm}
+          onBack={() => setStep('upload')}
+        />
+      )}
+
+      {step === 'edit' && parseResult && (
+        <ArticlesEditStep
+          rows={parseResult.rows}
+          onExecute={handleExecute}
+          onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
+          isLoading={isLoading}
+          error={error}
+        />
+      )}
+
+      {step === 'result' && executeResult && (
+        <RegisterResultStep
+          entity="articles"
+          result={executeResult}
+          onNewImport={handleNewImport}
+        />
+      )}
+    </div>
+  )
+}
+
+// ============================================================
 // CSV/Excel Data Import Wizard — entity selector + sub-flow
 // ============================================================
 
-type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers'
+type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
 
 const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
   { value: 'opening_balance', label: 'Ingående balanser' },
   { value: 'customers', label: 'Kunder' },
   { value: 'suppliers', label: 'Leverantörer' },
+  { value: 'articles', label: 'Artiklar' },
 ]
 
 function CSVDataImportWizard() {
@@ -1633,6 +1883,7 @@ function CSVDataImportWizard() {
       {entity === 'opening_balance' && <OpeningBalanceFlow key="ob-flow" />}
       {entity === 'customers' && <CustomersFlow key="cust-flow" />}
       {entity === 'suppliers' && <SuppliersFlow key="supp-flow" />}
+      {entity === 'articles' && <ArticlesFlow key="art-flow" />}
     </div>
   )
 }
@@ -2074,6 +2325,7 @@ export default function ImportPage() {
                     { key: 'opening_balances', label: t('csv_chip_opening_balances') },
                     { key: 'customers', label: t('csv_chip_customers') },
                     { key: 'suppliers', label: t('csv_chip_suppliers') },
+                    { key: 'articles', label: t('csv_chip_articles') },
                   ].map(chip => (
                     <span key={chip.key} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {chip.label}

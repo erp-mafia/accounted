@@ -1,6 +1,6 @@
 /**
  * Shared column-detection helpers for register imports
- * (customers, suppliers, future: articles).
+ * (customers, suppliers, articles).
  */
 
 export function normalize(header: string): string {

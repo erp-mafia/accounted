@@ -1430,6 +1430,29 @@ export const SupplierImportExecuteSchema = z.object({
   update_duplicates: z.boolean(),
 })
 
+const ImportedArticleRowSchema = z.object({
+  row_index: z.number().int(),
+  name: z.string().min(1),
+  name_en: z.string().nullable(),
+  article_number: z.string().nullable(),
+  type: ArticleTypeSchema,
+  unit: z.string(),
+  price_excl_vat: nonNegativeAmount,
+  vat_rate: vatRatePercent,
+  // The execute route re-validates against the chart of accounts (and drops
+  // unknown/inactive overrides), so a loose nullable string is enough here.
+  revenue_account: z.string().nullable(),
+  cost_price: nonNegativeAmount.nullable(),
+  ean: z.string().nullable(),
+  housework_type: z.string().nullable(),
+  notes: z.string().nullable(),
+})
+
+export const ArticleImportExecuteSchema = z.object({
+  rows: z.array(ImportedArticleRowSchema).min(1, 'At least one row is required'),
+  update_duplicates: z.boolean(),
+})
+
 // ============================================================
 // Salary schemas
 // ============================================================

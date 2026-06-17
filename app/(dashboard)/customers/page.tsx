@@ -24,6 +24,7 @@ import { Plus, Search, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } fro
 import CustomerForm from '@/components/customers/CustomerForm'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { formatDate } from '@/lib/utils'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -241,30 +242,38 @@ function CustomersPageInner() {
       <PageHeader
         title={t('title')}
         action={
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
-                ) : (
-                  <Lock className="mr-2 h-4 w-4" />
-                )}
-                {t('new_customer')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_customer')}</DialogTitle>
-              </DialogHeader>
-              <CustomerForm
-                onSubmit={handleCreateCustomer}
-                isLoading={isCreating}
-              />
-            </DialogContent>
-          </Dialog>
+          <div className="flex items-center gap-2">
+            <ReportExportMenu
+              items={[
+                { format: 'xlsx', href: '/api/export/customers' },
+                { format: 'csv', href: '/api/export/customers?format=csv' },
+              ]}
+            />
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  disabled={!canWrite}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                >
+                  {canWrite ? (
+                    <Plus className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Lock className="mr-2 h-4 w-4" />
+                  )}
+                  {t('new_customer')}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>{t('add_customer')}</DialogTitle>
+                </DialogHeader>
+                <CustomerForm
+                  onSubmit={handleCreateCustomer}
+                  isLoading={isCreating}
+                />
+              </DialogContent>
+            </Dialog>
+          </div>
         }
       />
 

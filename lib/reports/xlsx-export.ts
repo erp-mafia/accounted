@@ -109,7 +109,10 @@ function displayLength(value: CellValue, format: ColumnFormat): number {
 // single type parameter. Per-sheet type safety still applies inside each
 // `SheetSpec<TRow>` declaration.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any>>): Buffer {
+export function reportToWorkbook<_T = unknown>(
+  spec: ReadonlyArray<SheetSpec<any>>,
+  options: { bookType?: 'xlsx' | 'csv' } = {},
+): Buffer {
   if (spec.length === 0) {
     throw new Error('reportToWorkbook: at least one sheet spec is required')
   }
@@ -176,10 +179,16 @@ export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any
     XLSX.utils.book_append_sheet(workbook, worksheet, truncatedName)
   }
 
-  // `XLSX.write` with `type: 'buffer'` returns a Node Buffer.
-  const out = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+  // `XLSX.write` with `type: 'buffer'` returns a Node Buffer. `bookType: 'csv'`
+  // emits only the first sheet (CSV is single-sheet) — fine for the flat,
+  // single-sheet register exports that use this option.
+  const bookType = options.bookType ?? 'xlsx'
+  const out = XLSX.write(workbook, { type: 'buffer', bookType }) as Buffer
   return out
 }
+
+/** UTF-8 byte-order mark (U+FEFF) so Excel opens CSV exports with åäö intact. */
+export const UTF8_BOM = '﻿'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column helpers — small declarative builders so route files read cleanly.
@@ -247,4 +256,21 @@ export function xlsxFilename(reportSlug: string, companyName: string, period: st
   const periodCompact = (period || '').replace(/-/g, '')
   const parts = [reportSlug, companySlug, periodCompact].filter(Boolean)
   return `${parts.join('-')}.xlsx`
+}
+
+/**
+ * Build a download filename `<slug>-<companySlug>-<dateYYYYMMDD>.<ext>`.
+ * Like `xlsxFilename` but with a caller-chosen extension (`'xlsx'` | `'csv'`),
+ * for register exports that offer both formats.
+ */
+export function exportFilename(
+  slug: string,
+  companyName: string,
+  date: string,
+  ext: 'xlsx' | 'csv',
+): string {
+  const companySlug = slugifyCompanyName(companyName)
+  const dateCompact = (date || '').replace(/-/g, '')
+  const parts = [slug, companySlug, dateCompact].filter(Boolean)
+  return `${parts.join('-')}.${ext}`
 }

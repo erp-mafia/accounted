@@ -29,6 +29,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { formatCurrency } from '@/lib/utils'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -237,30 +238,38 @@ function ArticlesPageInner() {
       <PageHeader
         title={t('title')}
         action={
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
-                ) : (
-                  <Lock className="mr-2 h-4 w-4" />
-                )}
-                {t('new_article')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_article')}</DialogTitle>
-              </DialogHeader>
-              <ArticleForm
-                onSubmit={handleCreateArticle}
-                isLoading={isCreating}
-              />
-            </DialogContent>
-          </Dialog>
+          <div className="flex items-center gap-2">
+            <ReportExportMenu
+              items={[
+                { format: 'xlsx', href: '/api/export/articles' },
+                { format: 'csv', href: '/api/export/articles?format=csv' },
+              ]}
+            />
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  disabled={!canWrite}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                >
+                  {canWrite ? (
+                    <Plus className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Lock className="mr-2 h-4 w-4" />
+                  )}
+                  {t('new_article')}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>{t('add_article')}</DialogTitle>
+                </DialogHeader>
+                <ArticleForm
+                  onSubmit={handleCreateArticle}
+                  isLoading={isCreating}
+                />
+              </DialogContent>
+            </Dialog>
+          </div>
         }
       />
 

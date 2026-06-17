@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Building2, Lock } from 'lucide-react'
 import SupplierForm from '@/components/suppliers/SupplierForm'
@@ -118,30 +119,38 @@ export default function SuppliersPage() {
             {t('subtitle')}
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {canWrite ? (
-                <Plus className="mr-2 h-4 w-4" />
-              ) : (
-                <Lock className="mr-2 h-4 w-4" />
-              )}
-              {t('new_supplier')}
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{t('add_supplier')}</DialogTitle>
-            </DialogHeader>
-            <SupplierForm
-              onSubmit={handleCreateSupplier}
-              isLoading={isCreating}
-            />
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-2">
+          <ReportExportMenu
+            items={[
+              { format: 'xlsx', href: '/api/export/suppliers' },
+              { format: 'csv', href: '/api/export/suppliers?format=csv' },
+            ]}
+          />
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                disabled={!canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {canWrite ? (
+                  <Plus className="mr-2 h-4 w-4" />
+                ) : (
+                  <Lock className="mr-2 h-4 w-4" />
+                )}
+                {t('new_supplier')}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{t('add_supplier')}</DialogTitle>
+              </DialogHeader>
+              <SupplierForm
+                onSubmit={handleCreateSupplier}
+                isLoading={isCreating}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Search */}
