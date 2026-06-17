@@ -112,6 +112,8 @@ export function detectArticleColumns(headers: string[]): DetectedArticleColumns 
     ean_col,
     housework_type_col,
     notes_col,
-    confidence: Math.min(Math.round(confidence * 100) / 100, 1),
+    // Confidence is a 0–1 heuristic score (not money), only compared against the
+    // 0.8 skip-mapping threshold — no öre rounding needed.
+    confidence: Math.min(confidence, 1),
   }
 }
