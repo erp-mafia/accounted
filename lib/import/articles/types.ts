@@ -30,6 +30,12 @@ export interface ParsedArticleRow {
   price_excl_vat: number
   /** Integer percent, snapped to one of 0 | 6 | 12 | 25. */
   vat_rate: number
+  /**
+   * True when the VAT rate was inferred (snapped to the nearest statutory rate
+   * or defaulted from an unparseable cell). Drives a "verify this" hint in the
+   * edit step; cleared once the operator confirms the rate. Not persisted.
+   */
+  vat_rate_adjusted: boolean
   /** Optional BAS class-3 revenue-account override (validated server-side). */
   revenue_account: string | null
   cost_price: number | null

@@ -1711,7 +1711,7 @@ function ArticlesFlow() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rows: rows.map(({ duplicate_match: _dup, is_valid: _v, validation_errors: _ve, ...rest }) => rest),
+          rows: rows.map(({ duplicate_match: _dup, is_valid: _v, validation_errors: _ve, vat_rate_adjusted: _vra, ...rest }) => rest),
           update_duplicates: updateDuplicates,
         }),
       })

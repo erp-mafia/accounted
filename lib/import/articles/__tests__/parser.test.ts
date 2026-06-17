@@ -29,6 +29,8 @@ describe('parseArticlesFile', () => {
     expect(result.rows[1].type).toBe('vara')
     expect(result.rows[1].price_excl_vat).toBe(2.5)
     expect(result.rows[0].is_valid).toBe(true)
+    // A clean, valid VAT rate is not flagged as adjusted.
+    expect(result.rows[0].vat_rate_adjusted).toBe(false)
   })
 
   it('detects Fortnox-style export headers', () => {
@@ -74,6 +76,10 @@ describe('parseArticlesFile', () => {
     expect(result.rows[2].vat_rate).toBe(25)
     // The "7" → 6 snap should surface a file-level warning.
     expect(result.warnings.some((w) => w.includes('momssats'))).toBe(true)
+    // Per-row flag: only the snapped row (7 → 6) is marked adjusted.
+    expect(result.rows[0].vat_rate_adjusted).toBe(false) // "25%" is already valid
+    expect(result.rows[1].vat_rate_adjusted).toBe(true)  // 7 → 6
+    expect(result.rows[2].vat_rate_adjusted).toBe(false) // empty → default 25
   })
 
   it('defaults an unparseable momskod to 25 with a warning', () => {
@@ -84,6 +90,7 @@ describe('parseArticlesFile', () => {
 
     const result = parseArticlesFile(buffer, 'momskod.xlsx')
     expect(result.rows[0].vat_rate).toBe(25)
+    expect(result.rows[0].vat_rate_adjusted).toBe(true)
     expect(result.warnings.some((w) => w.toLowerCase().includes('moms'))).toBe(true)
   })
 

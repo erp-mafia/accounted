@@ -187,6 +187,8 @@ export function parseArticlesFile(
       unit,
       price_excl_vat: price,
       vat_rate: vatRate,
+      // A note means the rate was snapped or defaulted — flag it for review.
+      vat_rate_adjusted: vatNote !== null,
       revenue_account: revenueAccount,
       cost_price: costPrice,
       ean,
