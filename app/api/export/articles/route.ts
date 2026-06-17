@@ -22,22 +22,22 @@ export const GET = withRouteContext(
     const format = parseExportFormat(url.searchParams.get('format'))
     const includeInactive = url.searchParams.get('include_inactive') === '1'
 
-    const { data: companyRow } = await supabase
-      .from('company_settings')
-      .select('company_name')
-      .eq('company_id', companyId)
-      .single()
-
-    const articles = (await fetchAllRows(({ from, to }) => {
-      let query = supabase
-        .from('articles')
-        .select('*')
-        .eq('company_id', companyId)
-      if (!includeInactive) query = query.eq('active', true)
-      return query.order('name', { ascending: true }).range(from, to)
-    })) as unknown as Article[]
-
     try {
+      const { data: companyRow } = await supabase
+        .from('company_settings')
+        .select('company_name')
+        .eq('company_id', companyId)
+        .single()
+
+      const articles = (await fetchAllRows(({ from, to }) => {
+        let query = supabase
+          .from('articles')
+          .select('*')
+          .eq('company_id', companyId)
+        if (!includeInactive) query = query.eq('active', true)
+        return query.order('name', { ascending: true }).range(from, to)
+      })) as unknown as Article[]
+
       const { buffer, contentType, filename } = buildRegisterExport(
         [
           {
@@ -76,10 +76,14 @@ export const GET = withRouteContext(
         { format, slug: 'artiklar', companyName: companyRow?.company_name ?? '', date: todayIso() },
       )
 
+      // Audit trail: who exported what, when (sensitive bulk register download).
+      log.info('register exported', { entity: 'articles', format, rowCount: articles.length })
+
       return new NextResponse(new Uint8Array(buffer), {
         headers: {
           'Content-Type': contentType,
           'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
         },
       })
     } catch (err) {

@@ -109,10 +109,7 @@ function displayLength(value: CellValue, format: ColumnFormat): number {
 // single type parameter. Per-sheet type safety still applies inside each
 // `SheetSpec<TRow>` declaration.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-export function reportToWorkbook<_T = unknown>(
-  spec: ReadonlyArray<SheetSpec<any>>,
-  options: { bookType?: 'xlsx' | 'csv' } = {},
-): Buffer {
+export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any>>, options: { bookType?: 'xlsx' | 'csv' } = {}): Buffer {
   if (spec.length === 0) {
     throw new Error('reportToWorkbook: at least one sheet spec is required')
   }
@@ -188,7 +185,7 @@ export function reportToWorkbook<_T = unknown>(
 }
 
 /** UTF-8 byte-order mark (U+FEFF) so Excel opens CSV exports with åäö intact. */
-export const UTF8_BOM = '﻿'
+export const UTF8_BOM = '\uFEFF'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column helpers — small declarative builders so route files read cleanly.

@@ -1453,6 +1453,26 @@ export const ArticleImportExecuteSchema = z.object({
   update_duplicates: z.boolean(),
 })
 
+// Validates the optional column-mapping override posted to the parse route, so
+// a malformed/hostile blob can't drive the parser with non-numeric or
+// unexpected column indices. Mirrors DetectedArticleColumns.
+const articleColumnIndex = z.number().int().min(0).nullable()
+export const ArticleColumnOverridesSchema = z.object({
+  name_col: z.number().int().min(0),
+  article_number_col: articleColumnIndex,
+  name_en_col: articleColumnIndex,
+  type_col: articleColumnIndex,
+  unit_col: articleColumnIndex,
+  price_col: articleColumnIndex,
+  vat_rate_col: articleColumnIndex,
+  revenue_account_col: articleColumnIndex,
+  cost_price_col: articleColumnIndex,
+  ean_col: articleColumnIndex,
+  housework_type_col: articleColumnIndex,
+  notes_col: articleColumnIndex,
+  confidence: z.number(),
+})
+
 // ============================================================
 // Salary schemas
 // ============================================================

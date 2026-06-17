@@ -20,22 +20,22 @@ export const GET = withRouteContext(
 
     const format = parseExportFormat(new URL(request.url).searchParams.get('format'))
 
-    const { data: companyRow } = await supabase
-      .from('company_settings')
-      .select('company_name')
-      .eq('company_id', companyId)
-      .single()
-
-    const customers = (await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('customers')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('name', { ascending: true })
-        .range(from, to),
-    )) as unknown as Customer[]
-
     try {
+      const { data: companyRow } = await supabase
+        .from('company_settings')
+        .select('company_name')
+        .eq('company_id', companyId)
+        .single()
+
+      const customers = (await fetchAllRows(({ from, to }) =>
+        supabase
+          .from('customers')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('name', { ascending: true })
+          .range(from, to),
+      )) as unknown as Customer[]
+
       const { buffer, contentType, filename } = buildRegisterExport(
         [
           {
@@ -76,10 +76,13 @@ export const GET = withRouteContext(
         { format, slug: 'kunder', companyName: companyRow?.company_name ?? '', date: todayIso() },
       )
 
+      log.info('register exported', { entity: 'customers', format, rowCount: customers.length })
+
       return new NextResponse(new Uint8Array(buffer), {
         headers: {
           'Content-Type': contentType,
           'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
         },
       })
     } catch (err) {

@@ -3,6 +3,7 @@ import { parseArticlesFile } from '@/lib/import/articles/parser'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { ArticleColumnOverridesSchema } from '@/lib/api/schemas'
 import type {
   AnnotatedArticleRow,
   ArticleImportParseResult,
@@ -57,11 +58,18 @@ export const POST = withRouteContext(
 
     let columnOverrides: DetectedArticleColumns | undefined
     if (columnOverridesRaw) {
+      let raw: unknown
       try {
-        columnOverrides = JSON.parse(columnOverridesRaw)
+        raw = JSON.parse(columnOverridesRaw)
       } catch {
         return errorResponseFromCode('REG_IMPORT_INVALID_COLUMN_OVERRIDES', opLog, { requestId })
       }
+      // Validate shape/indices before trusting it to drive the parser.
+      const parsed = ArticleColumnOverridesSchema.safeParse(raw)
+      if (!parsed.success) {
+        return errorResponseFromCode('REG_IMPORT_INVALID_COLUMN_OVERRIDES', opLog, { requestId })
+      }
+      columnOverrides = parsed.data
     }
 
     try {
