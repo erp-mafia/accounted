@@ -1,10 +1,9 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -50,6 +49,7 @@ import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import type { EntityType } from '@/types'
 
 void _ENABLED_EXTENSION_IDS
@@ -185,7 +185,7 @@ function accountInitial(name: string | null, email: string | null): string {
 export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = useRealtimeSupabase()
   const { company } = useCompany()
   // Agent identity drives the "Assistent" nav icon — when the user has
   // built their assistant we show its chosen avatar instead of the
@@ -196,6 +196,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [liveUncategorizedTransactionCount, setLiveUncategorizedTransactionCount] = useState(
+    uncategorizedTransactionCount,
+  )
+  const refreshInFlightRef = useRef(false)
+  const refreshQueuedRef = useRef(false)
 
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
@@ -249,6 +254,66 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       closeTimerRef.current = null
     }, 200)
   }
+
+  useEffect(() => {
+    if (!company?.id) return
+
+    let cancelled = false
+
+    const refreshUncategorizedCount = async () => {
+      if (!company?.id || cancelled) return
+      if (refreshInFlightRef.current) {
+        refreshQueuedRef.current = true
+        return
+      }
+
+      refreshInFlightRef.current = true
+      try {
+        do {
+          refreshQueuedRef.current = false
+          const { count, error } = await supabase
+            .from('transactions')
+            .select('id', { count: 'exact', head: true })
+            .eq('company_id', company.id)
+            .is('is_business', null)
+            .eq('is_ignored', false)
+
+          if (error) {
+            console.error('Failed to refresh uncategorized transaction count:', error)
+            break
+          }
+
+          setLiveUncategorizedTransactionCount(count ?? 0)
+        } while (refreshQueuedRef.current && !cancelled)
+      } finally {
+        refreshInFlightRef.current = false
+        refreshQueuedRef.current = false
+      }
+    }
+
+    void refreshUncategorizedCount()
+
+    const channel = supabase
+      .channel(`dashboard-nav:transactions:${company.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'transactions',
+          filter: `company_id=eq.${company.id}`,
+        },
+        () => {
+          void refreshUncategorizedCount()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      cancelled = true
+      void supabase.removeChannel(channel)
+    }
+  }, [company?.id, supabase])
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 
@@ -354,8 +419,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
                   const badge =
-                    item.href === '/transactions' && uncategorizedTransactionCount > 0
-                      ? uncategorizedTransactionCount
+                    item.href === '/transactions' && liveUncategorizedTransactionCount > 0
+                      ? liveUncategorizedTransactionCount
                       : item.href === '/pending' && pendingOperationsCount > 0
                         ? pendingOperationsCount
                         : null
@@ -614,8 +679,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)
-            const badge = item.href === '/transactions' && uncategorizedTransactionCount > 0
-              ? uncategorizedTransactionCount
+            const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
+              ? liveUncategorizedTransactionCount
               : null
 
             const content = (
@@ -719,8 +784,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
                   const badge =
-                    item.href === '/transactions' && uncategorizedTransactionCount > 0
-                      ? uncategorizedTransactionCount
+                    item.href === '/transactions' && liveUncategorizedTransactionCount > 0
+                      ? liveUncategorizedTransactionCount
                       : item.href === '/pending' && pendingOperationsCount > 0
                         ? pendingOperationsCount
                         : null
@@ -773,11 +838,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   </div>
                   <div className="space-y-0.5">
                     {items.map((item) => {
-                      const Icon = item.icon
-                      const active = isActive(item.href)
-                      const enabled = isItemEnabled(item.href) && !item.comingSoon
-                      const badge = item.href === '/transactions' && uncategorizedTransactionCount > 0
-                        ? uncategorizedTransactionCount
+                    const Icon = item.icon
+                    const active = isActive(item.href)
+                    const enabled = isItemEnabled(item.href) && !item.comingSoon
+                      const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
+                        ? liveUncategorizedTransactionCount
                         : item.href === '/pending' && pendingOperationsCount > 0
                           ? pendingOperationsCount
                           : null

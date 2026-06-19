@@ -1,10 +1,9 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -57,6 +56,7 @@ import type {
 } from '@/types/skatteverket'
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
@@ -96,6 +96,7 @@ interface QuickReviewState {
 
 export default function TransactionsPage() {
   const { company } = useCompany()
+  const companyId = company?.id ?? null
   const t = useTranslations('transactions')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -243,12 +244,14 @@ export default function TransactionsPage() {
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
   // Bank transaction whose title is being edited (null = dialog closed).
   const [editTitleTarget, setEditTitleTarget] = useState<TransactionWithInvoice | null>(null)
-  const supabase = createClient()
+  const supabase = useRealtimeSupabase()
   const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
   // Tracks the last highlight target we acted on so re-renders don't re-trigger
   // the auto-open every time the user closes the categorize panel.
   const handledHighlightRef = useRef<string | null>(null)
+  const refreshTransactionsInFlightRef = useRef(false)
+  const refreshTransactionsQueuedRef = useRef(false)
 
   // Computed lists
   const uncategorizedTransactions = transactions
@@ -322,73 +325,7 @@ export default function TransactionsPage() {
 
   const PAGE_SIZE = 200
 
-  async function fetchTransactions() {
-    if (!company) return
-    setIsLoading(true)
-    const [{ data: txData, error: txError }, { count: uncatCount }] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('*')
-        .eq('company_id', company.id)
-        .order('date', { ascending: false })
-        .limit(PAGE_SIZE),
-      supabase
-        .from('transactions')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', company.id)
-        .is('is_business', null)
-        // Same predicate as lib/worklist countUnbookedTransactions — ignored
-        // rows are handled, not pending.
-        .eq('is_ignored', false),
-    ])
-
-    if (txError) {
-      toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
-      setIsLoading(false)
-      return
-    }
-
-    const rows = txData || []
-    const potentialInvoiceIds = rows
-      .filter((t) => t.potential_invoice_id)
-      .map((t) => t.potential_invoice_id)
-    const potentialSupplierInvoiceIds = rows
-      .filter((t) => t.potential_supplier_invoice_id)
-      .map((t) => t.potential_supplier_invoice_id)
-
-    const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-      potentialInvoiceIds.length > 0
-        ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
-        : Promise.resolve({ data: null }),
-      potentialSupplierInvoiceIds.length > 0
-        ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
-        : Promise.resolve({ data: null }),
-    ])
-
-    const invoiceMap = buildInvoiceMap(invoiceResult.data)
-    const supplierInvoiceMap = buildSupplierInvoiceMap(supplierInvoiceResult.data)
-
-    const transactionsWithInvoices: TransactionWithInvoice[] = rows.map((t) => ({
-      ...t,
-      potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
-      potential_supplier_invoice: t.potential_supplier_invoice_id
-        ? supplierInvoiceMap[t.potential_supplier_invoice_id]
-        : undefined,
-    }))
-
-    setTransactions(transactionsWithInvoices)
-    setTotalUncategorizedCount(uncatCount ?? 0)
-    setHasMore(rows.length >= PAGE_SIZE)
-    setIsLoading(false)
-
-    // Fire-and-forget: load SKV rows in parallel with the rest of the
-    // page. We don't block on this — if the extension is disabled or the
-    // user isn't connected the response is 503/401 and we just leave the
-    // SKV section empty.
-    void loadSkvRows()
-  }
-
-  async function loadSkvRows() {
+  const loadSkvRows = useCallback(async () => {
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner')
       if (!res.ok) {
@@ -404,16 +341,105 @@ export default function TransactionsPage() {
     } catch {
       setSkvRows([])
     }
-  }
+  }, [])
+
+  const fetchTransactions = useCallback(async (showLoading = false, includeSkvRows = false) => {
+    if (!companyId) return
+    if (showLoading) setIsLoading(true)
+    try {
+      const [{ data: txData, error: txError }, { count: uncatCount }] = await Promise.all([
+        supabase
+          .from('transactions')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('date', { ascending: false })
+          .limit(PAGE_SIZE),
+        supabase
+          .from('transactions')
+          .select('*', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .is('is_business', null)
+          // Same predicate as lib/worklist countUnbookedTransactions — ignored
+          // rows are handled, not pending.
+          .eq('is_ignored', false),
+      ])
+
+      if (txError) {
+        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
+        return
+      }
+
+      const rows = txData || []
+      const potentialInvoiceIds = rows
+        .filter((t) => t.potential_invoice_id)
+        .map((t) => t.potential_invoice_id)
+      const potentialSupplierInvoiceIds = rows
+        .filter((t) => t.potential_supplier_invoice_id)
+        .map((t) => t.potential_supplier_invoice_id)
+
+      const [invoiceResult, supplierInvoiceResult] = await Promise.all([
+        potentialInvoiceIds.length > 0
+          ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
+          : Promise.resolve({ data: null }),
+        potentialSupplierInvoiceIds.length > 0
+          ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
+          : Promise.resolve({ data: null }),
+      ])
+
+      const invoiceMap = buildInvoiceMap(invoiceResult.data)
+      const supplierInvoiceMap = buildSupplierInvoiceMap(supplierInvoiceResult.data)
+
+      const transactionsWithInvoices: TransactionWithInvoice[] = rows.map((t) => ({
+        ...t,
+        potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
+        potential_supplier_invoice: t.potential_supplier_invoice_id
+          ? supplierInvoiceMap[t.potential_supplier_invoice_id]
+          : undefined,
+      }))
+
+      setTransactions(transactionsWithInvoices)
+      setTotalUncategorizedCount(uncatCount ?? 0)
+      setHasMore(rows.length >= PAGE_SIZE)
+
+      // Fire-and-forget: load SKV rows in parallel with the rest of the
+      // page. We don't block on this — if the extension is disabled or the
+      // user isn't connected the response is 503/401 and we just leave the
+      // SKV section empty.
+      if (includeSkvRows) {
+        void loadSkvRows()
+      }
+    } finally {
+      if (showLoading) setIsLoading(false)
+    }
+  }, [companyId, loadSkvRows, supabase, t, toast])
+
+  const refreshTransactions = useCallback(async () => {
+    if (!companyId) return
+    if (refreshTransactionsInFlightRef.current) {
+      refreshTransactionsQueuedRef.current = true
+      return
+    }
+
+    refreshTransactionsInFlightRef.current = true
+    try {
+      do {
+        refreshTransactionsQueuedRef.current = false
+        await fetchTransactions(false, false)
+      } while (refreshTransactionsQueuedRef.current)
+    } finally {
+      refreshTransactionsInFlightRef.current = false
+      refreshTransactionsQueuedRef.current = false
+    }
+  }, [companyId, fetchTransactions])
 
   async function loadMoreTransactions() {
-    if (!company) return
+    if (!companyId) return
     setIsLoadingMore(true)
     const offset = transactions.length
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .select('*')
-      .eq('company_id', company.id)
+      .eq('company_id', companyId)
       .order('date', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1)
 
@@ -463,9 +489,9 @@ export default function TransactionsPage() {
   // requested, so loadMoreTransactions pages are covered without refetching.
   // Soft-fails to "no badges" on error.
   useEffect(() => {
-    if (!company) return
-    if (requestedJeIdsRef.current.companyId !== company.id) {
-      requestedJeIdsRef.current = { companyId: company.id, ids: new Set() }
+    if (!companyId) return
+    if (requestedJeIdsRef.current.companyId !== companyId) {
+      requestedJeIdsRef.current = { companyId, ids: new Set() }
       setJeUnderlagStatus({})
     }
     const requested = requestedJeIdsRef.current.ids
@@ -479,7 +505,6 @@ export default function TransactionsPage() {
     if (newIds.length === 0) return
     newIds.forEach((id) => requested.add(id))
 
-    const companyId = company.id
     ;(async () => {
       const IN_CLAUSE_CHUNK = 150
       const merged: Record<string, JeUnderlagStatus> = {}
@@ -530,7 +555,7 @@ export default function TransactionsPage() {
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, company])
+  }, [transactions, companyId])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
@@ -557,7 +582,7 @@ export default function TransactionsPage() {
     async function loadAll() {
       // Fetch transactions and entity type in parallel
       const [, entityRes] = await Promise.all([
-        fetchTransactions(),
+        fetchTransactions(true, true),
         fetch('/api/settings').then(r => r.json()).catch(() => null),
       ])
 
@@ -571,7 +596,39 @@ export default function TransactionsPage() {
     loadAll()
 
     return () => { cancelled = true }
-  }, [])
+  }, [fetchTransactions])
+
+  useEffect(() => {
+    if (!companyId) return
+
+    let cancelled = false
+
+    const refreshFromRealtime = async () => {
+      if (cancelled) return
+      await refreshTransactions()
+    }
+
+    const channel = supabase
+      .channel(`transactions:list:${companyId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'transactions',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          void refreshFromRealtime()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      cancelled = true
+      void supabase.removeChannel(channel)
+    }
+  }, [companyId, refreshTransactions, supabase])
 
   // Scroll the targeted row into view when arriving via
   // /transactions?highlight=<id>. Callers are inbox "Öppna transaktionen",
@@ -1404,7 +1461,7 @@ export default function TransactionsPage() {
       for (const id of ids) next.add(id)
       return next
     })
-    await fetchTransactions()
+    await refreshTransactions()
     setSelectedIds(new Set())
     setIsBatchMode(false)
     setTimeout(() => {
@@ -1424,7 +1481,7 @@ export default function TransactionsPage() {
     // confirms it's booked. Mirrors the pattern at the supplier-invoice
     // match success path below.
     setExitingIds((prev) => new Set(prev).add(txId))
-    await fetchTransactions()
+    await refreshTransactions()
     setTimeout(() => {
       setExitingIds((prev) => {
         const next = new Set(prev)
