@@ -1720,6 +1720,7 @@
     "match_voucher_btn": "Matcha mot befintlig verifikation",
     "attach_document_btn": "Matcha mot underlag",
     "more_actions_aria": "Fler åtgärder",
+    "ignore_btn": "Ignorera transaktion",
     "delete_aria": "Ta bort transaktion",
     "edit_title_aria": "Ändra titel",
     "edited_badge": "redigerad",

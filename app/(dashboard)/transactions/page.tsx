@@ -21,7 +21,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, Layers, Search, Trash2, X } from 'lucide-react'
+import { ChevronDown, EyeOff, Layers, Search, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
@@ -1667,6 +1667,67 @@ export default function TransactionsPage() {
     exitBatchMode()
   }
 
+  async function handleBatchIgnore() {
+    const ids = Array.from(selectedIds)
+    const ok = await confirm({
+      title: `Ignorera ${ids.length} transaktioner?`,
+      description: 'Transaktionerna försvinner från listan utan att bokföras. Du kan återställa dem under Bankavstämning.',
+      confirmLabel: 'Ignorera',
+      cancelLabel: 'Avbryt',
+      variant: 'warning',
+    })
+    if (!ok) return
+
+    const ignoredIds = new Set<string>()
+    setBatchProgress({ done: 0, total: ids.length })
+    let successes = 0
+    const failures: string[] = []
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const res = await fetch(`/api/transactions/${ids[i]}/ignore`, { method: 'POST' })
+        if (res.ok) {
+          successes++
+          ignoredIds.add(ids[i])
+        } else {
+          const tx = transactions.find((t) => t.id === ids[i])
+          failures.push(tx?.description || ids[i])
+        }
+      } catch {
+        failures.push(ids[i])
+      }
+      setBatchProgress({ done: i + 1, total: ids.length })
+    }
+    if (ignoredIds.size > 0) {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        for (const id of ignoredIds) next.add(id)
+        return next
+      })
+      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? ignoredIds.size) - ignoredIds.size))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) => (ignoredIds.has(t.id) ? { ...t, is_ignored: true } : t))
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          for (const id of ignoredIds) next.delete(id)
+          return next
+        })
+      }, 350)
+    }
+    setBatchProgress(null)
+    if (failures.length === 0) {
+      toast({ title: 'Klart', description: `${successes} transaktioner ignorerade` })
+    } else {
+      toast({
+        title: 'Delvis klart',
+        description: `${successes} ignorerade, ${failures.length} misslyckades`,
+        variant: 'destructive',
+      })
+    }
+    exitBatchMode()
+  }
+
   async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment) {
     const ids = Array.from(selectedIds)
     setBatchProgress({ done: 0, total: ids.length })
@@ -2011,6 +2072,7 @@ export default function TransactionsPage() {
                     onOpenAttachDocument={openAttachDocumentDialog}
                     onOpenCategoryDialog={openCategoryDialog}
                     onDelete={handleDeleteTransaction}
+                    onIgnore={handleIgnoreTransaction}
                     onEditTitle={openEditTitleDialog}
                     onToggleSelect={toggleBatchSelect}
                   />
@@ -2064,6 +2126,14 @@ export default function TransactionsPage() {
               <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
                 <X className="mr-1 h-3 w-3" />
                 Avmarkera
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBatchIgnore}
+              >
+                <EyeOff className="mr-1 h-3 w-3" />
+                Ignorera
               </Button>
               <Button
                 variant="outline"

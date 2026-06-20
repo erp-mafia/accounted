@@ -20,6 +20,7 @@ import {
   AlertCircle,
   ArrowUpRight,
   ArrowDownRight,
+  EyeOff,
   FileSearch,
   FileText,
   Link2,
@@ -73,6 +74,8 @@ interface TransactionInboxCardProps {
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
+  /** Mark the transaction as ignored so it leaves the inbox without a journal entry. */
+  onIgnore?: (transaction: TransactionWithInvoice) => void
   /** Open the edit-title dialog. Only wired for editable (unbooked/unmatched) rows. */
   onEditTitle?: (transaction: TransactionWithInvoice) => void
   onToggleSelect: (id: string) => void
@@ -92,6 +95,7 @@ export default function TransactionInboxCard({
   onOpenAttachDocument,
   onOpenCategoryDialog,
   onDelete,
+  onIgnore,
   onEditTitle,
   onToggleSelect,
   onAnimationComplete,
@@ -238,9 +242,10 @@ export default function TransactionInboxCard({
   const showAttachDocumentItem = isUnbooked && canWrite && !!onOpenAttachDocument
   const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
   const showEditItem = isTitleEditable && !!onEditTitle
+  const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showDeleteItem
+    showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
 
   return (
     <motion.div
@@ -390,20 +395,31 @@ export default function TransactionInboxCard({
                           {t('edit_title_aria')}
                         </DropdownMenuItem>
                       )}
+                      {(showIgnoreItem || showDeleteItem) && (showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem) && (
+                        <DropdownMenuSeparator />
+                      )}
+                      {showIgnoreItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onIgnore!(transaction)
+                          }}
+                        >
+                          <EyeOff className="h-4 w-4" />
+                          {t('ignore_btn')}
+                        </DropdownMenuItem>
+                      )}
                       {showDeleteItem && (
-                        <>
-                          {(showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem) && <DropdownMenuSeparator />}
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              onDelete!(transaction.id)
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            {t('delete_aria')}
-                          </DropdownMenuItem>
-                        </>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onDelete!(transaction.id)
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          {t('delete_aria')}
+                        </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>

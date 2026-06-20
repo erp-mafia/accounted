@@ -1720,6 +1720,7 @@
     "match_voucher_btn": "Match to existing voucher",
     "attach_document_btn": "Match to document",
     "more_actions_aria": "More actions",
+    "ignore_btn": "Ignore transaction",
     "delete_aria": "Delete transaction",
     "edit_title_aria": "Edit title",
     "edited_badge": "edited",
