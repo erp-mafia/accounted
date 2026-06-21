@@ -141,6 +141,18 @@ export function getCategoryAccountMapping(
     // Note: income tax deduction was abolished 2017 (IL 16 kap 2 §), but VAT deduction remains.
     const resolvedVat = vatTreatment ?? (isVatExempt ? null : category === 'expense_representation' ? 'reduced_12' : 'standard_25')
 
+    if (amount > 0) {
+      // Incoming refund: bank receives money, expense account is reduced (credited).
+      // Ingående moms is reversed — credit 2641 instead of debit.
+      return {
+        debitAccount: BANK_ACCOUNT,
+        creditAccount: expenseAccount,
+        vatTreatment: resolvedVat,
+        vatDebitAccount: null,
+        vatCreditAccount: resolvedVat ? '2641' : null,
+      }
+    }
+
     return {
       debitAccount: expenseAccount,
       creditAccount: BANK_ACCOUNT,
@@ -291,12 +303,16 @@ export function buildMappingResultFromCategory(
           description: hasVatOverride ? 'Ingående moms (enligt underlag)' : `Ingående moms ${vatRate * 100}%`,
         })
       } else if (vatAmount > 0 && transaction.amount > 0 && mapping.vatCreditAccount) {
-        // Income: Utgående moms (output VAT)
+        // Income output VAT, or expense refund reversing ingående moms (both credit vatCreditAccount).
+        // Distinguish by account: 2641 = reversed ingående moms, 2611/2621/2631 = utgående moms.
+        const isExpenseRefund = mapping.vatCreditAccount === '2641'
         vatLines.push({
           account_number: mapping.vatCreditAccount,
           debit_amount: 0,
           credit_amount: vatAmount,
-          description: hasVatOverride ? 'Utgående moms (enligt underlag)' : `Utgående moms ${vatRate * 100}%`,
+          description: isExpenseRefund
+            ? (hasVatOverride ? 'Återföring ingående moms (enligt underlag)' : `Återföring ingående moms ${vatRate * 100}%`)
+            : (hasVatOverride ? 'Utgående moms (enligt underlag)' : `Utgående moms ${vatRate * 100}%`),
         })
       }
     }

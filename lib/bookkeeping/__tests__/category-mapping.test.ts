@@ -381,6 +381,64 @@ describe('private transaction accounts by entity type and direction', () => {
   })
 })
 
+describe('incoming expense refund (positive amount, expense category)', () => {
+  it('getCategoryAccountMapping swaps accounts: bank debited, expense account credited', () => {
+    const result = getCategoryAccountMapping('expense_software', 500, true)
+    expect(result.debitAccount).toBe('1930')
+    expect(result.creditAccount).toBe('5420')
+  })
+
+  it('getCategoryAccountMapping sets vatCreditAccount 2641 and clears vatDebitAccount for refund', () => {
+    const result = getCategoryAccountMapping('expense_software', 500, true)
+    expect(result.vatDebitAccount).toBeNull()
+    expect(result.vatCreditAccount).toBe('2641')
+  })
+
+  it('VAT-exempt expense refund (bank_fees) has no VAT accounts', () => {
+    const result = getCategoryAccountMapping('expense_bank_fees', 100, true)
+    expect(result.debitAccount).toBe('1930')
+    expect(result.creditAccount).toBe('6570')
+    expect(result.vatDebitAccount).toBeNull()
+    expect(result.vatCreditAccount).toBeNull()
+  })
+
+  it('buildMappingResultFromCategory generates credit line on 2641 for expense refund', () => {
+    const tx = makeTransaction({ amount: 1000 })
+    const result = buildMappingResultFromCategory('expense_software', tx, true)
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].account_number).toBe('2641')
+    expect(result.vat_lines[0].credit_amount).toBe(200)
+    expect(result.vat_lines[0].debit_amount).toBe(0)
+  })
+
+  it('buildMappingResultFromCategory uses återföring description for expense refund VAT', () => {
+    const tx = makeTransaction({ amount: 1000 })
+    const result = buildMappingResultFromCategory('expense_software', tx, true)
+    expect(result.vat_lines[0].description).toBe('Återföring ingående moms 25%')
+  })
+
+  it('buildMappingResultFromCategory generates no VAT line for VAT-exempt expense refund', () => {
+    const tx = makeTransaction({ amount: 100 })
+    const result = buildMappingResultFromCategory('expense_bank_fees', tx, true)
+    expect(result.vat_lines).toHaveLength(0)
+  })
+
+  it('buildMappingResultFromCategory maps debit/credit correctly (bank debited, expense credited)', () => {
+    const tx = makeTransaction({ amount: 1250 })
+    const result = buildMappingResultFromCategory('expense_software', tx, true)
+    expect(result.debit_account).toBe('1930')
+    expect(result.credit_account).toBe('5420')
+  })
+
+  it('vat_amount override on expense refund uses återföring description', () => {
+    const tx = makeTransaction({ amount: 1250 })
+    const result = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'standard_25', 200)
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].credit_amount).toBe(200)
+    expect(result.vat_lines[0].description).toBe('Återföring ingående moms (enligt underlag)')
+  })
+})
+
 describe('category default → leaf account guarantee', () => {
   // BAS encodes the parent/leaf distinction in account_name via the
   // "(gruppkonto)" suffix. Auditors and Skatteverket downstream reporting
