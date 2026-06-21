@@ -74,7 +74,7 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { uploadDocument, MAX_DOCUMENT_SIZE } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
 // pattern as invoice-inbox above — the CI guard only checks lib/, app/api/,
 // components/. The two submit tools stage ops whose commit dispatches back into
@@ -9580,7 +9580,7 @@ export const tools: McpTool[] = [
         inbox_item_id: { type: 'string', description: 'UUID of the invoice_inbox_items row' },
         extracted_data: {
           type: 'object',
-          description: 'Full InvoiceExtractionResult (supplier, invoice, lineItems, totals, vatBreakdown). Validated server-side via the same Zod schema as the AI extractor.',
+          description: 'Full InvoiceExtractionResult (supplier, invoice, lineItems, totals, vatBreakdown). lineItems.accountSuggestion accepts a BAS expense account (4xxx–7xxx); AI extractor always emits null here.',
         },
       },
       required: ['inbox_item_id', 'extracted_data'],
@@ -9600,10 +9600,12 @@ export const tools: McpTool[] = [
       const inboxItemId = args.inbox_item_id as string
       if (!inboxItemId) throw new Error('inbox_item_id is required')
 
-      const parsed = InvoiceExtractionSchema.parse(args.extracted_data)
+      const parsed = AgentExtractionSchema.parse(args.extracted_data)
       // BYO extraction: confidence 0.95 marks the result as agent-supplied
       // (vs 1.0 the AI extractor uses on a perfect parse) so downstream UI
       // can render the provenance differently (ISO 27001 A.8.12).
+      // AgentExtractionSchema (unlike InvoiceExtractionSchema) preserves
+      // accountSuggestion so agents can pin a BAS cost account per line.
       const extracted = { ...parsed, confidence: 0.95 }
 
       const { data: item, error: fetchError } = await supabase

@@ -110,6 +110,22 @@ export const ExtractionSchema = z.object({
   ),
 })
 
+// Agent-supplied extraction: accountSuggestion is preserved instead of forced
+// to null. Agents (unlike AI extractors) can reliably assign a BAS expense
+// account; the regex enforces the class-4–7 range required for cost accounts.
+export const AgentExtractionSchema = ExtractionSchema.omit({ lineItems: true }).extend({
+  lineItems: z.array(
+    z.object({
+      description: z.string(),
+      quantity: z.number(),
+      unitPrice: z.number().nullable(),
+      lineTotal: z.number(),
+      vatRate: z.number().min(0).max(100).nullable(),
+      accountSuggestion: z.string().regex(/^[4-7]\d{3}$/).nullable(),
+    })
+  ),
+})
+
 const SYSTEM_PROMPT = `You extract invoice and receipt fields from a single document for a Swedish accounting system.
 
 Return ONLY a single JSON object that matches this schema exactly. No prose, no markdown fences, no commentary.
