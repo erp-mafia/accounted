@@ -79,8 +79,6 @@ export async function GET(
     .eq('journal_entries.company_id', companyId)
     .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
     .in('journal_entries.status', ['posted', 'reversed'])
-    .order('entry_date', { foreignTable: 'journal_entries', ascending: true })
-    .order('voucher_number', { foreignTable: 'journal_entries', ascending: true })
     .limit(PAGE_LIMIT + 1)
 
   if (cursor) {
@@ -107,17 +105,24 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = (data || []) as any[]
 
-  const lines: ReportSourceLine[] = rows
-    .slice(0, PAGE_LIMIT)
-    .map((row) => ({
-      journal_entry_id: row.journal_entries.id,
-      voucher_number: row.journal_entries.voucher_number,
-      voucher_series: row.journal_entries.voucher_series || 'A',
-      date: row.journal_entries.entry_date,
-      description: row.journal_entries.description || '',
-      debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
-      credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
-    }))
+  // Map all rows then sort in JS (date ASC, voucher_number ASC).
+  // .order({ foreignTable }) in Supabase sorts the embedded resource's rows,
+  // not the parent result set, so we cannot rely on DB ordering here.
+  // This mirrors the sort in generateGeneralLedger.
+  const allMapped: ReportSourceLine[] = rows.map((row) => ({
+    journal_entry_id: row.journal_entries.id,
+    voucher_number: row.journal_entries.voucher_number,
+    voucher_series: row.journal_entries.voucher_series || 'A',
+    date: row.journal_entries.entry_date,
+    description: row.journal_entries.description || '',
+    debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
+    credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
+  }))
+  allMapped.sort((a, b) => {
+    const dateComp = a.date.localeCompare(b.date)
+    return dateComp !== 0 ? dateComp : a.voucher_number - b.voucher_number
+  })
+  const lines = allMapped.slice(0, PAGE_LIMIT)
 
   // If we got more than PAGE_LIMIT rows back, the next cursor points at the
   // last delivered row so the next call resumes from after it.

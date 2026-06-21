@@ -160,4 +160,137 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
     expect(body.data.lines[1].credit).toBe(700)
     expect(body.data.next_cursor).toBeNull()
   })
+
+  it('sorts lines by entry_date ASC then voucher_number ASC regardless of DB return order', async () => {
+    // DB returns rows in reverse date order (latest first) — the route must
+    // sort them, not rely on the database order.
+    const linesData = [
+      {
+        debit_amount: 500,
+        credit_amount: 0,
+        journal_entry_id: 'je-latest',
+        journal_entries: {
+          id: 'je-latest',
+          voucher_number: 15,
+          voucher_series: 'A',
+          entry_date: '2026-05-10',
+          description: 'Latest',
+          status: 'posted',
+          company_id: 'company-1',
+          fiscal_period_id: 'period-1',
+        },
+      },
+      {
+        debit_amount: 200,
+        credit_amount: 0,
+        journal_entry_id: 'je-earliest',
+        journal_entries: {
+          id: 'je-earliest',
+          voucher_number: 3,
+          voucher_series: 'A',
+          entry_date: '2026-05-01',
+          description: 'Earliest',
+          status: 'posted',
+          company_id: 'company-1',
+          fiscal_period_id: 'period-1',
+        },
+      },
+      {
+        debit_amount: 0,
+        credit_amount: 100,
+        journal_entry_id: 'je-middle',
+        journal_entries: {
+          id: 'je-middle',
+          voucher_number: 9,
+          voucher_series: 'A',
+          entry_date: '2026-05-05',
+          description: 'Middle',
+          status: 'posted',
+          company_id: 'company-1',
+          fiscal_period_id: 'period-1',
+        },
+      },
+    ]
+
+    mockCreateClient.mockResolvedValue(
+      buildSupabase(
+        { id: 'user-1' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+        { data: linesData, error: null }
+      ) as never
+    )
+
+    const req = createMockRequest(
+      '/api/reports/trial-balance/account/1930/sources',
+      { searchParams: { fiscal_period_id: 'period-1' } }
+    )
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1930' }))
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      data: { lines: Array<{ journal_entry_id: string; date: string; voucher_number: number }> }
+    }
+
+    expect(body.data.lines).toHaveLength(3)
+    expect(body.data.lines[0].journal_entry_id).toBe('je-earliest')  // 2026-05-01, #3
+    expect(body.data.lines[1].journal_entry_id).toBe('je-middle')    // 2026-05-05, #9
+    expect(body.data.lines[2].journal_entry_id).toBe('je-latest')    // 2026-05-10, #15
+  })
+
+  it('sorts lines with same date by voucher_number ASC', async () => {
+    const linesData = [
+      {
+        debit_amount: 100,
+        credit_amount: 0,
+        journal_entry_id: 'je-high',
+        journal_entries: {
+          id: 'je-high',
+          voucher_number: 20,
+          voucher_series: 'A',
+          entry_date: '2026-06-01',
+          description: 'High voucher',
+          status: 'posted',
+          company_id: 'company-1',
+          fiscal_period_id: 'period-1',
+        },
+      },
+      {
+        debit_amount: 50,
+        credit_amount: 0,
+        journal_entry_id: 'je-low',
+        journal_entries: {
+          id: 'je-low',
+          voucher_number: 5,
+          voucher_series: 'A',
+          entry_date: '2026-06-01',
+          description: 'Low voucher',
+          status: 'posted',
+          company_id: 'company-1',
+          fiscal_period_id: 'period-1',
+        },
+      },
+    ]
+
+    mockCreateClient.mockResolvedValue(
+      buildSupabase(
+        { id: 'user-1' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+        { data: linesData, error: null }
+      ) as never
+    )
+
+    const req = createMockRequest(
+      '/api/reports/trial-balance/account/1930/sources',
+      { searchParams: { fiscal_period_id: 'period-1' } }
+    )
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1930' }))
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      data: { lines: Array<{ journal_entry_id: string }> }
+    }
+
+    expect(body.data.lines[0].journal_entry_id).toBe('je-low')   // voucher 5 first
+    expect(body.data.lines[1].journal_entry_id).toBe('je-high')  // voucher 20 second
+  })
 })
