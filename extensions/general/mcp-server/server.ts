@@ -6234,6 +6234,16 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Fetch supplier defaults so line items can inherit default_expense_account
+      // when neither the extraction nor the agent provided an accountSuggestion.
+      const { data: resolvedSupplier } = await supabase
+        .from('suppliers')
+        .select('default_expense_account')
+        .eq('id', supplierId)
+        .eq('company_id', companyId)
+        .single()
+      const supplierDefaultExpenseAccount = resolvedSupplier?.default_expense_account ?? null
+
       // Assemble core invoice fields
       const currency = (invoiceExt?.currency as string) || 'SEK'
       const invoiceDate = (invoiceExt?.invoiceDate as string) || null
@@ -6263,7 +6273,7 @@ export const tools: McpTool[] = [
       }
 
       // Translate extracted line items into the supplier_invoice_items shape.
-      // Default account 4000 (varuinköp/inköp) when extraction didn't pin one.
+      // Priority: per-line accountSuggestion → supplier.default_expense_account → 4000.
       const lineItems = lineItemsExt.map((li, idx) => ({
         line_number: idx + 1,
         description: (li.description as string) ?? `Position ${idx + 1}`,
@@ -6271,7 +6281,7 @@ export const tools: McpTool[] = [
         unit: (li.unit as string) ?? 'st',
         unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
         line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
-        account_number: (li.account_number as string | undefined) ?? '4000',
+        account_number: (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
         vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
         vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
       }))
