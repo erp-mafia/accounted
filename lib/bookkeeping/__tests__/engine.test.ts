@@ -484,6 +484,134 @@ describe('createDraftEntry — on-demand BAS account backfill', () => {
   })
 })
 
+describe('reverseEntry — entry_date defaults to original entry date', () => {
+  it('uses original entry_date when no reversalDate is provided', async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 3,
+      entry_date: '2024-11-15',
+      description: 'Hyra november',
+      source_type: 'manual',
+      source_id: null,
+      lines: [
+        { account_number: '5010', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 10000 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+
+    let insertedEntryDate: string | undefined
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update']) b[m] = vi.fn().mockReturnValue(b)
+      b.insert = vi.fn().mockImplementation((payload: unknown) => {
+        const p = payload as Record<string, unknown>
+        if (p.entry_date !== undefined) insertedEntryDate = p.entry_date as string
+        return b
+      })
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 4, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({ data: [{ id: 'acc-5010', account_number: '5010' }, { id: 'acc-1930', account_number: '1930' }], error: null })
+          return b
+        }
+        if (table === 'journal_entry_lines') return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        return createMockChain()
+      }),
+    }
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(insertedEntryDate).toBe('2024-11-15')
+  })
+
+  it('uses explicit reversalDate when provided', async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 3,
+      entry_date: '2024-11-15',
+      description: 'Hyra november',
+      source_type: 'manual',
+      source_id: null,
+      lines: [
+        { account_number: '5010', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 10000 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+
+    let insertedEntryDate: string | undefined
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update']) b[m] = vi.fn().mockReturnValue(b)
+      b.insert = vi.fn().mockImplementation((payload: unknown) => {
+        const p = payload as Record<string, unknown>
+        if (p.entry_date !== undefined) insertedEntryDate = p.entry_date as string
+        return b
+      })
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 4, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({ data: [{ id: 'acc-5010', account_number: '5010' }, { id: 'acc-1930', account_number: '1930' }], error: null })
+          return b
+        }
+        if (table === 'journal_entry_lines') return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        return createMockChain()
+      }),
+    }
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1', '2025-01-01')
+
+    expect(insertedEntryDate).toBe('2025-01-01')
+  })
+})
+
 describe('reverseEntry — bank transaction unlink', () => {
   // After a reversal the booked bank transaction must return to "Att bokföra"
   // (journal_entry_id cleared) so the user can book it again. The agent paths

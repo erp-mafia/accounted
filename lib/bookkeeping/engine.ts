@@ -657,7 +657,7 @@ export async function reverseEntry(
     project: line.project || undefined,
   }))
 
-  const entryDate = reversalDate || getSwedishLocalDate()
+  const entryDate = reversalDate ?? original.entry_date
 
   // Get voucher number for the reversal
   const voucherNumber = await getNextVoucherNumber(
