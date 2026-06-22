@@ -14,7 +14,7 @@ jobs:
     # (<reason>)` comments inside the migration.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so the merge-base with the PR base branch exists.
           fetch-depth: 0
@@ -50,7 +50,7 @@ jobs:
       PGPASSWORD: postgres
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
