@@ -4,7 +4,12 @@
  * Link an already-uploaded document to a journal entry (and optionally a
  * specific line). Wraps lib/core/documents/document-service.linkToJournalEntry.
  *
- * Body: `{ journal_entry_id: UUID, journal_entry_line_id?: UUID }`.
+ * Body: `{ journal_entry_id: UUID, journal_entry_line_id?: UUID, inbox_item_id?: UUID }`.
+ *
+ * When `inbox_item_id` is supplied the matching invoice_inbox_items row is
+ * stamped with `created_journal_entry_id` so it drops out of the active inbox
+ * into the resolved state. The stamp is best-effort: a failure is logged but
+ * does not fail the request (the document link is the legally-relevant write).
  *
  * The link is REVERSIBLE — set journal_entry_id back via the dashboard if
  * needed (no unlink endpoint in v1 yet to keep the WORM contract tight).
@@ -27,6 +32,7 @@ const Body = z
   .object({
     journal_entry_id: z.string().uuid(),
     journal_entry_line_id: z.string().uuid().optional(),
+    inbox_item_id: z.string().uuid().optional(),
   })
   .strict()
 
@@ -43,15 +49,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/documents/:id/link',
   summary: 'Link a document to a journal entry.',
   description:
-    'Sets journal_entry_id (and optionally journal_entry_line_id) on an existing document. Use this after /documents upload when the link target was unknown at upload time, or to re-link a stray document. Once the target JE is posted, the document row is effectively immutable per BFL 7 kap retention.',
+    'Sets journal_entry_id (and optionally journal_entry_line_id) on an existing document. Optionally stamps the originating invoice_inbox_items row as consumed via inbox_item_id. Use this after /documents upload when the link target was unknown at upload time, or to re-link a stray document. Once the target JE is posted, the document row is effectively immutable per BFL 7 kap retention.',
   useWhen:
-    'A document was uploaded without a journal_entry_id (e.g. bulk import) and you now want to attach it to a posted verifikation.',
+    'A document was uploaded without a journal_entry_id (e.g. bulk import) and you now want to attach it to a posted verifikation. Pass inbox_item_id when the document came from the invoice inbox so the item is marked resolved in one call.',
   doNotUseFor:
     'Unlinking — no v1 unlink endpoint. The dashboard exposes a manual override; v1 keeps the WORM contract by refusing to revert posted-JE links.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Both the document and the journal_entry_id must belong to the caller\'s company. NOT_FOUND on mismatch (enumeration hardening).',
     'Re-linking an already-linked document overwrites the previous journal_entry_id — confirm the old target is what you intend to break.',
+    'inbox_item_id stamping is best-effort: if the stamp fails the document link still succeeds. Use POST /api/v1/companies/:companyId/inbox-items/:id/stamp to stamp independently.',
   ],
   example: {
     request: { journal_entry_id: 'a8f1…' },
@@ -224,6 +231,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         body.journal_entry_id,
         body.journal_entry_line_id,
       )
+
+      if (body.inbox_item_id) {
+        const { error: stampErr } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({ created_journal_entry_id: body.journal_entry_id })
+          .eq('id', body.inbox_item_id)
+          .eq('company_id', ctx.companyId!)
+          .is('created_journal_entry_id', null)
+        if (stampErr) {
+          ctx.log.error('documents.link inbox stamp failed (best-effort)', stampErr as Error, {
+            inboxItemId: body.inbox_item_id,
+            journalEntryId: body.journal_entry_id,
+          })
+        }
+      }
+
       return ok(
         {
           id: updated.id,
