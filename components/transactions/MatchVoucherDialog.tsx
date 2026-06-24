@@ -22,6 +22,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { CashAccount } from '@/types'
+import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 
 interface MatchVoucherDialogProps {
   open: boolean
@@ -41,23 +42,6 @@ function shiftDate(isoDate: string, deltaDays: number): string {
   if (Number.isNaN(d.getTime())) return isoDate
   d.setDate(d.getDate() + deltaDays)
   return d.toISOString().slice(0, 10)
-}
-
-/** Resolve which cash account (BAS ledger number) this transaction reconciles against. */
-function resolveAccount(
-  cashAccounts: CashAccount[],
-  tx: TransactionWithInvoice,
-): { account: string; fallback: boolean } {
-  // 1. Bound row → its own account.
-  if (tx.cash_account_id) {
-    const bound = cashAccounts.find((a) => a.id === tx.cash_account_id)
-    if (bound) return { account: bound.ledger_account, fallback: false }
-  }
-  // 2. Legacy NULL → the sole enabled account of the transaction's currency.
-  const sameCurrency = cashAccounts.filter((a) => a.enabled && a.currency === tx.currency)
-  if (sameCurrency.length === 1) return { account: sameCurrency[0].ledger_account, fallback: false }
-  // 3. Give up gracefully on 1930 (the default SEK företagskonto).
-  return { account: '1930', fallback: true }
 }
 
 export function MatchVoucherDialog({
@@ -90,7 +74,7 @@ export function MatchVoucherDialog({
           const caRes = await fetch('/api/cash-accounts')
           const caJson = await caRes.json()
           const accounts = (caJson.data ?? []) as CashAccount[]
-          const resolved = resolveAccount(accounts, tx)
+          const resolved = resolveAccount(accounts, tx.cash_account_id ?? null, tx.currency ?? 'SEK')
           account = resolved.account
           fallback = resolved.fallback
         } catch {
