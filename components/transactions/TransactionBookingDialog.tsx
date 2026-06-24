@@ -117,14 +117,17 @@ export default function TransactionBookingDialog({
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [showUploadZone, setShowUploadZone] = useState(false)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
-  const [bankAccount, setBankAccount] = useState('1930')
+  const [bankAccount, setBankAccount] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open || !transaction) return
-    setBankAccount('1930')
+    setBankAccount(null)
     let cancelled = false
     fetch('/api/cash-accounts')
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`cash-accounts fetch failed: ${r.status}`)
+        return r.json()
+      })
       .then((json) => {
         if (cancelled) return
         const accounts = (json.data ?? []) as CashAccount[]
@@ -135,7 +138,9 @@ export default function TransactionBookingDialog({
         )
         setBankAccount(account)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setBankAccount('1930')
+      })
     return () => { cancelled = true }
   }, [open, transaction?.id])
 
@@ -336,21 +341,23 @@ export default function TransactionBookingDialog({
           )}
         </div>
 
-        <JournalEntryForm
-          key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
-          embedded
-          initialLines={
-            preselectedTemplate
-              ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-              : buildInitialLines(transaction, t('bank_line_description'), bankAccount)
-          }
-          initialDate={transaction.date}
-          initialDescription={transaction.description}
-          submitUrl={`/api/transactions/${transaction.id}/book`}
-          sourceType="bank_transaction"
-          sourceId={transaction.id}
-          onEntryCreated={(entryId) => handleBooked(transaction.id, entryId)}
-        />
+        {bankAccount !== null && (
+          <JournalEntryForm
+            key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+            embedded
+            initialLines={
+              preselectedTemplate
+                ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
+                : buildInitialLines(transaction, t('bank_line_description'), bankAccount)
+            }
+            initialDate={transaction.date}
+            initialDescription={transaction.description}
+            submitUrl={`/api/transactions/${transaction.id}/book`}
+            sourceType="bank_transaction"
+            sourceId={transaction.id}
+            onEntryCreated={(entryId) => handleBooked(transaction.id, entryId)}
+          />
+        )}
 
         <InboxDocumentPicker
           open={inboxPickerOpen}
