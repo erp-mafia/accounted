@@ -64,7 +64,7 @@ export function MatchVoucherDialog({
   const [includeMatched, setIncludeMatched] = useState(false)
 
   const loadCandidates = useCallback(
-    async (tx: TransactionWithInvoice, wide: boolean, matched: boolean) => {
+    async (tx: TransactionWithInvoice, wide: boolean, matched: boolean, signal: { cancelled: boolean }) => {
       setLoading(true)
       try {
         // Resolve the settlement account from the company's cash accounts.
@@ -72,16 +72,22 @@ export function MatchVoucherDialog({
         let fallback = true
         try {
           const caRes = await fetch('/api/cash-accounts')
-          const caJson = await caRes.json()
-          const accounts = (caJson.data ?? []) as CashAccount[]
-          const resolved = resolveAccount(accounts, tx.cash_account_id ?? null, tx.currency ?? 'SEK')
-          account = resolved.account
-          fallback = resolved.fallback
+          if (caRes.ok) {
+            const caJson = await caRes.json()
+            if (!signal.cancelled) {
+              const accounts = (caJson.data ?? []) as CashAccount[]
+              const resolved = resolveAccount(accounts, tx.cash_account_id ?? null, tx.currency ?? 'SEK')
+              account = resolved.account
+              fallback = resolved.fallback
+            }
+          }
         } catch {
           // Network hiccup — fall back to 1930 and let the user see the note.
         }
-        setAccountNumber(account)
-        setAccountFallback(fallback)
+        if (!signal.cancelled) {
+          setAccountNumber(account)
+          setAccountFallback(fallback)
+        }
 
         const params = new URLSearchParams()
         params.set('account_number', account)
@@ -94,6 +100,7 @@ export function MatchVoucherDialog({
 
         const res = await fetch(`/api/reconciliation/bank/unmatched-entries?${params}`)
         const json = await res.json()
+        if (signal.cancelled) return
         const lines = (json.data ?? []) as UnlinkedGLLine[]
         setGlLines(lines)
         // Pre-select a strong auto-match (exact/reference/date-range) so the
@@ -112,7 +119,7 @@ export function MatchVoucherDialog({
               : '',
         )
       } finally {
-        setLoading(false)
+        if (!signal.cancelled) setLoading(false)
       }
     },
     [],
@@ -122,7 +129,9 @@ export function MatchVoucherDialog({
   // the user toggles already-matched vouchers in/out.
   useEffect(() => {
     if (!open || !transaction) return
-    void loadCandidates(transaction, wideRange, includeMatched)
+    const signal = { cancelled: false }
+    void loadCandidates(transaction, wideRange, includeMatched, signal)
+    return () => { signal.cancelled = true }
   }, [open, transaction, wideRange, includeMatched, loadCandidates])
 
   // Reset transient state when the dialog closes so the next open starts clean.
