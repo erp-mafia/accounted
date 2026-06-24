@@ -28,7 +28,8 @@ import {
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import type { BASAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
+import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
+import type { BASAccount, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
@@ -77,9 +78,12 @@ interface Props {
 // a transaction is selected and the document is in a foreign currency, the
 // transaction's SEK amount is the canonical figure. The cost-account row
 // stays blank — the user must pick a cost account themselves.
+// bankAccount defaults to '1930' but is replaced by the resolved ledger account
+// once the cash-accounts fetch completes.
 function buildPrefillLines(
   item: InboxItem,
-  selectedTransactionAmount: number | null = null
+  selectedTransactionAmount: number | null = null,
+  bankAccount: string = '1930',
 ): FormLine[] {
   const docTotal = item.extracted_data?.totals?.total ?? null
   const docVat = item.extracted_data?.totals?.vatAmount ?? null
@@ -125,7 +129,7 @@ function buildPrefillLines(
     })
   }
   lines.push({
-    account_number: '1930',
+    account_number: bankAccount,
     debit_amount: '',
     credit_amount: String(totalRounded),
   })
@@ -157,6 +161,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // pending, or unsupported.
   const [fxRate, setFxRate] = useState<number | null>(null)
 
+  // null = fetch pending; array = loaded (may be empty on error — falls back to '1930')
+  const [cashAccounts, setCashAccounts] = useState<CashAccount[] | null>(null)
+
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   const [entryDate, setEntryDate] = useState<string>(
@@ -169,6 +176,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     return [supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg'
   })
   const [notes, setNotes] = useState<string>('')
+  // Start with blank lines; they are replaced once cashAccounts resolves (see
+  // the combined prefill effect below). This mirrors the TransactionBookingDialog
+  // pattern of gating JournalEntryForm on bankAccount !== null.
   const [lines, setLines] = useState<FormLine[]>(() => buildPrefillLines(item))
 
   // Transaction picker — optional selection.
@@ -181,11 +191,14 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
 
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Reset state when a different item opens the dialog
+  // Reset state when a different item opens the dialog. We pass bankAccount
+  // here but it may still be null (fetch in flight) — in that case '1930' is
+  // used as a placeholder and the prefill-update effect below will overwrite
+  // the settlement line once the fetch resolves.
   useEffect(() => {
     if (!open) return
     setEntryDate(item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10))
-    setLines(buildPrefillLines(item))
+    setLines(buildPrefillLines(item, null, bankAccount ?? '1930'))
     setSelectedTransactionId(item.matched_transaction_id)
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''
     const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
@@ -218,6 +231,29 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetCurrency, item.id])
 
+  // Fetch cash accounts once when the dialog opens so the settlement line can
+  // be routed to the correct ledger account instead of the hardcoded '1930'.
+  useEffect(() => {
+    if (!open) return
+    setCashAccounts(null)
+    let cancelled = false
+    fetch('/api/cash-accounts')
+      .then((r) => {
+        if (!r.ok) throw new Error(`cash-accounts fetch failed: ${r.status}`)
+        return r.json()
+      })
+      .then((json) => {
+        if (cancelled) return
+        setCashAccounts((json.data ?? []) as CashAccount[])
+      })
+      .catch(() => {
+        // Fall back to empty list — resolveAccount will return '1930'
+        if (!cancelled) setCashAccounts([])
+      })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, item.id])
+
   // SEK-equivalent of the underlag total — the anchor for ranking candidates.
   const targetSek = useMemo(() => {
     if (targetAmount == null) return null
@@ -240,14 +276,37 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       : resolveSekAmount(tx.amount, tx.amount_sek ?? null, tx.currency, tx.exchange_rate ?? null)
   }, [selectedTransactionId, transactions])
 
+  // The settlement currency to resolve against:
+  // - When a transaction is selected, use that transaction's currency.
+  // - Otherwise, use the document's currency (falls back to SEK).
+  const settlementCurrency = useMemo(() => {
+    if (selectedTransactionId) {
+      const tx = transactions.find((t) => t.id === selectedTransactionId)
+      if (tx) return (tx.currency ?? 'SEK').toUpperCase()
+    }
+    return targetCurrency
+  }, [selectedTransactionId, transactions, targetCurrency])
+
+  // Resolved bank account — null while the cash-accounts fetch is in flight.
+  // Derived from the cash accounts list; falls back to '1930' if the list is
+  // empty or no single-currency match exists.
+  const bankAccount = useMemo<string | null>(() => {
+    if (cashAccounts === null) return null
+    const { account } = resolveAccount(cashAccounts, null, settlementCurrency)
+    return account
+  }, [cashAccounts, settlementCurrency])
+
   useEffect(() => {
     if (!open) return
-    // Update amounts when the transaction selection changes, but preserve
-    // user-entered account numbers. This handles "user typed cost account,
-    // then picked an SEK-denominated transaction" — we want the SEK figure
-    // to flow into the line amounts without forgetting their account pick.
+    // Update amounts when the transaction selection or resolved bank account
+    // changes, but preserve user-entered account numbers. This handles "user
+    // typed cost account, then picked an SEK-denominated transaction" — we
+    // want the SEK figure to flow into the line amounts without forgetting
+    // their account pick. bankAccount may be null while the fetch is in flight;
+    // pass '1930' as a safe placeholder in that case — the effect re-runs once
+    // the fetch resolves and bankAccount becomes non-null.
     setLines((current) => {
-      const next = buildPrefillLines(item, selectedTransactionAmount)
+      const next = buildPrefillLines(item, selectedTransactionAmount, bankAccount ?? '1930')
       return next.map((nl, i) => {
         const existing = current[i]
         if (!existing) return nl
@@ -257,7 +316,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
         }
       })
     })
-  }, [open, item, selectedTransactionAmount])
+  }, [open, item, selectedTransactionAmount, bankAccount])
 
   // Fetch fiscal periods and accounts on first open
   useEffect(() => {
