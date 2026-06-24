@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -16,8 +16,9 @@ import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPi
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import type { BookingTemplateLibrary } from '@/types'
+import type { BookingTemplateLibrary, CashAccount } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
+import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 
 interface TransactionBookingDialogProps {
   open: boolean
@@ -31,7 +32,11 @@ interface TransactionBookingDialogProps {
   preselectedTemplate?: BookingTemplateLibrary | null
 }
 
-function buildInitialLines(transaction: TransactionWithInvoice, bankLineDescription: string): FormLine[] {
+function buildInitialLines(
+  transaction: TransactionWithInvoice,
+  bankLineDescription: string,
+  bankAccount: string = '1930',
+): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
     transaction.amount_sek,
@@ -51,7 +56,7 @@ function buildInitialLines(transaction: TransactionWithInvoice, bankLineDescript
     : {}
 
   const bankLine: FormLine = {
-    account_number: '1930',
+    account_number: bankAccount,
     debit_amount: isExpense ? '' : amountStr,
     credit_amount: isExpense ? amountStr : '',
     line_description: bankLineDescription,
@@ -71,6 +76,7 @@ function buildInitialLines(transaction: TransactionWithInvoice, bankLineDescript
 function buildInitialLinesFromTemplate(
   transaction: TransactionWithInvoice,
   template: BookingTemplateLibrary,
+  bankAccount: string = '1930',
 ): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
@@ -80,20 +86,21 @@ function buildInitialLinesFromTemplate(
   )) * 100) / 100
   const lines = applyTemplate(template.lines, sekAmount)
 
-  // Match buildInitialLines's foreign-currency handling: attach original
-  // currency/amount/exchange_rate metadata to the settlement (bank/cash) legs
-  // so the journal entry retains the foreign-currency annotation. Without
-  // this the entry is silently recorded in SEK only.
   const isForeign = !!transaction.currency && transaction.currency !== 'SEK'
-  if (!isForeign) return lines
-  const currencyMeta = buildCurrencyMetadata(
-    transaction.currency,
-    Math.abs(transaction.amount),
-    transaction.exchange_rate
-  )
+  const currencyMeta = isForeign
+    ? buildCurrencyMetadata(
+        transaction.currency,
+        Math.abs(transaction.amount),
+        transaction.exchange_rate
+      )
+    : {}
+
   return lines.map((line, i) => {
     const raw = template.lines[i]
-    return raw?.type === 'settlement' ? { ...line, ...currencyMeta } : line
+    if (raw?.type === 'settlement') {
+      return { ...line, ...(isForeign ? currencyMeta : {}), account_number: bankAccount }
+    }
+    return line
   })
 }
 
@@ -110,6 +117,24 @@ export default function TransactionBookingDialog({
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [showUploadZone, setShowUploadZone] = useState(false)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
+  const [bankAccount, setBankAccount] = useState('1930')
+
+  useEffect(() => {
+    if (!open || !transaction) return
+    setBankAccount('1930')
+    fetch('/api/cash-accounts')
+      .then((r) => r.json())
+      .then((json) => {
+        const accounts = (json.data ?? []) as CashAccount[]
+        const { account } = resolveAccount(
+          accounts,
+          transaction.cash_account_id ?? null,
+          transaction.currency ?? 'SEK',
+        )
+        setBankAccount(account)
+      })
+      .catch(() => {})
+  }, [open, transaction?.id])
 
   if (!transaction) return null
 
@@ -309,12 +334,12 @@ export default function TransactionBookingDialog({
         </div>
 
         <JournalEntryForm
-          key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}`}
+          key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
           embedded
           initialLines={
             preselectedTemplate
-              ? buildInitialLinesFromTemplate(transaction, preselectedTemplate)
-              : buildInitialLines(transaction, t('bank_line_description'))
+              ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
+              : buildInitialLines(transaction, t('bank_line_description'), bankAccount)
           }
           initialDate={transaction.date}
           initialDescription={transaction.description}
