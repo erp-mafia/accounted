@@ -64,7 +64,7 @@ export async function GET(request: Request) {
 
   let query = supabase
     .from('transactions')
-    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored')
+    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
     .eq('company_id', companyId)
 
   // unmatched and reconciled are mutually exclusive — unmatched wins if both set
