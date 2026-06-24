@@ -122,9 +122,11 @@ export default function TransactionBookingDialog({
   useEffect(() => {
     if (!open || !transaction) return
     setBankAccount('1930')
+    let cancelled = false
     fetch('/api/cash-accounts')
       .then((r) => r.json())
       .then((json) => {
+        if (cancelled) return
         const accounts = (json.data ?? []) as CashAccount[]
         const { account } = resolveAccount(
           accounts,
@@ -134,6 +136,7 @@ export default function TransactionBookingDialog({
         setBankAccount(account)
       })
       .catch(() => {})
+    return () => { cancelled = true }
   }, [open, transaction?.id])
 
   if (!transaction) return null
