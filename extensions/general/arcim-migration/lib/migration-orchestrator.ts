@@ -117,6 +117,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             if (isValidSwedishVatNumber(normalizedVat)) {
               updates.vat_number = normalizedVat
               updates.vat_registered = true
+            } else {
+              // Observability: a provider sent a VAT number we can't normalise
+              // to a valid SE+12 momsregistreringsnummer. We drop it (above),
+              // but surface the anomaly so consistently-bad provider data is
+              // visible. Don't log the raw value — it can embed a personnummer.
+              console.warn(
+                `[migration] Dropped malformed VAT number from ${provider} for company ${companyId} (normalized length ${normalizedVat.length})`,
+              )
             }
           }
           if (mapped.fiscal_year_start_month !== 1) {
