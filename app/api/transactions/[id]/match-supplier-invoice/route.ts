@@ -330,7 +330,7 @@ export const POST = withRouteContext(
         transaction_id: transactionId,
       })
       .eq('id', supplier_invoice_id)
-      .in('status', ['registered', 'approved', 'partially_paid'])
+      .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
       .select('id')
 
     if (updateInvError) {

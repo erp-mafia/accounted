@@ -81,6 +81,7 @@ function enqueueHappyPath(opts: {
     exchange_rate?: number | null
     remaining_amount?: number
     paid_amount?: number
+    status?: string
   }
   accountingMethod?: string
 }) {
@@ -103,7 +104,7 @@ function enqueueHappyPath(opts: {
       id: SI_UUID,
       currency: opts.invoice.currency,
       exchange_rate: opts.invoice.exchange_rate ?? null,
-      status: 'registered',
+      status: opts.invoice.status ?? 'registered',
       remaining_amount: opts.invoice.remaining_amount ?? 225,
       paid_amount: opts.invoice.paid_amount ?? 0,
       supplier: { supplier_type: 'eu_business' },
@@ -283,6 +284,18 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — non-FX paths', 
     expect(details.transaction_amount).toBe(6000)
     expect(details.remaining_amount).toBe(5000)
     expect(details.excess).toBe(1000)
+  })
+
+  it('succeeds for an overdue invoice (status is a valid CAS target)', async () => {
+    // Regression: CAS guard previously omitted 'overdue', so selecting an overdue
+    // invoice from SupplierInvoicePicker would commit a JE, fail the update, orphan
+    // the voucher, and return MATCH_SI_NOT_OPEN.
+    enqueueHappyPath({
+      transaction: { amount: -1000, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 1000, status: 'overdue' },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
   })
 
   it('does NOT trigger overshoot guard on currency mismatch (FX path clamps to remaining)', async () => {
