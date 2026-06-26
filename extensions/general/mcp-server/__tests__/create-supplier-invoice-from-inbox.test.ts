@@ -175,6 +175,29 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     expect(result.preview.supplier_resolution).toBe('lookup_org_number')
   })
 
+  it('falls through to name lookup when org_number returns null', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-7',
+        status: 'received',
+        extracted_data: baseExtracted,
+        matched_supplier_id: null,
+        created_supplier_invoice_id: null,
+        document_id: 'doc-7',
+      },
+      supplierByOrg: null,
+      supplierByName: { id: 'supplier-name-lookup' },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-7', dry_run: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { supplier_resolution: string; supplier_id: string } }
+
+    expect(result.preview.supplier_id).toBe('supplier-name-lookup')
+    expect(result.preview.supplier_resolution).toBe('lookup_name')
+  })
+
   it('throws when inbox item already converted', async () => {
     const supabase = makeMock({
       inbox: {
@@ -209,6 +232,39 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     await expect(
       tool.execute({ inbox_item_id: 'inbox-4', dry_run: true }, 'company-1', 'user-1', supabase),
     ).rejects.toThrow(/Cannot resolve supplier/)
+  })
+
+  it('applies line_overrides — overridden account wins over extracted accountSuggestion', async () => {
+    const extractedWithSuggestion = {
+      ...baseExtracted,
+      lineItems: [
+        { description: 'Line A', quantity: 1, unit_price: 400, line_total: 400, vat_rate: 25, vat_amount: 100, accountSuggestion: '6550' },
+        { description: 'Line B', quantity: 1, unit_price: 600, line_total: 600, vat_rate: 25, vat_amount: 150, accountSuggestion: '6550' },
+      ],
+    }
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-6',
+        status: 'received',
+        extracted_data: extractedWithSuggestion,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-6',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      {
+        inbox_item_id: 'inbox-6',
+        dry_run: true,
+        line_overrides: [{ line_number: 2, account_number: '6420' }],
+      },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { items_preview: Array<{ line_number: number; account_number: string }> } }
+
+    const items = result.preview.items_preview
+    expect(items[0].account_number).toBe('6550')  // untouched — extracted suggestion wins
+    expect(items[1].account_number).toBe('6420')  // override wins over extracted suggestion
   })
 
   it('throws when extracted_data is missing', async () => {

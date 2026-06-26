@@ -6288,6 +6288,19 @@ export const tools: McpTool[] = [
         supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
         vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Override extracted VAT treatment' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
+        line_overrides: {
+          type: 'array',
+          description: 'Per-line account overrides (1-based line_number). Wins over accountSuggestion and supplier default.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              line_number: { type: 'number', description: '1-based index matching items_preview' },
+              account_number: { type: 'string', description: 'BAS account number for this line (e.g. "6420")' },
+            },
+            required: ['line_number', 'account_number'],
+          },
+        },
         notes: { type: 'string', description: 'Optional notes appended to the supplier invoice' },
         dry_run: { type: 'boolean', description: 'If true, return the assembled payload without staging (default false)' },
         idempotency_key: { type: 'string', description: 'UUID. Repeat calls with same key + payload return cached response.' },
@@ -6407,19 +6420,26 @@ export const tools: McpTool[] = [
         }
       }
 
+      // Build a lookup for per-line account overrides keyed by 1-based line number.
+      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number: string }> | undefined) ?? []
+      const lineOverrideMap = new Map(rawLineOverrides.map((o) => [o.line_number, o.account_number]))
+
       // Translate extracted line items into the supplier_invoice_items shape.
-      // Priority: per-line accountSuggestion → supplier.default_expense_account → 4000.
-      const lineItems = lineItemsExt.map((li, idx) => ({
-        line_number: idx + 1,
-        description: (li.description as string) ?? `Position ${idx + 1}`,
-        quantity: Number(li.quantity) || 1,
-        unit: (li.unit as string) ?? 'st',
-        unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
-        line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
-        account_number: (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
-        vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
-        vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
-      }))
+      // Priority: line_overrides → per-line accountSuggestion → supplier.default_expense_account → 4000.
+      const lineItems = lineItemsExt.map((li, idx) => {
+        const lineNumber = idx + 1
+        return {
+          line_number: lineNumber,
+          description: (li.description as string) ?? `Position ${lineNumber}`,
+          quantity: Number(li.quantity) || 1,
+          unit: (li.unit as string) ?? 'st',
+          unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
+          line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
+          account_number: lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
+          vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
+          vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
+        }
+      })
 
       const params = {
         inbox_item_id: inboxItemId,
