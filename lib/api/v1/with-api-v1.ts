@@ -324,7 +324,19 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       }
 
       // 5. Resolve URL companyId and verify access.
-      const resolvedParams = (await params.params) as Record<string, string | string[] | undefined>
+      //
+      // Next.js 16 invokes a route handler with `{ params: undefined }` for a
+      // STATIC route (no `[segment]` in the path) — see app-route module.js
+      // `handlerContext = { params: context.params ? ... : undefined }`. The
+      // only authenticated static route on this surface is `/api/v1/companies`,
+      // so awaiting `params.params` blindly null-derefs there (`undefined` has
+      // no `.companyId`) and the catch below turns it into a 500 for every
+      // valid key. Dynamic routes still pass a real `Promise<{ companyId }>`.
+      // Guard the await and default to an empty param set.
+      const resolvedParams = ((await params?.params) ?? {}) as Record<
+        string,
+        string | string[] | undefined
+      >
       const rawCompanyId = resolvedParams.companyId
       const companyId = typeof rawCompanyId === 'string' ? rawCompanyId : undefined
 

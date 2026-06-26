@@ -83,6 +83,14 @@ function emptyParams() {
   return { params: Promise.resolve({}) }
 }
 
+// What Next.js 16 ACTUALLY passes to a STATIC route's handler: `{ params:
+// undefined }` (app-route module: `params: context.params ? ... : undefined`).
+// `emptyParams()` above is NOT what the runtime hands a static route, so it
+// masked #781. Use this for the real static-route contract.
+function staticRouteContext() {
+  return { params: undefined } as unknown as { params: Promise<Record<string, never>> }
+}
+
 function companyParams(companyId: string) {
   return { params: Promise.resolve({ companyId }) }
 }
@@ -243,6 +251,39 @@ describe('withApiV1 — company membership', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.companyId).toBe('company-1')
+  })
+})
+
+describe('withApiV1 — static (non-dynamic) route params', () => {
+  // Regression for #781: GET /api/v1/companies is the only authenticated
+  // static route. Next.js 16 hands it `{ params: undefined }`. The wrapper
+  // must not null-deref on `params.params` after auth succeeds.
+  it('does not 500 when Next passes { params: undefined } for a static route', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: undefined,
+      scopes: ['companies:read'],
+      mode: 'live',
+    })
+
+    let observedCompanyId: string | undefined = 'sentinel'
+    let handlerCalled = false
+    const handler = withApiV1('companies.list', async (_req, ctx) => {
+      handlerCalled = true
+      observedCompanyId = ctx.companyId
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      staticRouteContext(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(handlerCalled).toBe(true)
+    expect(observedCompanyId).toBeUndefined()
   })
 })
 
