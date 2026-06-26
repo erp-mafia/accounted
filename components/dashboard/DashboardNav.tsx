@@ -63,6 +63,10 @@ interface ExtensionNavItem {
 interface DashboardNavProps {
   companyName: string
   entityType: EntityType
+  // Whether the company has registered as an employer (company_settings.
+  // pays_salaries). Drives visibility of the payroll (Personal) section for
+  // non-aktiebolag — notably an enskild firma that hires staff. See #782.
+  paysSalaries?: boolean
   uncategorizedTransactionCount?: number
   pendingOperationsCount?: number
   isSandbox?: boolean
@@ -113,7 +117,10 @@ interface NavItem {
   labelKey: NavLabelKey
   icon: typeof LayoutDashboard
   group: GroupKey
-  modes?: EntityType[]
+  // Payroll surfaces — visible only to employers: every aktiebolag (unchanged
+  // behaviour) plus any company that has registered as an employer via
+  // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
+  employerOnly?: boolean
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -141,8 +148,11 @@ const navItems: NavItem[] = [
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },
   // Personal — "Beta" badge while we validate the end-to-end salary + AGI flow.
-  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
+  // employerOnly: shown to aktiebolag and to any employer (pays_salaries), so an
+  // enskild firma that hires staff gets payroll. Owner self-payroll stays
+  // blocked at the engine/DB layer (EF owner takes egna uttag, not lön). #782
+  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', employerOnly: true, betaBadge: true },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', employerOnly: true, betaBadge: true },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
@@ -172,7 +182,7 @@ function accountInitial(name: string | null, email: string | null): string {
   return '?'
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
@@ -265,10 +275,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
     return <Icon className={className} />
   }
 
+  const isEmployer = entityType === 'aktiebolag' || paysSalaries
+
   const filteredItems = navItems.filter(item => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
-    if (item.modes && !item.modes.includes(entityType)) return false
+    // Payroll (employerOnly) is hidden until the company is an employer — an
+    // aktiebolag, or any entity that has flagged pays_salaries. #782
+    if (item.employerOnly && !isEmployer) return false
     // Hide the Assistent (/chat) tab until the agent is built — mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).

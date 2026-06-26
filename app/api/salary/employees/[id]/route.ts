@@ -3,9 +3,10 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyId, getCompanyEntityType } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
+import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 
 ensureInitialized()
 
@@ -84,6 +85,17 @@ export async function PATCH(
   }
   if (mergedErrors.length > 0) {
     return NextResponse.json({ error: mergedErrors.join('. ') }, { status: 400 })
+  }
+
+  // Only when the caller is changing employment_type: block setting an EF's
+  // owner/board on payroll (mirrors the enforce_ef_no_owner_employee trigger,
+  // which fires on UPDATE OF employment_type — so unrelated edits to any
+  // grandfathered row aren't blocked). #782
+  if (body.employment_type !== undefined) {
+    const entityType = await getCompanyEntityType(supabase, companyId)
+    if (!isEmploymentTypeAllowedForEntity(entityType, body.employment_type)) {
+      return NextResponse.json({ error: EF_OWNER_EMPLOYMENT_ERROR }, { status: 400 })
+    }
   }
 
   // Build update object

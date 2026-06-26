@@ -1162,7 +1162,7 @@
     "vacation_supplement_cba": "0.80% (common collective agreement level)",
     "vacation_supplement_help": "Applied with sammalöneregeln. Can be overridden per employee.",
     "info_heading": "Information",
-    "info_payroll_scope": "The payroll module handles salaries for aktiebolag. Enskild firma owners use eget uttag instead.",
+    "info_payroll_scope": "The payroll module handles salaries for your employees – tax deductions, employer contributions, vacation pay liability and the employer declaration (AGI). If you run a sole proprietorship (enskild firma), you as the owner take money out via owner's drawings (account 2013), not salary – the module is for your employees.",
     "info_current_year": "<strong>Current year:</strong> 2026 — Arbetsgivaravgifter 31.42%, prisbasbelopp 59,200 SEK"
   },
   "settings_backup": {

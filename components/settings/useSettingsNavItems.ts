@@ -50,7 +50,10 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     { id: 'company', href: '/settings/company', label: t('company'), group: 'company', show: hasCompany },
     { id: 'bookkeeping', href: '/settings/bookkeeping', label: t('bookkeeping'), group: 'accounting', show: hasCompany },
     { id: 'tax', href: '/settings/tax', label: t('tax'), group: 'accounting', show: hasCompany },
-    { id: 'salary', href: '/settings/salary', label: t('salary'), group: 'accounting', show: hasCompany && company?.entity_type === 'aktiebolag' },
+    // Lön settings follow the sidebar: every aktiebolag, plus any company that
+    // has registered as an employer (pays_salaries) — e.g. an enskild firma
+    // with staff. #782
+    { id: 'salary', href: '/settings/salary', label: t('salary'), group: 'accounting', show: hasCompany && (company?.entity_type === 'aktiebolag' || !!company?.pays_salaries) },
     { id: 'invoicing', href: '/settings/invoicing', label: t('invoicing'), group: 'sales', show: hasCompany },
     { id: 'templates', href: '/settings/templates', label: t('templates'), group: 'sales', show: hasCompany },
     { id: 'banking', href: '/settings/banking', label: t('banking'), group: 'tools', show: hasCompany && !isSandbox && hasBankingExtension },

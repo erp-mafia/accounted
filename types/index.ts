@@ -35,6 +35,11 @@ export interface Company {
   archived_at: string | null
   created_at: string
   updated_at: string
+  // Denormalised from company_settings onto the active company in the
+  // dashboard layout so context consumers (e.g. the settings rail) can tell
+  // whether the company is a registered employer without an extra fetch.
+  // Optional because it isn't a column on `companies`. #782
+  pays_salaries?: boolean
 }
 
 // Company membership

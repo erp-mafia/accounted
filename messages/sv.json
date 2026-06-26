@@ -1162,7 +1162,7 @@
     "vacation_supplement_cba": "0,80% (vanligt kollektivavtalsbelopp)",
     "vacation_supplement_help": "Tillämpas vid sammalöneregeln. Kan ändras per anställd.",
     "info_heading": "Information",
-    "info_payroll_scope": "Lönemodulen hanterar löner för aktiebolag. Enskild firma-ägare använder eget uttag istället.",
+    "info_payroll_scope": "Lönemodulen hanterar löner till dina anställda – skatteavdrag, arbetsgivaravgifter, semesterlöneskuld och arbetsgivardeklaration (AGI). Driver du enskild firma tar du som ägare ut pengar via eget uttag (konto 2013), inte lön – modulen är till för dina anställda.",
     "info_current_year": "<strong>Aktuellt år:</strong> 2026 — Arbetsgivaravgifter 31,42 %, prisbasbelopp 59 200 SEK"
   },
   "settings_backup": {
