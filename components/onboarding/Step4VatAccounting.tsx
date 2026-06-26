@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { Loader2, ArrowRight, ArrowLeft, Info } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
+import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 import type { MomsPeriod, EntityType } from '@/types'
 
 const schema = z.object({
@@ -82,12 +83,15 @@ export default function Step4VatAccounting({
   const vatNumber = watch('vat_number')
   const accountingMethod = watch('accounting_method')
 
-  // Auto-fill VAT number when vat_registered toggles on
+  // Auto-fill VAT number when vat_registered toggles on. Derive via the shared
+  // helper so a 12-digit personnummer (enskild firma) gets its century dropped —
+  // building SE${orgNumber}01 verbatim produced SE + 14 digits and failed
+  // validation on save.
   useEffect(() => {
     if (vatRegistered && !vatNumber && orgNumber) {
-      const cleaned = orgNumber.replace(/[-\s]/g, '')
-      if (cleaned.length >= 10) {
-        setValue('vat_number', `SE${cleaned}01`)
+      const derived = deriveSwedishVatNumber(orgNumber)
+      if (derived) {
+        setValue('vat_number', derived)
       }
     }
   }, [vatRegistered, vatNumber, orgNumber, setValue])

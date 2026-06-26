@@ -1144,6 +1144,31 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('normalises vat_number (lowercase, spaces, hyphens) to the canonical SE+12 form', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      vat_registered: true,
+      vat_number: 'se 556123-4567 01',
+      moms_period: 'quarterly',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.vat_number).toBe('SE556123456701')
+    }
+  })
+
+  it('rejects vat_number with 14 digits (the SE + 12-digit personnummer + 01 bug)', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      vat_registered: true,
+      vat_number: 'SE19900101123401',
+      moms_period: 'quarterly',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const vatError = result.error.issues.find(i => i.path.includes('vat_number'))
+      expect(vatError?.message).toContain('SE följt av 12 siffror')
+    }
+  })
+
   it('allows aktiebolag with kontantmetoden (BFL 5 kap. 2 §)', () => {
     const result = UpdateSettingsSchema.safeParse({
       entity_type: 'aktiebolag',

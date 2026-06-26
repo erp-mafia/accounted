@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { normalizeVatNumber, isValidSwedishVatNumber, deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 
 /**
@@ -190,6 +191,18 @@ async function createCompanyFromOnboardingImpl(params: {
     first_year_end: _fye,
     ...settingsToSave
   } = params.settings
+
+  // Defence in depth: this upsert bypasses UpdateSettingsSchema, so never persist
+  // a VAT number blind. Normalise to the canonical SE+12 form; if it isn't
+  // structurally valid (e.g. the legacy SE+14 personnummer derivation), re-derive
+  // it from the org number, falling back to null rather than storing a malformed
+  // momsregistreringsnummer.
+  if (typeof settingsToSave.vat_number === 'string' && settingsToSave.vat_number) {
+    const normalized = normalizeVatNumber(settingsToSave.vat_number)
+    settingsToSave.vat_number = isValidSwedishVatNumber(normalized)
+      ? normalized
+      : deriveSwedishVatNumber(settingsToSave.org_number as string | null | undefined)
+  }
 
   const { error: settingsError } = await supabase
     .from('company_settings')

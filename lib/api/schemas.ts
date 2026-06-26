@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
+import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 
@@ -1031,7 +1032,11 @@ export const UpdateSettingsSchema = z.object({
   country: z.string().optional(),
   f_skatt: z.boolean().optional(),
   vat_registered: z.boolean().optional(),
-  vat_number: z.string().regex(/^SE\d{12}$/, 'Momsregistreringsnummer måste vara SE följt av 12 siffror').nullable().optional(),
+  vat_number: z.string()
+    .transform(normalizeVatNumber)
+    .pipe(z.string().regex(/^SE\d{12}$/, 'Momsregistreringsnummer måste vara SE följt av 12 siffror'))
+    .nullable()
+    .optional(),
   moms_period: MomsPeriodSchema.nullable().optional(),
   periodisk_sammanstallning_period: PsPeriodTypeSchema.optional(),
   tax_contact_name: z.string().max(200).nullable().optional(),

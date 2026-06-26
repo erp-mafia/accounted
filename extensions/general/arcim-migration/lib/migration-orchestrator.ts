@@ -22,6 +22,7 @@ import type { MigrationProgress, MigrationResults, SkipReasons } from '../types'
 import type { ProviderName } from '@/lib/providers/types'
 import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
+import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
 import {
   fetchCompanyInfoDirect,
   fetchCustomersDirect,
@@ -109,8 +110,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           if (!existing?.company_name && mapped.company_name) updates.company_name = mapped.company_name
           if (!existing?.org_number && mapped.org_number) updates.org_number = mapped.org_number
           if (!existing?.vat_number && mapped.vat_number) {
-            updates.vat_number = mapped.vat_number
-            updates.vat_registered = true
+            // Normalise provider input; only persist a structurally valid
+            // SE+12 momsregistreringsnummer so a malformed value from an
+            // external API can't enter company_settings unchecked.
+            const normalizedVat = normalizeVatNumber(mapped.vat_number)
+            if (isValidSwedishVatNumber(normalizedVat)) {
+              updates.vat_number = normalizedVat
+              updates.vat_registered = true
+            }
           }
           if (mapped.fiscal_year_start_month !== 1) {
             updates.fiscal_year_start_month = mapped.fiscal_year_start_month
