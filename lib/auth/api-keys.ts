@@ -210,6 +210,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_unmatched_documents:        'transactions:read',
   gnubok_get_document_content:            'transactions:read',
   gnubok_attach_document_to_transaction:  'transactions:write',
+  gnubok_link_document_to_voucher:        'bookkeeping:write',
   // Payroll
   gnubok_list_employees:                  'payroll:read',
   gnubok_get_salary_run:                  'payroll:read',

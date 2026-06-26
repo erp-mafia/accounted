@@ -6829,6 +6829,95 @@ export const tools: McpTool[] = [
       )
     },
   },
+  {
+    name: 'gnubok_link_document_to_voucher',
+    title: 'Link Document to Voucher',
+    description: 'Stage linking a document to a posted verifikation. Use for imported/manual vouchers with no bank-tx row. Call gnubok_list_verifikat_without_documents first to find targets. Stages for approval.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+        journal_entry_id: { type: 'string', description: 'UUID of the target journal entry (verifikation)' },
+        journal_entry_line_id: { type: 'string', description: 'Optional UUID to pin the doc to a specific debit/credit line' },
+        idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries' },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+      },
+      required: ['document_id', 'journal_entry_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const documentId = args.document_id as string
+      const journalEntryId = args.journal_entry_id as string
+      const journalEntryLineId = typeof args.journal_entry_line_id === 'string' ? args.journal_entry_line_id : undefined
+      if (!documentId) throw new Error('document_id is required')
+      if (!journalEntryId) throw new Error('journal_entry_id is required')
+
+      const [docRes, jeRes] = await Promise.all([
+        supabase
+          .from('document_attachments')
+          .select('id, file_name, mime_type, journal_entry_id')
+          .eq('id', documentId)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('journal_entries')
+          .select('id, entry_date, description, voucher_series, voucher_number, status')
+          .eq('id', journalEntryId)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+      ])
+
+      if (docRes.error || !docRes.data) throw new Error('Document not found')
+      if (jeRes.error || !jeRes.data) throw new Error('Journal entry not found')
+
+      const doc = docRes.data as {
+        id: string; file_name: string; mime_type: string; journal_entry_id: string | null
+      }
+      const je = jeRes.data as {
+        id: string; entry_date: string; description: string
+        voucher_series: string | null; voucher_number: number | null; status: string
+      }
+
+      const voucherLabel = je.voucher_series && je.voucher_number
+        ? `${je.voucher_series}${je.voucher_number}`
+        : je.id.slice(0, 8)
+
+      const currentlyLinkedToSameJe = doc.journal_entry_id === journalEntryId
+      const currentlyLinkedToOther = !!doc.journal_entry_id && !currentlyLinkedToSameJe
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'link_document_to_voucher',
+        `Koppla bilaga: ${doc.file_name} → verifikat ${voucherLabel}`,
+        { document_id: documentId, journal_entry_id: journalEntryId, journal_entry_line_id: journalEntryLineId ?? null },
+        {
+          document_file_name: doc.file_name,
+          document_mime_type: doc.mime_type,
+          document_already_linked: currentlyLinkedToSameJe,
+          document_currently_linked_to_other: currentlyLinkedToOther,
+          document_current_journal_entry_id: doc.journal_entry_id ?? null,
+          voucher_label: voucherLabel,
+          voucher_date: je.entry_date,
+          voucher_description: je.description,
+          voucher_status: je.status,
+          journal_entry_line_id: journalEntryLineId ?? null,
+        },
+        actor,
+        undefined,
+        {
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dryRun: args.dry_run === true,
+          dateForPeriodCheck: je.entry_date,
+        }
+      )
+    },
+  },
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_employees',

@@ -54,6 +54,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // propagates it. A wrong attachment requires a rättelse, so require human
   // approval rather than auto-commit.
   attach_document_to_transaction: 'medium',
+  // Linking a doc to a posted verifikation is part of räkenskapsinformation
+  // (BFL 5 kap 6 §) and becomes immutable once the JE is posted. Medium so a
+  // human confirms the doc-to-verifikat pairing before it locks.
+  link_document_to_voucher: 'medium',
 
   // ── High: irreversible, compliance-critical, or external side-effects
   send_invoice: 'high',          // emails the customer

@@ -1759,6 +1759,73 @@ async function commitAttachDocumentToTransaction(
   }
 }
 
+async function commitLinkDocumentToVoucher(
+  supabase: SupabaseClient,
+  _userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const documentId = params.document_id as string
+  const journalEntryId = params.journal_entry_id as string
+  const journalEntryLineId = params.journal_entry_line_id as string | undefined
+  if (!documentId || !journalEntryId) {
+    return { error: 'document_id and journal_entry_id are required', status: 400 }
+  }
+
+  const { data: doc, error: docError } = await supabase
+    .from('document_attachments')
+    .select('id, file_name, journal_entry_id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (docError || !doc) return { error: 'Document not found', status: 404 }
+
+  // WORM guard: refuse to re-link a doc already linked to a DIFFERENT posted JE.
+  const existingJeId = (doc.journal_entry_id as string | null) ?? null
+  if (existingJeId && existingJeId !== journalEntryId) {
+    const { data: existingJe } = await supabase
+      .from('journal_entries')
+      .select('status')
+      .eq('id', existingJeId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (existingJe && (existingJe as { status: string }).status === 'posted') {
+      return {
+        error:
+          'Bilagan är kopplad till en bokförd verifikation och kan inte länkas om. Ladda upp ett nytt dokument.',
+        status: 409,
+      }
+    }
+  }
+
+  try {
+    const updated = await linkToJournalEntry(
+      supabase,
+      companyId,
+      documentId,
+      journalEntryId,
+      journalEntryLineId,
+    )
+    return {
+      data: {
+        document_id: updated.id,
+        file_name: updated.file_name,
+        journal_entry_id: updated.journal_entry_id,
+        journal_entry_line_id: updated.journal_entry_line_id ?? null,
+      },
+    }
+  } catch (err) {
+    const msg = (err as Error).message ?? ''
+    if (/locked\/closed fiscal period|Bokföringen är låst/i.test(msg)) {
+      return {
+        error: 'Verifikationens period är låst — bilagan kan inte länkas.',
+        status: 409,
+      }
+    }
+    return { error: `Failed to link document: ${msg}`, status: 500 }
+  }
+}
+
 async function commitRunYearEnd(
   supabase: SupabaseClient,
   userId: string,
@@ -3583,6 +3650,9 @@ async function commitPendingOperationInner(
         break
       case 'attach_document_to_transaction':
         result = await commitAttachDocumentToTransaction(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'link_document_to_voucher':
+        result = await commitLinkDocumentToVoucher(supabase, userId, companyId, pendingOp.params)
         break
       case 'run_year_end':
         result = await commitRunYearEnd(supabase, userId, companyId, pendingOp.params)

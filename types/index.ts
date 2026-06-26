@@ -1740,6 +1740,9 @@ export type PendingOperationType =
   | 'uncategorize_transaction'
   // Document inbox: pin doc to bank transaction
   | 'attach_document_to_transaction'
+  // Link a document directly to a journal entry (verifikation) — for imported/
+  // manual vouchers that have no bank-transaction row.
+  | 'link_document_to_voucher'
   // Manual transaction ingestion (uncategorized row, reversible by delete)
   | 'create_transaction'
   // Stream 1 Phase 1: supplier invoice lifecycle
