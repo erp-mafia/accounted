@@ -16,9 +16,55 @@
  * dependency. The registry shape stays stable across that change.
  */
 
+import { z } from 'zod'
 import type { ZodTypeAny } from 'zod'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
 import { API_V1_VERSION } from './version'
+
+/**
+ * The `meta` block echoed in every v1 response envelope (see
+ * `lib/api/v1/response.ts`). List endpoints additionally populate
+ * `next_cursor`; it is absent on the final page.
+ */
+export const ResponseMetaSchema = z.object({
+  request_id: z.string(),
+  api_version: z.string(),
+  next_cursor: z.string().nullable().optional(),
+})
+
+/**
+ * The `{ data, meta }` envelope that every list endpoint actually returns via
+ * `paginated()`. Declare a list endpoint's `response.success` with this so the
+ * OpenAPI contract matches the runtime body.
+ *
+ * Previously each list endpoint declared a bare `{ <name>: [...] }` success
+ * object (e.g. `{ companies: [...] }`) that no handler ever emits — the
+ * generated spec advertised a shape the API never returns. See issue #781.
+ */
+export function listEnvelope<T extends ZodTypeAny>(item: T) {
+  return z.object({
+    data: z.array(item),
+    meta: ResponseMetaSchema,
+  })
+}
+
+/**
+ * The `{ data, meta }` envelope for an endpoint that returns a single OBJECT
+ * under `data` (via `ok()`), rather than a bare array under `data`.
+ *
+ * Most list endpoints return `{ data: [...] }` (use {@link listEnvelope}). A
+ * few — `accounts`, `fiscal-periods`, `webhooks` — deliberately wrap their
+ * array in a named key (`{ data: { accounts: [...] } }`); their handlers and
+ * route tests lock that shape in. Declare those with
+ * `dataEnvelope(z.object({ <name>: z.array(Item) }))` so the OpenAPI contract
+ * matches what they actually return.
+ */
+export function dataEnvelope<T extends ZodTypeAny>(data: T) {
+  return z.object({
+    data,
+    meta: ResponseMetaSchema,
+  })
+}
 
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 

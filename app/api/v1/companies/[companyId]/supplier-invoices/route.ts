@@ -29,7 +29,7 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -71,9 +71,7 @@ const SupplierInvoiceSummary = z.object({
   created_at: z.string(),
 })
 
-const SupplierInvoicesListResponse = z.object({
-  supplier_invoices: z.array(SupplierInvoiceSummary),
-})
+const SupplierInvoicesListResponse = listEnvelope(SupplierInvoiceSummary)
 
 // Explicit projection.
 const SI_SUMMARY_COLUMNS =

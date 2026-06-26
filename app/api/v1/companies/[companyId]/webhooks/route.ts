@@ -14,7 +14,7 @@
 import { z } from 'zod'
 import { created, ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { generateWebhookSecret } from '@/lib/webhooks/signing'
@@ -83,9 +83,7 @@ const WebhookCreated = WebhookSummary.extend({
   description: z.string().nullable(),
 })
 
-const WebhooksListResponse = z.object({
-  webhooks: z.array(WebhookSummary),
-})
+const WebhooksListResponse = dataEnvelope(z.object({ webhooks: z.array(WebhookSummary) }))
 
 const WEBHOOK_LIST_COLUMNS =
   'id, name, event_type, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at'

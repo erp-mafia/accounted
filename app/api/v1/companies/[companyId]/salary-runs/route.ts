@@ -20,7 +20,7 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateSalaryRunSchema } from '@/lib/api/schemas'
@@ -48,7 +48,7 @@ const SalaryRunSummary = z.object({
   created_at: z.string(),
 })
 
-const SalaryRunsListResponse = z.object({ salary_runs: z.array(SalaryRunSummary) })
+const SalaryRunsListResponse = listEnvelope(SalaryRunSummary)
 
 const SALARY_RUN_SUMMARY_COLUMNS =
   'id, period_year, period_month, payment_date, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_employer_cost, agi_generated_at, agi_submitted_at, approved_at, paid_at, booked_at, created_at'

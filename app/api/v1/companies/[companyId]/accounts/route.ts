@@ -7,7 +7,7 @@
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 
@@ -26,7 +26,7 @@ const Account = z.object({
   sort_order: z.number().int(),
 })
 
-const AccountsResponse = z.object({ accounts: z.array(Account) })
+const AccountsResponse = dataEnvelope(z.object({ accounts: z.array(Account) }))
 
 const ACCOUNT_COLUMNS =
   'account_number, account_name, account_class, account_group, account_type, ' +
@@ -51,16 +51,18 @@ registerEndpoint({
   ],
   example: {
     response: {
-      data: [
-        {
-          account_number: '1930',
-          account_name: 'Företagskonto',
-          account_class: 1,
-          account_type: 'asset',
-          normal_balance: 'debit',
-          is_active: true,
-        },
-      ],
+      data: {
+        accounts: [
+          {
+            account_number: '1930',
+            account_name: 'Företagskonto',
+            account_class: 1,
+            account_type: 'asset',
+            normal_balance: 'debit',
+            is_active: true,
+          },
+        ],
+      },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },

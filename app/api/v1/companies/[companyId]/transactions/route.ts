@@ -12,7 +12,7 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 
@@ -33,9 +33,7 @@ const TransactionSummary = z.object({
   created_at: z.string(),
 })
 
-const TransactionListResponse = z.object({
-  transactions: z.array(TransactionSummary),
-})
+const TransactionListResponse = listEnvelope(TransactionSummary)
 
 // Explicit projection — no SELECT *. created_at is required for cursor
 // stability (see ordering rationale in the GET handler).

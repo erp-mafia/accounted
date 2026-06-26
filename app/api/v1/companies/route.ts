@@ -16,7 +16,7 @@ import {
   parsePaginationParams,
   decodeDefaultCursor,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse } from '@/lib/api/v1/errors'
 
@@ -29,9 +29,7 @@ const Company = z.object({
   created_at: z.string(),
 })
 
-const CompaniesListResponse = z.object({
-  companies: z.array(Company),
-})
+const CompaniesListResponse = listEnvelope(Company)
 
 registerEndpoint({
   operation: 'companies.list',

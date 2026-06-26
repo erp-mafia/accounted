@@ -12,7 +12,7 @@
 
 import { z } from 'zod'
 import { paginated } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { decodeDefaultCursor, encodeDefaultCursor, parsePaginationParams } from '@/lib/api/v1/pagination'
@@ -76,7 +76,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: z.array(DeliverySummary) },
+  response: { success: listEnvelope(DeliverySummary) },
 })
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(

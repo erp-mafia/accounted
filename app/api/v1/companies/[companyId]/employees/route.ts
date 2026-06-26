@@ -24,7 +24,7 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
@@ -51,7 +51,7 @@ const EmployeeSummary = z.object({
   created_at: z.string(),
 })
 
-const EmployeesListResponse = z.object({ employees: z.array(EmployeeSummary) })
+const EmployeesListResponse = listEnvelope(EmployeeSummary)
 
 // Explicit projection — never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.

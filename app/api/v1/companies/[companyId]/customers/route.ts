@@ -16,7 +16,7 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
@@ -46,9 +46,7 @@ const CustomerSummary = z.object({
   created_at: z.string(),
 })
 
-const CustomersListResponse = z.object({
-  customers: z.array(CustomerSummary),
-})
+const CustomersListResponse = listEnvelope(CustomerSummary)
 
 // Explicit projection — never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.

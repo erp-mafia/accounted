@@ -6,7 +6,7 @@
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse } from '@/lib/api/v1/errors'
 
@@ -25,7 +25,7 @@ const FiscalPeriod = z.object({
   exceeds_18_months: z.boolean(),
 })
 
-const FiscalPeriodsResponse = z.object({ fiscal_periods: z.array(FiscalPeriod) })
+const FiscalPeriodsResponse = dataEnvelope(z.object({ fiscal_periods: z.array(FiscalPeriod) }))
 
 const FISCAL_PERIOD_COLUMNS =
   'id, name, period_start, period_end, is_closed, closed_at, locked_at, ' +
@@ -49,16 +49,18 @@ registerEndpoint({
   ],
   example: {
     response: {
-      data: [
-        {
-          id: 'fp_2026',
-          name: 'Räkenskapsår 2026',
-          period_start: '2026-01-01',
-          period_end: '2026-12-31',
-          is_closed: false,
-          locked_at: null,
-        },
-      ],
+      data: {
+        fiscal_periods: [
+          {
+            id: 'fp_2026',
+            name: 'Räkenskapsår 2026',
+            period_start: '2026-01-01',
+            period_end: '2026-12-31',
+            is_closed: false,
+            locked_at: null,
+          },
+        ],
+      },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
