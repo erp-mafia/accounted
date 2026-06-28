@@ -150,7 +150,7 @@ export async function generateSIEExport(
   // balances RPC derives IB from earlier journal lines instead of silently
   // emitting zero #IB records and producing wrong #UB values.
   const openingBalancesByAccount = new Map<string, number>()
-  const { balances: obBalances } = await getOpeningBalances(supabase, companyId, {
+  const { balances: obBalances, obEntryId } = await getOpeningBalances(supabase, companyId, {
     period_start: period.period_start,
     opening_balance_entry_id: period.opening_balance_entry_id ?? null,
   })
@@ -162,8 +162,12 @@ export async function generateSIEExport(
     openingBalancesByAccount.set(accountNumber, amount)
   }
 
+  // Exclude the OB entry from VER/TRANS and from movement calculations to
+  // prevent double-counting: it is already represented by the #IB records above.
+  const periodEntries = (entries as JournalEntry[])?.filter(e => e.id !== obEntryId) ?? []
+
   // === Journal entries (VER + TRANS) ===
-  for (const entry of (entries as JournalEntry[]) || []) {
+  for (const entry of periodEntries) {
     const entryLines = (entry.lines as JournalEntryLine[]) || []
     const entryDate = dateStringToSIE(entry.entry_date)
     const series = entry.voucher_series || 'A'
@@ -200,7 +204,7 @@ export async function generateSIEExport(
 
   // === Closing balances (UB for balance sheet, RES for income statement) ===
   // Movement balances from journal entries
-  const movementBalances = calculateBalances(entries as JournalEntry[])
+  const movementBalances = calculateBalances(periodEntries)
 
   // Merge all accounts that have either IB or movements
   const allAccountNumbers = new Set([
