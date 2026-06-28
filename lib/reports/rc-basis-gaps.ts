@@ -90,6 +90,7 @@ function pickEntry(row: RcLineRow): EntryFields | null {
 }
 
 interface SiblingLineRow {
+  id: string
   journal_entry_id: string
   account_number: string
   debit_amount: number
@@ -134,11 +135,12 @@ export async function findRcBasisGaps(
   const siblingLines = await fetchAllRows<SiblingLineRow>(({ from, to }) =>
     supabase
       .from('journal_entry_lines')
-      .select('journal_entry_id, account_number, debit_amount, credit_amount')
+      .select('id, journal_entry_id, account_number, debit_amount, credit_amount')
       .in('journal_entry_id', entryIds)
       // Stable total order for correct paging (see fetch-all.ts).
       .order('id', { ascending: true })
       .range(from, to),
+    { dedupeBy: (r) => r.id },
   )
 
   const basisByEntry = new Map<string, number>()

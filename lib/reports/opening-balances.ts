@@ -41,18 +41,20 @@ export async function getOpeningBalances(
     // for consistency (avoids silent truncation) and joins journal_entries
     // to enforce company_id ownership (defense in depth alongside RLS).
     const obLines = await fetchAllRows<{
+      id: string
       account_number: string
       debit_amount: number
       credit_amount: number
     }>(({ from, to }) =>
       supabase
         .from('journal_entry_lines')
-        .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id)')
+        .select('id, account_number, debit_amount, credit_amount, journal_entries!inner(company_id)')
         .eq('journal_entry_id', obEntryId)
         .eq('journal_entries.company_id', companyId)
         // Stable total order for correct paging (see fetch-all.ts).
         .order('id', { ascending: true })
-        .range(from, to)
+        .range(from, to),
+      { dedupeBy: (r) => r.id }
     )
 
     for (const line of obLines) {
