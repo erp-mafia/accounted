@@ -423,4 +423,73 @@ describe('generateSIEExport', () => {
     expect(output).toContain('#UB 0 1930 12000.00')
     expect(output).toContain('#UB 0 2440 -12000.00')
   })
+
+  it('excludes the OB entry from #VER output and #UB movement so a zeroed-out account gets #UB 0', async () => {
+    // Regression: the OB entry was included in both getOpeningBalances (#IB)
+    // and calculateBalances (movement), so its debit cancelled the real net
+    // movement and left #UB = #IB for any account zeroed out during the year.
+    //
+    // Setup: 1933 opens at 96 466,59 (IB), is swept to 0 via a transfer to
+    // 1930 during the year. The OB entry (id: 'ob-entry-1') is returned by
+    // the journal_entries query because it lives in the same fiscal period.
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: 'ob-entry-1' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null },   // accounts
+      {
+        data: [
+          // The OB entry itself — must be excluded from movement/VER output
+          {
+            id: 'ob-entry-1',
+            entry_date: '2024-01-01',
+            voucher_number: 1,
+            voucher_series: 'A',
+            description: 'IB 2024',
+            status: 'posted',
+            lines: [
+              { account_number: '1933', debit_amount: 96466.59, credit_amount: 0, line_description: 'IB 1933', cost_center: null, project: null },
+              { account_number: '2019', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
+            ],
+          },
+          // A real transaction: account 1933 swept to 1930
+          {
+            id: 'e2',
+            entry_date: '2024-08-07',
+            voucher_number: 2,
+            voucher_series: 'A',
+            description: 'Stängning Bokio',
+            status: 'posted',
+            lines: [
+              { account_number: '1930', debit_amount: 96466.59, credit_amount: 0, line_description: null, cost_center: null, project: null },
+              { account_number: '1933', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
+            ],
+          },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      // fetchAllRows for OB entry lines (opening_balance_entry_id is set)
+      {
+        data: [
+          { account_number: '1933', debit_amount: 96466.59, credit_amount: 0 },
+          { account_number: '2019', debit_amount: 0, credit_amount: 96466.59 },
+        ],
+        error: null,
+      },
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    // IB recorded correctly
+    expect(output).toContain('#IB 0 1933 96466.59')
+    // 1933 was zeroed out: UB must be 0, not a repeat of IB
+    expect(output).toContain('#UB 0 1933 0.00')
+    // 1930 received the sweep: UB = 0 + 96466.59
+    expect(output).toContain('#UB 0 1930 96466.59')
+    // OB entry must NOT appear as a #VER block
+    expect(output).not.toContain('"IB 2024"')
+    // The real transfer entry must appear
+    expect(output).toContain('"Stängning Bokio"')
+  })
 })
