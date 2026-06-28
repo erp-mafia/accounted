@@ -745,6 +745,7 @@ export async function generateINK2Declaration(
       .from('chart_of_accounts')
       .select('account_number, account_name')
       .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
       .range(from, to)
   )
 

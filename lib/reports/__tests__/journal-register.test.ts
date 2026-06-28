@@ -67,6 +67,54 @@ describe('generateJournalRegister', () => {
     expect(report.period).toEqual({ start: '2024-01-01', end: '2024-12-31' })
   })
 
+  it('does not double an entry when an unstable page boundary re-serves a line (#790/#793)', async () => {
+    // Page 1 is a FULL page so fetchAllRows fetches page 2, which re-serves
+    // the 5010 line of voucher 2. dedupeBy(line id) must collapse it so the
+    // grundbok lists the voucher once with a 4000 (not 8000) total.
+    const PAGE_SIZE = 1000
+    const filler = Array.from({ length: PAGE_SIZE - 1 }, (_, i) => ({
+      id: `f${i}`,
+      account_number: '1930',
+      debit_amount: 0,
+      credit_amount: 0,
+      journal_entry_id: 'e0',
+      journal_entries: { id: 'e0', entry_date: '2024-01-02', voucher_number: 1, voucher_series: 'A', description: 'filler', source_type: 'manual', status: 'posted' },
+    }))
+    const rentLine = {
+      id: 'rent-line-1',
+      account_number: '5010',
+      debit_amount: 4000,
+      credit_amount: 0,
+      journal_entry_id: 'e1',
+      journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 2, voucher_series: 'A', description: 'Lokalhyra', source_type: 'manual', status: 'posted' },
+    }
+
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      ],
+      journal_entry_lines: [
+        { data: [...filler, rentLine], error: null }, // page 1 — full → triggers page 2
+        { data: [rentLine], error: null },            // page 2 — duplicate of the 5010 line
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Företagskonto' },
+            { account_number: '5010', account_name: 'Lokalhyra' },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const report = await generateJournalRegister(supabase, 'company-1', 'period-1')
+
+    const voucher2 = report.entries.find((e) => e.voucher_number === 2)!
+    expect(voucher2.total_debit).toBe(4000) // not 8000
+    expect(voucher2.lines).toHaveLength(1) // listed once, not twice
+  })
+
   it('produces entries in registration order with correct totals', async () => {
     mockResults = {
       fiscal_periods: [

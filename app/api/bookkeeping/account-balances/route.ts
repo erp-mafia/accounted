@@ -120,7 +120,8 @@ export async function GET(request: Request) {
         query = query.neq('journal_entry_id', obEntryId)
       }
 
-      return query.range(from, to)
+      // Stable total order for correct paging (see fetch-all.ts).
+      return query.order('id', { ascending: true }).range(from, to)
     })
   } catch (err) {
     log.error('period activity lookup failed', {

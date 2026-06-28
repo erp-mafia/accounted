@@ -83,6 +83,7 @@ export async function generateGeneralLedger(
   // Supabase types !inner joins as arrays; for many-to-one (line → entry)
   // it returns a single object at runtime. Cast via `as any` on the query.
   const rawLines = await fetchAllRows<{
+    id: string
     account_number: string
     debit_amount: number
     credit_amount: number
@@ -97,7 +98,7 @@ export async function generateGeneralLedger(
   }>(({ from, to }) => {
     let query = supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status)')
+      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status)')
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', periodId)
       .in('journal_entries.status', ['posted', 'reversed'])
@@ -106,9 +107,13 @@ export async function generateGeneralLedger(
       query = query.neq('journal_entry_id', obEntryId)
     }
 
+    // Stable total order on the line PK — paging is only correct with a
+    // deterministic order, else rows duplicate/skip across pages and balances
+    // double or accounts vanish (see fetch-all.ts ordering invariant). The
+    // report re-sorts lines per account below, so this order is invisible.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return query.range(from, to) as any
-  })
+    return query.order('id', { ascending: true }).range(from, to) as any
+  }, { dedupeBy: (r) => r.id })
 
   if (rawLines.length === 0 && openingBalances.size === 0) {
     return { accounts: [], period: { start: period.period_start, end: period.period_end } }
@@ -120,6 +125,7 @@ export async function generateGeneralLedger(
       .from('chart_of_accounts')
       .select('account_number, account_name')
       .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
       .range(from, to)
   )
 

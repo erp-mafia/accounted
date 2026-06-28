@@ -200,6 +200,8 @@ export async function generatePeriodiskSammanstallning(
       .in('journal_entries.source_type', ['invoice_created', 'credit_note'])
       .gte('journal_entries.entry_date', start)
       .lte('journal_entries.entry_date', end)
+      // Stable total order for correct paging (see fetch-all.ts).
+      .order('id', { ascending: true })
       .range(from, to) as unknown as PromiseLike<{ data: RawLine[] | null; error: { message: string } | null }>,
   )
 
@@ -229,6 +231,8 @@ export async function generatePeriodiskSammanstallning(
           )
         `)
         .in('id', invoiceIds)
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
         .range(from, to) as unknown as PromiseLike<{ data: RawInvoice[] | null; error: { message: string } | null }>,
     )
     for (const inv of invoices) invoiceMap.set(inv.id, inv)

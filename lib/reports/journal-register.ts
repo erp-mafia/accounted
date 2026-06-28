@@ -62,6 +62,7 @@ export async function generateJournalRegister(
   // Supabase types !inner joins as arrays; for many-to-one (line → entry)
   // it returns a single object at runtime. Cast via `as any` on the query.
   const rawLines = await fetchAllRows<{
+    id: string
     account_number: string
     debit_amount: number
     credit_amount: number
@@ -75,16 +76,18 @@ export async function generateJournalRegister(
       source_type: string
       status: string
     }
-  }>(({ from, to }) =>
-    supabase
+  }>(({ from, to }) => {
+    return supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(id, entry_date, voucher_number, voucher_series, description, source_type, status, company_id, fiscal_period_id)')
+      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(id, entry_date, voucher_number, voucher_series, description, source_type, status, company_id, fiscal_period_id)')
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', periodId)
       .in('journal_entries.status', ['posted', 'reversed'])
+      // Stable total order on the line PK — without it, rows duplicate/skip
+      // across pages and entries appear twice or go missing (see fetch-all.ts).
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .range(from, to) as any
-  )
+      .order('id', { ascending: true }).range(from, to) as any
+  }, { dedupeBy: (r) => r.id })
 
   if (rawLines.length === 0) {
     return { entries: [], total_entries: 0, total_debit: 0, total_credit: 0, period: { start: period.period_start, end: period.period_end } }
@@ -96,6 +99,7 @@ export async function generateJournalRegister(
       .from('chart_of_accounts')
       .select('account_number, account_name')
       .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
       .range(from, to)
   )
 

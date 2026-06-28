@@ -5,6 +5,20 @@ const { supabase, mockResult } = createMockSupabase()
 
 import { generateMonthlyBreakdown } from '../monthly-breakdown'
 
+// Minimal chainable query mock: every filter/order method returns the same
+// object; .single()/.range() resolve to the queued result. Tolerant of
+// query-shape changes such as an added .order() (see fetch-all.ts ordering
+// invariant) so the tests don't hardcode the exact method chain.
+function chain(result: unknown) {
+  const c: Record<string, unknown> = {}
+  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order']) {
+    c[m] = () => c
+  }
+  c.single = () => Promise.resolve(result)
+  c.range = () => Promise.resolve(result)
+  return c
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 })
@@ -33,38 +47,9 @@ describe('generateMonthlyBreakdown', () => {
     let callCount = 0
     supabase.from.mockImplementation(() => {
       callCount++
-      if (callCount === 1) {
-        // fiscal_periods query
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                single: () =>
-                  Promise.resolve({
-                    data: { period_start: '2024-01-01', period_end: '2024-12-31' },
-                    error: null,
-                  }),
-              }),
-            }),
-          }),
-        }
-      }
-      // journal_entry_lines query
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                range: () =>
-                  Promise.resolve({
-                    data: [],
-                    error: null,
-                  }),
-              }),
-            }),
-          }),
-        }),
-      }
+      return callCount === 1
+        ? chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null })
+        : chain({ data: [], error: null })
     })
 
     const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
@@ -79,61 +64,37 @@ describe('generateMonthlyBreakdown', () => {
     let callCount = 0
     supabase.from.mockImplementation(() => {
       callCount++
-      if (callCount === 1) {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                single: () =>
-                  Promise.resolve({
-                    data: { period_start: '2024-01-01', period_end: '2024-03-31' },
-                    error: null,
-                  }),
-              }),
-            }),
-          }),
-        }
-      }
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                range: () =>
-                  Promise.resolve({
-                    data: [
-                      {
-                        account_number: '3001',
-                        debit_amount: 0,
-                        credit_amount: 10000,
-                        journal_entry: { entry_date: '2024-01-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                      {
-                        account_number: '5010',
-                        debit_amount: 3000,
-                        credit_amount: 0,
-                        journal_entry: { entry_date: '2024-01-20', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                      {
-                        account_number: '3001',
-                        debit_amount: 0,
-                        credit_amount: 5000,
-                        journal_entry: { entry_date: '2024-02-10', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                      {
-                        account_number: '6200',
-                        debit_amount: 1500,
-                        credit_amount: 0,
-                        journal_entry: { entry_date: '2024-02-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                    ],
-                    error: null,
-                  }),
-              }),
-            }),
-          }),
-        }),
-      }
+      return callCount === 1
+        ? chain({ data: { period_start: '2024-01-01', period_end: '2024-03-31' }, error: null })
+        : chain({
+            data: [
+              {
+                account_number: '3001',
+                debit_amount: 0,
+                credit_amount: 10000,
+                journal_entry: { entry_date: '2024-01-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+              {
+                account_number: '5010',
+                debit_amount: 3000,
+                credit_amount: 0,
+                journal_entry: { entry_date: '2024-01-20', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+              {
+                account_number: '3001',
+                debit_amount: 0,
+                credit_amount: 5000,
+                journal_entry: { entry_date: '2024-02-10', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+              {
+                account_number: '6200',
+                debit_amount: 1500,
+                credit_amount: 0,
+                journal_entry: { entry_date: '2024-02-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+            ],
+            error: null,
+          })
     })
 
     const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
@@ -160,61 +121,37 @@ describe('generateMonthlyBreakdown', () => {
     let callCount = 0
     supabase.from.mockImplementation(() => {
       callCount++
-      if (callCount === 1) {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                single: () =>
-                  Promise.resolve({
-                    data: { period_start: '2024-01-01', period_end: '2024-01-31' },
-                    error: null,
-                  }),
-              }),
-            }),
-          }),
-        }
-      }
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                range: () =>
-                  Promise.resolve({
-                    data: [
-                      {
-                        account_number: '1930',
-                        debit_amount: 10000,
-                        credit_amount: 0,
-                        journal_entry: { entry_date: '2024-01-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                      {
-                        account_number: '2611',
-                        debit_amount: 0,
-                        credit_amount: 2500,
-                        journal_entry: { entry_date: '2024-01-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                      {
-                        account_number: '8400',
-                        debit_amount: 500,
-                        credit_amount: 0,
-                        journal_entry: { entry_date: '2024-01-20', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                      {
-                        account_number: '8300',
-                        debit_amount: 0,
-                        credit_amount: 200,
-                        journal_entry: { entry_date: '2024-01-25', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
-                      },
-                    ],
-                    error: null,
-                  }),
-              }),
-            }),
-          }),
-        }),
-      }
+      return callCount === 1
+        ? chain({ data: { period_start: '2024-01-01', period_end: '2024-01-31' }, error: null })
+        : chain({
+            data: [
+              {
+                account_number: '1930',
+                debit_amount: 10000,
+                credit_amount: 0,
+                journal_entry: { entry_date: '2024-01-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+              {
+                account_number: '2611',
+                debit_amount: 0,
+                credit_amount: 2500,
+                journal_entry: { entry_date: '2024-01-15', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+              {
+                account_number: '8400',
+                debit_amount: 500,
+                credit_amount: 0,
+                journal_entry: { entry_date: '2024-01-20', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+              {
+                account_number: '8300',
+                debit_amount: 0,
+                credit_amount: 200,
+                journal_entry: { entry_date: '2024-01-25', status: 'posted', user_id: 'user-1', fiscal_period_id: 'period-1' },
+              },
+            ],
+            error: null,
+          })
     })
 
     const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')

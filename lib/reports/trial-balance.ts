@@ -60,13 +60,14 @@ export async function generateTrialBalance(
     options.fromDate > period.period_start
   ) {
     const priorLines = await fetchAllRows<{
+      id: string
       account_number: string
       debit_amount: number
       credit_amount: number
     }>(({ from, to }) => {
       let query = supabase
         .from('journal_entry_lines')
-        .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
+        .select('id, account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
         .eq('journal_entries.company_id', companyId)
         .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
         .in('journal_entries.status', ['posted', 'reversed'])
@@ -81,8 +82,9 @@ export async function generateTrialBalance(
         query = query.neq('journal_entries.source_type', 'year_end')
       }
 
-      return query.range(from, to)
-    })
+      // Stable total order on the line PK for correct paging (see fetch-all.ts).
+      return query.order('id', { ascending: true }).range(from, to)
+    }, { dedupeBy: (r) => r.id })
 
     for (const line of priorLines) {
       const existing = openingBalances.get(line.account_number) || { debit: 0, credit: 0 }
@@ -100,13 +102,14 @@ export async function generateTrialBalance(
   // be missed from both IB and period. The window is sub-second and the
   // consequence is a single stale report — acceptable.
   const lines = await fetchAllRows<{
+    id: string
     account_number: string
     debit_amount: number
     credit_amount: number
   }>(({ from, to }) => {
     let query = supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
+      .select('id, account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
       .in('journal_entries.status', ['posted', 'reversed'])
@@ -132,8 +135,9 @@ export async function generateTrialBalance(
       query = query.neq('journal_entries.source_type', 'year_end')
     }
 
-    return query.range(from, to)
-  })
+    // Stable total order on the line PK for correct paging (see fetch-all.ts).
+    return query.order('id', { ascending: true }).range(from, to)
+  }, { dedupeBy: (r) => r.id })
 
   if (lines.length === 0 && openingBalances.size === 0) {
     return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true }
@@ -149,6 +153,7 @@ export async function generateTrialBalance(
       .from('chart_of_accounts')
       .select('account_number, account_name, account_class')
       .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
       .range(from, to)
   )
 

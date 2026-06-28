@@ -61,6 +61,9 @@ export async function generateVacationLiability(
       .eq('is_active', true)
       .not('vacation_rule', 'in', '(none,semesterersattning)')
       .order('last_name')
+      // id tiebreaker — last_name is not unique, so it alone is not a stable
+      // total order for paging (see fetch-all.ts).
+      .order('id', { ascending: true })
       .range(from, to)
   )
 
@@ -80,6 +83,8 @@ export async function generateVacationLiability(
       .eq('company_id', companyId)
       .eq('salary_runs.period_year', year)
       .eq('salary_runs.status', 'booked')
+      // Stable total order for correct paging (see fetch-all.ts).
+      .order('id', { ascending: true })
       .range(from, to)
   )
 

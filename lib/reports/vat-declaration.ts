@@ -283,6 +283,8 @@ export async function calculateVatDeclaration(
       .in('journal_entries.status', ['posted', 'reversed'])
       .gte('journal_entries.entry_date', start)
       .lte('journal_entries.entry_date', end)
+      // Stable total order for correct paging (see fetch-all.ts).
+      .order('id', { ascending: true })
       .range(from, to)
   )
 

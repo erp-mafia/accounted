@@ -47,6 +47,8 @@ export async function generateSupplierLedger(
         .select('*, supplier:suppliers(id, name)')
         .eq('company_id', companyId)
         .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
         .range(from, to)
     )
   } catch {

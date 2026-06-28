@@ -69,6 +69,8 @@ export async function generateARLedger(
         .select('*, customer:customers(id, name)')
         .eq('company_id', companyId)
         .in('status', ['sent', 'overdue', 'credited'])
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
         .range(from, to)
     )
   } catch {

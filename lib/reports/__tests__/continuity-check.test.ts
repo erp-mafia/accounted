@@ -9,7 +9,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'range', 'update']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'update']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {

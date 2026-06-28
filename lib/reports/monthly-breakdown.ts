@@ -63,6 +63,8 @@ export async function generateMonthlyBreakdown(
         .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
         .eq('journal_entries.company_id', companyId)
         .eq('journal_entries.status', 'posted')
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
         .range(from, to)
     )
   } catch {

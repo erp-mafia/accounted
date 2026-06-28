@@ -73,6 +73,9 @@ export async function generateSalaryJournal(
       .eq('salary_runs.period_year', year)
       .eq('salary_runs.status', 'booked')
       .order('created_at')
+      // id tiebreaker — created_at is not unique, so it alone is not a stable
+      // total order for paging (see fetch-all.ts).
+      .order('id', { ascending: true })
       .range(from, to)
   )
 

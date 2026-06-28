@@ -209,6 +209,8 @@ export async function estimateArchiveSize(
         .eq('company_id', companyId)
         .eq('fiscal_period_id', periodId)
         .in('status', ['posted', 'reversed'])
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
         .range(from, to)
     )
     const ids = periodEntryIds.map((e) => e.id)
@@ -345,6 +347,8 @@ async function writeDocuments(
         )
         .eq('company_id', companyId)
         .not('journal_entry_id', 'is', null)
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
         .range(from, to)
     )
 
@@ -729,6 +733,9 @@ async function buildEntryToPeriodMap(
   } else {
     query = query.in('fiscal_period_id', periodIds)
   }
+
+  // Stable total order for correct paging (see fetch-all.ts).
+  query = query.order('id', { ascending: true })
 
   const entries = await fetchAllRows<{ id: string; fiscal_period_id: string }>(({ from, to }) =>
     query.range(from, to)
