@@ -46,6 +46,9 @@ function buildCapturingSupabase(opts?: {
       return {
         select: () => ({
           eq: () => ({
+            // Mirrors the stable `.order('account_number')` the sync query now
+            // chains before `.range()` for paging stability.
+            order: () => ({
             range: (from: number, to: number) => ({
               then: (
                 resolve: (v: {
@@ -59,6 +62,7 @@ function buildCapturingSupabase(opts?: {
                 }
                 resolve({ data: existing.slice(from, to + 1), error: null })
               },
+            }),
             }),
           }),
         }),

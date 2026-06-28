@@ -154,6 +154,11 @@ export async function syncMappedAccounts(
           .from('chart_of_accounts')
           .select('account_number, account_name')
           .eq('company_id', companyId)
+          // Stable total order on the unique account_number — paging is only
+          // correct with a deterministic order, else rows duplicate/skip across
+          // pages (see fetch-all.ts ordering invariant). The result is read into
+          // a Map below, so this order is invisible to callers.
+          .order('account_number', { ascending: true })
           .range(from, to)
     )
     existingByNumber = new Map(
