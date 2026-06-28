@@ -17,6 +17,29 @@ function sanitizeProgramName(str: string): string {
  * Format: CP437 encoded text file (we'll use UTF-8 as modern systems accept it)
  * Line format: #TAG field1 field2 ...
  */
+// Unicode codepoint → CP437 byte for characters used in Swedish accounting data.
+// Covers all six Swedish vowel variants plus common Western European accented letters.
+const CP437: Record<number, number> = {
+  0x00C7: 0x80, 0x00FC: 0x81, 0x00E9: 0x82, 0x00E2: 0x83,
+  0x00E4: 0x84, 0x00E0: 0x85, 0x00E5: 0x86, 0x00E7: 0x87,
+  0x00EA: 0x88, 0x00EB: 0x89, 0x00E8: 0x8A, 0x00EF: 0x8B,
+  0x00EE: 0x8C, 0x00EC: 0x8D, 0x00C4: 0x8E, 0x00C5: 0x8F,
+  0x00C9: 0x90, 0x00E6: 0x91, 0x00C6: 0x92, 0x00F4: 0x93,
+  0x00F6: 0x94, 0x00F2: 0x95, 0x00FB: 0x96, 0x00F9: 0x97,
+  0x00FF: 0x98, 0x00D6: 0x99, 0x00DC: 0x9A, 0x00A2: 0x9B,
+  0x00A3: 0x9C, 0x00A5: 0x9D, 0x00E1: 0xA0, 0x00ED: 0xA1,
+  0x00F3: 0xA2, 0x00FA: 0xA3, 0x00F1: 0xA4, 0x00D1: 0xA5,
+}
+
+export function encodeSIEToCP437(text: string): Uint8Array {
+  const bytes: number[] = []
+  for (const char of text) {
+    const cp = char.codePointAt(0)!
+    bytes.push(cp < 0x80 ? cp : (CP437[cp] ?? 0x3F))
+  }
+  return new Uint8Array(bytes)
+}
+
 export async function generateSIEExport(
   supabase: SupabaseClient,
   companyId: string,
@@ -139,7 +162,7 @@ export async function generateSIEExport(
 
   // === Header ===
   lines.push('#FLAGGA 0')
-  lines.push('#FORMAT PC8')
+  if (options.emit_format_pc8) lines.push('#FORMAT PC8')
   lines.push('#SIETYP 4')
   const programName = sanitizeProgramName(options.program_name || getBranding().appName)
   lines.push(`#PROGRAM "${programName}" "1.0"`)

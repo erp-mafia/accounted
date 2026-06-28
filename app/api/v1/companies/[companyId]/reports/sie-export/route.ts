@@ -12,7 +12,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ErrorResponse } from '@/lib/api/v1/errors'
 import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
-import { generateSIEExport } from '@/lib/reports/sie-export'
+import { generateSIEExport, encodeSIEToCP437 } from '@/lib/reports/sie-export'
 
 registerEndpoint({
   operation: 'reports.sie-export',
@@ -28,7 +28,7 @@ registerEndpoint({
   pitfalls: [
     '`period_id` is required.',
     'The response is text/plain with Content-Disposition: attachment — clients should treat as a binary download. Filename uses the pattern `export_{period_id}.se`.',
-    'Encoding is UTF-8 (modern systems accept it; some legacy Swedish bookkeeping software still expects CP437/Latin-1 — convert client-side if needed).',
+    'Default encoding is UTF-8 (no #FORMAT PC8 tag). Pass `encoding=cp437` to get a spec-compliant CP437-encoded file with #FORMAT PC8, required by some legacy desktop bookkeeping software.',
     'Only `posted` entries are exported; drafts and reversed entries\' originals are included but marked accordingly.',
   ],
   example: {
@@ -53,7 +53,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     })
     if (!period.ok) return period.response
 
-    const excludeClosing = new URL(request.url).searchParams.get('exclude_closing') === 'true'
+    const { searchParams } = new URL(request.url)
+    const excludeClosing = searchParams.get('exclude_closing') === 'true'
+    const useCP437 = searchParams.get('encoding') === 'cp437'
 
     const { data: company, error: companyErr } = await ctx.supabase
       .from('company_settings')
@@ -74,6 +76,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           company_name: (company as { company_name: string | null }).company_name || 'Unknown',
           org_number: (company as { org_number: string | null }).org_number,
           exclude_year_end_closing: excludeClosing,
+          emit_format_pc8: useCP437,
         }),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'sie-export' },
     )
@@ -85,10 +88,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // is belt-and-suspenders.
     const safeId = period.period.id.replace(/[^0-9a-fA-F-]/g, '')
 
-    return new NextResponse(gen.result, {
+    const body = useCP437 ? encodeSIEToCP437(gen.result) : gen.result
+    const contentType = useCP437 ? 'application/octet-stream' : 'text/plain; charset=utf-8'
+
+    return new NextResponse(body, {
       status: 200,
       headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Type': contentType,
         'Content-Disposition': `attachment; filename="export_${safeId}.se"`,
         'X-Request-Id': ctx.requestId,
       },

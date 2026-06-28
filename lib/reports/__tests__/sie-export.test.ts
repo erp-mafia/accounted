@@ -83,13 +83,13 @@ describe('generateSIEExport', () => {
     const lines = output.split('\r\n')
 
     expect(lines[0]).toBe('#FLAGGA 0')
-    expect(lines[1]).toBe('#FORMAT PC8')
-    expect(lines[2]).toBe('#SIETYP 4')
-    expect(lines[3]).toMatch(/^#PROGRAM "ERPBase" "1\.0"$/)
-    expect(lines[4]).toMatch(/^#GEN \d{8}$/)
-    expect(lines[5]).toBe('#ORGNR 556677-8899')
-    expect(lines[6]).toBe('#FNAMN "Test AB"')
-    expect(lines[7]).toBe('#RAR 0 20240101 20241231')
+    expect(lines[1]).toBe('#SIETYP 4')
+    expect(lines[2]).toMatch(/^#PROGRAM "ERPBase" "1\.0"$/)
+    expect(lines[3]).toMatch(/^#GEN \d{8}$/)
+    expect(lines[4]).toBe('#ORGNR 556677-8899')
+    expect(lines[5]).toBe('#FNAMN "Test AB"')
+    expect(lines[6]).toBe('#RAR 0 20240101 20241231')
+    expect(output).not.toContain('#FORMAT PC8')
   })
 
   it('omits #ORGNR when org_number is null', async () => {
