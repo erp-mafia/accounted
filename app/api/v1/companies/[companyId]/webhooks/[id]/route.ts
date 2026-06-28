@@ -19,7 +19,7 @@
 import { z } from 'zod'
 import { ok, noContent } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
@@ -91,7 +91,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: WebhookDetail },
+  response: { success: dataEnvelope(WebhookDetail) },
 })
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
@@ -153,7 +153,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: true,
   request: { body: PatchWebhookSchema },
-  response: { success: WebhookDetail },
+  response: { success: dataEnvelope(WebhookDetail) },
 })
 
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
@@ -299,7 +299,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: z.object({ deleted: z.boolean() }) },
+  response: { success: NoBodyResponse },
 })
 
 export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(

@@ -12,7 +12,7 @@
 
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
@@ -56,7 +56,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: false,
   request: { body: Body },
-  response: { success: OpeningBalancesResponse },
+  response: { success: dataEnvelope(OpeningBalancesResponse) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(

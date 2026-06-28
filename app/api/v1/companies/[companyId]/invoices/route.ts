@@ -23,7 +23,7 @@ import {
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
 import { parseExpand } from '@/lib/api/v1/expand'
-import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
@@ -372,7 +372,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: true,
   request: { body: CreateInvoiceSchema },
-  response: { success: InvoiceCreated },
+  response: { success: dataEnvelope(InvoiceCreated) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(

@@ -16,7 +16,7 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { parseExpand } from '@/lib/api/v1/expand'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 
@@ -108,7 +108,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: InvoiceDetail },
+  response: { success: dataEnvelope(InvoiceDetail) },
 })
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
@@ -210,7 +210,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: true,
   request: { body: V1PatchDraftInvoiceSchema },
-  response: { success: InvoiceDetail },
+  response: { success: dataEnvelope(InvoiceDetail) },
 })
 
 const INVOICE_PATCH_RESPONSE_COLUMNS =

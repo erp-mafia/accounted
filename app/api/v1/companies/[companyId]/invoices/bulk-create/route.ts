@@ -36,7 +36,7 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
@@ -128,7 +128,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: true,
   request: { body: BulkCreateRequest },
-  response: { success: BulkCreateResponse },
+  response: { success: dataEnvelope(BulkCreateResponse) },
 })
 
 interface ResultItem {

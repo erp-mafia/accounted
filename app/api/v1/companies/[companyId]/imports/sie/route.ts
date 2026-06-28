@@ -24,7 +24,7 @@
 
 import { z } from 'zod'
 import { accepted } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import {
@@ -94,7 +94,7 @@ registerEndpoint({
   reversible: false,
   dryRunSupported: false,
   request: { contentType: 'multipart/form-data' },
-  response: { success: SieImportAccepted },
+  response: { success: dataEnvelope(SieImportAccepted) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(

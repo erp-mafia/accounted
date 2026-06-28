@@ -209,7 +209,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: true,
   request: { body: CreateWebhookSchema },
-  response: { success: WebhookCreated },
+  response: { success: dataEnvelope(WebhookCreated) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(

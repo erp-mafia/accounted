@@ -22,14 +22,30 @@ import type { ApiKeyScope } from '@/lib/auth/api-keys'
 import { API_V1_VERSION } from './version'
 
 /**
+ * The audit block surfaced inline on write responses (see `AuditBlock` in
+ * `lib/api/v1/response.ts`) so an agent gets the voucher number / audit-trail
+ * URL without a second round-trip. Every field is optional.
+ */
+const ResponseAuditSchema = z.object({
+  voucher_number: z.string().optional(),
+  voucher_url: z.string().optional(),
+  audit_trail_url: z.string().optional(),
+  immutable_at: z.string().optional(),
+})
+
+/**
  * The `meta` block echoed in every v1 response envelope (see
  * `lib/api/v1/response.ts`). List endpoints additionally populate
- * `next_cursor`; it is absent on the final page.
+ * `next_cursor`; it is absent on the final page. Writes may surface an
+ * `audit` block, and soft-degraded `?expand=` responses a `partial_expansions`
+ * list — both optional, so reads and lists omit them.
  */
 export const ResponseMetaSchema = z.object({
   request_id: z.string(),
   api_version: z.string(),
   next_cursor: z.string().nullable().optional(),
+  audit: ResponseAuditSchema.optional(),
+  partial_expansions: z.array(z.string()).optional(),
 })
 
 /**
@@ -65,6 +81,18 @@ export function dataEnvelope<T extends ZodTypeAny>(data: T) {
     meta: ResponseMetaSchema,
   })
 }
+
+/**
+ * Sentinel `response.success` for endpoints that return 204 No Content with an
+ * empty body — e.g. DELETE handlers calling `noContent()`. The OpenAPI
+ * generator emits a bare `204` response (no schema) for these instead of a
+ * `200 { data, meta }`, and the envelope contract test exempts them.
+ *
+ * Identified by REFERENCE equality, so every 204 route MUST import this exact
+ * constant rather than declaring its own `z.object({})` — that is what lets the
+ * generator and the contract test recognise the "no body" intent.
+ */
+export const NoBodyResponse = z.object({})
 
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 
@@ -327,6 +355,13 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       ? { [def.response.contentType]: { schema: { type: 'string', format: 'binary' } } }
       : { 'application/json': { schema: zodToJsonSchema(def.response.success) } }
 
+    // 204 No Content endpoints (DELETEs returning noContent()) carry no body —
+    // emit a bare 204 instead of a 200 { data, meta } so the spec stops
+    // advertising a response shape these handlers never send.
+    const successResponse = def.response.success === NoBodyResponse
+      ? { '204': { description: 'No Content' } }
+      : { '200': { description: 'Success', content: successContent } }
+
     const operationDef: Record<string, unknown> = {
       operationId: def.operation,
       summary: def.summary,
@@ -343,10 +378,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-dry-run-supported': def.dryRunSupported,
       ...(def.scope ? { 'x-required-scope': def.scope } : {}),
       responses: {
-        '200': {
-          description: 'Success',
-          content: successContent,
-        },
+        ...successResponse,
         '400': { description: 'Validation error', $ref: '#/components/responses/Error' },
         '401': { description: 'Unauthorized', $ref: '#/components/responses/Error' },
         '403': { description: 'Insufficient scope', $ref: '#/components/responses/Error' },

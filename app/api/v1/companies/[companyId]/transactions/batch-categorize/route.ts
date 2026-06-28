@@ -12,7 +12,7 @@
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -102,7 +102,7 @@ registerEndpoint({
   reversible: true,
   dryRunSupported: true,
   request: { body: BatchRequest },
-  response: { success: BatchResponse },
+  response: { success: dataEnvelope(BatchResponse) },
 })
 
 interface Item {

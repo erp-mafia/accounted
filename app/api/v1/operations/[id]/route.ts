@@ -16,7 +16,7 @@
 
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { getOperation } from '@/lib/api/v1/operations'
@@ -76,7 +76,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: OperationDetail },
+  response: { success: dataEnvelope(OperationDetail) },
 })
 
 export const GET = withApiV1<{ params: Promise<{ id: string }> }>(

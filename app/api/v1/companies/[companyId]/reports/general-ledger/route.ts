@@ -8,7 +8,7 @@
 
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -43,7 +43,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: GeneralLedgerResponse },
+  response: { success: dataEnvelope(GeneralLedgerResponse) },
 })
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(

@@ -7,7 +7,7 @@
 
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 
@@ -45,7 +45,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: HealthResponse },
+  response: { success: dataEnvelope(HealthResponse) },
 })
 
 export const GET = withApiV1('health.check', async (_request, ctx) => {

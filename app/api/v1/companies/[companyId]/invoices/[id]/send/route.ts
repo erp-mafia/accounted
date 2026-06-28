@@ -39,7 +39,7 @@ import { z } from 'zod'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
@@ -113,7 +113,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
-  response: { success: InvoiceSendResponse },
+  response: { success: dataEnvelope(InvoiceSendResponse) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
