@@ -38,7 +38,7 @@ export const GET = withRouteContext(
         emit_format_pc8: useCP437,
       })
 
-      const body = useCP437 ? encodeSIEToCP437(sieContent) : sieContent
+      const body = useCP437 ? Buffer.from(encodeSIEToCP437(sieContent)) : sieContent
       const contentType = useCP437 ? 'application/octet-stream' : 'text/plain; charset=utf-8'
 
       return new NextResponse(body, {

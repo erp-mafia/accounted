@@ -88,7 +88,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // is belt-and-suspenders.
     const safeId = period.period.id.replace(/[^0-9a-fA-F-]/g, '')
 
-    const body = useCP437 ? encodeSIEToCP437(gen.result) : gen.result
+    const body = useCP437 ? Buffer.from(encodeSIEToCP437(gen.result)) : gen.result
     const contentType = useCP437 ? 'application/octet-stream' : 'text/plain; charset=utf-8'
 
     return new NextResponse(body, {
