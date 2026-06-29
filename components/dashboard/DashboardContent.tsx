@@ -11,11 +11,8 @@ import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import {
-  Receipt,
-  ArrowLeftRight,
   ChevronRight,
   CheckCircle2,
-  Clock,
   ArrowRight,
   MessageCircle,
 } from 'lucide-react'
@@ -114,67 +111,15 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
   // header so the tile and the section never disagree.
   const todoCount = worklist.total + (summary.expiringBankConnections?.length ?? 0)
 
-  // Pick the single most-urgent next action so the launchpad surfaces one
-  // unambiguous CTA. Order matches the friction we actually want to remove
-  // first: stale → overdue → uncategorized → unpaid → all clear.
-  const nextBestAction = (() => {
-    if (summary.staleUncategorizedCount > 0) {
-      return {
-        href: '/transactions',
-        title: 'Gamla transaktioner väntar',
-        body: `${summary.staleUncategorizedCount} transaktion${summary.staleUncategorizedCount === 1 ? '' : 'er'} äldre än 14 dagar saknar bokföring.`,
-        cta: 'Bokför nu',
-        tone: 'destructive' as const,
-        icon: Clock,
-      }
-    }
-    if (summary.overdueInvoicesCount > 0) {
-      return {
-        href: '/invoices?status=unpaid',
-        title: 'Förfallna fakturor',
-        body: `${summary.overdueInvoicesCount} st · ${formatCurrency(summary.unpaidInvoicesTotal)}`,
-        cta: 'Gå till fakturor',
-        tone: 'destructive' as const,
-        icon: Receipt,
-      }
-    }
-    if (worklist.counts.book_transaction > 0) {
-      const n = worklist.counts.book_transaction
-      return {
-        href: '/transactions',
-        title: 'Transaktioner att bokföra',
-        body: `${n} obokförd${n === 1 ? '' : 'a'} transaktion${n === 1 ? '' : 'er'}.`,
-        cta: 'Bokför nu',
-        tone: 'primary' as const,
-        icon: ArrowLeftRight,
-      }
-    }
-    if (summary.unpaidInvoicesCount > 0) {
-      return {
-        href: '/invoices?status=unpaid',
-        title: 'Obetalda fakturor',
-        body: `${summary.unpaidInvoicesCount} st · ${formatCurrency(summary.unpaidInvoicesTotal)}`,
-        cta: 'Visa fakturor',
-        tone: 'primary' as const,
-        icon: Receipt,
-      }
-    }
-    return {
-      href: '/invoices/new',
-      title: 'Allt är ikapp',
-      body: 'Inga obokförda transaktioner och inga obetalda fakturor. Skicka nästa faktura?',
-      cta: 'Skapa faktura',
-      tone: 'neutral' as const,
-      icon: CheckCircle2,
-    }
-  })()
-
   return (
     <div className="stagger-enter space-y-8">
-      {!agentBuilt ? (
-        /* Build-assistant hero — shown until the company has a verified
-           agent_profile. Takes the hero slot so existing/migrated users get a
-           clear prompt instead of a full-screen onboarding takeover. */
+      {/* Build-assistant hero — shown only until the company has a verified
+          agent_profile, so existing/migrated users get a clear prompt instead
+          of a full-screen onboarding takeover. Once the assistant is built the
+          dashboard leads with the metrics + the unified "Att göra" worklist
+          below; we deliberately drop a next-best-action hero here so the page
+          has a single CTA surface instead of two that point at the same work. */}
+      {!agentBuilt && (
         <section>
           <Link href="/onboarding/agent" className="block group">
             <Card className="transition-colors hover:border-primary/50">
@@ -193,38 +138,6 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
                 </div>
                 <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
                   <span>Kom igång</span>
-                  <ArrowRight className="h-4 w-4" />
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        </section>
-      ) : (
-        /* Next best action — single hero card, shown for every agent-built
-           company regardless of nav density so there is always one clear CTA */
-        <section>
-          <Link href={nextBestAction.href} className="block group">
-            <Card className={cn(
-              'transition-colors',
-              nextBestAction.tone === 'destructive' && 'border-destructive/30 hover:bg-destructive/[0.03]',
-              nextBestAction.tone === 'primary' && 'hover:border-primary/50',
-              nextBestAction.tone === 'neutral' && 'hover:border-primary/30',
-            )}>
-              <CardContent className="p-6 flex items-center gap-5">
-                <div className={cn(
-                  'flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center',
-                  nextBestAction.tone === 'destructive' && 'bg-destructive/10 text-destructive',
-                  nextBestAction.tone === 'primary' && 'bg-secondary text-foreground',
-                  nextBestAction.tone === 'neutral' && 'bg-secondary text-foreground',
-                )}>
-                  <nextBestAction.icon className="h-5 w-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-display text-xl leading-tight">{nextBestAction.title}</p>
-                  <p className="text-sm text-muted-foreground mt-1">{nextBestAction.body}</p>
-                </div>
-                <div className="flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                  <span>{nextBestAction.cta}</span>
                   <ArrowRight className="h-4 w-4" />
                 </div>
               </CardContent>
