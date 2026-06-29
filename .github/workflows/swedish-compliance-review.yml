@@ -41,6 +41,7 @@ jobs:
       - name: Resolve PR number
         id: pr
         run: |
+          set -euo pipefail
           NUM=$(cat pr-number.txt)
           # Guard: pr-number.txt must be a plain integer (artifact is untrusted input).
           if ! [[ "$NUM" =~ ^[0-9]+$ ]]; then
@@ -49,7 +50,10 @@ jobs:
           fi
           echo "number=$NUM" >> "$GITHUB_OUTPUT"
       - name: Install Anthropic Bedrock SDK
-        run: npm install --no-save --no-package-lock @anthropic-ai/bedrock-sdk@latest
+        # Pinned exact version + --ignore-scripts: this is the privileged job
+        # (write token in env), so no floating @latest and no dependency
+        # lifecycle scripts may execute here.
+        run: npm install --no-save --no-package-lock --ignore-scripts @anthropic-ai/bedrock-sdk@0.31.0
       - name: Run compliance review
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

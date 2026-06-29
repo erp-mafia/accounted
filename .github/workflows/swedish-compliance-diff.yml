@@ -24,15 +24,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Compute diff vs base
+        # Pass GitHub context via env, never interpolate ${{ }} into the shell
+        # body — expression substitution happens before bash parses the script,
+        # so a value with shell metacharacters would be a code-execution sink.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           # Full fetch (not --depth=1): the PR branch may be behind base, and a
           # shallow base can leave merge-base with no reachable common ancestor.
           # checkout above uses fetch-depth: 0, so HEAD already has full history.
-          git fetch origin "${{ github.base_ref }}"
-          MERGE_BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          git fetch origin "$BASE_REF"
+          MERGE_BASE=$(git merge-base "origin/$BASE_REF" HEAD)
           git diff "$MERGE_BASE" HEAD > diff.patch
           git diff --name-only "$MERGE_BASE" HEAD > files.txt
-          echo "${{ github.event.pull_request.number }}" > pr-number.txt
+          printf '%s\n' "$PR_NUMBER" > pr-number.txt
       - name: Upload diff artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
