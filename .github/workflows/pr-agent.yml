@@ -47,7 +47,7 @@ jobs:
     steps:
       - name: The PR Agent
         # Pinned to the v0.36.0 commit SHA (immutable) — do not switch to @v0.36.0.
-        uses: The-PR-Agent/pr-agent@85178bef87b7a03081cd30592a5aad100284f9a7 # v0.37.0
+        uses: The-PR-Agent/pr-agent@bd09b6cf89c6d6f3d16b159fa7603fa0e7768cf2 # v0.38.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
