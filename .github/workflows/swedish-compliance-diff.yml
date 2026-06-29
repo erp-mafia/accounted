@@ -25,7 +25,10 @@ jobs:
           fetch-depth: 0
       - name: Compute diff vs base
         run: |
-          git fetch origin "${{ github.base_ref }}" --depth=1
+          # Full fetch (not --depth=1): the PR branch may be behind base, and a
+          # shallow base can leave merge-base with no reachable common ancestor.
+          # checkout above uses fetch-depth: 0, so HEAD already has full history.
+          git fetch origin "${{ github.base_ref }}"
           MERGE_BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
           git diff "$MERGE_BASE" HEAD > diff.patch
           git diff --name-only "$MERGE_BASE" HEAD > files.txt
