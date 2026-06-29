@@ -5,6 +5,7 @@ import {
   disposeAsset,
   updateAsset,
 } from '../assets/asset-service'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import type { Asset } from '@/types'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
@@ -23,9 +24,9 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
       land_improvement: { asset: '1150', accumulated: '1159', expense: '7824' },
       machinery: { asset: '1210', accumulated: '1219', expense: '7831' },
       equipment: { asset: '1220', accumulated: '1229', expense: '7832' },
-      vehicle: { asset: '1240', accumulated: '1249', expense: '7834' },
-      computer: { asset: '1250', accumulated: '1259', expense: '7833' },
-      other_tangible: { asset: '1280', accumulated: '1289', expense: '7839' },
+      vehicle: { asset: '1240', accumulated: '1249', expense: '7832' },
+      computer: { asset: '1250', accumulated: '1259', expense: '7832' },
+      other_tangible: { asset: '1290', accumulated: '1299', expense: '7839' },
     } as const
     expect(DEFAULT_ACCOUNTS_BY_CATEGORY).toEqual(expected)
   })
@@ -46,6 +47,22 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
     >) {
       const expense = DEFAULT_ACCOUNTS_BY_CATEGORY[cat].expense
       expect(expense).toMatch(/^78\d{2}$/)
+    }
+  })
+
+  // Regression guard for #755: 7833/7834 were referenced here but absent from
+  // the BAS reference, so backfillStandardBASAccounts could not seed them and
+  // annual depreciation threw AccountsNotInChartError. Every account in the
+  // triple must resolve in BAS_REFERENCE — otherwise the lazy backfill silently
+  // can't add it and the depreciation posting fails on minimal charts.
+  it('every account in the triple exists in the BAS reference (backfillable)', () => {
+    for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as Array<
+      keyof typeof DEFAULT_ACCOUNTS_BY_CATEGORY
+    >) {
+      const { asset, accumulated, expense } = DEFAULT_ACCOUNTS_BY_CATEGORY[cat]
+      for (const account of [asset, accumulated, expense]) {
+        expect(getBASReference(account), `${cat}: ${account} missing from BAS reference`).toBeDefined()
+      }
     }
   })
 })

@@ -12,8 +12,16 @@ import type {
 
 /**
  * Default BAS account triples per category. The user can override at create
- * time; these only kick in when the form doesn't specify accounts. Matches
- * the seeded BAS 2020 chart (lib/bookkeeping/bas-data/).
+ * time; these only kick in when the form doesn't specify accounts. Every
+ * account here MUST exist in BAS_REFERENCE (lib/bookkeeping/bas-data/) so the
+ * engine's backfillStandardBASAccounts can seed it on a minimal chart —
+ * otherwise depreciation throws AccountsNotInChartError (#755). A guard test in
+ * asset-service.test.ts enforces that invariant.
+ *
+ * vehicle (1240) and computer (1250) both sit in the maskiner-och-inventarier
+ * asset range, so their depreciation maps to 7832 (Avskrivningar på
+ * inventarier, verktyg och installationer) — 7833/7834 are not in the standard
+ * BAS catalog (removed as non-standard in #463).
  */
 export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<
   AssetCategory,
@@ -24,9 +32,9 @@ export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<
   land_improvement: { asset: '1150', accumulated: '1159', expense: '7824' },
   machinery: { asset: '1210', accumulated: '1219', expense: '7831' },
   equipment: { asset: '1220', accumulated: '1229', expense: '7832' },
-  vehicle: { asset: '1240', accumulated: '1249', expense: '7834' },
-  computer: { asset: '1250', accumulated: '1259', expense: '7833' },
-  other_tangible: { asset: '1280', accumulated: '1289', expense: '7839' },
+  vehicle: { asset: '1240', accumulated: '1249', expense: '7832' },
+  computer: { asset: '1250', accumulated: '1259', expense: '7832' },
+  other_tangible: { asset: '1290', accumulated: '1299', expense: '7839' },
 }
 
 export interface CreateAssetInput {
