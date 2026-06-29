@@ -88,6 +88,9 @@ export async function GET(request: Request) {
       p_offset: offset,
       p_exclude_draft: excludeDraft,
       p_collapse_corrections: collapseCorrections,
+      // Series filter lives in the RPC now (#798): filtering here after the RPC
+      // paged would recompute count from one page only, breaking pagination.
+      p_series: seriesFilter,
     })
 
     if (error) {
@@ -95,18 +98,8 @@ export async function GET(request: Request) {
     }
 
     const rows = data ?? []
-    let entries = rows.map((r: { entry: unknown }) => r.entry) as Array<{ voucher_series?: string }>
-    let count = rows.length > 0 ? Number((rows[0] as { total_count: number | string }).total_count) : 0
-
-    // The list_fiscal_period_entries_with_related RPC doesn't accept a series
-    // filter, so post-filter here. Recompute count from the filtered set so
-    // the paginator stays consistent; consequence: when a series filter is
-    // applied, the cross-period follow-up surfacing is still on but the
-    // visible total drops to the matching subset.
-    if (seriesFilter) {
-      entries = entries.filter((e) => (e?.voucher_series ?? 'A') === seriesFilter)
-      count = entries.length
-    }
+    const entries = rows.map((r: { entry: unknown }) => r.entry)
+    const count = rows.length > 0 ? Number((rows[0] as { total_count: number | string }).total_count) : 0
 
     return NextResponse.json({ data: entries, count })
   }

@@ -3,11 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { seedCompany, insertBalancedLines } from '@/tests/pg/fixtures'
 
-// Covers the p_exclude_draft / p_collapse_corrections params added to
-// list_fiscal_period_entries_with_related (migration 20260621130500).
+// Covers the p_exclude_draft / p_collapse_corrections / p_series params on
+// list_fiscal_period_entries_with_related (migrations 20260621130500 +
+// 20260629160000).
 //   - exclude_draft: drafts kept off the committed list (own "Utkast" surface).
 //   - collapse_corrections: a correction group renders as ONE row — the live
 //     correction; the storno and the reversed original it replaced are hidden.
+//   - series: voucher-series filter; pushed into the RPC so total_count reflects
+//     the filtered set (the route used to post-filter and recompute count from
+//     one page, breaking pagination — #798).
 // total_count must stay in lockstep with the filtered set so pagination holds.
 describe('list_fiscal_period_entries_with_related: draft + correction filters', () => {
   // Insert a journal_entry directly so we can set the storno/correction link
@@ -21,6 +25,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     sourceType: string
     voucherNumber: number
     description: string
+    voucherSeries?: string
     reversesId?: string
     correctionOfId?: string
     withLines?: boolean
@@ -30,7 +35,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
           entry_date, description, source_type, status, reverses_id, correction_of_id)
-       VALUES ($1,$2,$3,$4,$5,'A','2026-06-01',$6,$7,$8,$9,$10)`,
+       VALUES ($1,$2,$3,$4,$5,$11,'2026-06-01',$6,$7,$8,$9,$10)`,
       [
         id,
         p.userId,
@@ -42,6 +47,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
         p.status,
         p.reversesId ?? null,
         p.correctionOfId ?? null,
+        p.voucherSeries ?? 'A',
       ],
     )
     if (p.withLines) await insertBalancedLines(id)
@@ -51,13 +57,30 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
   async function callRpc(
     companyId: string,
     periodId: string,
-    opts: { status?: string | null; excludeDraft?: boolean; collapse?: boolean } = {},
+    opts: {
+      status?: string | null
+      excludeDraft?: boolean
+      collapse?: boolean
+      series?: string | null
+      limit?: number
+    } = {},
   ) {
-    const { rows } = await getPool().query<{ entry: { id: string }; total_count: string }>(
+    const { rows } = await getPool().query<{
+      entry: { id: string; voucher_series: string }
+      total_count: string
+    }>(
       `SELECT entry, total_count
          FROM list_fiscal_period_entries_with_related(
-           $1, $2, true, $3, NULL, NULL, 'desc', 100, 0, $4, $5)`,
-      [companyId, periodId, opts.status ?? null, opts.excludeDraft ?? false, opts.collapse ?? false],
+           $1, $2, true, $3, NULL, NULL, 'desc', $6, 0, $4, $5, $7)`,
+      [
+        companyId,
+        periodId,
+        opts.status ?? null,
+        opts.excludeDraft ?? false,
+        opts.collapse ?? false,
+        opts.limit ?? 100,
+        opts.series ?? null,
+      ],
     )
     return rows
   }
@@ -96,5 +119,34 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     // Drafts mode (status=draft). exclude_draft must NOT cancel the explicit ask.
     const rows = await callRpc(companyId, fiscalPeriodId, { status: 'draft', excludeDraft: true })
     expect(rows.map((r) => r.entry.id)).toEqual([draft])
+  })
+
+  it('filters by voucher series with a total_count over the filtered set (#798)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    // 2 entries in series A, 3 in series B.
+    for (const n of [1, 2]) {
+      await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'manual', voucherNumber: n, voucherSeries: 'A', withLines: true, description: `A${n}` })
+    }
+    for (const n of [1, 2, 3]) {
+      await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'manual', voucherNumber: n, voucherSeries: 'B', withLines: true, description: `B${n}` })
+    }
+
+    // No series filter: all 5.
+    const all = await callRpc(companyId, fiscalPeriodId, {})
+    expect(Number(all[0]!.total_count)).toBe(5)
+
+    // series=B returns only the 3 B entries, and total_count is the filtered 3.
+    const seriesB = await callRpc(companyId, fiscalPeriodId, { series: 'B' })
+    expect(seriesB).toHaveLength(3)
+    expect(seriesB.every((r) => r.entry.voucher_series === 'B')).toBe(true)
+    expect(Number(seriesB[0]!.total_count)).toBe(3)
+
+    // The #798 regression: with a page smaller than the filtered set, the page
+    // truncates but total_count still reports the full filtered count (3) — the
+    // paginator can reach every B entry instead of stopping after one page.
+    const firstPage = await callRpc(companyId, fiscalPeriodId, { series: 'B', limit: 2 })
+    expect(firstPage).toHaveLength(2)
+    expect(Number(firstPage[0]!.total_count)).toBe(3)
   })
 })
