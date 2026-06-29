@@ -527,6 +527,19 @@ describe('generateSIEExport', () => {
         ],
         error: null,
       },
+      // journal_entry_lines (allLines) — #824 moved per-entry lines into a single
+      // paged join query; lines map back to entries by journal_entry_id (the inline
+      // entry.lines above are overwritten). The OB entry's lines (excluded from
+      // movement via obEntryId) and the real transfer's lines both flow through here.
+      {
+        data: [
+          { id: 'l1', journal_entry_id: 'ob-entry-1', account_number: '1933', debit_amount: 96466.59, credit_amount: 0, line_description: 'IB 1933', cost_center: null, project: null },
+          { id: 'l2', journal_entry_id: 'ob-entry-1', account_number: '2019', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
+          { id: 'l3', journal_entry_id: 'e2', account_number: '1930', debit_amount: 96466.59, credit_amount: 0, line_description: null, cost_center: null, project: null },
+          { id: 'l4', journal_entry_id: 'e2', account_number: '1933', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
+        ],
+        error: null,
+      },
       { data: [], error: null }, // cost_centers
       { data: [], error: null }, // projects
       // fetchAllRows for OB entry lines (opening_balance_entry_id is set)
