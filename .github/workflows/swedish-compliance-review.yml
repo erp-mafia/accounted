@@ -28,7 +28,11 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     steps:
       # Base repo only — the TRUSTED copy of the script and .claude/skills/.
+      # persist-credentials: false — no later step needs git push creds, so don't
+      # leave the token in .git/config for the steps that handle untrusted input.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
