@@ -74,8 +74,15 @@ export async function generateSIEExport(
       q = q.neq('source_type', 'year_end')
     }
 
-    return q.order('voucher_number').range(from, to)
-  })
+    // Stable TOTAL order: voucher_series + voucher_number is unique per
+    // company+period, so fetchAllRows paging can't duplicate or skip a voucher
+    // across the 1000-row boundary on large years (voucher_number alone is not
+    // unique across series). dedupeBy is defense-in-depth — see fetch-all.ts.
+    return q
+      .order('voucher_series', { ascending: true })
+      .order('voucher_number', { ascending: true })
+      .range(from, to)
+  }, { dedupeBy: (r) => r.id })
 
   // Fetch all lines for those entries, filtered server-side via an inner join
   // so the same company/period/status (and year-end exclusion) constraints
@@ -92,9 +99,11 @@ export async function generateSIEExport(
       q = q.neq('journal_entries.source_type', 'year_end')
     }
 
+    // Stable total order on the line PK so paging can't duplicate/skip a line
+    // across the 1000-row boundary; dedupeBy is the defense-in-depth net.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return q.range(from, to) as any
-  })
+    return q.order('id', { ascending: true }).range(from, to) as any
+  }, { dedupeBy: (r) => r.id })
 
   const linesByEntryId = new Map<string, JournalEntryLine[]>()
   for (const line of allLines) {

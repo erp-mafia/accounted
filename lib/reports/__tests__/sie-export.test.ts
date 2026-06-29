@@ -374,9 +374,9 @@ describe('generateSIEExport', () => {
       status: 'posted',
     }))
 
-    const lines = entries.flatMap((e) => [
-      { journal_entry_id: e.id, account_number: '1510', debit_amount: 100, credit_amount: 0, line_description: null, cost_center: null, project: null },
-      { journal_entry_id: e.id, account_number: '3001', debit_amount: 0, credit_amount: 100, line_description: null, cost_center: null, project: null },
+    const lines = entries.flatMap((e, i) => [
+      { id: `l${i * 2 + 1}`, journal_entry_id: e.id, account_number: '1510', debit_amount: 100, credit_amount: 0, line_description: null, cost_center: null, project: null },
+      { id: `l${i * 2 + 2}`, journal_entry_id: e.id, account_number: '3001', debit_amount: 0, credit_amount: 100, line_description: null, cost_center: null, project: null },
     ])
 
     // fetchAllRows paginates at PAGE_SIZE = 1000; chunk the mock data so the
