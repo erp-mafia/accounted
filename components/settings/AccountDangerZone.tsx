@@ -102,13 +102,13 @@ export function AccountDangerZone() {
 
   return (
     <>
-      <section className="space-y-4 border-t border-border/8 pt-8">
+      <section className="space-y-4 border-t border-border pt-8">
         <h2 className="text-sm font-medium uppercase tracking-wider text-destructive/80">
           {t('heading')}
         </h2>
 
         {hasBlockers && (
-          <div className="rounded-lg border border-border/60 bg-muted/30 p-4 space-y-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
             <p className="text-sm font-medium">{t('blockers_title')}</p>
             <p className="text-sm text-muted-foreground">
               {t('blockers_description')}
@@ -117,7 +117,7 @@ export function AccountDangerZone() {
               {blockers.map((b) => (
                 <li
                   key={b.id}
-                  className="flex items-center justify-between rounded-md border border-border/40 bg-background px-3 py-2"
+                  className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
                 >
                   <span className="text-sm font-medium">{b.name}</span>
                   <Button variant="ghost" size="sm" asChild>

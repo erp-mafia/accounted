@@ -14,7 +14,7 @@ export default function ConsultantEmptyState({ firstName }: ConsultantEmptyState
   return (
     <div className="stagger-enter">
       <header className="mb-16">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
       </header>
@@ -24,7 +24,7 @@ export default function ConsultantEmptyState({ firstName }: ConsultantEmptyState
           <Building2 className="h-5 w-5 text-muted-foreground" />
         </div>
 
-        <h2 className="font-display text-lg font-medium mb-2">
+        <h2 className="font-display text-lg mb-2">
           Inga företag ännu
         </h2>
         <p className="text-sm text-muted-foreground mb-8">
@@ -33,7 +33,7 @@ export default function ConsultantEmptyState({ firstName }: ConsultantEmptyState
 
         <Link
           href="/onboarding"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors active:scale-[0.98]"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           <Plus className="h-4 w-4" />
           Lägg till företag

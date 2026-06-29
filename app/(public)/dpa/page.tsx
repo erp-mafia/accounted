@@ -5,7 +5,7 @@ import { getBranding } from '@/lib/branding/service'
 
 export function generateMetadata(): Metadata {
   return {
-    title: `Personuppgiftsbitradesavtal - ${getBranding().appName}`,
+    title: `Personuppgiftsbiträdesavtal - ${getBranding().appName}`,
   }
 }
 
@@ -16,7 +16,7 @@ export default function DPAPage() {
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="text-center space-y-2">
           <h1 className="font-display text-3xl md:text-4xl tracking-tight text-foreground">
-            Personuppgiftsbitradesavtal (DPA)
+            Personuppgiftsbiträdesavtal (DPA)
           </h1>
           <p className="text-sm text-muted-foreground">
             Enligt GDPR Art. 28 &middot; Senast uppdaterad: 2026-06-03
@@ -112,7 +112,7 @@ export default function DPAPage() {
                 åtkomst</li>
               <li><strong>Integritetskontroll:</strong> SHA-256 checksummor för alla dokument, med
                 regelbunden verifiering</li>
-              <li><strong>Revisionslogg:</strong> Alla ändringshandelser loggas automatiskt av databasen
+              <li><strong>Revisionslogg:</strong> Alla ändringshändelser loggas automatiskt av databasen
                 (ej redigerbara)</li>
               <li><strong>Oföränderlig bokföring:</strong> Bokförda verifikationer kan inte ändras eller
                 raderas (databasutlösare)</li>
@@ -243,7 +243,7 @@ export default function DPAPage() {
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground text-center">
-              Detta personuppgiftsbitradesavtal träder i kraft när du skapar ett konto på
+              Detta personuppgiftsbiträdesavtal träder i kraft när du skapar ett konto på
               {' '}{appName} och gäller så länge du använder tjänsten. För frågor, kontakta oss
               på {privacyEmail}.
             </p>

@@ -51,7 +51,7 @@ export function SuccessAnimation({
 
         {/* Text */}
         <div className="text-center animate-slide-up" style={{ animationDelay: '300ms' }}>
-          <p className="text-lg font-display font-medium">{title}</p>
+          <p className="text-lg font-display">{title}</p>
           {description && (
             <p className="text-sm text-muted-foreground mt-1">{description}</p>
           )}

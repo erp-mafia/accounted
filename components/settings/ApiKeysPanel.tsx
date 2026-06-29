@@ -187,7 +187,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
         aria-label={copyAriaLabel}
       >
         {copied ? (
-          <Check className="h-3.5 w-3.5 text-green-600" />
+          <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}
@@ -700,7 +700,7 @@ export function ApiKeysPanel() {
               onClick={handleCopy}
             >
               {copied ? (
-                <Check className="h-4 w-4 text-green-600" />
+                <Check className="h-4 w-4 text-success" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

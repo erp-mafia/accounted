@@ -1439,7 +1439,7 @@ export default function NewSupplierInvoicePage() {
             {/* Valuta & moms — kept inline with the line items because they
                 drive how each row is interpreted. Hidden defaults (SEK +
                 normal moms) collapse to nothing so most users don't see this. */}
-            <div className="mb-5 pb-5 border-b grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="mb-4 pb-4 border-b grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-1.5">
                 <Label className="text-xs">{t('currency_label')}</Label>
                 <Controller

@@ -108,7 +108,7 @@ export function SkatteverketConnectPanel() {
         </CardHeader>
         <CardContent className="space-y-4">
           {status?.disabled && (
-            <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
               <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
               <p>{t('disabled_message')}</p>
             </div>
@@ -211,7 +211,7 @@ export function SkatteverketConnectPanel() {
         </div>
 
         {status.disabled && (
-          <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+          <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
             <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
             <p>{t('disabled_filings_message')}</p>
           </div>

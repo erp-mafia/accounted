@@ -188,7 +188,7 @@ function MfaEnrollContent() {
             </p>
           </div>
 
-          <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+          <div className="rounded-lg border bg-card p-6">
             <div className="space-y-4">
               <div className="rounded-lg border bg-muted/50 p-4">
                 <p className="text-sm text-muted-foreground leading-relaxed">
@@ -242,7 +242,7 @@ function MfaEnrollContent() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6 space-y-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-lg border bg-card p-6 space-y-6">
           {/* QR Code */}
           <div className="flex justify-center">
             <div

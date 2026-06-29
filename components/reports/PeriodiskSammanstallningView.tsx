@@ -200,19 +200,19 @@ export function PeriodiskSammanstallningView() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <div className="text-xs text-muted-foreground uppercase tracking-wider">Tjänster (typ 3)</div>
-                  <div className="font-display text-xl font-medium tabular-nums">
+                  <div className="font-display text-xl tabular-nums">
                     {formatAmount(data.totals.services)} kr
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground uppercase tracking-wider">Varor (typ 1)</div>
-                  <div className="font-display text-xl font-medium tabular-nums">
+                  <div className="font-display text-xl tabular-nums">
                     {formatAmount(data.totals.goods)} kr
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground uppercase tracking-wider">Trepart (typ 2)</div>
-                  <div className="font-display text-xl font-medium tabular-nums">
+                  <div className="font-display text-xl tabular-nums">
                     {formatAmount(data.totals.triangulation)} kr
                   </div>
                 </div>
@@ -260,7 +260,7 @@ export function PeriodiskSammanstallningView() {
               <CardHeader>
                 <CardTitle className="text-base text-destructive flex items-center gap-2">
                   <AlertCircle className="h-4 w-4" />
-                  {errors.length} {errors.length === 1 ? 'fel måste' : 'fel måste'} åtgärdas
+                  {errors.length} fel måste åtgärdas
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">

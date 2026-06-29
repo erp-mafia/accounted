@@ -123,7 +123,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         <section>
           <Link href="/onboarding/agent" className="block group">
             <Card className="transition-colors hover:border-primary/50">
-              <CardContent className="p-6 flex items-center gap-5">
+              <CardContent className="p-6 flex items-center gap-4">
                 <div className="flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center bg-foreground text-background">
                   <MessageCircle className="h-5 w-5" />
                 </div>

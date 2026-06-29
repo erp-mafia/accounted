@@ -82,7 +82,7 @@ export default function KpiPage() {
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
         <div className="flex gap-2">
           <KPISettingsDialog
             preferences={preferences}

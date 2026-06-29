@@ -203,7 +203,7 @@ export default function CustomerDetailPage({
               <Icon className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{customer.name}</h1>
+              <h1 className="font-display text-2xl md:text-3xl tracking-tight">{customer.name}</h1>
               <Badge variant="secondary">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</Badge>
             </div>
           </div>

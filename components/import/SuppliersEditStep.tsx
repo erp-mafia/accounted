@@ -193,7 +193,8 @@ export default function SuppliersEditStep({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="h-8 w-8"
+                      aria-label="Ta bort rad"
                       onClick={() => deleteRow(row.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />

@@ -123,8 +123,8 @@ export default function TransactionAttachDocumentDialog({
           <div
             className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${
               isIncome
-                ? 'bg-success/10 text-success'
-                : 'bg-destructive/10 text-destructive'
+                ? 'text-success'
+                : 'text-destructive'
             }`}
           >
             {isIncome ? (

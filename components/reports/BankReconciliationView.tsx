@@ -1063,7 +1063,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                 <tbody>
                   {ignoredTx.map((tx) => (
                     <tr key={tx.id} className="border-b last:border-0 text-muted-foreground">
-                      <td className="py-2">{tx.date}</td>
+                      <td className="py-2 tabular-nums">{formatDate(tx.date)}</td>
                       <td className="py-2 truncate max-w-[300px]">{tx.description}</td>
                       <td className="py-2 text-xs">
                         <Badge variant="outline" className="text-xs">{tx.currency}</Badge>
@@ -1123,7 +1123,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                 <tbody>
                   {matchedTx.map((tx) => (
                     <tr key={tx.id} className="border-b last:border-0">
-                      <td className="py-2">{tx.date}</td>
+                      <td className="py-2 tabular-nums">{formatDate(tx.date)}</td>
                       <td className="py-2 truncate max-w-[300px]">{tx.description}</td>
                       <td className="py-2 text-right tabular-nums">
                         {formatCurrency(tx.amount)}

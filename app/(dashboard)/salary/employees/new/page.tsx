@@ -92,7 +92,7 @@ export default function NewEmployeePage() {
         <Button variant="ghost" size="icon" asChild>
           <Link href="/salary/employees" aria-label="Tillbaka till anställda"><ArrowLeft className="h-4 w-4" /></Link>
         </Button>
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Ny anställd</h1>
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">Ny anställd</h1>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">

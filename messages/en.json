@@ -604,6 +604,7 @@
     "weak_title": "Password too weak",
     "weak_description": "Password must be at least 8 characters and include uppercase, lowercase, digits, and a special character.",
     "mismatch_title": "Passwords don't match",
+    "mismatch_description": "Make sure you entered the same password in both fields.",
     "save_failed_title": "Could not save password",
     "save_failed_description": "Please try again."
   },
@@ -739,6 +740,7 @@
     "default_payment_terms_label": "Payment terms (days)",
     "default_account_label": "Default account",
     "default_account_placeholder": "e.g. 5410",
+    "default_currency_label": "Default currency",
     "notes_label": "Notes",
     "notes_placeholder": "Internal notes about the supplier...",
     "submit_save": "Save supplier",

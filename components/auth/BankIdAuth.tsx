@@ -441,7 +441,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
             className="gap-1.5 text-muted-foreground"
           >
             <Monitor className="h-3.5 w-3.5" />
-            BankID pa den har enheten
+            BankID på den här enheten
           </Button>
         </>
       )}
@@ -449,7 +449,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
       {isMobile() && (
         <div className="flex flex-col items-center gap-2">
           <Smartphone className="h-8 w-8 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Oppnar BankID-appen...</p>
+          <p className="text-sm text-muted-foreground">Öppnar BankID-appen...</p>
         </div>
       )}
 

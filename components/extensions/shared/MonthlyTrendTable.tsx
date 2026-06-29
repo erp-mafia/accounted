@@ -28,7 +28,7 @@ export default function MonthlyTrendTable({
 }: MonthlyTrendTableProps) {
   if (rows.length === 0) {
     return (
-      <div className={cn('rounded-xl border p-6 text-center text-sm text-muted-foreground', className)}>
+      <div className={cn('rounded-lg border p-6 text-center text-sm text-muted-foreground', className)}>
         Ingen data att visa
       </div>
     )
@@ -38,7 +38,7 @@ export default function MonthlyTrendTable({
   const fmt = formatValue ?? ((v: number) => v.toLocaleString('sv-SE'))
 
   return (
-    <div className={cn('rounded-xl border', className)}>
+    <div className={cn('rounded-lg border', className)}>
       <Table>
         <TableHeader>
           <TableRow>

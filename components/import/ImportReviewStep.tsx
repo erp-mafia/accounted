@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import {
   CheckCircle,
   AlertCircle,
@@ -183,7 +183,7 @@ export default function ImportReviewStep({
                   {preview.voucherCount} verifikationer bearbetas
                 </p>
               </div>
-              <div className="text-2xl font-display font-medium tabular-nums text-muted-foreground">
+              <div className="text-2xl font-display tabular-nums text-muted-foreground">
                 {elapsed}s
               </div>
               <p className="text-sm text-muted-foreground max-w-sm">
@@ -224,11 +224,11 @@ export default function ImportReviewStep({
                 <p className="font-medium">Räkenskapsår</p>
                 <p className="text-sm text-muted-foreground">
                   {preview.fiscalYearStart
-                    ? new Date(preview.fiscalYearStart).toLocaleDateString('sv-SE')
+                    ? formatDate(preview.fiscalYearStart)
                     : '?'}{' '}
                   -{' '}
                   {preview.fiscalYearEnd
-                    ? new Date(preview.fiscalYearEnd).toLocaleDateString('sv-SE')
+                    ? formatDate(preview.fiscalYearEnd)
                     : '?'}
                 </p>
               </div>

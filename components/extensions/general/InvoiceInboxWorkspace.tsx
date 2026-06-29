@@ -1225,7 +1225,7 @@ function OnboardingCard({
     {
       done: hasAnyItem,
       title: 'Ladda upp eller maila in ett underlag',
-      hint: 'accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
+      hint: 'Accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
     },
     {
       done: hasResolvedItem,
@@ -1589,7 +1589,7 @@ function FieldsRail({
               AI-tolkning ingår i abonnemanget
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Uppgradera för att låta accounted läsa av leverantör, belopp och
+              Uppgradera för att låta Accounted läsa av leverantör, belopp och
               moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
               koppla dokumentet till en transaktion nedan.
             </p>

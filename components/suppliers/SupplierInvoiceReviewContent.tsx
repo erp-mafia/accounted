@@ -5,7 +5,7 @@ import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import {
   resolveReverseChargeRate,
   isReverseChargeBasisAccount,
@@ -276,16 +276,16 @@ export function SupplierInvoiceReviewContent({
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-sm">
         <div>
           <span className="text-muted-foreground">{t('invoice_date_label')}</span>
-          <p className="font-medium">{invoiceDate}</p>
+          <p className="font-medium">{formatDate(invoiceDate)}</p>
         </div>
         <div>
           <span className="text-muted-foreground">{t('due_date_label')}</span>
-          <p className="font-medium">{dueDate}</p>
+          <p className="font-medium">{formatDate(dueDate)}</p>
         </div>
         {deliveryDate && (
           <div>
             <span className="text-muted-foreground">{t('delivery_date_label')}</span>
-            <p className="font-medium">{deliveryDate}</p>
+            <p className="font-medium">{formatDate(deliveryDate)}</p>
           </div>
         )}
       </div>
@@ -380,21 +380,21 @@ export function SupplierInvoiceReviewContent({
       <div className="space-y-2 text-sm">
         <div className="flex justify-between">
           <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-          <span>{formatCurrency(subtotal, currency)}</span>
+          <span className="tabular-nums">{formatCurrency(subtotal, currency)}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-muted-foreground">{reverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}</span>
-          <span>{formatCurrency(totalVat, currency)}</span>
+          <span className="tabular-nums">{formatCurrency(totalVat, currency)}</span>
         </div>
         <Separator />
         <div className="flex justify-between font-bold text-xl sm:text-2xl">
           <span>{t('total_label')}</span>
-          <span>{formatCurrency(total, currency)}</span>
+          <span className="tabular-nums">{formatCurrency(total, currency)}</span>
         </div>
         {currency !== 'SEK' && exchangeRate && (
           <div className="flex justify-between text-muted-foreground">
             <span>{t('review_sek_amount_at_rate', { rate: exchangeRate })}</span>
-            <span>{formatCurrency(total * parseFloat(exchangeRate))}</span>
+            <span className="tabular-nums">{formatCurrency(total * parseFloat(exchangeRate))}</span>
           </div>
         )}
       </div>

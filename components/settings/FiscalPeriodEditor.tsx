@@ -174,7 +174,7 @@ export function FiscalPeriodEditor() {
 
   return (
     <>
-      <section className="space-y-4 border-t border-border/8 pt-8">
+      <section className="space-y-4 border-t border-border pt-8">
         <div className="space-y-1">
           <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
             {t('fp_heading')}
@@ -286,7 +286,7 @@ function BlockedState({
       : t('fp_blocked_reason_posted', { count: postedCount })
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/30 p-4 space-y-3">
+    <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
       <div className="flex gap-2">
         <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
         <div className="space-y-1">

@@ -808,7 +808,7 @@ function ManualEntryEditor({
     <div className="rounded-md border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2">
+        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2" aria-label="Ta bort">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>

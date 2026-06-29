@@ -1599,7 +1599,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
             <CardTitle className="text-sm text-muted-foreground">Totalt utestående</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(ledger.total_outstanding)} kr</p>
+            <p className="font-display text-2xl tabular-nums">{formatAmount(ledger.total_outstanding)} kr</p>
             <p className="text-xs text-muted-foreground">{ledger.unpaid_count} fakturor</p>
             {ledger.unconverted_fx_count > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -1613,7 +1613,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
             <CardTitle className="text-sm text-muted-foreground">Ej förfallet</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums text-success">{formatAmount(ledger.total_current)} kr</p>
+            <p className="font-display text-2xl tabular-nums text-success">{formatAmount(ledger.total_current)} kr</p>
           </CardContent>
         </Card>
         <Card>
@@ -1621,7 +1621,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
             <CardTitle className="text-sm text-muted-foreground">Förfallet</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums text-destructive">{formatAmount(ledger.total_overdue)} kr</p>
+            <p className="font-display text-2xl tabular-nums text-destructive">{formatAmount(ledger.total_overdue)} kr</p>
           </CardContent>
         </Card>
       </div>
@@ -1930,15 +1930,15 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
                         {formatVoucher(line)}
                       </Link>
                     </td>
-                    <td className="py-1.5">{line.date}</td>
+                    <td className="py-1.5">{formatDate(line.date)}</td>
                     <td className="py-1.5 truncate max-w-[200px]">{line.description}</td>
-                    <td className="py-1.5 text-right">
+                    <td className="py-1.5 text-right tabular-nums">
                       {line.debit > 0 ? formatAmount(line.debit) : ''}
                     </td>
-                    <td className="py-1.5 text-right">
+                    <td className="py-1.5 text-right tabular-nums">
                       {line.credit > 0 ? formatAmount(line.credit) : ''}
                     </td>
-                    <td className="py-1.5 text-right font-mono">{formatAmount(line.balance)}</td>
+                    <td className="py-1.5 text-right font-mono tabular-nums">{formatAmount(line.balance)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2102,7 +2102,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
                       <td className="py-2 font-mono text-xs">
                         {formatVoucher(entry)}
                       </td>
-                      <td className="py-2">{entry.date}</td>
+                      <td className="py-2">{formatDate(entry.date)}</td>
                       <td className="py-2">
                         {entry.description}
                         {isReversed && (
@@ -2110,8 +2110,8 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
                         )}
                       </td>
                       <td className="py-2 text-xs text-muted-foreground">{entry.source_type}</td>
-                      <td className="py-2 text-right">{formatAmount(entry.total_debit)}</td>
-                      <td className="py-2 text-right">{formatAmount(entry.total_credit)}</td>
+                      <td className="py-2 text-right tabular-nums">{formatAmount(entry.total_debit)}</td>
+                      <td className="py-2 text-right tabular-nums">{formatAmount(entry.total_credit)}</td>
                     </tr>
                     {isExpanded && entry.lines.map((line, lineIndex) => (
                       <tr key={`${index}-${lineIndex}`} className="bg-muted/30 border-b last:border-0">
@@ -2366,7 +2366,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
             <CardTitle className="text-sm text-muted-foreground">Totalt utestående</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(ledger.total_outstanding)} kr</p>
+            <p className="font-display text-2xl tabular-nums">{formatAmount(ledger.total_outstanding)} kr</p>
             <p className="text-xs text-muted-foreground">{ledger.unpaid_count} fakturor</p>
             {ledger.unconverted_fx_count > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -2380,7 +2380,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
             <CardTitle className="text-sm text-muted-foreground">Ej förfallet</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums text-success">{formatAmount(ledger.total_current)} kr</p>
+            <p className="font-display text-2xl tabular-nums text-success">{formatAmount(ledger.total_current)} kr</p>
           </CardContent>
         </Card>
         <Card>
@@ -2388,7 +2388,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
             <CardTitle className="text-sm text-muted-foreground">Förfallet</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums text-destructive">{formatAmount(ledger.total_overdue)} kr</p>
+            <p className="font-display text-2xl tabular-nums text-destructive">{formatAmount(ledger.total_overdue)} kr</p>
           </CardContent>
         </Card>
       </div>

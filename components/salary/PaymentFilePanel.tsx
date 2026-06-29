@@ -101,7 +101,7 @@ export function PaymentFilePanel({
       <CardContent className="space-y-4">
         {paymentFileFormat && paymentFileGeneratedAt && (
           <div className="flex items-start gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+            <CheckCircle2 className="h-4 w-4 mt-0.5 text-success" />
             <div>
               Senast genererad:{' '}
               <span className="text-foreground">
@@ -158,7 +158,7 @@ export function PaymentFilePanel({
                   </div>
                 ))}
                 <p className="pt-1 text-muted-foreground border-t mt-2">
-                  Filen innehåller både lön till anställda och beloppen är förberedda — bankens BankID-signering är det enda steget kvar.
+                  Beloppen är förifyllda — kvar är att signera med BankID i banken.
                 </p>
               </div>
             )}

@@ -67,7 +67,7 @@ export function SettingsRail({ variant, display, activeId }: SettingsRailProps) 
   }
 
   return (
-    <nav aria-label={t('aria_label')} className="space-y-5">
+    <nav aria-label={t('aria_label')} className="space-y-6">
       {groups.map((g) => (
         <div key={g.key} className="space-y-1">
           <p className="px-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">

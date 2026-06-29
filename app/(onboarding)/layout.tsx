@@ -46,7 +46,7 @@ export default async function OnboardingLayout({
           href="/settings/account"
           aria-label="Kontoinställningar"
           title="Kontoinställningar"
-          className="fixed bottom-5 right-5 z-50 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:border-foreground/40 hover:text-foreground"
+          className="fixed bottom-6 right-6 z-50 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:border-foreground/40 hover:text-foreground"
         >
           <Settings className="h-4 w-4" />
         </Link>

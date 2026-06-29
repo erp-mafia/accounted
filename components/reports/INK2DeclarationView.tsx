@@ -116,13 +116,13 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
         <>
           {/* Warnings */}
           {data.warnings.length > 0 && (
-            <Card className="border-orange-200 bg-orange-50">
+            <Card className="border-border">
               <CardContent className="py-4">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5" />
+                  <AlertCircle className="h-5 w-5 text-warning mt-0.5" />
                   <div>
                     {data.warnings.map((warning, i) => (
-                      <p key={i} className="text-sm text-orange-800">{warning}</p>
+                      <p key={i} className="text-sm text-foreground">{warning}</p>
                     ))}
                   </div>
                 </div>
@@ -137,7 +137,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 <CardTitle>
                   {data.companyInfo.companyName}
                 </CardTitle>
-                <Badge className="bg-primary/10 text-primary">
+                <Badge variant="secondary">
                   {data.fiscalYear.name}
                 </Badge>
               </div>
@@ -170,7 +170,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">Summa tillgångar</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right tabular-nums">
                       {formatCurrency(data.totals.totalAssets)}
                     </td>
                   </tr>
@@ -200,7 +200,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">Summa eget kapital och skulder</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right tabular-nums">
                       {formatCurrency(data.totals.totalEquityLiabilities)}
                     </td>
                   </tr>

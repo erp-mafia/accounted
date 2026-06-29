@@ -272,11 +272,11 @@ export function SecuritySettings() {
               </div>
             ) : hasMfa ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 rounded-lg border bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900">
-                  <ShieldCheck className="h-5 w-5 text-green-600 dark:text-green-500" />
+                <div className="flex items-center gap-3 p-4 rounded-lg border border-border bg-secondary">
+                  <ShieldCheck className="h-5 w-5 text-success" />
                   <div>
-                    <p className="font-medium text-green-900 dark:text-green-100">{t('mfa_active_title')}</p>
-                    <p className="text-sm text-green-700 dark:text-green-400">
+                    <p className="font-medium text-foreground">{t('mfa_active_title')}</p>
+                    <p className="text-sm text-muted-foreground">
                       {t('mfa_active_description')}
                     </p>
                   </div>

@@ -243,7 +243,7 @@ export function BackupDownloadForm() {
             />
           </div>
 
-          <div className="rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Info className="h-3.5 w-3.5" />
               {isLoadingEstimate ? (

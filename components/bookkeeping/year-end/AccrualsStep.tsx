@@ -308,7 +308,7 @@ function ManualEntryEditor({
           {entry.kind === 'manual_prepaid_expense' && 'Förutbetald kostnad'}
           {entry.kind === 'manual_accrued_expense' && 'Upplupen kostnad'}
         </p>
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2">
+        <Button variant="ghost" size="sm" aria-label="Ta bort post" onClick={onRemove} className="h-7 px-2">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>

@@ -168,7 +168,7 @@ export default function SalaryRunEmployeeDetailPage({
         </Link>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div>
-            <h1 className="font-serif text-2xl font-medium tracking-tight">
+            <h1 className="font-display text-2xl tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
             <p className="text-sm text-muted-foreground tabular-nums">
@@ -312,7 +312,7 @@ function SummaryCard({ label, value, accent, overridden }: { label: string; valu
 
 function AbsenceCount({ label, days }: { label: string; days: number }) {
   return (
-    <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
+    <div className="rounded-md border bg-muted/30 px-3 py-2">
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <div className="text-sm font-medium tabular-nums">{days} dagar</div>
     </div>

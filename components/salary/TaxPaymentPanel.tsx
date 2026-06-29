@@ -139,7 +139,7 @@ export function TaxPaymentPanel({
 
         {paymentFileGeneratedAt && (
           <div className="flex items-start gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+            <CheckCircle2 className="h-4 w-4 mt-0.5 text-success" />
             <div>
               Betalfil senast genererad{' '}
               <span className="text-foreground">
@@ -150,7 +150,7 @@ export function TaxPaymentPanel({
         )}
 
         {taxPaidAt && (
-          <div className="flex items-start gap-2 text-sm text-emerald-700 dark:text-emerald-400">
+          <div className="flex items-start gap-2 text-sm text-success">
             <CheckCircle2 className="h-4 w-4 mt-0.5" />
             <div>
               Markerad som betald{' '}

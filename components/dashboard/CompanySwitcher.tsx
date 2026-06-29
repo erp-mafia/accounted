@@ -120,7 +120,7 @@ export default function CompanySwitcher() {
     return (
       <Link
         href="/select-company"
-        className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-all duration-150"
+        className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
       >
         <Plus className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
         <span className="text-[13px] text-muted-foreground truncate">{t('add_company')}</span>
@@ -133,7 +133,7 @@ export default function CompanySwitcher() {
       <button
         ref={triggerRef}
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 w-full text-left rounded-lg border border-transparent hover:border-border/60 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-all duration-150"
+        className="flex items-center gap-1.5 w-full text-left rounded-lg border border-transparent hover:border-border/60 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
         aria-expanded={open}
         aria-haspopup="listbox"
       >

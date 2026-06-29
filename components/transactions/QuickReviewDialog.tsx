@@ -260,7 +260,7 @@ export default function QuickReviewDialog({
         {/* Transaction summary */}
         <div className="flex items-center gap-3 rounded-lg border p-3">
           <div
-            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIncome ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}
+            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIncome ? 'text-success' : 'text-destructive'}`}
           >
             {isIncome ? (
               <ArrowUpRight className="h-4 w-4" />

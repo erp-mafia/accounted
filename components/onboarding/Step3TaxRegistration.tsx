@@ -347,7 +347,7 @@ export default function Step3TaxRegistration({
                       className="text-left"
                     >
                       <Card className={cn(
-                        'p-3 transition-all cursor-pointer hover:border-primary/50',
+                        'p-3 transition-colors cursor-pointer hover:border-primary/50',
                         field.value && 'border-primary ring-2 ring-primary/20'
                       )}>
                         <div className="flex items-center justify-between">
@@ -369,7 +369,7 @@ export default function Step3TaxRegistration({
                       className="text-left"
                     >
                       <Card className={cn(
-                        'p-3 transition-all cursor-pointer hover:border-primary/50',
+                        'p-3 transition-colors cursor-pointer hover:border-primary/50',
                         !field.value && 'border-primary ring-2 ring-primary/20'
                       )}>
                         <div className="flex items-center justify-between">

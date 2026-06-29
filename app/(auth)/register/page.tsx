@@ -201,14 +201,6 @@ function RegisterPageContent() {
     }
 
     try {
-      console.log('[register] attempting signUp', {
-        email: emailValue,
-        hasPassword: !!passwordValue,
-        passwordLength: passwordValue.length,
-        redirectTo: `${window.location.origin}/auth/callback`,
-        supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      })
-
       const { data, error } = await supabase.auth.signUp({
         email: emailValue,
         password: passwordValue,
@@ -218,15 +210,7 @@ function RegisterPageContent() {
       })
 
       if (error) {
-        console.error('[register] signUp error', {
-          message: error.message,
-          code: error.code,
-          status: error.status,
-          name: error.name,
-          stack: error.stack,
-          cause: error.cause,
-          fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
-        })
+        console.error('[register] signUp error', error.message)
         toast({
           title: t('register_failed_title'),
           description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
@@ -234,16 +218,6 @@ function RegisterPageContent() {
         })
         return
       }
-
-      console.log('[register] signUp response', {
-        userId: data.user?.id,
-        email: data.user?.email,
-        isAnonymous: data.user?.is_anonymous,
-        identities: data.user?.identities?.length,
-        hasSession: !!data.session,
-        confirmationSentAt: data.user?.confirmation_sent_at,
-        provider: data.user?.app_metadata?.provider,
-      })
 
       // If auto-confirmed (local dev), process invite immediately and redirect
       if (data.session) {
@@ -260,17 +234,9 @@ function RegisterPageContent() {
 
             if (res.ok) {
               document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
-              console.log('[register] invite accepted after auto-confirm — redirecting')
               window.location.href = '/'
               return
             }
-
-            // Log the error response so we can diagnose invite failures
-            const errBody = await res.json().catch(() => ({}))
-            console.error('[register] invite acceptance returned non-ok', {
-              status: res.status,
-              error: errBody.error,
-            })
           } catch (err) {
             console.error('[register] invite acceptance failed:', err)
           }
@@ -294,13 +260,7 @@ function RegisterPageContent() {
       setEmail(emailValue)
       setIsRegistered(true)
     } catch (error) {
-      console.error('[register] unexpected exception', {
-        error,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        type: typeof error,
-        constructor: error?.constructor?.name,
-      })
+      console.error('[register] unexpected exception', error)
       toast({
         title: t('register_failed_title'),
         description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
@@ -329,7 +289,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-xl border bg-card p-4">
+          <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('duplicate_hint')}
             </p>
@@ -377,7 +337,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-xl border bg-card p-4">
+          <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('confirm_email_hint')}
             </p>
@@ -416,7 +376,7 @@ function RegisterPageContent() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-lg border bg-card p-6">
           {bankIdEnabled && !bankIdUser && (
             <>
               <div className="mb-5">

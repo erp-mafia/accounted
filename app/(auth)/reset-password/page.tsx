@@ -40,7 +40,7 @@ export default function ResetPasswordPage() {
     if (password !== confirmPassword) {
       toast({
         title: t('mismatch_title'),
-        description: t('weak_description'),
+        description: t('mismatch_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -102,7 +102,7 @@ export default function ResetPasswordPage() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-lg border bg-card p-6">
           <form onSubmit={handleResetPassword} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="password">{t('new_password_label')}</Label>

@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Building2, Lock } from 'lucide-react'
@@ -114,7 +115,7 @@ export default function SuppliersPage() {
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
+          <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
           <p className="text-muted-foreground">
             {t('subtitle')}
           </p>
@@ -168,13 +169,13 @@ export default function SuppliersPage() {
       {isLoading ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
+            <Card key={i}>
               <CardContent className="p-6 space-y-3">
-                <div className="h-5 bg-muted rounded w-1/2" />
-                <div className="h-3 bg-muted rounded w-2/3" />
+                <Skeleton className="h-5 w-1/2" />
+                <Skeleton className="h-3 w-2/3" />
                 <div className="h-px bg-muted" />
-                <div className="h-3 bg-muted rounded w-1/2" />
-                <div className="h-3 bg-muted rounded w-1/3" />
+                <Skeleton className="h-3 w-1/2" />
+                <Skeleton className="h-3 w-1/3" />
               </CardContent>
             </Card>
           ))}
@@ -206,7 +207,7 @@ export default function SuppliersPage() {
             const location = formatLocation(supplier)
             return (
               <Link key={supplier.id} href={`/suppliers/${supplier.id}`} className="group">
-                <Card className="h-full cursor-pointer transition-all duration-150 hover:border-foreground/20 hover:shadow-sm motion-safe:active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                <Card className="h-full cursor-pointer transition-colors duration-150 hover:border-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                   <CardContent className="p-6 flex flex-col h-full">
                     <div className="space-y-1 mb-4">
                       <h3 className="text-[15px] font-semibold tracking-tight leading-tight truncate group-hover:text-primary transition-colors">
@@ -217,7 +218,7 @@ export default function SuppliersPage() {
                       </p>
                     </div>
 
-                    <dl className="mt-auto space-y-1.5 text-sm border-t pt-3">
+                    <dl className="mt-auto space-y-2 text-sm border-t pt-3">
                       {supplier.org_number && (
                         <div className="flex items-baseline justify-between gap-3">
                           <dt className="text-xs text-muted-foreground shrink-0">{t('label_org_number')}</dt>

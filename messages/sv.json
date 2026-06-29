@@ -604,6 +604,7 @@
     "weak_title": "Lösenordet är för svagt",
     "weak_description": "Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.",
     "mismatch_title": "Lösenorden matchar inte",
+    "mismatch_description": "Kontrollera att du skrev samma lösenord i båda fälten.",
     "save_failed_title": "Kunde inte spara lösenordet",
     "save_failed_description": "Försök igen."
   },
@@ -739,6 +740,7 @@
     "default_payment_terms_label": "Betalningsvillkor (dagar)",
     "default_account_label": "Standardkonto",
     "default_account_placeholder": "T.ex. 5410",
+    "default_currency_label": "Standardvaluta",
     "notes_label": "Anteckningar",
     "notes_placeholder": "Interna anteckningar om leverantören...",
     "submit_save": "Spara leverantör",

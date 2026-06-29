@@ -151,7 +151,7 @@ export function DeadlineCard({
           {/* Date block */}
           <div className="flex-shrink-0 w-12 text-center">
             <span className={cn(
-              'block text-lg font-display font-medium leading-none tabular-nums',
+              'block text-lg font-display leading-none tabular-nums',
               completed && 'text-muted-foreground',
             )}>
               {dayNum}

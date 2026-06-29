@@ -395,10 +395,10 @@ function ProviderStep({
                   <button
                     key={provider.id}
                     disabled={isDisabled}
-                    className={`relative flex items-center gap-4 rounded-lg border p-4 text-left transition-all ${
+                    className={`relative flex items-center gap-4 rounded-lg border p-4 text-left transition-colors ${
                       isDisabled
                         ? 'cursor-not-allowed border-border/50 opacity-60'
-                        : 'border-border hover:border-primary/50 hover:bg-accent/50 active:scale-[0.98]'
+                        : 'border-border hover:border-primary/50 hover:bg-accent/50'
                     }`}
                     onClick={() => !isDisabled && onSelect(provider.id)}
                   >
@@ -1448,7 +1448,7 @@ function ResultStep({
       {/* ── Header card with overall summary ── */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2.5">
+          <CardTitle className="flex items-center gap-2">
             <StatusIcon status={nothingNew ? 'success' : overallIcon} />
             {nothingNew ? 'Allt är uppdaterat' :
              anySieFailed ? 'Migrering delvis genomförd' :

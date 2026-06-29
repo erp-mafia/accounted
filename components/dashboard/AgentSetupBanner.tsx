@@ -18,7 +18,7 @@ export default function AgentSetupBanner({ companyName }: Props) {
       href="/onboarding/agent"
       className="group block rounded-lg border border-border bg-card hover:bg-secondary/60 transition-colors duration-150 mb-8"
     >
-      <div className="flex items-center gap-4 p-5">
+      <div className="flex items-center gap-4 p-6">
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-background shrink-0">
           <MessageCircle className="h-4 w-4" />
         </div>

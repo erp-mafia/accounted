@@ -77,7 +77,7 @@ const TagInput = React.forwardRef<HTMLInputElement, TagInputProps>(
     return (
       <div
         className={cn(
-          'flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-colors',
+          'flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm transition-colors',
           'focus-within:ring-1 focus-within:ring-ring',
           disabled && 'cursor-not-allowed opacity-50',
           className

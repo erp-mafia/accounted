@@ -147,7 +147,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
                 <p className="text-xs text-muted-foreground">{t(`def_${def.id}_label`)}</p>
               </InfoTooltip>
               <p
-                className={`font-display text-2xl font-medium tabular-nums tracking-tight mt-2 ${color}`}
+                className={`font-display text-2xl tabular-nums tracking-tight mt-2 ${color}`}
               >
                 {formatted}
               </p>

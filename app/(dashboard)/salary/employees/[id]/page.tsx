@@ -144,7 +144,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             <Link href="/salary/employees" aria-label="Tillbaka till anställda"><ArrowLeft className="h-4 w-4" /></Link>
           </Button>
           <div>
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">

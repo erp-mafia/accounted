@@ -114,7 +114,7 @@ export default function BankIdCompanyPicker({
   return (
     <div className="stagger-enter">
       <header className="mb-10">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
         <p className="text-muted-foreground text-sm mt-1.5">

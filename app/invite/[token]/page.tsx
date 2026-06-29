@@ -172,7 +172,7 @@ export default function InvitePage() {
             </span>
           </div>
           <div className="animate-fade-in">
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight leading-[1.1]">
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight leading-[1.1]">
               {error ? t('header_invalid') : t('header_invited')}
             </h1>
           </div>

@@ -21,8 +21,8 @@ function formatDate(iso: string | null) {
 }
 
 function confidenceColor(c: number): string {
-  if (c >= 0.8) return 'text-emerald-600 dark:text-emerald-400'
-  if (c >= 0.5) return 'text-amber-600 dark:text-amber-400'
+  if (c >= 0.8) return 'text-success'
+  if (c >= 0.5) return 'text-warning'
   return 'text-muted-foreground'
 }
 

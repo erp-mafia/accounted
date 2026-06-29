@@ -288,7 +288,7 @@ export default function Step2CompanyDetails({
             </div>
 
             <div className="pt-4 border-t">
-              <h3 className="font-medium mb-4">{t('step2_address_heading')}</h3>
+              <h3 className="mb-4">{t('step2_address_heading')}</h3>
 
               <div className="space-y-4">
                 <div className="space-y-2">

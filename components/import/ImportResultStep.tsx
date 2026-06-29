@@ -50,7 +50,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
   return (
     <div className="space-y-6">
       {/* Success/Failure header */}
-      <Card className={result.success ? 'border-success/50' : 'border-destructive/50'}>
+      <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {result.success ? (
@@ -116,7 +116,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
                 <FileText className="h-4 w-4" />
                 <span className="text-sm">Verifikationer skapade</span>
               </div>
-              <p className="text-2xl font-display font-medium tabular-nums">{result.journalEntriesCreated}</p>
+              <p className="text-2xl font-display tabular-nums">{result.journalEntriesCreated}</p>
             </CardContent>
           </Card>
 
@@ -125,9 +125,9 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-sm">Räkenskapsår</span>
               </div>
-              <div className="text-2xl font-display font-medium">
+              <div className="text-2xl font-display">
                 {result.fiscalPeriodId ? (
-                  <Badge variant="default" className="bg-success">Skapat</Badge>
+                  <Badge variant="success">Skapat</Badge>
                 ) : (
                   <Badge variant="secondary">Befintligt</Badge>
                 )}
@@ -140,9 +140,9 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-sm">Ingående balanser</span>
               </div>
-              <div className="text-2xl font-display font-medium">
+              <div className="text-2xl font-display">
                 {result.openingBalanceEntryId ? (
-                  <Badge variant="default" className="bg-success">Importerade</Badge>
+                  <Badge variant="success">Importerade</Badge>
                 ) : (
                   <Badge variant="secondary">Inga</Badge>
                 )}

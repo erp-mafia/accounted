@@ -21,7 +21,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 
@@ -135,7 +135,7 @@ export function SkattekontoMatchDialog({
           <DialogDescription>
             {row && (
               <>
-                {row.transaktionsdatum} • {row.transaktionstext} •{' '}
+                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
                 <span className="tabular-nums">
                   {formatCurrency(Number(row.belopp_skatteverket))}
                 </span>
@@ -176,7 +176,7 @@ export function SkattekontoMatchDialog({
               <TableBody>
                 {candidates.map(c => (
                   <TableRow key={c.journal_entry_id}>
-                    <TableCell className="tabular-nums">{c.entry_date}</TableCell>
+                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>

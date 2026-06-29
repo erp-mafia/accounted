@@ -10,6 +10,7 @@ import { DeadlineList } from '@/components/deadlines/DeadlineList'
 import { PageHeader } from '@/components/ui/page-header'
 import { AlertTriangle, ArrowRight } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
+import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
 
 const supabase = createClient()
@@ -224,7 +225,7 @@ export default function DeadlinesPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader title={t('title')} />
 
       {/* Overdue invoices alert */}
@@ -235,8 +236,8 @@ export default function DeadlinesPage() {
               <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" />
               <p className="text-sm">
                 <span className="font-medium">{t('overdue_invoices', { count: overdueInvoices.count })}</span>
-                <span className="text-muted-foreground ml-1.5">
-                  {overdueInvoices.total.toLocaleString('sv-SE')} kr
+                <span className="text-muted-foreground ml-1.5 tabular-nums">
+                  {formatCurrency(overdueInvoices.total)}
                 </span>
               </p>
             </div>

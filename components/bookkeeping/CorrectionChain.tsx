@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Info } from 'lucide-react'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
@@ -89,7 +89,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
                     </Badge>
                   )}
                   <span className="ml-auto text-sm tabular-nums text-muted-foreground">
-                    {total.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} kr
+                    {formatCurrency(total)}
                   </span>
                 </div>
                 {entry.description && (

@@ -634,7 +634,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
                           <button
                             type="button"
                             className={cn(
-                              'w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors',
+                              'w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors',
                               isSelected
                                 ? 'bg-primary/10 border-l-2 border-primary'
                                 : 'border-l-2 border-transparent hover:bg-accent/40'

@@ -61,7 +61,7 @@ export default function NewSalaryRunPage() {
         <Button variant="ghost" size="icon" asChild>
           <Link href="/salary" aria-label="Tillbaka till löner"><ArrowLeft className="h-4 w-4" /></Link>
         </Button>
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Ny lönekörning</h1>
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">Ny lönekörning</h1>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">

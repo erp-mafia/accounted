@@ -17,7 +17,7 @@ export default function KPICard({ label, value, suffix, trend, className }: KPIC
       <CardContent className="pt-6">
         <p className="text-sm text-muted-foreground">{label}</p>
         <div className="flex items-baseline gap-1 mt-1">
-          <span className="text-2xl font-semibold tracking-tight">{value}</span>
+          <span className="text-2xl font-semibold tracking-tight tabular-nums">{value}</span>
           {suffix && <span className="text-sm text-muted-foreground">{suffix}</span>}
         </div>
         {trend && (

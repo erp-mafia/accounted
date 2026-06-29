@@ -387,7 +387,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
             <Link href="/salary" aria-label="Tillbaka till löner"><ArrowLeft className="h-4 w-4" /></Link>
           </Button>
           <div>
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight">
               Lönekörning {periodLabel}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
@@ -426,7 +426,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
           <Card key={label}>
             <CardContent className="p-4">
               <p className="text-xs text-muted-foreground mb-2">{label}</p>
-              <p className={`font-display text-xl font-medium tabular-nums leading-tight ${accent ? 'text-success' : ''}`}>
+              <p className={`font-display text-xl tabular-nums leading-tight ${accent ? 'text-success' : ''}`}>
                 {formatCurrency(value)}
               </p>
             </CardContent>

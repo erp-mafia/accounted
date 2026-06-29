@@ -207,7 +207,7 @@ export default function DocumentUploadZone({
       <div
         className={`
           relative border-2 border-dashed rounded-lg text-center transition-colors
-          ${compact ? 'p-3' : 'p-5'}
+          ${compact ? 'p-3' : 'p-6'}
           ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
           ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
         `}
@@ -281,6 +281,7 @@ export default function DocumentUploadZone({
               <Button
                 variant="ghost"
                 size="sm"
+                aria-label="Ta bort fil"
                 className="h-6 w-6 p-0 shrink-0"
                 onClick={(e) => {
                   e.stopPropagation()

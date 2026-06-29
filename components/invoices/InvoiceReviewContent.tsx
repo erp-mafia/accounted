@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Customer, Currency } from '@/types'
@@ -108,11 +108,11 @@ export function InvoiceReviewContent({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div>
           <span className="text-muted-foreground">{t('invoice_date')}</span>
-          <p className="font-medium">{invoiceDate}</p>
+          <p className="font-medium">{invoiceDate ? formatDate(invoiceDate) : ''}</p>
         </div>
         <div>
           <span className="text-muted-foreground">{t('due_date')}</span>
-          <p className="font-medium">{dueDate}</p>
+          <p className="font-medium">{dueDate ? formatDate(dueDate) : ''}</p>
         </div>
       </div>
 

@@ -103,7 +103,7 @@ export default function BankFileConfirmStep({
                 <FileText className="h-4 w-4" />
                 <span className="text-xs">Transaktioner</span>
               </div>
-              <p className="text-xl font-display font-medium tabular-nums">{stats.parsed_rows}</p>
+              <p className="text-xl font-display tabular-nums">{stats.parsed_rows}</p>
               {stats.skipped_rows > 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
                   {stats.skipped_rows} rader hoppades över
@@ -125,16 +125,16 @@ export default function BankFileConfirmStep({
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-xs">Inkomster</span>
               </div>
-              <p className="text-xl font-display font-medium tabular-nums">
+              <p className="text-xl font-display tabular-nums">
                 {formatCurrency(stats.total_income)}
               </p>
             </div>
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Leverantörsfakturor</span>
+                <span className="text-xs">Utgifter</span>
               </div>
-              <p className="text-xl font-display font-medium tabular-nums">
+              <p className="text-xl font-display tabular-nums">
                 {formatCurrency(stats.total_expenses)}
               </p>
             </div>

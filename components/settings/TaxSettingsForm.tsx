@@ -45,7 +45,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       </section>
 
       {/* F-skatt */}
-      <section className="border-t border-border/8 pt-8 space-y-4">
+      <section className="border-t border-border pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('tax_vat_heading')}
         </h2>
@@ -140,7 +140,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       </section>
 
       {/* Tax contact — required for SKV-filings */}
-      <section className="border-t border-border/8 pt-8 space-y-4">
+      <section className="border-t border-border pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('tax_contact_heading')}
         </h2>
@@ -181,7 +181,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       </section>
 
       {/* Fiscal year & salaries */}
-      <section className="border-t border-border/8 pt-8 space-y-4">
+      <section className="border-t border-border pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('fiscal_year_salaries_heading')}
         </h2>
@@ -235,7 +235,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
       </section>
 
       {/* Preliminary tax */}
-      <section className="border-t border-border/8 pt-8 space-y-4">
+      <section className="border-t border-border pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('preliminary_tax_heading')}
         </h2>

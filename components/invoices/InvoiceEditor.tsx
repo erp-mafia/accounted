@@ -1113,7 +1113,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1 min-w-0">
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+          <h1 className="font-display text-2xl md:text-3xl tracking-tight">
             {titleText}
             {numberPreview && !isSelfBilled && (
               <span className="ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl">

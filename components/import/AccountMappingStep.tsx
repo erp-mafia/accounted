@@ -343,7 +343,7 @@ function ConfidenceBadge({
   }
 
   if (confidence >= 0.9) {
-    return <Badge variant="default" className="bg-success">Exakt</Badge>
+    return <Badge variant="success">Exakt</Badge>
   }
 
   if (confidence >= 0.7) {

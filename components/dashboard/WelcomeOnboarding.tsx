@@ -225,7 +225,6 @@ export default function WelcomeOnboarding({
         return
       }
 
-      console.log(LOG, 'onboarding completed', result.companyId)
       toast({
         title: t('toast_welcome_title'),
         description: t('toast_company_ready'),
@@ -253,12 +252,12 @@ export default function WelcomeOnboarding({
     return (
       <div className="flex flex-col items-start justify-center min-h-[60vh] animate-fade-in">
         <p className="text-muted-foreground/50 text-sm mb-2">{greeting}</p>
-        <h1 className="font-display text-4xl md:text-5xl font-medium tracking-tight leading-[1.05] mb-10">
+        <h1 className="font-display text-4xl md:text-5xl tracking-tight leading-[1.05] mb-10">
           {t('welcome_title', { appName: branding.appName })}
         </h1>
         <button
           onClick={() => setStarted(true)}
-          className="px-5 py-2.5 rounded-lg bg-foreground text-background text-sm font-medium hover:bg-foreground/85 transition-colors duration-150 active:scale-[0.98]"
+          className="px-4 py-2 rounded-lg bg-foreground text-background text-sm font-medium hover:bg-foreground/85 transition-colors duration-150"
         >
           {hasExistingCompanies ? t('add_a_company') : t('add_first_company')}
         </button>
@@ -270,7 +269,7 @@ export default function WelcomeOnboarding({
     <div className="stagger-enter">
       {/* Greeting header */}
       <header className="mb-10">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
         <p className="text-muted-foreground text-sm mt-1.5">
@@ -319,7 +318,7 @@ export default function WelcomeOnboarding({
                 </div>
               </div>
 
-              <h2 className="font-display text-lg font-medium tracking-tight leading-tight">
+              <h2 className="font-display text-lg tracking-tight leading-tight">
                 {stepInfo.title}
               </h2>
               <p className="text-white/40 mt-1 text-sm">

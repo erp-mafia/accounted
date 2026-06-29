@@ -45,7 +45,7 @@ export default function EmployeesPage() {
             <Link href="/salary" aria-label={t('back_to_payroll')}><ArrowLeft className="h-4 w-4" /></Link>
           </Button>
           <div>
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
             <p className="text-sm text-muted-foreground mt-1">{t('registered_count', { count: employees.length })}</p>
           </div>
         </div>

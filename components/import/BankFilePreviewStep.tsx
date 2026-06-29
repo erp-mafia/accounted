@@ -48,7 +48,7 @@ export default function BankFilePreviewStep({
               <FileText className="h-4 w-4" />
               <span className="text-sm">Transaktioner</span>
             </div>
-            <p className="text-2xl font-display font-medium tabular-nums">{stats.parsed_rows}</p>
+            <p className="text-2xl font-display tabular-nums">{stats.parsed_rows}</p>
             {stats.skipped_rows > 0 && (
               <p className="text-xs text-muted-foreground mt-1">
                 {stats.skipped_rows} rader hoppades över
@@ -75,7 +75,7 @@ export default function BankFilePreviewStep({
               <TrendingUp className="h-4 w-4" />
               <span className="text-sm">Inkomster</span>
             </div>
-            <p className="text-lg font-display font-medium tabular-nums">
+            <p className="text-lg font-display tabular-nums">
               {formatCurrency(stats.total_income)}
             </p>
           </CardContent>
@@ -85,9 +85,9 @@ export default function BankFilePreviewStep({
           <CardContent className="pt-6">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <TrendingDown className="h-4 w-4" />
-              <span className="text-sm">Leverantörsfakturor</span>
+              <span className="text-sm">Utgifter</span>
             </div>
-            <p className="text-lg font-display font-medium tabular-nums">
+            <p className="text-lg font-display tabular-nums">
               {formatCurrency(stats.total_expenses)}
             </p>
           </CardContent>
@@ -96,9 +96,9 @@ export default function BankFilePreviewStep({
 
       {/* Warnings */}
       {warnings.length > 0 && (
-        <Card className="border-yellow-300">
+        <Card>
           <CardHeader className="py-3">
-            <CardTitle className="text-sm flex items-center gap-2 text-yellow-600">
+            <CardTitle className="text-sm flex items-center gap-2 text-warning">
               <AlertTriangle className="h-4 w-4" />
               {warnings.length} varning{warnings.length !== 1 ? 'ar' : ''}
             </CardTitle>

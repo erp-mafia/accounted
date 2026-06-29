@@ -127,7 +127,7 @@ export default function Step4VatAccounting({
           })} className="space-y-6">
             {/* VAT section */}
             <div className="space-y-4">
-              <h3 className="font-medium flex items-center gap-2">
+              <h3 className="flex items-center gap-2">
                 <InfoTooltip
                   content={
                     <div className="space-y-2">

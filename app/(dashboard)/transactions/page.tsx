@@ -2061,7 +2061,7 @@ export default function TransactionsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Status bar */}
       <TransactionStatusBar
         uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
@@ -2091,7 +2091,7 @@ export default function TransactionsPage() {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-sm">
+            <Button variant="outline" size="sm" className="h-9 gap-2 px-3 text-sm">
               {mode === 'inbox'
                 ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
                 : 'Alla transaktioner'}
@@ -2138,7 +2138,7 @@ export default function TransactionsPage() {
                 </span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                    <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-xs">
                       {sourceFilter === 'all'
                         ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
                         : sourceFilter === 'bank'

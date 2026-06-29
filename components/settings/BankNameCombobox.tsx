@@ -161,7 +161,7 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
               role="option"
               aria-selected={highlightedIndex === i}
               className={cn(
-                'flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer transition-colors',
+                'flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors',
                 highlightedIndex === i && 'bg-accent text-accent-foreground',
               )}
               onMouseEnter={() => setHighlightedIndex(i)}

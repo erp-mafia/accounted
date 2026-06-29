@@ -164,7 +164,7 @@ export function AccountSettingsContent() {
                 key={value}
                 type="button"
                 onClick={() => setTheme(value)}
-                className={`flex items-center gap-2 rounded-lg border-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                className={`flex items-center gap-2 rounded-lg border-2 px-4 py-3 text-sm font-medium transition-colors ${
                   theme === value
                     ? 'border-primary bg-primary/5'
                     : 'border-border hover:border-primary/40'
@@ -193,7 +193,7 @@ export function AccountSettingsContent() {
               type="button"
               onClick={() => handleLocaleChange(value)}
               disabled={savingLocale}
-              className={`flex items-center gap-2 rounded-lg border-2 px-4 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+              className={`flex items-center gap-2 rounded-lg border-2 px-4 py-3 text-sm font-medium transition-colors disabled:opacity-50 ${
                 activeLocale === value
                   ? 'border-primary bg-primary/5'
                   : 'border-border hover:border-primary/40'

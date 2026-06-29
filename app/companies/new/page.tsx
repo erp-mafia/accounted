@@ -181,7 +181,6 @@ function NewCompanyContent() {
         return
       }
 
-      console.log(LOG, 'created company', result.companyId)
       toast({
         title: t('toast_company_created'),
         description: t('toast_switched_to_new'),
@@ -263,7 +262,7 @@ function NewCompanyContent() {
           </div>
 
           <div key={`title-${currentStep}`} className="animate-fade-in">
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight leading-[1.1]">
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight leading-[1.1]">
               {stepInfo.title}
             </h1>
             <p className="text-white/40 mt-1.5 text-sm max-w-sm leading-relaxed">

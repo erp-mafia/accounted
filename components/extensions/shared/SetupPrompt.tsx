@@ -62,7 +62,7 @@ export default function SetupPrompt({ title, description, fields, onSave }: Setu
               </div>
             ))}
             <Button type="submit" className="w-full" disabled={!allFilled || isSaving}>
-              {isSaving ? 'Sparar...' : 'Kom igang'}
+              {isSaving ? 'Sparar...' : 'Kom igång'}
             </Button>
           </form>
         </CardContent>

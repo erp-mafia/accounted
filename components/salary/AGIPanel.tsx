@@ -690,7 +690,7 @@ export function AGIPanel(props: AGIPanelProps) {
           <span>Arbetsgivardeklaration (AGI)</span>
           <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
             <span className="flex items-center gap-1">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+              <CheckCircle2 className="h-3.5 w-3.5 text-success" />
               Ansluten
             </span>
             {!readOnly && (
@@ -1005,7 +1005,7 @@ function StatusRow({
   return (
     <div className="flex items-center gap-2">
       {ok ? (
-        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+        <CheckCircle2 className="h-4 w-4 text-success" />
       ) : (
         <Link2Off className="h-4 w-4 text-muted-foreground" />
       )}

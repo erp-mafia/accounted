@@ -581,7 +581,7 @@ export default function SupplierInvoiceDetailPage() {
             {invoice.delivery_date && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('delivery_date_label')}</span>
-                <span>{invoice.delivery_date}</span>
+                <span className="tabular-nums">{formatDate(invoice.delivery_date)}</span>
               </div>
             )}
             {invoice.payment_reference && (

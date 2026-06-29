@@ -94,13 +94,13 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
         <>
           {/* Warnings */}
           {data.warnings.length > 0 && (
-            <Card className="border-orange-200 bg-orange-50">
+            <Card className="border-border">
               <CardContent className="py-4">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5" />
+                  <AlertCircle className="h-5 w-5 text-warning mt-0.5" />
                   <div>
                     {data.warnings.map((warning, i) => (
-                      <p key={i} className="text-sm text-orange-800">{warning}</p>
+                      <p key={i} className="text-sm text-foreground">{warning}</p>
                     ))}
                   </div>
                 </div>
@@ -115,7 +115,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 <CardTitle>
                   {data.companyInfo.companyName}
                 </CardTitle>
-                <Badge className="bg-primary/10 text-primary">
+                <Badge variant="secondary">
                   {data.fiscalYear.name}
                 </Badge>
               </div>
@@ -152,7 +152,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">Summa intäkter</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right tabular-nums">
                       {formatCurrency(
                         data.rutor.R1 + data.rutor.R2 + data.rutor.R3 + data.rutor.R4
                       )}
@@ -189,7 +189,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">Summa kostnader</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right tabular-nums">
                       -{formatCurrency(
                         data.rutor.R5 + data.rutor.R6 + data.rutor.R7 +
                         data.rutor.R8 + data.rutor.R9 + data.rutor.R10
@@ -207,10 +207,10 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               <div className="flex justify-between items-center">
                 <div>
                   <span className="font-mono text-xs bg-muted px-1 rounded mr-2">R11</span>
-                  <span className="font-display font-medium text-xl">Årets resultat</span>
+                  <span className="font-display text-xl">Årets resultat</span>
                 </div>
                 <span
-                  className={`font-display text-2xl font-medium tabular-nums ${
+                  className={`font-display text-2xl tabular-nums ${
                     data.rutor.R11 >= 0 ? 'text-success' : 'text-destructive'
                   }`}
                 >
@@ -266,7 +266,7 @@ function NEDeclarationRow({
             </span>
           )}
         </td>
-        <td className="py-2 text-right">
+        <td className="py-2 text-right tabular-nums">
           {isExpense && amount > 0 ? '-' : ''}{formatCurrency(Math.abs(amount))}
         </td>
       </tr>

@@ -171,7 +171,7 @@ function MfaVerifyContent() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-lg border bg-card p-6">
           <form onSubmit={handleVerify} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="code">{t('verify_code_label')}</Label>

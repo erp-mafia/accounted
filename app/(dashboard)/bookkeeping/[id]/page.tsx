@@ -255,7 +255,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight font-mono">
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight font-mono">
               {formatVoucher(entry)}
             </h1>
             <JournalEntryStatusBadge entry={entry} />
@@ -366,7 +366,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             {entry.committed_at && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('field_posted_at')}</span>
-                <span>{new Date(entry.committed_at).toLocaleDateString('sv-SE')}</span>
+                <span>{formatDate(entry.committed_at)}</span>
               </div>
             )}
             <div className="flex justify-between">
