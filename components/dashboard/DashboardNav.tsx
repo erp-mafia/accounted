@@ -838,9 +838,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   </div>
                   <div className="space-y-0.5">
                     {items.map((item) => {
-                    const Icon = item.icon
-                    const active = isActive(item.href)
-                    const enabled = isItemEnabled(item.href) && !item.comingSoon
+                      const Icon = item.icon
+                      const active = isActive(item.href)
+                      const enabled = isItemEnabled(item.href) && !item.comingSoon
                       const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
                         ? liveUncategorizedTransactionCount
                         : item.href === '/pending' && pendingOperationsCount > 0
