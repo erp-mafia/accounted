@@ -1,0 +1,41 @@
+name: Compliance diff
+
+# Stage 1 of the fork-safe compliance review (see swedish-compliance-review.yml).
+#
+# This runs on the untrusted PR head, but is SAFE because it has NO secrets and
+# only a read-only token: it computes the diff and uploads it as an artifact.
+# It never runs project code (no `npm install`, no `node`) — only git plumbing,
+# which does not execute repository hooks. The privileged half (model call +
+# comment) lives in stage 2, which never checks out fork code.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Compute diff vs base
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          MERGE_BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          git diff "$MERGE_BASE" HEAD > diff.patch
+          git diff --name-only "$MERGE_BASE" HEAD > files.txt
+          echo "${{ github.event.pull_request.number }}" > pr-number.txt
+      - name: Upload diff artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-input
+          path: |
+            diff.patch
+            files.txt
+            pr-number.txt
+          retention-days: 1

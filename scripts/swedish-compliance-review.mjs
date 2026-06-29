@@ -4,7 +4,7 @@
 // feedback to review.md for the workflow to post as a PR comment.
 
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -30,18 +30,39 @@ function loadSkills() {
   return { primary: { id: ALWAYS_LOAD, content: primary }, others };
 }
 
+function truncate(diff) {
+  if (diff.length > MAX_DIFF_CHARS) {
+    return { diff: diff.slice(0, MAX_DIFF_CHARS), truncated: true };
+  }
+  return { diff, truncated: false };
+}
+
 function getDiff() {
+  // Two-stage (fork-safe) mode: the diff was computed on `pull_request` without
+  // secrets and handed to us as an artifact. We read it as DATA — we never run
+  // fork code here. See .github/workflows/swedish-compliance-{diff,review}.yml.
+  const diffFile = process.env.DIFF_FILE;
+  if (diffFile && existsSync(diffFile)) {
+    const raw = readFileSync(diffFile, 'utf8');
+    const filesFile = process.env.FILES_FILE;
+    const files =
+      filesFile && existsSync(filesFile)
+        ? readFileSync(filesFile, 'utf8').trim()
+        : raw
+            .split('\n')
+            .filter((l) => l.startsWith('+++ b/'))
+            .map((l) => l.slice('+++ b/'.length))
+            .join('\n');
+    return { files, ...truncate(raw) };
+  }
+
+  // Legacy / same-repo mode: compute the diff from the local checkout.
   const baseRef = process.env.GITHUB_BASE_REF || 'main';
   execSync(`git fetch origin ${baseRef} --depth=1`, { stdio: 'ignore' });
   const mergeBase = execSync(`git merge-base origin/${baseRef} HEAD`).toString().trim();
   const files = execSync(`git diff --name-only ${mergeBase} HEAD`).toString().trim();
-  let diff = execSync(`git diff ${mergeBase} HEAD`).toString();
-  let truncated = false;
-  if (diff.length > MAX_DIFF_CHARS) {
-    diff = diff.slice(0, MAX_DIFF_CHARS);
-    truncated = true;
-  }
-  return { files, diff, truncated };
+  const diff = execSync(`git diff ${mergeBase} HEAD`).toString();
+  return { files, ...truncate(diff) };
 }
 
 function buildSystemPrompt({ primary, others }) {
