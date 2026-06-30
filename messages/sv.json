@@ -423,7 +423,6 @@
   },
   "suppliers": {
     "title": "Leverantörer",
-    "subtitle": "Hantera dina leverantörer och deras betalningsuppgifter",
     "new_supplier": "Ny leverantör",
     "add_supplier": "Lägg till leverantör",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
@@ -4141,6 +4140,7 @@
     "desc_balance_sheet": "Ekonomisk ställning vid periodens slut",
     "desc_kassaflodesanalys": "Likviditetens förändring under året",
     "desc_arsredovisning": "Förvaltningsberättelse, noter och underskrifter",
+    "desc_year_end_closing": "Stäng räkenskapsåret – dispositioner, periodiseringar och bokslutstransaktioner",
     "desc_vat_declaration": "Underlag till momsdeklarationen (rutor)",
     "desc_periodisk_sammanstallning": "EU-försäljning av varor och tjänster",
     "desc_ne_declaration": "NE-bilaga för enskild firma",
@@ -4164,6 +4164,7 @@
     "name_balance_sheet": "Balansräkning",
     "name_kassaflodesanalys": "Kassaflödesanalys",
     "name_arsredovisning": "Årsredovisning",
+    "name_year_end_closing": "Årsbokslut",
     "name_vat_declaration": "Momsdeklaration",
     "name_periodisk_sammanstallning": "Periodisk sammanställning",
     "name_ne_declaration": "NE-bilaga",

@@ -240,6 +240,7 @@ function ArticlesPageInner() {
         action={
           <div className="flex items-center gap-2">
             <ReportExportMenu
+              size="default"
               items={[
                 { format: 'xlsx', href: '/api/export/articles' },
                 { format: 'csv', href: '/api/export/articles?format=csv' },

@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import {
   LayoutDashboard,
   Home,
-  Receipt,
+  ReceiptText,
   Users,
   ArrowLeftRight,
   BookOpen,
@@ -135,7 +135,7 @@ const navItems: NavItem[] = [
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'top' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'top' },
   // Försäljning dropdown
-  { href: '/invoices', labelKey: 'invoices', icon: Receipt, group: 'försäljning' },
+  { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'försäljning' },
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
   { href: '/articles', labelKey: 'articles', icon: Tag, group: 'försäljning' },
   // Inköp dropdown

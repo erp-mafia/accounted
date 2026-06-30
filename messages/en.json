@@ -423,7 +423,6 @@
   },
   "suppliers": {
     "title": "Suppliers",
-    "subtitle": "Manage your suppliers and their payment details",
     "new_supplier": "New supplier",
     "add_supplier": "Add supplier",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
@@ -4141,6 +4140,7 @@
     "desc_balance_sheet": "Financial position at the end of the period",
     "desc_kassaflodesanalys": "Change in liquidity during the year",
     "desc_arsredovisning": "Directors' report, notes and signatures",
+    "desc_year_end_closing": "Close the fiscal year — dispositions, accruals and closing entries",
     "desc_vat_declaration": "Basis for the VAT return (boxes)",
     "desc_periodisk_sammanstallning": "EU sales of goods and services",
     "desc_ne_declaration": "NE appendix for sole traders",
@@ -4164,6 +4164,7 @@
     "name_balance_sheet": "Balance sheet",
     "name_kassaflodesanalys": "Cash flow statement",
     "name_arsredovisning": "Annual report",
+    "name_year_end_closing": "Year-end closing",
     "name_vat_declaration": "VAT declaration",
     "name_periodisk_sammanstallning": "EU sales report",
     "name_ne_declaration": "NE-bilaga",

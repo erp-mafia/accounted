@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Sparkles, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 
@@ -73,7 +73,6 @@ export default function BankSyncSinceLastVisit() {
 
   return (
     <div className="inline-flex items-center gap-2 rounded-md border border-success/30 bg-success/5 px-2.5 py-1 text-xs text-success">
-      <Sparkles className="h-3.5 w-3.5" />
       <span>
         {count === 1
           ? t('bank_sync_new_since_last_visit_one')

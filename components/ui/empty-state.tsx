@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
-  Receipt,
+  ReceiptText,
   Users,
   ArrowLeftRight,
   Camera,
@@ -103,7 +103,7 @@ export function EmptyInvoices() {
   const t = useTranslations('empty')
   return (
     <EmptyState
-      icon={Receipt}
+      icon={ReceiptText}
       title={t('preset_invoices_title')}
       description={t('preset_invoices_description')}
       actionLabel={t('preset_invoices_action')}

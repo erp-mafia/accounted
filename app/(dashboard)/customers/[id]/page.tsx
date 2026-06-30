@@ -23,7 +23,7 @@ import {
   Edit2,
   Trash2,
   Loader2,
-  Receipt,
+  ReceiptText,
   Lock,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -313,7 +313,7 @@ export default function CustomerDetailPage({
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
-              <Receipt className="h-4 w-4 text-muted-foreground" />
+              <ReceiptText className="h-4 w-4 text-muted-foreground" />
               <span>{t('invoice_count', { count: customer.invoices?.length || 0 })}</span>
             </div>
           </CardContent>
@@ -336,7 +336,7 @@ export default function CustomerDetailPage({
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Receipt className="h-4 w-4" />
+            <ReceiptText className="h-4 w-4" />
             {t('section_invoices')}
             {customer.invoices?.length > 0 && (
               <Badge variant="secondary">{customer.invoices.length}</Badge>

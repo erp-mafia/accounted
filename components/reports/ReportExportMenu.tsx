@@ -26,9 +26,11 @@ export interface ReportExportItem {
 export function ReportExportMenu({
   items,
   children,
+  size = 'sm',
 }: {
   items?: ReportExportItem[]
   children?: React.ReactNode
+  size?: 'default' | 'sm'
 }) {
   const t = useTranslations('reports')
   const hasItems = !!items && items.length > 0
@@ -39,7 +41,7 @@ export function ReportExportMenu({
       {hasItems && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size={size}>
               <Download className="h-4 w-4 mr-2" />
               {t('export')}
             </Button>

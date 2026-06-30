@@ -21,7 +21,7 @@ import {
   Inbox,
   Landmark,
   Loader2,
-  Receipt,
+  ReceiptText,
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
@@ -341,7 +341,7 @@ export default function AttGoraSection({
                     {counts.overdue_invoice > 0 && (
                       <WorklistRow
                         href="/invoices?status=unpaid"
-                        icon={Receipt}
+                        icon={ReceiptText}
                         label={t('row_overdue_invoices')}
                         count={counts.overdue_invoice}
                       />

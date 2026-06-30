@@ -191,15 +191,13 @@ export default function ArticleDetailPage({
             <div>
               <h1 className="font-display text-2xl md:text-3xl tracking-tight">{article.name}</h1>
               <div className="flex items-center gap-2 mt-1">
-                <Badge variant="secondary">{t(ARTICLE_TYPE_KEY[article.type])}</Badge>
-                {article.article_number && (
-                  <span className="text-sm text-muted-foreground tabular-nums">
-                    {article.article_number}
-                  </span>
-                )}
                 <Badge variant={article.active ? 'success' : 'secondary'}>
                   {article.active ? t('status_active') : t('status_inactive')}
                 </Badge>
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  {t(ARTICLE_TYPE_KEY[article.type])}
+                  {article.article_number ? ` · #${article.article_number}` : ''}
+                </span>
               </div>
             </div>
           </div>

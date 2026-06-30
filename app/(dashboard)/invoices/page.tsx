@@ -24,7 +24,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { Plus, Search, Receipt, Lock, Repeat } from 'lucide-react'
+import { Plus, Search, ReceiptText, Lock, Repeat } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -256,7 +256,7 @@ export default function InvoicesPage() {
         ) : filteredInvoices.length === 0 ? (
           searchTerm ? (
             <DataListEmpty
-              icon={<Receipt className="h-6 w-6" />}
+              icon={<ReceiptText className="h-6 w-6" />}
               title={t('no_search_results_title')}
               description={t('no_search_results_description', { term: searchTerm })}
             />
@@ -264,7 +264,7 @@ export default function InvoicesPage() {
             <EmptyInvoices />
           ) : (
             <DataListEmpty
-              icon={<Receipt className="h-6 w-6" />}
+              icon={<ReceiptText className="h-6 w-6" />}
               title={t('no_category_title')}
               description={t('no_category_description')}
             />

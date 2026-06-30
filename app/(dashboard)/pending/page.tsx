@@ -43,7 +43,7 @@ import {
   ClipboardCheck,
   ArrowLeftRight,
   Users,
-  Receipt,
+  ReceiptText,
   Bot,
   BookOpen,
   ChevronDown,
@@ -63,14 +63,14 @@ import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTr
 const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
   categorize_transaction: { labelKey: 'type_categorize_transaction', icon: ArrowLeftRight, variant: 'default' },
   create_customer: { labelKey: 'type_create_customer', icon: Users, variant: 'secondary' },
-  create_invoice: { labelKey: 'type_create_invoice', icon: Receipt, variant: 'outline' },
+  create_invoice: { labelKey: 'type_create_invoice', icon: ReceiptText, variant: 'outline' },
   create_transaction: { labelKey: 'type_create_transaction', icon: ArrowLeftRight, variant: 'secondary' },
   create_voucher: { labelKey: 'type_create_voucher', icon: BookOpen, variant: 'outline' },
   correct_entry: { labelKey: 'type_correct_entry', icon: BookOpen, variant: 'outline' },
   reverse_entry: { labelKey: 'type_reverse_entry', icon: BookOpen, variant: 'outline' },
-  mark_invoice_paid: { labelKey: 'type_mark_invoice_paid', icon: Receipt, variant: 'default' },
-  send_invoice: { labelKey: 'type_send_invoice', icon: Receipt, variant: 'outline' },
-  mark_invoice_sent: { labelKey: 'type_mark_invoice_sent', icon: Receipt, variant: 'outline' },
+  mark_invoice_paid: { labelKey: 'type_mark_invoice_paid', icon: ReceiptText, variant: 'default' },
+  send_invoice: { labelKey: 'type_send_invoice', icon: ReceiptText, variant: 'outline' },
+  mark_invoice_sent: { labelKey: 'type_mark_invoice_sent', icon: ReceiptText, variant: 'outline' },
   match_transaction_invoice: { labelKey: 'type_match_transaction_invoice', icon: ArrowLeftRight, variant: 'secondary' },
 }
 
