@@ -53,3 +53,34 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.skatteverket,
   CAPABILITY.email_send,
 ] as const
+
+/**
+ * Paid MCP tools → required capability. The MCP/agent path is a paid chokepoint
+ * just like the HTTP routes, so the dispatcher gates these the same way it gates
+ * API-key scope (see mcp-server `tools/call`). Only external-service WRITE tools
+ * appear here: send_invoice (email) and the two Skatteverket submissions. The
+ * read/local SKV tools (generate_agi, vat_declaration_validate/status, agi_status)
+ * stay free — the §4 carve-out forbids blocking a statutory filing obligation.
+ *
+ * No MCP tool invokes AI or triggers bank sync, so those PAID capabilities have
+ * no entry here — they are reachable only via already-gated HTTP routes/handlers.
+ */
+export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
+  gnubok_send_invoice: CAPABILITY.email_send,
+  gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
+  gnubok_agi_submit: CAPABILITY.skatteverket,
+} as const
+
+/**
+ * Paid pending-operation types → required capability. Keyed by
+ * `pending_operations.operation_type`. This is the commit-time twin of
+ * MCP_TOOL_CAPABILITY_MAP: it gates the actual external-service call inside
+ * commitPendingOperation, so an operation staged during the trial cannot be
+ * committed once the grant has expired — regardless of caller (MCP approve tool
+ * or the UI approval path). Keep the values in sync with MCP_TOOL_CAPABILITY_MAP.
+ */
+export const PAID_OPERATION_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
+  send_invoice: CAPABILITY.email_send,
+  submit_vat_declaration: CAPABILITY.skatteverket,
+  submit_agi: CAPABILITY.skatteverket,
+} as const

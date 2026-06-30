@@ -80,6 +80,12 @@ export async function hasCapability(
   return true
 }
 
+/** Bilingual paywall copy, shared by every transport (HTTP route, MCP tool, commit executor). */
+export const CAPABILITY_BLOCKED_MESSAGE_SV =
+  'Den här funktionen kräver en betald prenumeration. Uppgradera för att fortsätta använda externa tjänster.'
+export const CAPABILITY_BLOCKED_MESSAGE_EN =
+  'This feature requires a paid subscription. Upgrade to keep using external services.'
+
 /**
  * Standard bilingual 403 for a capability-blocked endpoint. Matches the
  * sandbox/guard envelope so the UI surfaces the upsell consistently.
@@ -87,15 +93,37 @@ export async function hasCapability(
 export function capabilityBlockedResponse(key: CapabilityKey): NextResponse {
   return NextResponse.json(
     {
-      error:
-        'Den här funktionen kräver en betald prenumeration. Uppgradera för att fortsätta använda externa tjänster.',
-      error_en:
-        'This feature requires a paid subscription. Upgrade to keep using external services.',
+      error: CAPABILITY_BLOCKED_MESSAGE_SV,
+      error_en: CAPABILITY_BLOCKED_MESSAGE_EN,
       capability_blocked: true,
       capability: key,
     },
     { status: 403 },
   )
+}
+
+export interface CapabilityBlockedError {
+  code: 'capability_blocked'
+  capability_blocked: true
+  capability: CapabilityKey
+  message_sv: string
+  message_en: string
+}
+
+/**
+ * Transport-free counterpart to capabilityBlockedResponse, for call sites that
+ * don't return a NextResponse — the MCP dispatcher (folded into the JSON-RPC
+ * `isError` envelope) and the pending-operation commit executor. Same copy and
+ * the same `capability_blocked: true` marker so every surface upsells alike.
+ */
+export function capabilityBlockedError(key: CapabilityKey): CapabilityBlockedError {
+  return {
+    code: 'capability_blocked',
+    capability_blocked: true,
+    capability: key,
+    message_sv: CAPABILITY_BLOCKED_MESSAGE_SV,
+    message_en: CAPABILITY_BLOCKED_MESSAGE_EN,
+  }
 }
 
 /**

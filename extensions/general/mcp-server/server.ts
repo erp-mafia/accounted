@@ -71,6 +71,8 @@ import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplica
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { getEmailService } from '@/lib/email/service'
+import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
+import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -9982,7 +9984,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'unknown_tool' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'unknown_tool' | null
   errorMessage: string | null
   requestId: string | number | null
   userId: string
@@ -10432,6 +10434,35 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         return NextResponse.json(
           jsonRpc(id ?? null, {
             content: [{ type: 'text', text: JSON.stringify(scopeError, null, 2) }],
+            isError: true,
+          })
+        )
+      }
+
+      // Enforce the capability paywall — the MCP/agent path is a paid chokepoint
+      // just like the HTTP routes (send_invoice → email_send, the two SKV
+      // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
+      // all-on inside hasCapability. Blocks before any pending op is staged.
+      const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
+      if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
+        const capError = { error: capabilityBlockedError(requiredCapability) }
+        emitToolCallTelemetry({
+          tool: toolName,
+          requiredScope,
+          actor,
+          latencyMs: 0,
+          success: false,
+          isError: true,
+          errorCode: capError.error.code,
+          errorKind: 'capability_denied',
+          errorMessage: capError.error.message_sv,
+          requestId: id ?? null,
+          userId,
+          companyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            content: [{ type: 'text', text: JSON.stringify(capError, null, 2) }],
             isError: true,
           })
         )
