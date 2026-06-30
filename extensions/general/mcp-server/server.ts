@@ -6277,6 +6277,7 @@ export const tools: McpTool[] = [
         inbox_item_id: { type: 'string', description: 'UUID of the inbox item to convert' },
         supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
         vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Override extracted VAT treatment' },
+        invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD). Use when OCR misses the date.' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
         line_overrides: {
           type: 'array',
@@ -6384,7 +6385,7 @@ export const tools: McpTool[] = [
 
       // Assemble core invoice fields
       const currency = (invoiceExt?.currency as string) || 'SEK'
-      const invoiceDate = (invoiceExt?.invoiceDate as string) || null
+      const invoiceDate = (args.invoice_date_override as string | undefined) ?? (invoiceExt?.invoiceDate as string) ?? null
       const dueDate = (args.due_date_override as string | undefined) ?? (invoiceExt?.dueDate as string | undefined) ?? null
       const supplierInvoiceNumber = (invoiceExt?.invoiceNumber as string) || ''
       if (!invoiceDate) throw new Error('Extracted invoice has no invoice date')
