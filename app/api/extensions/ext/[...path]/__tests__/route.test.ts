@@ -27,11 +27,19 @@ vi.mock('@/lib/extensions/context-factory', () => ({
   }),
 }))
 
+// Default to "MFA not enforced" so existing tests authenticate normally;
+// the AAL2-gate regression test below flips this on.
+vi.mock('@/lib/auth/mfa', () => ({
+  shouldEnforceMfa: vi.fn(() => false),
+}))
+
 import { createClient } from '@/lib/supabase/server'
+import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { GET, POST } from '../route'
 
 const mockCreateClient = vi.mocked(createClient)
+const mockShouldEnforceMfa = vi.mocked(shouldEnforceMfa)
 
 function createPathParams(path: string[]) {
   return { params: Promise.resolve({ path }) }
@@ -40,6 +48,9 @@ function createPathParams(path: string[]) {
 describe('Extension Catch-All Route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // clearAllMocks doesn't reset implementations — re-assert the default so the
+    // AAL2 test's mockReturnValue(true) can't leak into later cases.
+    mockShouldEnforceMfa.mockReturnValue(false)
     extensionRegistry.clear()
   })
 
@@ -86,6 +97,40 @@ describe('Extension Catch-All Route', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
+  })
+
+  it('blocks a session that has not completed MFA (AAL2) and never dispatches the handler', async () => {
+    // Regression for the audit fix: the dispatcher is the single chokepoint for
+    // the whole extension surface, so an AAL1 (single-factor) session on hosted
+    // must be rejected before any extension handler runs.
+    const handler = vi.fn()
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/data', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1', app_metadata: {} } },
+      error: null,
+    })
+    // MFA is required for this user, but only AAL1 has been reached.
+    mockShouldEnforceMfa.mockReturnValue(true)
+    ;(supabase.auth as unknown as { mfa: unknown }).mfa = {
+      getAuthenticatorAssuranceLevel: vi
+        .fn()
+        .mockResolvedValue({ data: { currentLevel: 'aal1', nextLevel: 'aal2' } }),
+    }
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/data')
+    const response = await GET(request, createPathParams(['test-ext', 'data']))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it('returns 404 for unmatched method/path', async () => {

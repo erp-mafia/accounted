@@ -49,6 +49,12 @@ export async function GET(request: Request) {
 
   // Session auth resolves the active company; API-key auth uses the key's bound company.
   const companyId = keyCompanyId ?? await requireCompanyId(supabase, userId)
+  // Defense in depth: never run the event_log query with an empty/undefined
+  // scope. requireCompanyId throws when there is no company, but guard the
+  // key-bound path too so a malformed binding can't widen the query scope.
+  if (!companyId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   // Validate query params
   const result = validateQuery(request, EventsQuerySchema)

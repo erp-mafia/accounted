@@ -296,6 +296,9 @@ export const POST = withRouteContext(
         })
         .eq('id', id)
         .eq('company_id', companyId)
+        // CAS: only undo OUR flip. If a concurrent request already transitioned
+        // the row away from newStatus, don't clobber that legitimate state.
+        .eq('status', newStatus)
       await cancelOrphanedPaymentEntry(
         supabase, companyId!, user.id, journalEntryId,
         'Automatiskt makulerad: betalningspost kunde inte registreras',

@@ -63,7 +63,10 @@ export async function generateAvgifterBasis(
     avgifter_basis: number
     avgifter_amount: number
     avgifter_rate: number
-    salary_run: { period_year: number; period_month: number; status: string }
+    // PostgREST's type-level select parser models an embedded resource as an
+    // array, so keep this `unknown` (the rows are read via an explicit cast
+    // below) to stay assignable regardless of postgrest-js version.
+    salary_run: unknown
   }>(({ from, to }) =>
     supabase
       .from('salary_run_employees')
