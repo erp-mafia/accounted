@@ -64,21 +64,26 @@ function getIncomeYear(fiscalYearEnd: string): string {
 /**
  * Normalize an enskild firma identity (personnummer) to 12 digits YYYYMMDDNNNN.
  * Unlike INK2's juridisk-person formatter, this does NOT prepend "16": for a
- * physical person the century is the birth century. A 10-digit number (YYMMDDNNNN)
- * is expanded with the standard heuristic — the result must keep the person under
- * 100 years old relative to the income year (matches Skatteverket's '-'/'+' rule).
+ * physical person the century is the birth century.
+ *
+ * For a 10-digit number (YYMMDDNNNN) the century is inferred from age: a NE-bilaga
+ * filer is an adult, so we pick the century that yields a plausible adult age
+ * (≥18, <110) at the income year, preferring 1900s. This avoids mapping e.g. a
+ * 1924-born filer for income year 2024 (yy=24) to 2024. (Skatteverket's '-'/'+'
+ * century separator is lost once non-digits are stripped, so age is used instead.)
+ *
+ * Returns the all-zero placeholder for missing/unexpected input; callers validate
+ * the result and surface a generation error rather than shipping an invalid file.
  */
 function formatIdentityNumber12(raw: string | null, incomeYear: number): string {
   const digits = (raw || '').replace(/\D/g, '')
   if (digits.length === 12) return digits
   if (digits.length === 10) {
     const yy = parseInt(digits.substring(0, 2), 10)
-    const currentTwo = incomeYear % 100
-    const century = yy <= currentTwo ? '20' : '19'
+    const ageIf2000s = incomeYear - (2000 + yy)
+    const century = ageIf2000s >= 18 && ageIf2000s < 110 ? '20' : '19'
     return `${century}${digits}`
   }
-  // Unknown / missing — emit a syntactically valid placeholder so the rest of the
-  // file is still well-formed; the route surfaces generation failures separately.
   return '000000000000'
 }
 
@@ -114,10 +119,8 @@ function sanitizeString(str: string): string {
 }
 
 /** Generate the INFO.SRU file content (submitter metadata). */
-function generateInfoSru(declaration: NEDeclaration, now: Date): string {
+function generateInfoSru(declaration: NEDeclaration, now: Date, identity12: string): string {
   const lines: string[] = []
-  const incomeYear = parseInt(getIncomeYear(declaration.fiscalYear.end), 10)
-  const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
 
   // DATABESKRIVNING block (required order)
   lines.push('#DATABESKRIVNING_START')
@@ -145,12 +148,10 @@ function generateInfoSru(declaration: NEDeclaration, now: Date): string {
 }
 
 /** Generate the BLANKETTER.SRU file content (a single NE blankett block). */
-function generateBlanketterSru(declaration: NEDeclaration, now: Date): string {
+function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12: string): string {
   const lines: string[] = []
   const incomeYearStr = getIncomeYear(declaration.fiscalYear.end)
-  const incomeYear = parseInt(incomeYearStr, 10)
   const periodSuffix = computePeriodSuffix(declaration.fiscalYear.end)
-  const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
   const taxpayerName = sanitizeString(declaration.companyInfo.companyName)
 
   lines.push(`#BLANKETT NE-${incomeYearStr}${periodSuffix}`)
@@ -181,10 +182,22 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date): string {
 /** Generate a complete SRU submission (INFO.SRU + BLANKETTER.SRU) for the NE-bilaga. */
 export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmission {
   const now = new Date()
+  const incomeYear = parseInt(getIncomeYear(declaration.fiscalYear.end), 10)
+  const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
+
+  // A valid NE filing requires the owner's personnummer. Refuse rather than ship a
+  // structurally well-formed file with a placeholder #IDENTITET that Skatteverket
+  // would reject at upload — surface it as a generation error the route can show.
+  if (!/^\d{12}$/.test(identity12) || identity12 === '000000000000') {
+    throw new Error(
+      'NE-bilagan kräver ett giltigt personnummer (ÅÅÅÅMMDDNNNN) för den enskilda näringsidkaren. ' +
+        'Komplettera personnumret i företagsinställningarna innan du laddar ner SRU-filen.',
+    )
+  }
 
   return {
-    infoSru: generateInfoSru(declaration, now),
-    blanketterSru: generateBlanketterSru(declaration, now),
+    infoSru: generateInfoSru(declaration, now, identity12),
+    blanketterSru: generateBlanketterSru(declaration, now, identity12),
     generatedAt: now.toISOString(),
   }
 }
@@ -199,6 +212,14 @@ export function validateBlanketterSru(content: string): {
   if (!/^#BLANKETT NE-/m.test(content)) errors.push('Missing #BLANKETT NE- block')
   if (!/^#IDENTITET /m.test(content)) errors.push('Missing #IDENTITET')
   if (!/^#NAMN /m.test(content)) errors.push('Missing #NAMN')
+  // Räkenskapsårets datum are mandatory for income declarations; their absence is
+  // a level-2 rejection at Skatteverket, so catch it in the pre-flight.
+  if (!new RegExp(`^#UPPGIFT ${FISCAL_START_CODE} `, 'm').test(content)) {
+    errors.push(`Missing #UPPGIFT ${FISCAL_START_CODE} (räkenskapsårets början)`)
+  }
+  if (!new RegExp(`^#UPPGIFT ${FISCAL_END_CODE} `, 'm').test(content)) {
+    errors.push(`Missing #UPPGIFT ${FISCAL_END_CODE} (räkenskapsårets slut)`)
+  }
   if (!/^#FIL_SLUT/m.test(content)) errors.push('Missing #FIL_SLUT terminator')
 
   const blankettslutCount = (content.match(/^#BLANKETTSLUT/gm) || []).length
@@ -212,9 +233,10 @@ export function validateBlanketterSru(content: string): {
   }
 }
 
-/** Get the ZIP filename for download. */
+/** Get the ZIP filename for download. Uses the income year (fiscal year END) so the
+ * filename matches the blankett type/identity for broken fiscal years. */
 export function getZipFilename(declaration: NEDeclaration): string {
-  const year = declaration.fiscalYear.start.substring(0, 4)
+  const year = getIncomeYear(declaration.fiscalYear.end)
   const orgNumber = declaration.companyInfo.orgNumber?.replace(/\D/g, '') || 'unknown'
   return `NE_SRU_${orgNumber}_${year}.zip`
 }

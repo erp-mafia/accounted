@@ -141,6 +141,28 @@ describe('NE-bilaga SRU generator', () => {
       )
       expect(infoSru).toContain('#ORGNR 199001019802')
     })
+
+    it('infers 1900s for a 10-digit yy that would map to a child in the 2000s', () => {
+      // yy=24 for income year 2024: naive yy<=24 → 2024 (age 0); adult-age logic must pick 1924.
+      const { infoSru } = generateNESRUSubmission(
+        makeDeclaration({ companyInfo: { orgNumber: '2401019808' } })
+      )
+      expect(infoSru).toContain('#ORGNR 192401019808')
+    })
+  })
+
+  describe('identity validation (no silent placeholder file)', () => {
+    it('throws when the personnummer is missing', () => {
+      expect(() =>
+        generateNESRUSubmission(makeDeclaration({ companyInfo: { orgNumber: null } }))
+      ).toThrow(/personnummer/i)
+    })
+
+    it('throws when the identity has an unexpected length', () => {
+      expect(() =>
+        generateNESRUSubmission(makeDeclaration({ companyInfo: { orgNumber: '12345' } }))
+      ).toThrow(/personnummer/i)
+    })
   })
 
   describe('validateBlanketterSru', () => {
@@ -156,6 +178,13 @@ describe('NE-bilaga SRU generator', () => {
       const result = validateBlanketterSru(blanketterSru.replace('#FIL_SLUT', ''))
       expect(result.isValid).toBe(false)
       expect(result.errors).toContain('Missing #FIL_SLUT terminator')
+    })
+
+    it('fails when the mandatory fiscal-year date field (7011) is missing', () => {
+      const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
+      const result = validateBlanketterSru(blanketterSru.replace(/#UPPGIFT 7011 \d+\r?\n/, ''))
+      expect(result.isValid).toBe(false)
+      expect(result.errors.some((e) => e.includes('7011'))).toBe(true)
     })
   })
 
@@ -175,6 +204,12 @@ describe('NE-bilaga SRU generator', () => {
   describe('getZipFilename', () => {
     it('produces NE_SRU_<id>_<year>.zip', () => {
       expect(getZipFilename(makeDeclaration())).toBe('NE_SRU_199001019802_2024.zip')
+    })
+
+    it('uses the income year (fiscal year end) for a broken fiscal year', () => {
+      expect(
+        getZipFilename(makeDeclaration({ fiscalYear: { start: '2024-05-01', end: '2025-04-30' } }))
+      ).toBe('NE_SRU_199001019802_2025.zip')
     })
   })
 })
