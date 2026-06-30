@@ -361,11 +361,11 @@ export function EfDeclarationSection({
         <CardContent>
           <Button asChild variant="outline">
             <Link
-              href={`/api/reports/ne-bilaga?fiscal_period_id=${fiscalPeriodId}`}
+              href={`/api/reports/ne-bilaga?period_id=${fiscalPeriodId}&format=sru`}
               prefetch={false}
             >
               <FileDown className="mr-2 h-4 w-4" />
-              Förhandsgranska NE-bilaga
+              Ladda ner NE-bilaga (SRU)
             </Link>
           </Button>
         </CardContent>

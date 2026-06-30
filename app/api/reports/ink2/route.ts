@@ -6,6 +6,7 @@ import {
 } from '@/lib/reports/ink2/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { encodeISO88591 } from '@/lib/reports/sru-encoding'
 import JSZip from 'jszip'
 
 /**
@@ -67,13 +68,3 @@ export const GET = withRouteContext(
     }
   },
 )
-
-/** Encode a string as ISO 8859-1 bytes; characters outside Latin-1 become '?'. */
-function encodeISO88591(str: string): Uint8Array {
-  const bytes = new Uint8Array(str.length)
-  for (let i = 0; i < str.length; i++) {
-    const code = str.charCodeAt(i)
-    bytes[i] = code <= 0xFF ? code : 0x3F
-  }
-  return bytes
-}

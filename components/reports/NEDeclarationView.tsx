@@ -12,6 +12,7 @@ import { formatCurrency } from '@/lib/utils'
 export function NEDeclarationView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<NEDeclaration | null>(null)
   const [loading, setLoading] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetchDeclaration = async () => {
@@ -32,8 +33,24 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
     }
   }
 
-  const downloadSRU = () => {
-    window.open(`/api/reports/ne-bilaga?period_id=${periodId}&format=sru`, '_blank')
+  const downloadSRU = async () => {
+    setDownloading(true)
+    try {
+      const res = await fetch(`/api/reports/ne-bilaga?period_id=${periodId}&format=sru`)
+      if (!res.ok) throw new Error('Download failed')
+      const blob = await res.blob()
+      const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'NE_SRU.zip'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Kunde inte ladda ner SRU-filer')
+    } finally {
+      setDownloading(false)
+    }
   }
 
   // NE ruta labels
@@ -72,9 +89,9 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               {loading ? 'Laddar...' : 'Hämta NE-bilaga'}
             </Button>
             {data && (
-              <Button variant="outline" onClick={downloadSRU}>
+              <Button variant="outline" onClick={downloadSRU} disabled={downloading}>
                 <Download className="h-4 w-4 mr-2" />
-                Ladda ner SRU-fil
+                {downloading ? 'Laddar ner...' : 'Ladda ner SRU-fil'}
               </Button>
             )}
           </div>

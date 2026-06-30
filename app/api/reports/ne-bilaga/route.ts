@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server'
 import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import {
-  generateSRUFile,
-  sruFileToString,
-  getSRUFilename,
+  generateNESRUSubmission,
+  getZipFilename,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { encodeISO88591 } from '@/lib/reports/sru-encoding'
+import JSZip from 'jszip'
 
 /**
  * GET /api/reports/ne-bilaga
@@ -34,14 +35,23 @@ export const GET = withRouteContext(
       const declaration = await generateNEDeclaration(supabase, companyId!, periodId)
 
       if (format === 'sru') {
-        const sruFile = generateSRUFile(declaration)
-        const sruContent = sruFileToString(sruFile)
-        const filename = getSRUFilename(declaration)
+        const submission = generateNESRUSubmission(declaration)
 
-        return new NextResponse(sruContent, {
+        // Skatteverket requires ISO 8859-1 (Latin-1); UTF-8 mojibakes å/ä/ö and is rejected.
+        const infoBytes = encodeISO88591(submission.infoSru)
+        const blanketterBytes = encodeISO88591(submission.blanketterSru)
+
+        const zip = new JSZip()
+        zip.file('INFO.SRU', infoBytes)
+        zip.file('BLANKETTER.SRU', blanketterBytes)
+
+        const zipArrayBuffer = await zip.generateAsync({ type: 'arraybuffer' })
+        const filename = getZipFilename(declaration)
+
+        return new NextResponse(zipArrayBuffer, {
           status: 200,
           headers: {
-            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Type': 'application/zip',
             'Content-Disposition': `attachment; filename="${filename}"`,
             'X-Request-Id': requestId,
           },
