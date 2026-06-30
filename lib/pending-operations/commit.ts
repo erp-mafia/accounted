@@ -1017,6 +1017,24 @@ async function commitMarkInvoicePaid(
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
+  // Paid/remaining/status math + overpayment guard via the shared
+  // planInvoicePayment helper — the single source of truth across the three
+  // mark-paid surfaces (this agent path, the dashboard route, and the v1 API).
+  // This path settles the full remaining (no custom lines), so it can never
+  // overpay, but routing through the helper keeps the state identical. Runs
+  // BEFORE the JE below so a rejected payment never burns a voucher number.
+  const paymentAmount = (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
+  const payment = planInvoicePayment(invoice, paymentAmount)
+  if (!payment.ok) {
+    return {
+      error:
+        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
+        'Betalningsbeloppet är större än fakturans återstående belopp.',
+      status: 400,
+    }
+  }
+  const { newPaidAmount, newRemaining, newStatus } = payment.plan
+
   if (isRealInvoice) {
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
@@ -1049,10 +1067,15 @@ async function commitMarkInvoicePaid(
   // invoice no-ops here instead of double-booking the payment.
   const { data: updateResult, error: updateError } = await supabase
     .from('invoices')
-    .update({ status: 'paid', paid_at: now, paid_amount: invoice.total })
+    .update({
+      status: newStatus,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+    })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue'])
+    .in('status', ['sent', 'overdue', 'partially_paid'])
     .select('id')
 
   if (updateError) {
@@ -1083,7 +1106,32 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  return { data: { status: 'paid', journal_entry_id: journalEntryId } }
+  // Notify subscribers — invoice.paid fans out to registered webhooks
+  // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
+  // so an emit failure must not fail the operation. Parity with the v1 and
+  // dashboard mark-paid routes, which previously emitted while this path did not.
+  try {
+    await eventBus.emit({
+      type: 'invoice.paid',
+      payload: {
+        invoice: {
+          ...(invoice as Invoice),
+          status: newStatus,
+          paid_amount: newPaidAmount,
+          remaining_amount: newRemaining,
+          paid_at: newStatus === 'paid' ? now : (invoice as Invoice).paid_at,
+        } as Invoice,
+        companyId,
+        userId,
+        paymentAmount,
+        paymentDate,
+      },
+    })
+  } catch (err) {
+    log.warn('invoice.paid emit failed', err)
+  }
+
+  return { data: { status: newStatus, remaining_amount: newRemaining, journal_entry_id: journalEntryId } }
 }
 
 async function commitSendInvoice(

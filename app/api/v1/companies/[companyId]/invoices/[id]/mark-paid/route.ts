@@ -42,6 +42,8 @@ import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/e
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
@@ -259,27 +261,35 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // when a concurrent partial payment slips through the pre-flight check
     // (pre-flight sees status='sent' but the race-guard UPDATE later sees
     // status='partially_paid' so a second full-total amount would be booked
-    // against an already-reduced AR balance).
+    // against an already-reduced AR balance). This is the booking-currency
+    // amount (SEK for custom lines) used by the duplicate guard, the JE
+    // builder, and the invoice.paid event below.
     const paymentAmount = customLines
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
       : (typed.remaining_amount ?? typed.total)
 
-    const isPartial =
-      customLines !== undefined &&
-      Math.abs(paymentAmount - (typed.remaining_amount ?? typed.total)) > 0.005 // same half-öre epsilon as above
-
-    const newRemaining = Math.max(
-      0,
-      Math.round(((typed.remaining_amount ?? typed.total) - paymentAmount) * 100) / 100,
-    )
-    // 0.005 epsilon = half an öre. After rounding to 2 decimals above,
-    // newRemaining is in steps of 0.01; values ≤ 0.005 only arise from
-    // floating-point artefacts (e.g. 0.0000000001 from a SEK 99.99 payment
-    // against a SEK 99.99 invoice). Treating those as 'paid' avoids
-    // permanently-partially_paid invoices on full payment.
-    const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
-    const newPaidAmount =
-      Math.round(((typed.paid_amount ?? 0) + paymentAmount) * 100) / 100
+    // Ledger math + overpayment guard via the shared planInvoicePayment helper —
+    // the single source of truth across all three mark-paid surfaces (this route,
+    // the dashboard route, and the agent commit path), so the paid/remaining/
+    // status math can never drift again. Custom lines are SEK; convert to invoice
+    // currency for the comparison so a foreign-currency invoice isn't falsely
+    // rejected as overpaid (the default path is already in invoice currency).
+    const fxRate =
+      typed.currency && typed.currency !== 'SEK' && typed.exchange_rate
+        ? typed.exchange_rate
+        : 1
+    const paymentAmountInInvoiceCurrency = customLines
+      ? roundOre(paymentAmount / fxRate)
+      : paymentAmount
+    const payment = planInvoicePayment(typed, paymentAmountInInvoiceCurrency)
+    if (!payment.ok) {
+      return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', ctx.log, {
+        requestId: ctx.requestId,
+        details: payment.details,
+      })
+    }
+    const { newPaidAmount, newRemaining, newStatus, isFullyPaid } = payment.plan
+    const isPartial = customLines !== undefined && !isFullyPaid
 
     // Duplicate-payment guard: surface a likely-matching unlinked inbound
     // bank transaction before booking (or before dry-run preview, so a

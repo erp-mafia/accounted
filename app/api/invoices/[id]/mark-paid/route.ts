@@ -12,6 +12,9 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { eventBus } from '@/lib/events'
+import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 ensureInitialized()
@@ -144,6 +147,30 @@ export const POST = withRouteContext(
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
+    // Ledger math + overpayment guard via the shared planInvoicePayment helper —
+    // the same single source of truth the match-invoice flow uses, so the three
+    // mark-paid surfaces (this route, the v1 API, and the agent commit path)
+    // cannot drift again. Runs BEFORE any journal entry is created so a doomed
+    // overpayment never burns a voucher number. paymentAmount and the
+    // duplicate-payment guard above operate in the booking currency (SEK for
+    // custom lines); convert to invoice currency for the ledger comparison so a
+    // foreign-currency invoice isn't falsely rejected as overpaid.
+    const fxRate =
+      invoice.currency && invoice.currency !== 'SEK' && invoice.exchange_rate
+        ? invoice.exchange_rate
+        : 1
+    const paymentAmountInInvoiceCurrency = customLines
+      ? roundOre(paymentAmount / fxRate)
+      : paymentAmount
+    const payment = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency)
+    if (!payment.ok) {
+      return errorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', opLog, {
+        requestId,
+        details: payment.details,
+      })
+    }
+    const { newPaidAmount, newRemaining, newStatus } = payment.plan
+
     const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
     let journalEntryId: string | null = null
 
@@ -225,13 +252,14 @@ export const POST = withRouteContext(
     const { data: updateResult, error: updateError } = await supabase
       .from('invoices')
       .update({
-        status: 'paid',
-        paid_at: now,
-        paid_amount: invoice.total,
+        status: newStatus,
+        paid_amount: newPaidAmount,
+        remaining_amount: newRemaining,
+        ...(newStatus === 'paid' ? { paid_at: now } : {}),
       })
       .eq('id', id)
       .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue'])
+      .in('status', ['sent', 'overdue', 'partially_paid'])
       .select('id')
 
     if (updateError) {
@@ -265,11 +293,36 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_RACE', opLog, { requestId })
     }
 
+    // Notify subscribers — invoice.paid fans out to registered webhooks
+    // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
+    // so an emit failure must not fail the request. Mirrors the v1 route.
+    try {
+      await eventBus.emit({
+        type: 'invoice.paid',
+        payload: {
+          invoice: {
+            ...(invoice as Invoice),
+            status: newStatus,
+            paid_amount: newPaidAmount,
+            remaining_amount: newRemaining,
+            paid_at: newStatus === 'paid' ? now : (invoice as Invoice).paid_at,
+          } as Invoice,
+          companyId: companyId!,
+          userId: user.id,
+          paymentAmount: paymentAmountInInvoiceCurrency,
+          paymentDate,
+        },
+      })
+    } catch (err) {
+      opLog.error('invoice.paid emit failed', err as Error, { invoiceId: id })
+    }
+
     return NextResponse.json({
       success: true,
-      status: 'paid',
-      paid_at: now,
-      paid_amount: invoice.total,
+      status: newStatus,
+      paid_at: newStatus === 'paid' ? now : null,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,
     })
   },

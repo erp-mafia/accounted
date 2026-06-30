@@ -48,6 +48,7 @@ import {
   createInvoiceCashEntry as mockedCash,
 } from '@/lib/bookkeeping/invoice-entries'
 import { POST as markPaid } from '../route'
+import { eventBus } from '@/lib/events'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -137,6 +138,7 @@ const PAID_INVOICE = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  eventBus.clear()
   mockValidate.mockResolvedValue({
     userId: USER_ID,
     companyId: COMPANY_ID,
@@ -160,6 +162,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
       }),
     )
 
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
+
     const res = await markPaid(
       makeRequest(
         `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
@@ -175,6 +180,11 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
     expect(mockPayment).toHaveBeenCalled()
     expect(mockCash).not.toHaveBeenCalled()
+    // invoice.paid must fire so registered webhooks fan out (issue #825).
+    expect(paidHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: COMPANY_ID, userId: USER_ID, paymentAmount: 12500 }),
+    )
   })
 
   it('uses the cash-basis booking when accounting_method=cash', async () => {
@@ -327,6 +337,36 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+  })
+
+  it('returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING when custom lines overpay the invoice', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: SENT_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+
+    // 15000 paid against a 12500 remaining → shared planInvoicePayment guard
+    // rejects BEFORE any journal entry is booked.
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          lines: [
+            { account_number: '1930', debit_amount: 15000, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 15000 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockPayment).not.toHaveBeenCalled()
   })
 
   it('returns 400 INVOICE_PAID_NOT_PAYABLE for draft invoices', async () => {
