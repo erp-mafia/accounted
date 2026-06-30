@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -232,16 +232,16 @@ async function handleRequest(
     return decorateResponse(response, requestId)
   }
 
-  // Auth check
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return decorateResponse(
-      NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-      requestId,
-    )
+  // Auth check — requireAuth() enforces MFA (AAL2) on hosted, which the previous
+  // inline supabase.auth.getUser() did not. This dispatcher is the single
+  // chokepoint for the entire enabled-extension surface (banking sync, document
+  // upload/booking, supplier-invoice flows, migration), so enforcing MFA here
+  // closes the gap across all of them at once.
+  const auth = await requireAuth()
+  if (auth.error) {
+    return decorateResponse(auth.error, requestId)
   }
+  const { user, supabase } = auth
 
   // If path params were extracted, create a new Request with them as search params
   let handlerRequest = request

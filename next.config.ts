@@ -7,8 +7,6 @@ const isDev = process.env.NODE_ENV === "development";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
-const activepiecesUrl = process.env.ACTIVEPIECES_URL ?? "";
-
 const cspDirectives = [
   "default-src 'self'",
   // Recapt: scoped to the two specific hosts the SDK actually contacts —
@@ -29,7 +27,7 @@ const cspDirectives = [
   // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
   // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
   "object-src 'self' blob:",
-  `frame-src 'self' blob: ${supabaseUrl}${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
+  `frame-src 'self' blob: ${supabaseUrl}`,
   "frame-ancestors 'none'",
 ].join("; ");
 

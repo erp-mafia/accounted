@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).",
   "rawRouteAuth": {
-    "count": 168,
+    "count": 165,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -31,7 +31,6 @@
       "app/api/bookkeeping/journal-entries/[id]/chain/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/no-document-required/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/notes/route.ts",
-      "app/api/bookkeeping/journal-entries/[id]/route.ts",
       "app/api/bookkeeping/journal-entries/route.ts",
       "app/api/bookkeeping/mapping-rules/evaluate/route.ts",
       "app/api/bookkeeping/mapping-rules/route.ts",
@@ -58,7 +57,6 @@
       "app/api/events/route.ts",
       "app/api/extensions/[sector]/[slug]/data/route.ts",
       "app/api/extensions/[sector]/[slug]/settings/route.ts",
-      "app/api/extensions/ext/[...path]/route.ts",
       "app/api/extensions/skatteverket/skattekonto/drift/route.ts",
       "app/api/import/sie/[id]/route.ts",
       "app/api/import/sie/create-accounts/route.ts",
@@ -67,7 +65,6 @@
       "app/api/invoices/[id]/convert/route.ts",
       "app/api/invoices/[id]/mark-sent/route.ts",
       "app/api/invoices/[id]/pdf/route.ts",
-      "app/api/invoices/[id]/route.ts",
       "app/api/invoices/preview-pdf/route.ts",
       "app/api/kpi/preferences/route.ts",
       "app/api/mcp-oauth/authorize/route.ts",
@@ -174,6 +171,6 @@
     ]
   },
   "naiveOreRound": {
-    "count": 659
+    "count": 655
   }
 }

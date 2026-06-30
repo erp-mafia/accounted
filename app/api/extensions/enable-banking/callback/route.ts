@@ -1,9 +1,17 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { ensureInitialized } from '@/lib/init'
 import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
 import { upsertFromPsd2 } from '@/lib/cash-accounts/service'
+
+// This route emits bank_connection.consent_granted / .cash_account_mirror_failed
+// (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
+// load so registerEventLogHandler() has subscribed before the first emit() —
+// otherwise the audit row is silently dropped on a cold instance where this
+// redirect route is the first event-emitting code path to execute.
+ensureInitialized()
 
 // Suggested BAS account per currency. Mirrors the AccountPickerDialog defaults
 // (SEK→1930, EUR→1932, USD→1933, GBP→1934). The user can re-map in the picker

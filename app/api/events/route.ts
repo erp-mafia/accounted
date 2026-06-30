@@ -23,6 +23,11 @@ export async function GET(request: Request) {
   // Dual auth: API key or session
   let userId: string
   let supabase: SupabaseClient
+  // When authenticated via an API key, the key is BOUND to a specific company.
+  // Honor that binding (least privilege) rather than resolving the user's
+  // active company — otherwise a key scoped to company A would leak company B's
+  // events whenever the user's active_company_id happened to point elsewhere.
+  let keyCompanyId: string | null = null
 
   const token = extractBearerToken(request)
   if (token?.startsWith('gnubok_sk_')) {
@@ -31,6 +36,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: authResult.error }, { status: authResult.status })
     }
     userId = authResult.userId
+    keyCompanyId = authResult.companyId
     supabase = createServiceClientNoCookies()
   } else {
     supabase = await createClient()
@@ -41,7 +47,8 @@ export async function GET(request: Request) {
     userId = user.id
   }
 
-  const companyId = await requireCompanyId(supabase, userId)
+  // Session auth resolves the active company; API-key auth uses the key's bound company.
+  const companyId = keyCompanyId ?? await requireCompanyId(supabase, userId)
 
   // Validate query params
   const result = validateQuery(request, EventsQuerySchema)
