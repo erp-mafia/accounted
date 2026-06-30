@@ -140,7 +140,7 @@ function RegisterPageContent() {
       })
 
       if (error) {
-        console.error('[register] BankID verifyOtp failed', error)
+        console.error('[register] BankID verifyOtp failed', error.message)
         toast({
           title: t('register_failed_complete'),
           description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
@@ -152,7 +152,7 @@ function RegisterPageContent() {
       router.push('/select-company')
       router.refresh()
     } catch (error) {
-      console.error('[register] BankID signup error', error)
+      console.error('[register] BankID signup error', error instanceof Error ? error.message : String(error))
       toast({
         title: t('register_failed_title'),
         description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
@@ -238,7 +238,7 @@ function RegisterPageContent() {
               return
             }
           } catch (err) {
-            console.error('[register] invite acceptance failed:', err)
+            console.error('[register] invite acceptance failed:', err instanceof Error ? err.message : String(err))
           }
         }
 
@@ -260,7 +260,7 @@ function RegisterPageContent() {
       setEmail(emailValue)
       setIsRegistered(true)
     } catch (error) {
-      console.error('[register] unexpected exception', error)
+      console.error('[register] unexpected exception', error instanceof Error ? error.message : String(error))
       toast({
         title: t('register_failed_title'),
         description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
