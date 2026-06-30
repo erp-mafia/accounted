@@ -337,21 +337,27 @@ export async function calculateVatDeclaration(
     if (t) revenueByRate[rate] = round(t.credit - t.debit)
   }
 
-  // Count journal entries by source type for metadata
-  const { data: entryCounts } = await supabase
-    .from('journal_entries')
-    .select('source_type')
-    .eq('company_id', companyId)
-    .in('status', ['posted', 'reversed'])
-    .gte('entry_date', start)
-    .lte('entry_date', end)
+  // Count journal entries by source type for metadata.
+  // Paginated with a stable id order so the invoice/transaction counts don't
+  // silently truncate at 1000 entries for a busy VAT period.
+  const entryCounts = await fetchAllRows<{ id: string; source_type: string }>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('id, source_type')
+      .eq('company_id', companyId)
+      .in('status', ['posted', 'reversed'])
+      .gte('entry_date', start)
+      .lte('entry_date', end)
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (e) => e.id })
 
   const invoiceSources = new Set([
     'invoice_created', 'invoice_paid', 'invoice_cash_payment', 'credit_note',
   ])
   let invoiceCount = 0
   let transactionCount = 0
-  for (const e of entryCounts || []) {
+  for (const e of entryCounts) {
     if (invoiceSources.has(e.source_type)) invoiceCount++
     else if (e.source_type === 'bank_transaction') transactionCount++
   }

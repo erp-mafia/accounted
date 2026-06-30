@@ -195,17 +195,20 @@ export async function generateNEDeclaration(
     throw new Error('NE declaration is only for enskild firma (sole proprietorship)')
   }
 
-  // Fetch all posted journal entries with lines for this period
-  const { data: entries, error: entriesError } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .in('status', ['posted', 'reversed'])
-
-  if (entriesError) {
-    throw new Error(`Failed to fetch journal entries: ${entriesError.message}`)
-  }
+  // Fetch all posted journal entries with lines for this period.
+  // Paginated: a period can exceed PostgREST's 1000-row cap, and a silent
+  // truncation here would under-report the NE-bilaga tax declaration. PostgREST
+  // ranges count parent rows, so the embedded lines come with each entry.
+  const entries = await fetchAllRows<JournalEntry>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .in('status', ['posted', 'reversed'])
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (e) => e.id })
 
   // Fetch chart of accounts for account names
   const accounts = await fetchAllRows<{ account_number: string; account_name: string }>(({ from, to }) =>

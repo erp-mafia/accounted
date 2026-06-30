@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
@@ -40,11 +41,23 @@ export async function generateARReconciliation(
 
   // total/paid_amount are stored in invoice currency; account 1510 is in SEK
   // (booked at invoice-date rate), so convert each row before summing.
-  const { data: invoices } = await supabase
-    .from('invoices')
-    .select('total, paid_amount, currency, exchange_rate')
-    .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue'])
+  // Paginated: a company with >1000 open invoices would otherwise be silently
+  // truncated, manufacturing a phantom reconciliation gap.
+  const invoices = await fetchAllRows<{
+    id: string
+    total: number | null
+    paid_amount: number | null
+    currency: string | null
+    exchange_rate: number | null
+  }>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('id, total, paid_amount, currency, exchange_rate')
+      .eq('company_id', companyId)
+      .in('status', ['sent', 'overdue'])
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
 
   let unconvertedFxCount = 0
   const arLedgerTotal = (invoices || [])
@@ -73,28 +86,37 @@ export async function generateARReconciliation(
   // trial balance / balance sheet use. A corrected invoice flips its original to
   // status='reversed'; that reversed leg is cancelled by the posted storno, so
   // both must be summed or a corrected invoice manufactures a phantom gap.
-  const { data: journalLines } = await supabase
-    .from('journal_entry_lines')
-    .select(`
-      debit_amount,
-      credit_amount,
-      journal_entry:journal_entries!inner(
-        status,
-        company_id,
-        fiscal_period_id
-      )
-    `)
-    .in('account_number', ['1510', '1513'])
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', periodId)
-    .in('journal_entries.status', ['posted', 'reversed'])
+  // Paginated with a stable id order (+ dedupe defense) so a period with >1000
+  // ledger lines on 1510/1513 isn't silently truncated into a phantom gap.
+  const journalLines = await fetchAllRows<{
+    id: string
+    debit_amount: number | null
+    credit_amount: number | null
+  }>(({ from, to }) =>
+    supabase
+      .from('journal_entry_lines')
+      .select(`
+        id,
+        debit_amount,
+        credit_amount,
+        journal_entry:journal_entries!inner(
+          status,
+          company_id,
+          fiscal_period_id
+        )
+      `)
+      .in('account_number', ['1510', '1513'])
+      .eq('journal_entries.company_id', companyId)
+      .eq('journal_entries.fiscal_period_id', periodId)
+      .in('journal_entries.status', ['posted', 'reversed'])
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (l) => l.id })
 
   // Both 1510 and 1513 are debit-normal assets: balance = debits - credits
   let account1510Balance = 0
-  if (journalLines) {
-    for (const line of journalLines) {
-      account1510Balance = Math.round((account1510Balance + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)) * 100) / 100
-    }
+  for (const line of journalLines) {
+    account1510Balance = Math.round((account1510Balance + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)) * 100) / 100
   }
 
   const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100

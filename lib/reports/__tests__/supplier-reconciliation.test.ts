@@ -10,7 +10,7 @@ let calls: Array<{ method: string; args: unknown[] }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in']) {
+  for (const m of ['select', 'eq', 'in', 'order', 'range']) {
     b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
       calls.push({ method: m, args })
       return b
@@ -69,6 +69,25 @@ describe('generateReconciliation', () => {
     expect(result.account_2440_balance).toBe(8000)
     expect(result.difference).toBe(0)
     expect(result.is_reconciled).toBe(true)
+  })
+
+  it('paginates the 2440 ledger query — sums >1000 lines instead of truncating at 1000', async () => {
+    // Regression guard for the silent PostgREST 1000-row cap: fetchAllRows must
+    // page through ALL ledger lines. A full first page (length === PAGE_SIZE)
+    // forces a second fetch.
+    // Unique ids so the dedupe-by-id safety net doesn't collapse rows.
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `p1-${i}`, debit_amount: 0, credit_amount: 10 }))
+    const page2 = Array.from({ length: 500 }, (_, i) => ({ id: `p2-${i}`, debit_amount: 0, credit_amount: 10 }))
+    results = [
+      { data: [], error: null },     // 0: supplier_invoices — none open
+      { data: page1, error: null },  // 1: 2440 lines page 1 (full → triggers next page)
+      { data: page2, error: null },  // 2: 2440 lines page 2 (partial → stop)
+    ]
+
+    const result = await generateReconciliation(supabase, 'company-1', 'period-1')
+
+    // 1500 lines × 10 = 15 000. A 1000-row truncation would wrongly yield 10 000.
+    expect(result.account_2440_balance).toBe(15000)
   })
 
   it('detects mismatch when difference != 0', async () => {

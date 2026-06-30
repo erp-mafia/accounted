@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Arbetsgivaravgiftsunderlag — Employer contribution basis report.
@@ -53,21 +54,33 @@ export async function generateAvgifterBasis(
 ): Promise<AvgifterBasisReport> {
   const r = (x: number) => Math.round(x * 100) / 100
 
-  // Load all salary run employees for booked runs this year
-  const { data: runEmployees, error } = await supabase
-    .from('salary_run_employees')
-    .select(`
-      avgifter_basis,
-      avgifter_amount,
-      avgifter_rate,
-      salary_run:salary_runs!inner(period_year, period_month, status)
-    `)
-    .eq('company_id', companyId)
-
-  if (error) throw new Error(`Failed to load avgifter data: ${error.message}`)
+  // Load all salary run employees for booked runs this year.
+  // Paginated with a stable id order: a multi-year/high-headcount company can
+  // exceed PostgREST's 1000-row cap, and a silent truncation here would
+  // under-report the arbetsgivaravgifter basis reconciled against AGI filings.
+  const runEmployees = await fetchAllRows<{
+    id: string
+    avgifter_basis: number
+    avgifter_amount: number
+    avgifter_rate: number
+    salary_run: { period_year: number; period_month: number; status: string }
+  }>(({ from, to }) =>
+    supabase
+      .from('salary_run_employees')
+      .select(`
+        id,
+        avgifter_basis,
+        avgifter_amount,
+        avgifter_rate,
+        salary_run:salary_runs!inner(period_year, period_month, status)
+      `)
+      .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (e) => e.id })
 
   // Filter to booked runs for the year
-  const bookedForYear = (runEmployees || []).filter(sre => {
+  const bookedForYear = runEmployees.filter(sre => {
     const run = sre.salary_run as unknown as { period_year: number; period_month: number; status: string } | null
     return run && run.period_year === year && run.status === 'booked'
   })

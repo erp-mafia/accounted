@@ -10,7 +10,7 @@ let calls: Array<{ method: string; args: unknown[] }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in']) {
+  for (const m of ['select', 'eq', 'in', 'order', 'range']) {
     b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
       calls.push({ method: m, args })
       return b

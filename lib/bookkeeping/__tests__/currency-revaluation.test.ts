@@ -127,7 +127,17 @@ function buildFilterChain(data: unknown[]) {
     return chain
   })
 
-  // Make it thenable for await
+  // Paging stability order — no-op in the mock (data is already deterministic).
+  chain.order = vi.fn().mockImplementation(() => chain)
+
+  // fetchAllRows paginates via .range(from, to); slice so pagination terminates
+  // correctly even when a test supplies more than one page of rows.
+  chain.range = vi.fn().mockImplementation((from: number, to: number) => ({
+    then: (resolve: (val: unknown) => void) =>
+      resolve({ data: filtered.slice(from, to + 1), error: null }),
+  }))
+
+  // Make it thenable for await (used by callers that don't paginate)
   chain.then = (resolve: (val: unknown) => void) => {
     resolve({ data: filtered, error: null })
   }
