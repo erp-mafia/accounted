@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -11,7 +10,7 @@ import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import NewJournalEntryDialog, { type CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
 import ChartOfAccountsManager from '@/components/bookkeeping/ChartOfAccountsManager'
 import { useToast } from '@/components/ui/use-toast'
-import { Lock, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
@@ -129,29 +128,21 @@ export default function BookkeepingPage() {
       <PageHeader
         title={t('title')}
         action={
-          <div className="flex gap-2 w-full sm:w-auto">
-            <Button
-              className="w-full sm:w-auto"
-              onClick={() => {
-                setCopyPrefill(null)
-                setShowNewEntry(true)
-              }}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              {t('tab_new_entry')}
-              {nextVoucher && (
-                <span className="ml-1 text-primary-foreground/70 tabular-nums">
-                  ({nextVoucher.series}{nextVoucher.next})
-                </span>
-              )}
-            </Button>
-            <Button variant="outline" asChild className="w-full sm:w-auto">
-              <Link href="/bookkeeping/year-end">
-                <Lock className="mr-2 h-4 w-4" />
-                {t('year_end')}
-              </Link>
-            </Button>
-          </div>
+          <Button
+            className="w-full sm:w-auto"
+            onClick={() => {
+              setCopyPrefill(null)
+              setShowNewEntry(true)
+            }}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            {t('tab_new_entry')}
+            {nextVoucher && (
+              <span className="ml-1 text-primary-foreground/70 tabular-nums">
+                ({nextVoucher.series}{nextVoucher.next})
+              </span>
+            )}
+          </Button>
         }
       />
 

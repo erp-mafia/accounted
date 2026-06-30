@@ -130,6 +130,17 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
 
   // --- Bokslut (year-end) ---
   {
+    // The year-end closing wizard (dispositions, accruals, execute). Owns its
+    // route under /bookkeeping; surfaced here so the closing flow is reachable
+    // from Rapporter rather than only via the Bokföring header.
+    slug: 'year-end-closing',
+    labelKey: 'name_year_end_closing',
+    descKey: 'desc_year_end_closing',
+    category: 'year_end',
+    params: 'fiscal',
+    route: '/bookkeeping/year-end',
+  },
+  {
     slug: 'income-statement',
     labelKey: 'name_income_statement',
     descKey: 'desc_income_statement',

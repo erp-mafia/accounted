@@ -4,7 +4,13 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
+import {
+  DataList,
+  DataListHeader,
+  DataListRow,
+  DataListEmpty,
+  DataListLoading,
+} from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -101,7 +107,6 @@ export default function JournalEntryList() {
   const [sortHydrated, setSortHydrated] = useState(false)
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [periodHydrated, setPeriodHydrated] = useState(false)
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [filterOpen, setFilterOpen] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -164,13 +169,31 @@ export default function JournalEntryList() {
   }
 
   const fetchAttachmentCounts = useCallback(async (entryIds: string[]) => {
-    if (entryIds.length === 0) return
+    if (entryIds.length === 0) {
+      setAttachmentCounts({})
+      return
+    }
+    // The counts route caps each request at 50 IDs, so a large page ("Alla", or
+    // 100/page) must be split into chunks and merged. Without this the whole
+    // request 400s and every document-requiring row falsely shows the
+    // missing-underlag warning until it's expanded.
+    const COUNTS_BATCH_SIZE = 50
+    const batches: string[][] = []
+    for (let i = 0; i < entryIds.length; i += COUNTS_BATCH_SIZE) {
+      batches.push(entryIds.slice(i, i + COUNTS_BATCH_SIZE))
+    }
     try {
-      const res = await fetch(
-        `/api/documents/counts?journal_entry_ids=${entryIds.join(',')}`
+      const results = await Promise.all(
+        batches.map(async (batch) => {
+          const res = await fetch(
+            `/api/documents/counts?journal_entry_ids=${batch.join(',')}`
+          )
+          if (!res.ok) return {} as Record<string, number>
+          const { data } = await res.json()
+          return (data || {}) as Record<string, number>
+        })
       )
-      const { data } = await res.json()
-      setAttachmentCounts(data || {})
+      setAttachmentCounts(Object.assign({}, ...results))
     } catch {
       // Non-critical — silently ignore
     }
@@ -230,7 +253,6 @@ export default function JournalEntryList() {
   // gates that first fetch so the list loads already scoped to the resolved year.
   useEffect(() => {
     if (!company?.id) {
-      setPeriods([])
       setPeriodId(null)
       setPeriodHydrated(true)
       return
@@ -248,7 +270,6 @@ export default function JournalEntryList() {
         // Non-critical — fall through with an empty list (scope stays "all years").
       }
       if (cancelled) return
-      setPeriods(fetched)
 
       const stored =
         typeof window !== 'undefined'
@@ -544,28 +565,25 @@ export default function JournalEntryList() {
   // Count of active dialog filters, shown as a badge on the Filtrera button so
   // the user can tell the list is scoped without opening the dialog. Sort order
   // is a view preference (always set), not a filter, so it is excluded.
-  const activeFilterCount =
-    (periodId ? 1 : 0) +
+  // Filters that live inside the Filtrera dialog. The fiscal-year scope is its
+  // own control now, so it no longer counts toward the dialog badge (it would
+  // otherwise always read "1" for the default year).
+  const dialogFilterCount =
     (seriesFilter !== 'all' ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
     (showMissingOnly ? 1 : 0)
+  // Year scope included — drives empty-state messaging + keeping the bar mounted.
+  const activeFilterCount = (periodId ? 1 : 0) + dialogFilterCount
 
   // When any filter or search is active we keep the filter bar mounted even
   // with zero results, so the user can edit or clear their query. The pristine
   // "no entries yet" state below only applies to an untouched, empty ledger.
   const hasActiveFilters = Boolean(search) || activeFilterCount > 0
 
-  // Resolve the active fiscal-year scope for the bar chip. "All years" (periodId
-  // null) renders immediately; a specific period waits until its name resolves
-  // from the fetched list (scopeLabel stays null meanwhile, so the chip never
-  // flashes the wrong scope). Surfacing this keeps the period visible per BFL
-  // without the user having to open the filter dialog.
-  const activePeriod = periodId ? periods.find((p) => p.id === periodId) ?? null : null
-  const scopeLabel = periodId ? activePeriod?.name ?? null : t('scope_all_years')
-
-  // Apply a fiscal-year selection from the dialog. The FiscalYearSelector
-  // persists the choice to localStorage itself; here we only mirror it into
-  // local state and reset pagination.
+  // Apply a fiscal-year selection. The FiscalYearSelector (now an inline control
+  // in the toolbar, not buried in the filter dialog) persists the choice to
+  // localStorage itself; here we only mirror it into local state and reset
+  // pagination.
   const handlePeriodChange = (next: string | null) => {
     setPeriodId(next)
     setPage(0)
@@ -620,24 +638,44 @@ export default function JournalEntryList() {
   // Verifikat/Utkast toggle stays reachable.
   if (!loading && entries.length === 0 && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <div className="p-4 rounded-full bg-muted mb-4">
-            <BookOpen className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <h3 className="text-lg font-medium mb-1">{t('empty_title')}</h3>
-          <p className="text-sm text-muted-foreground text-center max-w-sm">
-            {t('empty_description')}
-          </p>
-        </CardContent>
-      </Card>
+      <DataList>
+        <DataListEmpty
+          icon={<BookOpen className="h-6 w-6" />}
+          title={t('empty_title')}
+          description={t('empty_description')}
+        />
+      </DataList>
     )
   }
 
   return (
     <div className="space-y-4">
-      {/* Search (always visible) + filter dialog for everything else */}
-      <div className="flex items-center gap-2">
+      {/* Control bar: view toggle + search + filters + active fiscal-year scope
+          on one aligned row (wraps on narrow screens) rather than four stacked rows. */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
+            they don't sink to the last page of the committed list. */}
+        <div className="inline-flex shrink-0 rounded-md border border-border p-0.5">
+          <button
+            type="button"
+            onClick={() => switchMode('committed')}
+            className={`h-7 rounded px-3 text-xs font-medium transition-colors ${listMode === 'committed' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t('mode_vouchers')}
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode('drafts')}
+            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${listMode === 'drafts' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t('mode_drafts')}
+            {draftCount > 0 && (
+              <Badge variant="secondary" className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums">
+                {draftCount}
+              </Badge>
+            )}
+          </button>
+        </div>
         <div className="relative flex-1 sm:flex-none sm:w-[280px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <Input
@@ -669,19 +707,19 @@ export default function JournalEntryList() {
               size="sm"
               className="h-8 gap-2 text-xs shrink-0"
               aria-label={
-                activeFilterCount > 0
-                  ? t('filter_with_count', { count: activeFilterCount })
+                dialogFilterCount > 0
+                  ? t('filter_with_count', { count: dialogFilterCount })
                   : t('filter')
               }
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
               {t('filter')}
-              {activeFilterCount > 0 && (
+              {dialogFilterCount > 0 && (
                 <Badge
                   variant="secondary"
                   className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums"
                 >
-                  {activeFilterCount}
+                  {dialogFilterCount}
                 </Badge>
               )}
             </Button>
@@ -692,17 +730,6 @@ export default function JournalEntryList() {
             </DialogHeader>
 
             <div className="space-y-4">
-              {/* Räkenskapsår */}
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">{t('filter_section_period')}</Label>
-                <FiscalYearSelector
-                  value={periodId}
-                  onChange={handlePeriodChange}
-                  label={null}
-                  className="w-full"
-                />
-              </div>
-
               {/* Sortering */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium">{t('filter_section_sort')}</Label>
@@ -840,152 +867,121 @@ export default function JournalEntryList() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
-
-      {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
-          they don't sink to the last page of the committed list. */}
-      <div className="flex items-center gap-2">
-        <div className="inline-flex rounded-md border border-border p-0.5">
-          <button
-            type="button"
-            onClick={() => switchMode('committed')}
-            className={`h-7 rounded px-3 text-xs font-medium transition-colors ${listMode === 'committed' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            {t('mode_vouchers')}
-          </button>
-          <button
-            type="button"
-            onClick={() => switchMode('drafts')}
-            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${listMode === 'drafts' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            {t('mode_drafts')}
-            {draftCount > 0 && (
-              <Badge variant="secondary" className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums">
-                {draftCount}
-              </Badge>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Active fiscal-year scope — visible without opening the filter dialog so
-          the user always sees which räkenskapsår the ledger is scoped to (BFL
-          period-correctness). Clicking it opens the dialog to change the scope. */}
-      {listMode === 'committed' && periodHydrated && scopeLabel && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{t('scope_label')}</span>
-          <button
-            type="button"
-            onClick={() => setFilterOpen(true)}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 font-medium text-foreground transition-colors duration-150 hover:bg-secondary/60"
-          >
-            {scopeLabel}
-            {(activePeriod?.locked_at || activePeriod?.is_closed) && (
-              <Lock className="h-3 w-3 text-muted-foreground" />
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* Batch-mark "Inget underlag krävs": select-all + contextual action bar */}
-      {(eligibleEntries.length > 0 || selectedIds.size > 0) && (
-        <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="select-all-missing"
-              checked={allEligibleSelected}
-              onCheckedChange={toggleSelectAll}
-              disabled={eligibleEntries.length === 0}
+        {/* Active fiscal-year scope as a direct one-click picker, pushed to the
+            right of the control bar — keeps the räkenskapsår visible per BFL and
+            changeable in one click. Distinct from Filtrera (which now holds only
+            sort / series / date / underlag); previously both just opened the same
+            dialog. The selector persists the choice to localStorage; the first-load
+            scope resolution still happens authoritatively in the period effect. */}
+        {periodHydrated && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground sm:ml-auto">
+            <span className="shrink-0">{t('scope_label')}</span>
+            <FiscalYearSelector
+              value={periodId}
+              onChange={handlePeriodChange}
+              label={null}
             />
-            <Label htmlFor="select-all-missing" className="text-sm cursor-pointer">
-              {selectedIds.size > 0
-                ? t('batch_selected_count', { count: selectedIds.size })
-                : t('batch_select_all', { count: eligibleEntries.length })}
-            </Label>
           </div>
-          {selectedIds.size > 0 ? (
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Input
-                value={batchReason}
-                onChange={(e) => setBatchReason(e.target.value)}
-                placeholder={t('no_doc_required_reason_placeholder')}
-                list="batch-no-doc-suggestions"
-                maxLength={200}
-                className="h-8 text-xs sm:w-56"
-                disabled={batchSubmitting}
-              />
-              <datalist id="batch-no-doc-suggestions">
-                <option value={t('no_doc_required_suggestion_bank_fee')} />
-                <option value={t('no_doc_required_suggestion_interest')} />
-                <option value={t('no_doc_required_suggestion_internal_transfer')} />
-                <option value={t('no_doc_required_suggestion_tax_payment')} />
-                <option value={t('no_doc_required_suggestion_salary')} />
-              </datalist>
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
-                  {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {t('batch_mark_no_doc')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setSelectedIds(new Set())}
-                  disabled={batchSubmitting}
-                >
-                  {t('batch_clear_selection')}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            // Filter-scoped: mark every missing-doc verifikat matching the active
-            // filters across all pages — scales to a post-import flood.
-            <Button size="sm" variant="outline" onClick={openBulk}>
-              <CircleSlash className="mr-2 h-4 w-4" />
-              {t('batch_mark_all_missing')}
-            </Button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       {loading ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-            <p className="text-sm text-muted-foreground">{t('loading')}</p>
-          </CardContent>
-        </Card>
+        <DataList>
+          <DataListLoading />
+        </DataList>
       ) : filteredEntries.length === 0 ? (
         // Empty placeholder, scoped to the situation: an empty drafts view, a
         // filtered committed view with no matches, or a committed view with no
         // posted entries yet (but drafts exist — hence we got here, not the
         // pristine early return above).
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <div className="p-4 rounded-full bg-muted mb-4">
-              {listMode === 'drafts' || !hasActiveFilters ? (
-                <BookOpen className="h-6 w-6 text-muted-foreground" />
+        <DataList>
+          <DataListEmpty
+            icon={
+              listMode === 'drafts' || !hasActiveFilters ? (
+                <BookOpen className="h-6 w-6" />
               ) : (
-                <Search className="h-6 w-6 text-muted-foreground" />
-              )}
-            </div>
-            <h3 className="text-lg font-medium mb-1">
-              {listMode === 'drafts'
+                <Search className="h-6 w-6" />
+              )
+            }
+            title={
+              listMode === 'drafts'
                 ? t('empty_drafts_title')
                 : hasActiveFilters
                   ? t('no_results_title')
-                  : t('empty_title')}
-            </h3>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              {listMode === 'drafts'
+                  : t('empty_title')
+            }
+            description={
+              listMode === 'drafts'
                 ? t('empty_drafts_description')
                 : hasActiveFilters
                   ? t('no_results_description')
-                  : t('empty_description')}
-            </p>
-          </CardContent>
-        </Card>
+                  : t('empty_description')
+            }
+          />
+        </DataList>
       ) : (
-      <div className="space-y-2">
+      <DataList>
+        {/* Batch-mark "Inget underlag krävs": select-all + contextual action bar,
+            rendered as the list header so it reads as part of the ledger rather
+            than a detached box above it. */}
+        {(eligibleEntries.length > 0 || selectedIds.size > 0) && (
+          <DataListHeader className="justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="select-all-missing"
+                checked={allEligibleSelected}
+                onCheckedChange={toggleSelectAll}
+                disabled={eligibleEntries.length === 0}
+              />
+              <Label htmlFor="select-all-missing" className="text-sm cursor-pointer">
+                {selectedIds.size > 0
+                  ? t('batch_selected_count', { count: selectedIds.size })
+                  : t('batch_select_all', { count: eligibleEntries.length })}
+              </Label>
+            </div>
+            {selectedIds.size > 0 ? (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Input
+                  value={batchReason}
+                  onChange={(e) => setBatchReason(e.target.value)}
+                  placeholder={t('no_doc_required_reason_placeholder')}
+                  list="batch-no-doc-suggestions"
+                  maxLength={200}
+                  className="h-8 text-xs sm:w-56"
+                  disabled={batchSubmitting}
+                />
+                <datalist id="batch-no-doc-suggestions">
+                  <option value={t('no_doc_required_suggestion_bank_fee')} />
+                  <option value={t('no_doc_required_suggestion_interest')} />
+                  <option value={t('no_doc_required_suggestion_internal_transfer')} />
+                  <option value={t('no_doc_required_suggestion_tax_payment')} />
+                  <option value={t('no_doc_required_suggestion_salary')} />
+                </datalist>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
+                    {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {t('batch_mark_no_doc')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedIds(new Set())}
+                    disabled={batchSubmitting}
+                  >
+                    {t('batch_clear_selection')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              // Filter-scoped: mark every missing-doc verifikat matching the active
+              // filters across all pages — scales to a post-import flood.
+              <Button size="sm" variant="outline" onClick={openBulk}>
+                <CircleSlash className="mr-2 h-4 w-4" />
+                {t('batch_mark_all_missing')}
+              </Button>
+            )}
+          </DataListHeader>
+        )}
         {filteredEntries.map((entry) => {
           const isExpanded = expandedId === entry.id
           const lines = (entry.lines || []) as JournalEntryLine[]
@@ -994,55 +990,205 @@ export default function JournalEntryList() {
           const selectable = canWrite && isEligibleForExempt(entry)
 
           return (
-            <Card key={entry.id}>
-              <div className="flex items-stretch">
-                {selectable && (
-                  <div className="flex items-center pl-3" onClick={(e) => e.stopPropagation()}>
+            <DataListRow
+              key={entry.id}
+              selected={selectedIds.has(entry.id)}
+              expanded={isExpanded}
+              onClick={() => toggleExpand(entry.id)}
+              leading={
+                selectable ? (
+                  <div onClick={(e) => e.stopPropagation()}>
                     <Checkbox
                       checked={selectedIds.has(entry.id)}
                       onCheckedChange={() => toggleSelect(entry.id)}
                       aria-label={t('batch_select_row')}
                     />
                   </div>
+                ) : undefined
+              }
+              expandedContent={
+                isExpanded ? (
+                  <>
+                    {lines.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
+                    ) : (
+                      <div className="rounded-lg border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>{t('account_column')}</TableHead>
+                              <TableHead>{t('description_column')}</TableHead>
+                              <TableHead className="text-right">{t('debit')}</TableHead>
+                              <TableHead className="text-right">{t('credit')}</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {lines
+                              .slice()
+                              .sort((a, b) => a.sort_order - b.sort_order)
+                              .map((line) => {
+                                const accountName = getAccountDescription(line.account_number)?.name
+                                const desc = line.line_description
+                                const showDesc = desc
+                                  && desc.toLowerCase() !== accountName?.toLowerCase()
+                                  && desc.toLowerCase() !== entry.description?.toLowerCase()
+                                const debit = Number(line.debit_amount) || 0
+                                const credit = Number(line.credit_amount) || 0
+                                const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+                                  ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
+                                  : null
+                                return (
+                                  <TableRow key={line.id}>
+                                    <TableCell className="align-top whitespace-nowrap">
+                                      <AccountNumber number={line.account_number} showName />
+                                    </TableCell>
+                                    <TableCell className="align-top text-muted-foreground">
+                                      {showDesc ? desc : ''}
+                                    </TableCell>
+                                    <TableCell className="align-top text-right tabular-nums">
+                                      {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
+                                      {debit > 0 && fx && (
+                                        <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="align-top text-right tabular-nums">
+                                      {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
+                                      {credit > 0 && fx && (
+                                        <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                )
+                              })}
+                          </TableBody>
+                          <TableFooter>
+                            <TableRow>
+                              <TableCell colSpan={2} className="font-medium">{t('sum_label')}</TableCell>
+                              <TableCell className="text-right tabular-nums font-medium">
+                                {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums font-medium">
+                                {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                              </TableCell>
+                            </TableRow>
+                          </TableFooter>
+                        </Table>
+                      </div>
+                    )}
+
+                    {entry.notes && (
+                      <p className="mt-3 text-xs text-muted-foreground italic px-1">
+                        {entry.notes}
+                      </p>
+                    )}
+
+                    <JournalEntryAttachments
+                      journalEntryId={entry.id}
+                      onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
+                    />
+
+                    {entry.status === 'posted' && NEEDS_ATTACHMENT.has(entry.source_type) && (
+                      <NoDocRequiredToggle
+                        entryId={entry.id}
+                        initialExempt={noDocRequired.has(entry.id)}
+                        initialReason={noDocRequired.get(entry.id) ?? null}
+                        canWrite={canWrite}
+                        onChange={(exempted, reason) => {
+                          setNoDocRequired((prev) => {
+                            const next = new Map(prev)
+                            if (exempted) next.set(entry.id, reason ?? null)
+                            else next.delete(entry.id)
+                            return next
+                          })
+                        }}
+                      />
+                    )}
+
+                    <div className="mt-4 pt-3 border-t flex flex-col sm:flex-row gap-2">
+                      {entry.status === 'draft' && (
+                        <Button
+                          size="sm"
+                          className="w-full sm:w-auto"
+                          onClick={() => handleCommit(entry.id)}
+                          disabled={!canWrite || committingId === entry.id}
+                          title={!canWrite ? t('read_only_tooltip') : undefined}
+                        >
+                          {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : committingId === entry.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          {t('post')}
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" className="w-full sm:w-auto" asChild>
+                        <Link href={`/bookkeeping/${entry.id}`}>{t('show_details')}</Link>
+                      </Button>
+                      {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full sm:w-auto"
+                          onClick={() => setCorrectionEntry(entry)}
+                        >
+                          {t('create_correction')}
+                        </Button>
+                      )}
+                      {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full sm:w-auto"
+                          onClick={() => setReverseEntryTarget(entry)}
+                        >
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          {t('reverse_action')}
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        {t('copy')}
+                      </Button>
+                    </div>
+                  </>
+                ) : undefined
+              }
+            >
+              {/* Desktop: single row */}
+              <div className="hidden sm:flex items-center gap-3">
+                {isExpanded ? (
+                  <ChevronDown className="h-4 w-4 shrink-0" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 shrink-0" />
                 )}
-              <button
-                onClick={() => toggleExpand(entry.id)}
-                aria-expanded={isExpanded}
-                className="flex-1 min-w-0 p-4 text-left hover:bg-muted/50 transition-colors min-h-[44px]"
-              >
-                {/* Desktop: single row */}
-                <div className="hidden sm:flex items-center gap-3 flex-1">
-                  {isExpanded ? (
-                    <ChevronDown className="h-4 w-4 shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 shrink-0" />
-                  )}
-                  <Link
-                    href={`/bookkeeping/${entry.id}`}
-                    className="font-mono text-sm text-primary hover:underline w-16"
-                    onClick={(e) => e.stopPropagation()}
+                <Link
+                  href={`/bookkeeping/${entry.id}`}
+                  className="font-mono text-sm text-primary hover:underline w-16"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {formatVoucher(entry)}
+                </Link>
+                <span className="text-sm text-muted-foreground tabular-nums w-24">
+                  {formatDate(entry.entry_date)}
+                </span>
+                {entry.out_of_period && (
+                  <Badge
+                    variant="outline"
+                    className="text-xs font-normal shrink-0"
+                    title={t('out_of_period_tooltip')}
                   >
-                    {formatVoucher(entry)}
-                  </Link>
-                  <span className="text-sm text-muted-foreground tabular-nums w-24">
-                    {formatDate(entry.entry_date)}
-                  </span>
-                  {entry.out_of_period && (
-                    <Badge
-                      variant="outline"
-                      className="text-xs font-normal shrink-0"
-                      title={t('out_of_period_tooltip')}
-                    >
-                      {t('out_of_period_label')}
-                    </Badge>
-                  )}
-                  {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
-                    <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
-                  )}
-                  <span className="flex-1 truncate">{entry.description}</span>
-                  <span className="shrink-0 w-28 text-right tabular-nums text-sm font-medium">
-                    {formatCurrency(voucherTotal)}
-                  </span>
+                    {t('out_of_period_label')}
+                  </Badge>
+                )}
+                {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
+                  <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
+                )}
+                <span className="flex-1 truncate">{entry.description}</span>
+                <span className="shrink-0 w-28 text-right tabular-nums text-sm font-medium">
+                  {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
+                </span>
+                <div className="flex shrink-0 items-center gap-1">
                   <Button
                     asChild
                     variant="ghost"
@@ -1070,82 +1216,11 @@ export default function JournalEntryList() {
                       <Copy className="h-3.5 w-3.5" />
                     </span>
                   </Button>
-                  {attachmentCounts[entry.id] ? (
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 mr-1 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
-                    >
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={t('view_attachments')}
-                        title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          setPreviewEntryId(entry.id)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            setPreviewEntryId(entry.id)
-                          }
-                        }}
-                      >
-                        <span className="flex items-center gap-0.5">
-                          <Paperclip className="h-3.5 w-3.5" />
-                          <span className="text-xs">{attachmentCounts[entry.id]}</span>
-                        </span>
-                      </span>
-                    </Button>
-                  ) : (
-                    NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                      noDocRequired.has(entry.id) ? (
-                        <span className="mr-1" title={t('no_doc_required_indicator_tooltip')}>
-                          <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
-                        </span>
-                      ) : (
-                        <span className="mr-1" title={t('missing_attachment_tooltip')}>
-                          <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                        </span>
-                      )
-                    )
-                  )}
-                </div>
-                {/* Mobile: two rows */}
-                <div className="sm:hidden">
-                  <div className="flex items-center gap-2">
-                    {isExpanded ? (
-                      <ChevronDown className="h-4 w-4 shrink-0" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 shrink-0" />
-                    )}
-                    <Link
-                      href={`/bookkeeping/${entry.id}`}
-                      className="font-mono text-sm text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {formatVoucher(entry)}
-                    </Link>
-                    <span className="text-sm text-muted-foreground tabular-nums">
-                      {formatDate(entry.entry_date)}
-                    </span>
-                    {entry.out_of_period && (
-                      <Badge
-                        variant="outline"
-                        className="text-xs font-normal shrink-0"
-                        title={t('out_of_period_tooltip_mobile')}
-                      >
-                        {t('out_of_period_label')}
-                      </Badge>
-                    )}
-                    {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
-                      <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
-                    )}
-                    <span className="ml-auto flex items-center gap-1">
+                  {/* Fixed-width attachment slot keeps the copy icon in a stable
+                      column and the right edge aligned whether a row has a
+                      paperclip, a warning, or nothing. */}
+                  <span className="flex min-w-10 items-center justify-center">
+                    {attachmentCounts[entry.id] ? (
                       <Button
                         asChild
                         variant="ghost"
@@ -1155,230 +1230,158 @@ export default function JournalEntryList() {
                         <span
                           role="button"
                           tabIndex={0}
-                          aria-label={t('copy_voucher_tooltip')}
-                          title={t('copy_voucher_tooltip')}
+                          aria-label={t('view_attachments')}
+                          title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
-                            router.push(`/bookkeeping?copy_from=${entry.id}`)
+                            setPreviewEntryId(entry.id)
                           }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault()
                               e.stopPropagation()
-                              router.push(`/bookkeeping?copy_from=${entry.id}`)
+                              setPreviewEntryId(entry.id)
                             }
                           }}
                         >
-                          <Copy className="h-3.5 w-3.5" />
+                          <span className="flex items-center gap-0.5">
+                            <Paperclip className="h-3.5 w-3.5" />
+                            <span className="text-xs">{attachmentCounts[entry.id]}</span>
+                          </span>
                         </span>
                       </Button>
-                      {attachmentCounts[entry.id] ? (
-                        <Button
-                          asChild
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
-                        >
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            aria-label={t('view_attachments')}
-                            title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
-                            onClick={(e) => {
+                    ) : (
+                      NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
+                        noDocRequired.has(entry.id) ? (
+                          <span title={t('no_doc_required_indicator_tooltip')}>
+                            <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                          </span>
+                        ) : (
+                          <span title={t('missing_attachment_tooltip')}>
+                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
+                          </span>
+                        )
+                      )
+                    )}
+                  </span>
+                </div>
+              </div>
+              {/* Mobile: two rows */}
+              <div className="sm:hidden">
+                <div className="flex items-center gap-2">
+                  {isExpanded ? (
+                    <ChevronDown className="h-4 w-4 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0" />
+                  )}
+                  <Link
+                    href={`/bookkeeping/${entry.id}`}
+                    className="font-mono text-sm text-primary hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {formatVoucher(entry)}
+                  </Link>
+                  <span className="text-sm text-muted-foreground tabular-nums">
+                    {formatDate(entry.entry_date)}
+                  </span>
+                  {entry.out_of_period && (
+                    <Badge
+                      variant="outline"
+                      className="text-xs font-normal shrink-0"
+                      title={t('out_of_period_tooltip_mobile')}
+                    >
+                      {t('out_of_period_label')}
+                    </Badge>
+                  )}
+                  {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
+                    <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
+                  )}
+                  <span className="ml-auto flex items-center gap-1">
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
+                    >
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={t('copy_voucher_tooltip')}
+                        title={t('copy_voucher_tooltip')}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          router.push(`/bookkeeping?copy_from=${entry.id}`)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            router.push(`/bookkeeping?copy_from=${entry.id}`)
+                          }
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </span>
+                    </Button>
+                    {attachmentCounts[entry.id] ? (
+                      <Button
+                        asChild
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
+                      >
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          aria-label={t('view_attachments')}
+                          title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setPreviewEntryId(entry.id)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault()
                               e.stopPropagation()
                               setPreviewEntryId(entry.id)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                setPreviewEntryId(entry.id)
-                              }
-                            }}
-                          >
-                            <span className="flex items-center gap-0.5">
-                              <Paperclip className="h-3.5 w-3.5" />
-                              <span className="text-xs">{attachmentCounts[entry.id]}</span>
-                            </span>
+                            }
+                          }}
+                        >
+                          <span className="flex items-center gap-0.5">
+                            <Paperclip className="h-3.5 w-3.5" />
+                            <span className="text-xs">{attachmentCounts[entry.id]}</span>
                           </span>
-                        </Button>
-                      ) : (
-                        NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                          noDocRequired.has(entry.id) ? (
-                            <span title={t('no_doc_required_indicator_tooltip')}>
-                              <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
-                            </span>
-                          ) : (
-                            <span title={t('missing_attachment_tooltip')}>
-                              <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                            </span>
-                          )
+                        </span>
+                      </Button>
+                    ) : (
+                      NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
+                        noDocRequired.has(entry.id) ? (
+                          <span title={t('no_doc_required_indicator_tooltip')}>
+                            <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                          </span>
+                        ) : (
+                          <span title={t('missing_attachment_tooltip')}>
+                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
+                          </span>
                         )
-                      )}
-                    </span>
-                  </div>
-                  <div className="mt-1 ml-6 flex items-center justify-between gap-2">
-                    <p className="text-sm truncate">{entry.description}</p>
-                    <span className="shrink-0 tabular-nums text-sm font-medium">
-                      {formatCurrency(voucherTotal)}
-                    </span>
-                  </div>
+                      )
+                    )}
+                  </span>
                 </div>
-              </button>
+                <div className="mt-1 ml-6 flex items-center justify-between gap-2">
+                  <p className="text-sm truncate">{entry.description}</p>
+                  <span className="shrink-0 tabular-nums text-sm font-medium">
+                    {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
               </div>
-
-              {isExpanded && (
-                <CardContent className="pt-0 pb-4">
-                  {lines.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
-                  ) : (
-                  <div className="rounded-lg border overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t('account_column')}</TableHead>
-                          <TableHead>{t('description_column')}</TableHead>
-                          <TableHead className="text-right">{t('debit')}</TableHead>
-                          <TableHead className="text-right">{t('credit')}</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {lines
-                          .slice()
-                          .sort((a, b) => a.sort_order - b.sort_order)
-                          .map((line) => {
-                            const accountName = getAccountDescription(line.account_number)?.name
-                            const desc = line.line_description
-                            const showDesc = desc
-                              && desc.toLowerCase() !== accountName?.toLowerCase()
-                              && desc.toLowerCase() !== entry.description?.toLowerCase()
-                            const debit = Number(line.debit_amount) || 0
-                            const credit = Number(line.credit_amount) || 0
-                            const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-                              ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
-                              : null
-                            return (
-                              <TableRow key={line.id}>
-                                <TableCell className="align-top whitespace-nowrap">
-                                  <AccountNumber number={line.account_number} showName />
-                                </TableCell>
-                                <TableCell className="align-top text-muted-foreground">
-                                  {showDesc ? desc : ''}
-                                </TableCell>
-                                <TableCell className="align-top text-right tabular-nums">
-                                  {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                  {debit > 0 && fx && (
-                                    <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                  )}
-                                </TableCell>
-                                <TableCell className="align-top text-right tabular-nums">
-                                  {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                  {credit > 0 && fx && (
-                                    <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                  )}
-                                </TableCell>
-                              </TableRow>
-                            )
-                          })}
-                      </TableBody>
-                      <TableFooter>
-                        <TableRow>
-                          <TableCell colSpan={2} className="font-medium">{t('sum_label')}</TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">
-                            {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">
-                            {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                          </TableCell>
-                        </TableRow>
-                      </TableFooter>
-                    </Table>
-                  </div>
-                  )}
-
-                  {entry.notes && (
-                    <p className="mt-3 text-xs text-muted-foreground italic px-1">
-                      {entry.notes}
-                    </p>
-                  )}
-
-                  <JournalEntryAttachments
-                    journalEntryId={entry.id}
-                    onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
-                  />
-
-                  {entry.status === 'posted' && NEEDS_ATTACHMENT.has(entry.source_type) && (
-                    <NoDocRequiredToggle
-                      entryId={entry.id}
-                      initialExempt={noDocRequired.has(entry.id)}
-                      initialReason={noDocRequired.get(entry.id) ?? null}
-                      canWrite={canWrite}
-                      onChange={(exempted, reason) => {
-                        setNoDocRequired((prev) => {
-                          const next = new Map(prev)
-                          if (exempted) next.set(entry.id, reason ?? null)
-                          else next.delete(entry.id)
-                          return next
-                        })
-                      }}
-                    />
-                  )}
-
-                  <div className="mt-4 pt-3 border-t flex flex-col sm:flex-row gap-2">
-                    {entry.status === 'draft' && (
-                      <Button
-                        size="sm"
-                        className="w-full sm:w-auto"
-                        onClick={() => handleCommit(entry.id)}
-                        disabled={!canWrite || committingId === entry.id}
-                        title={!canWrite ? t('read_only_tooltip') : undefined}
-                      >
-                        {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : committingId === entry.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        {t('post')}
-                      </Button>
-                    )}
-                    <Button variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                      <Link href={`/bookkeeping/${entry.id}`}>{t('show_details')}</Link>
-                    </Button>
-                    {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full sm:w-auto"
-                        onClick={() => setCorrectionEntry(entry)}
-                      >
-                        {t('create_correction')}
-                      </Button>
-                    )}
-                    {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full sm:w-auto"
-                        onClick={() => setReverseEntryTarget(entry)}
-                      >
-                        <RotateCcw className="mr-2 h-4 w-4" />
-                        {t('reverse_action')}
-                      </Button>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full sm:w-auto"
-                      onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
-                    >
-                      <Copy className="mr-2 h-4 w-4" />
-                      {t('copy')}
-                    </Button>
-                  </div>
-                </CardContent>
-              )}
-            </Card>
+            </DataListRow>
           )
         })}
-      </div>
+      </DataList>
       )}
 
       {/* Filter-scoped bulk "Inget underlag krävs" confirmation */}

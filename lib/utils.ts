@@ -15,12 +15,16 @@ export function cn(...inputs: ClassValue[]) {
  */
 const INVALID_DATE_PLACEHOLDER = '—'
 
-export function formatCurrency(amount: number, currency: string = 'SEK'): string {
+export function formatCurrency(
+  amount: number,
+  currency: string = 'SEK',
+  options?: { minimumFractionDigits?: number; maximumFractionDigits?: number },
+): string {
   return new Intl.NumberFormat('sv-SE', {
     style: 'currency',
     currency,
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: options?.minimumFractionDigits ?? 0,
+    maximumFractionDigits: options?.maximumFractionDigits ?? 2,
   }).format(amount)
 }
 
