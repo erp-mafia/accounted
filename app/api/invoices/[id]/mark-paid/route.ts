@@ -92,8 +92,12 @@ export const POST = withRouteContext(
     // /api/supplier-invoices/[id]/mark-paid. The dialog always sends custom
     // lines, so the partial-payment skip is gated on total debit vs remaining,
     // not on the mere presence of customLines.
+    const invForRemaining = invoice as Invoice & {
+      remaining_amount?: number | null
+      paid_amount?: number | null
+    }
     const remainingAmount =
-      (invoice as Invoice & { remaining_amount?: number }).remaining_amount ?? invoice.total
+      invForRemaining.remaining_amount ?? invoice.total - (invForRemaining.paid_amount ?? 0)
     const paymentAmount = customLines
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
       : remainingAmount

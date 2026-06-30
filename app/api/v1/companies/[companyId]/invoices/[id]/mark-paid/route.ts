@@ -261,12 +261,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // when a concurrent partial payment slips through the pre-flight check
     // (pre-flight sees status='sent' but the race-guard UPDATE later sees
     // status='partially_paid' so a second full-total amount would be booked
-    // against an already-reduced AR balance). This is the booking-currency
-    // amount (SEK for custom lines) used by the duplicate guard, the JE
-    // builder, and the invoice.paid event below.
+    // against an already-reduced AR balance). For legacy rows where
+    // remaining_amount was never written, derive it from total − paid_amount
+    // rather than the full total. This is the booking-currency amount (SEK for
+    // custom lines) used by the duplicate guard, the JE builder, and the event.
     const paymentAmount = customLines
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
-      : (typed.remaining_amount ?? typed.total)
+      : (typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0))
 
     // Ledger math + overpayment guard via the shared planInvoicePayment helper —
     // the single source of truth across all three mark-paid surfaces (this route,
