@@ -1023,7 +1023,12 @@ async function commitMarkInvoicePaid(
   // This path settles the full remaining (no custom lines), so it can never
   // overpay, but routing through the helper keeps the state identical. Runs
   // BEFORE the JE below so a rejected payment never burns a voucher number.
-  const paymentAmount = (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
+  // Settle the full outstanding balance. Prefer remaining_amount; for legacy rows
+  // where it was never written, derive it from total − paid_amount rather than
+  // falling back to the full total (which would double-count a prior partial
+  // payment and trip the overpayment guard).
+  const inv = invoice as { remaining_amount?: number | null; paid_amount?: number | null }
+  const paymentAmount = inv.remaining_amount ?? (invoice.total - (inv.paid_amount ?? 0))
   const payment = planInvoicePayment(invoice, paymentAmount)
   if (!payment.ok) {
     return {
@@ -1101,7 +1106,7 @@ async function commitMarkInvoicePaid(
       )
     }
     return {
-      error: 'Invoice can only be marked as paid when status is "sent" or "overdue"',
+      error: 'Invoice can only be marked as paid from a payable status (sent, overdue or partially paid)',
       status: 409,
     }
   }
