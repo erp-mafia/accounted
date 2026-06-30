@@ -28,6 +28,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
@@ -1028,16 +1029,59 @@ async function commitMarkInvoicePaid(
       )
       journalEntryId = je?.id ?? null
     }
+
+    // Fail closed: a real invoice must produce a posted payment voucher.
+    // Marking it paid with no journal entry orphans the receivable and
+    // diverges the GL from the AR sub-ledger. Nothing was posted (the helper
+    // returned null), so there is no voucher to cancel.
+    if (!journalEntryId) {
+      return {
+        error:
+          'Betalningen kunde inte bokföras (ingen verifikation skapades — t.ex. stängd räkenskapsperiod). ' +
+          'Fakturan har inte markerats som betald.',
+        status: 422,
+      }
+    }
   }
 
   const now = new Date().toISOString()
-  const { error: updateError } = await supabase
+  // CAS guard: only flip from a payable status so a concurrently-settled
+  // invoice no-ops here instead of double-booking the payment.
+  const { data: updateResult, error: updateError } = await supabase
     .from('invoices')
     .update({ status: 'paid', paid_at: now, paid_amount: invoice.total })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
+    .in('status', ['sent', 'overdue'])
+    .select('id')
 
-  if (updateError) return { error: 'Failed to update invoice status', status: 500 }
+  if (updateError) {
+    // The payment voucher already posted but the invoice row did not flip;
+    // cancel the orphan so the GL doesn't diverge from the sub-ledger.
+    if (journalEntryId) {
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId, userId, journalEntryId,
+        'Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning',
+      )
+    }
+    return { error: 'Failed to update invoice status', status: 500 }
+  }
+
+  if (!updateResult || updateResult.length === 0) {
+    // Race lost: the invoice was settled concurrently between our read and
+    // write. Cancel the orphaned payment voucher and document the gap rather
+    // than leaving a double booking.
+    if (journalEntryId) {
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId, userId, journalEntryId,
+        'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      )
+    }
+    return {
+      error: 'Invoice can only be marked as paid when status is "sent" or "overdue"',
+      status: 409,
+    }
+  }
 
   return { data: { status: 'paid', journal_entry_id: journalEntryId } }
 }
@@ -3810,7 +3854,7 @@ async function commitPendingOperationInner(
   }
 
   const now = new Date().toISOString()
-  await supabase
+  const { error: finalizeError } = await supabase
     .from('pending_operations')
     .update({
       status: 'committed',
@@ -3818,6 +3862,20 @@ async function commitPendingOperationInner(
       result_data: result.data || {},
     })
     .eq('id', pendingOp.id)
+
+  if (finalizeError) {
+    // The executor's side-effects already committed (and are immutable); only
+    // the terminal status write failed. Without surfacing this, the row would
+    // sit in 'committing' indefinitely — the expire sweep only targets
+    // 'pending' ops, so nothing would ever reconcile it. Log loudly with the
+    // ids needed to finalize manually; the response still reports success
+    // because the actual work is done.
+    log.error('failed to finalize pending_operation to committed (left in committing)', finalizeError, {
+      pendingOperationId: pendingOp.id,
+      operationType: pendingOp.operation_type,
+      companyId,
+    })
+  }
 
   return {
     status: 'committed',

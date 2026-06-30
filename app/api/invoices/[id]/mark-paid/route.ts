@@ -6,6 +6,7 @@ import {
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -204,6 +205,20 @@ export const POST = withRouteContext(
           details: { reason: err instanceof Error ? err.message : 'unknown' },
         })
       }
+
+      // Fail closed: a real invoice must produce a payment voucher. If a helper
+      // returned null without throwing (e.g. a closed/locked fiscal period),
+      // refuse to mark the invoice paid — flipping status with no journal entry
+      // orphans the receivable and diverges the GL from the sub-ledger.
+      if (!journalEntryId) {
+        opLog.error('mark-paid produced no journal entry; refusing to mark paid', undefined, {
+          invoiceId: id,
+        })
+        return errorResponseFromCode('INVOICE_PAID_BOOK_FAILED', opLog, {
+          requestId,
+          details: { reason: 'no_journal_entry_created' },
+        })
+      }
     }
 
     // CAS guard: only update if status is still in a payable state.
@@ -221,34 +236,31 @@ export const POST = withRouteContext(
 
     if (updateError) {
       opLog.error('failed to update invoice status', updateError)
+      // The payment voucher already posted but the invoice row did not flip to
+      // paid; cancel the orphan so the GL doesn't diverge from the sub-ledger.
+      if (journalEntryId) {
+        await cancelOrphanedPaymentEntry(
+          supabase,
+          companyId!,
+          user.id,
+          journalEntryId,
+          'Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning',
+        )
+      }
       return errorResponse(updateError, opLog, { requestId })
     }
 
     if (!updateResult || updateResult.length === 0) {
-      // Status changed between read and write — cancel the orphaned JE and
-      // document the voucher gap before reporting back.
+      // Status changed between read and write (concurrent settle) — cancel the
+      // orphaned payment voucher and document the voucher gap before reporting.
       if (journalEntryId) {
-        const { data: orphan } = await supabase
-          .from('journal_entries')
-          .select('fiscal_period_id, voucher_series, voucher_number')
-          .eq('id', journalEntryId)
-          .single()
-
-        await supabase
-          .from('journal_entries')
-          .update({ status: 'cancelled' })
-          .eq('id', journalEntryId)
-
-        if (orphan) {
-          await supabase.from('voucher_gap_explanations').insert({
-            company_id: companyId,
-            fiscal_period_id: orphan.fiscal_period_id,
-            voucher_series: orphan.voucher_series || 'A',
-            gap_number: orphan.voucher_number,
-            explanation: 'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-            created_by: user.id,
-          })
-        }
+        await cancelOrphanedPaymentEntry(
+          supabase,
+          companyId!,
+          user.id,
+          journalEntryId,
+          'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+        )
       }
       return errorResponseFromCode('INVOICE_PAID_RACE', opLog, { requestId })
     }

@@ -38,6 +38,8 @@ import {
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
@@ -402,21 +404,36 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         }
 
         if (!journalEntryId) {
-          warnings.push({
-            code: 'JOURNAL_ENTRY_NOT_POSTED',
-            message:
-              'Payment journal entry was not created (likely no open fiscal period). Verify the period and book manually if required.',
+          // Fail closed: a real invoice must produce a posted payment voucher.
+          // A null here (e.g. no open fiscal period) means nothing was booked,
+          // so flipping the invoice to paid/partially_paid would diverge the GL
+          // from the AR sub-ledger. Abort BEFORE the invoice update below —
+          // mirrors the v1 match-invoice strict mode.
+          ctx.log.error('mark-paid: no payment journal entry produced — aborting before state mutation', undefined, {
+            invoiceId,
+            companyId: ctx.companyId,
+          })
+          return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
+            requestId: ctx.requestId,
+            details: { reason: 'no_journal_entry_created' },
           })
         }
       } catch (err) {
-        ctx.log.error('mark-paid: journal entry creation failed', err as Error, {
+        if (err instanceof AccountsNotInChartError) {
+          return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+        }
+        ctx.log.error('mark-paid: payment JE creation failed — aborting before state mutation', err as Error, {
           invoiceId,
           companyId: ctx.companyId,
         })
-        warnings.push({
-          code: 'JOURNAL_ENTRY_NOT_POSTED',
-          message:
-            'Payment was recorded but the journal entry posting failed. Check the engine logs; reconcile before period close.',
+        const message = isBookkeepingError(err)
+          ? getErrorMessage(err, { context: 'invoice' })
+          : err instanceof Error
+            ? err.message
+            : 'Unknown error'
+        return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: message },
         })
       }
     }

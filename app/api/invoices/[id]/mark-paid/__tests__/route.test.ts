@@ -159,6 +159,32 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     )
   })
 
+  it('refuses to mark paid (INVOICE_PAID_BOOK_FAILED) when no payment journal entry is produced', async () => {
+    const customer = makeCustomer()
+    const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer })
+
+    // Fetch invoice
+    enqueue({ data: invoice, error: null })
+    // Duplicate-payment guard: two ILIKE probes — no candidates
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    // Company settings
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    // Deliberately NO status-update enqueued: the route must fail closed BEFORE
+    // touching the invoice row when nothing was booked.
+
+    // Helper returns null without throwing (e.g. a closed/locked fiscal period).
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue(null)
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
+    // No silent "paid with no journal entry" — GL must not diverge from the AR ledger.
+    expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
+  })
+
   it('marks overdue invoice as paid with cash method', async () => {
     const customer = makeCustomer()
     const invoice = makeInvoice({

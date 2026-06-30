@@ -207,6 +207,17 @@ export const POST = withRouteContext(
       })
     }
 
+    // Fail closed: every supplier payment must post a voucher. If a helper
+    // returned null without throwing (e.g. a closed/locked fiscal period), do
+    // NOT flip the invoice — that would diverge the GL from the AP sub-ledger.
+    if (!journalEntryId) {
+      opLog.error('supplier mark-paid produced no journal entry; refusing to mark paid', undefined)
+      return errorResponseFromCode('SI_PAID_FAILED', opLog, {
+        requestId,
+        details: { reason: 'no_journal_entry_created' },
+      })
+    }
+
     const newRemaining = Math.round((invoice.remaining_amount - paymentAmount) * 100) / 100
     const newPaidAmount = Math.round((invoice.paid_amount + paymentAmount) * 100) / 100
     const isFullyPaid = newRemaining <= 0
@@ -228,24 +239,35 @@ export const POST = withRouteContext(
 
     if (updateError) {
       opLog.error('supplier invoice update failed', updateError)
+      // The payment voucher already posted but the invoice row did not flip;
+      // cancel the orphan so the GL doesn't diverge from the AP sub-ledger.
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId!, user.id, journalEntryId,
+        'Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning',
+      )
       return errorResponse(updateError, opLog, { requestId })
     }
 
     if (!updateResult || updateResult.length === 0) {
       // CAS guard: another request paid the invoice between our read and write.
       // Cancel the orphaned JE and document the voucher gap.
-      if (journalEntryId) {
-        await cancelOrphanedPaymentEntry(
-          supabase, companyId!, user.id, journalEntryId,
-          'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-        )
-      }
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId!, user.id, journalEntryId,
+        'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      )
       return errorResponseFromCode('SI_PAID_ALREADY', opLog, {
         requestId,
         details: { reason: 'race' },
       })
     }
 
+    // Record the payment row. payment-sync.ts derives the reversal/recalc amount
+    // from this row (falling back to the FULL paid_amount when the row is
+    // missing), so a missing row would silently desync a later reversal of a
+    // PARTIAL payment. The status flip above already succeeded, so on insert
+    // failure roll the invoice back to its pre-payment state and cancel the
+    // voucher rather than leave it 'paid' with no payment record (the previous
+    // code swallowed this error and left the sub-ledger desynced).
     const { error: paymentError } = await supabase
       .from('supplier_invoice_payments')
       .insert({
@@ -261,7 +283,27 @@ export const POST = withRouteContext(
       })
 
     if (paymentError) {
-      opLog.warn('failed to record supplier_invoice_payments row', paymentError)
+      opLog.error('failed to record supplier_invoice_payments row — rolling back', paymentError)
+      await supabase
+        .from('supplier_invoices')
+        .update({
+          status: invoice.status,
+          remaining_amount: invoice.remaining_amount,
+          paid_amount: invoice.paid_amount,
+          paid_at: invoice.paid_at ?? null,
+          payment_journal_entry_id:
+            (invoice as { payment_journal_entry_id?: string | null }).payment_journal_entry_id ?? null,
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId!, user.id, journalEntryId,
+        'Automatiskt makulerad: betalningspost kunde inte registreras',
+      )
+      return errorResponseFromCode('SI_PAID_FAILED', opLog, {
+        requestId,
+        details: { reason: 'payment_record_insert_failed' },
+      })
     }
 
     // Under kontantmetoden the cash payment entry is the ONLY booking of the
