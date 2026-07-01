@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, Building2 } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, Building2, PenLine } from 'lucide-react'
 import {
   getCommonTemplates,
   getAdvancedTemplates,
@@ -58,6 +58,12 @@ function getVatLabelKey(template: BookingTemplate): string | null {
     case 'exempt': return 'vat_exempt'
     default: return null
   }
+}
+
+// Reverse charge (omvänd moms) carries the ochre emphasis via the sanctioned
+// `warning` variant; every other VAT treatment uses the neutral `secondary`.
+function getVatBadgeVariant(vatTreatment: string | null | undefined): 'secondary' | 'warning' {
+  return vatTreatment === 'reverse_charge' ? 'warning' : 'secondary'
 }
 
 function groupTemplates(templates: BookingTemplate[]): Map<TemplateGroup, BookingTemplate[]> {
@@ -117,20 +123,17 @@ function LibraryTemplateCard({ raw, converted, selected, onClick }: LibraryTempl
             )}
             {vatLabelKey && (
               <Badge
-                variant="secondary"
-                className={`text-[10px] px-1.5 py-0 ${
-                  converted?.vat_treatment === 'reverse_charge'
-                    ? 'bg-warning/10 text-warning-foreground'
-                    : ''
-                }`}
+                variant={getVatBadgeVariant(converted?.vat_treatment)}
+                className="text-[10px] px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {!converted && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                <PenLine className="h-3 w-3" />
                 {t('opens_editor_badge')}
-              </Badge>
+              </span>
             )}
           </div>
         </div>
@@ -169,18 +172,14 @@ function TemplateCard({ template, selected, onClick, compact }: TemplateCardProp
             </span>
             {vatLabelKey && (
               <Badge
-                variant="secondary"
-                className={`text-[10px] px-1.5 py-0 ${
-                  template.vat_treatment === 'reverse_charge'
-                    ? 'bg-warning/10 text-warning-foreground'
-                    : ''
-                }`}
+                variant={getVatBadgeVariant(template.vat_treatment)}
+                className="text-[10px] px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {template.requires_vat_registration_data && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-warning/30 text-warning-foreground gap-0.5">
+              <Badge variant="warning" className="text-[10px] px-1.5 py-0 gap-0.5">
                 <AlertTriangle className="h-2.5 w-2.5" />
                 {t('requires_vat_reg')}
               </Badge>

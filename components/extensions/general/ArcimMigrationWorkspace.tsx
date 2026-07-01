@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -304,10 +305,10 @@ function ProviderStep({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="font-medium">{providerInfo?.name ?? consent.provider}</p>
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <Badge variant="success" className="gap-1">
                           <CheckCircle className="h-3 w-3" />
                           Ansluten
-                        </span>
+                        </Badge>
                       </div>
                       <div className="mt-0.5 space-y-0.5">
                         {consent.companyName && (
@@ -411,19 +412,13 @@ function ProviderStep({
                       <div className="flex items-center gap-2">
                         <p className="font-medium">{provider.name}</p>
                         {comingSoon && (
-                          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            Kommer snart
-                          </span>
+                          <Badge variant="secondary">Kommer snart</Badge>
                         )}
                         {alreadyConnected && (
-                          <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                            Ansluten
-                          </span>
+                          <Badge variant="success">Ansluten</Badge>
                         )}
                         {needsSieFirst && !comingSoon && !alreadyConnected && (
-                          <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">
-                            SIE krävs först
-                          </span>
+                          <Badge variant="warning">SIE krävs först</Badge>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">

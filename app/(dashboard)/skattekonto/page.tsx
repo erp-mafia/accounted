@@ -539,9 +539,7 @@ function TransactionTable({
                     Bokförd
                   </Badge>
                 ) : row.match_suggestion ? (
-                  <Badge variant="outline" className="border-warning text-warning">
-                    Möjlig dublett
-                  </Badge>
+                  <Badge variant="warning">Möjlig dublett</Badge>
                 ) : (
                   <Badge variant="outline">Ej bokförd</Badge>
                 )}

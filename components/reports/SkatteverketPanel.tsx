@@ -554,7 +554,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
             Skicka till Skatteverket
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-success border-success/30 gap-1">
+            <Badge variant="success" className="gap-1">
               <CheckCircle2 className="h-3 w-3" />
               Ansluten
             </Badge>
