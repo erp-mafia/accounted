@@ -34,6 +34,16 @@ export type ReportParams = 'fiscal-range' | 'fiscal' | 'calendar' | 'none'
 
 export type ReportExportFormat = 'pdf' | 'xlsx'
 
+/**
+ * Whether a report is something you *read* (P&L, ledgers, KPI) or something you
+ * *submit* (VAT declaration, INK2/NE, årsredovisning, SIE export, year-end
+ * closing). Drives the Rapporter surface split: readable rows render in the
+ * Analys/Underlag tabs; `filing` rows are owned by the Skatt & bokslut context
+ * and appear in the Rapporter → "Alla rapporter" index only as deep-links.
+ * Undefined defaults to `readable` (backward-compatible — see getReportKind).
+ */
+export type ReportKind = 'readable' | 'filing'
+
 export interface ReportDescriptor {
   /** URL slug at /reports/[slug]; also the legacy activeTab id. */
   slug: string
@@ -59,6 +69,12 @@ export interface ReportDescriptor {
    * Used for reports that were never in the nav (KPI, payroll, archive…).
    */
   libraryOnly?: boolean
+  /**
+   * Read vs. submit. Omit for readable reports (the default); set `'filing'`
+   * on statutory outputs so the Rapporter reading tabs exclude them and the
+   * "Alla rapporter" index renders them as deep-links. See ReportKind.
+   */
+  kind?: ReportKind
 }
 
 /** Categories shown in the legacy desktop rail, in order. */
@@ -137,6 +153,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_year_end_closing',
     descKey: 'desc_year_end_closing',
     category: 'year_end',
+    kind: 'filing',
     params: 'fiscal',
     route: '/bookkeeping/year-end',
   },
@@ -169,6 +186,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_arsredovisning',
     descKey: 'desc_arsredovisning',
     category: 'year_end',
+    kind: 'filing',
     entityType: 'aktiebolag',
     params: 'fiscal',
     route: '/bookkeeping/year-end/arsredovisning',
@@ -180,6 +198,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_vat_declaration',
     descKey: 'desc_vat_declaration',
     category: 'tax_vat',
+    kind: 'filing',
     params: 'calendar',
     exports: ['xlsx'],
   },
@@ -188,6 +207,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_periodisk_sammanstallning',
     descKey: 'desc_periodisk_sammanstallning',
     category: 'tax_vat',
+    kind: 'filing',
     params: 'calendar',
   },
   {
@@ -195,6 +215,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_ne_declaration',
     descKey: 'desc_ne_declaration',
     category: 'tax_vat',
+    kind: 'filing',
     entityType: 'enskild_firma',
     params: 'fiscal',
   },
@@ -203,6 +224,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_ink2_declaration',
     descKey: 'desc_ink2_declaration',
     category: 'tax_vat',
+    kind: 'filing',
     entityType: 'aktiebolag',
     params: 'fiscal',
   },
@@ -261,6 +283,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_sie_export',
     descKey: 'desc_sie_export',
     category: 'export',
+    kind: 'filing',
     params: 'fiscal',
     route: '/import?view=export#sie-export',
     libraryOnly: true,
@@ -274,6 +297,15 @@ export const DATE_RANGE_SLUGS: ReadonlySet<string> = new Set(
 
 export function getReport(slug: string): ReportDescriptor | undefined {
   return REPORT_CATALOG.find((r) => r.slug === slug)
+}
+
+/** Read vs. submit, defaulting to `readable` when unset. */
+export function getReportKind(r: ReportDescriptor): ReportKind {
+  return r.kind ?? 'readable'
+}
+
+export function isFilingReport(r: ReportDescriptor): boolean {
+  return getReportKind(r) === 'filing'
 }
 
 function isVisible(
@@ -315,4 +347,74 @@ export function getLibrarySections(
       (r) => r.category === category && isVisible(r, entityType, hasEmployees),
     ),
   })).filter((s) => s.items.length > 0)
+}
+
+/**
+ * The two "reading" tabs of the Rapporter surface. KPI lives in its own
+ * Översikt tab (not here); statutory `filing` reports are excluded (they are
+ * owned by Skatt & bokslut and only listed as deep-links in the "Alla
+ * rapporter" index). Sections that resolve to zero visible rows are dropped.
+ */
+export type ReadingTab = 'analys' | 'underlag'
+
+interface ReadingSectionSpec {
+  tab: ReadingTab
+  key: string
+  labelKey: string
+  match: (r: ReportDescriptor) => boolean
+}
+
+const READING_SECTION_SPECS: ReadingSectionSpec[] = [
+  {
+    // Readable P&L / balance reports — spans `interim` + the readable `year_end`
+    // rows (income-statement, balance-sheet, kassaflödesanalys). KPI is excluded
+    // (it is the Översikt tab).
+    tab: 'analys',
+    key: 'resultat_balans',
+    labelKey: 'section_resultat_balans',
+    match: (r) =>
+      getReportKind(r) === 'readable' &&
+      (r.category === 'interim' || r.category === 'year_end') &&
+      r.slug !== 'kpi',
+  },
+  {
+    tab: 'underlag',
+    key: 'ledgers',
+    labelKey: CATEGORY_LABEL_KEY.ledgers,
+    match: (r) => r.category === 'ledgers',
+  },
+  {
+    tab: 'underlag',
+    key: 'reconciliation',
+    labelKey: CATEGORY_LABEL_KEY.reconciliation,
+    match: (r) => r.category === 'reconciliation',
+  },
+  {
+    tab: 'underlag',
+    key: 'payroll',
+    labelKey: CATEGORY_LABEL_KEY.payroll,
+    match: (r) => r.category === 'payroll' && getReportKind(r) === 'readable',
+  },
+]
+
+export interface ReadingSection {
+  key: string
+  labelKey: string
+  items: ReportDescriptor[]
+}
+
+export function getReadingSections(
+  tab: ReadingTab,
+  entityType?: EntityType,
+  hasEmployees?: boolean,
+): ReadingSection[] {
+  return READING_SECTION_SPECS.filter((s) => s.tab === tab)
+    .map((s) => ({
+      key: s.key,
+      labelKey: s.labelKey,
+      items: REPORT_CATALOG.filter(
+        (r) => s.match(r) && isVisible(r, entityType, hasEmployees),
+      ),
+    }))
+    .filter((s) => s.items.length > 0)
 }

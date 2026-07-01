@@ -7,18 +7,26 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { ReportLibrary } from '@/components/reports/ReportLibrary'
+import { ReportSectionList } from '@/components/reports/ReportSectionList'
 import { RecentReportsShelf } from '@/components/reports/RecentReportsShelf'
 import { useRecentReports } from '@/components/reports/useRecentReports'
-import { getReport } from '@/lib/reports/catalog'
+import { KpiDashboard } from '@/components/kpi/KpiDashboard'
+import { getReport, getReadingSections } from '@/lib/reports/catalog'
 
 /**
- * Reports library landing. A calm, grouped index of every report — selecting
- * one opens the focused /reports/[slug] route. The fiscal year picked here
- * persists (FiscalYearSelector localStorage) and is restored on the focused
- * page, so the choice carries across without URL plumbing.
+ * The Rapporter surface — one home for the numbers, arranged as tabs:
+ *  - Översikt: the KPI glance (canonical KPI home; Hem deep-links here).
+ *  - Analys: readable P&L / balance reports.
+ *  - Underlag: raw ledger detail, reconciliation, payroll.
+ *  - Alla rapporter: the complete catalog index; statutory filings appear as
+ *    deep-links into their owning Skatt & bokslut context.
+ *
+ * The fiscal year picked in the header persists (FiscalYearSelector
+ * localStorage) and is restored on focused /reports/[slug] views.
  */
 export default function ReportsPage() {
   const router = useRouter()
@@ -27,9 +35,11 @@ export default function ReportsPage() {
   const { company } = useCompany()
   const t = useTranslations('reports')
   const { recents, pushRecent } = useRecentReports(company?.id)
+  const entityType = company?.entity_type
 
-  // Open a report. Route-owning reports (cash flow, annual report, KPI, SIE)
-  // navigate to their own page; the rest open the focused /reports/[slug] route.
+  // Open a report. Route-owning reports (cash flow, annual report, KPI, SIE,
+  // filings) navigate to their own page; the rest open the focused
+  // /reports/[slug] route.
   const openReport = (slug: string) => {
     const report = getReport(slug)
     if (report?.route) {
@@ -77,17 +87,41 @@ export default function ReportsPage() {
           actionHref="/settings"
         />
       ) : (
-        <div className="space-y-8">
-          <RecentReportsShelf
-            slugs={recents}
-            entityType={company?.entity_type}
-            onOpen={openReport}
-          />
-          <ReportLibrary
-            entityType={company?.entity_type}
-            onOpen={openReport}
-          />
-        </div>
+        <Tabs defaultValue="oversikt" className="space-y-8">
+          <TabsList>
+            <TabsTrigger value="oversikt">{t('tab_oversikt')}</TabsTrigger>
+            <TabsTrigger value="analys">{t('tab_analys')}</TabsTrigger>
+            <TabsTrigger value="underlag">{t('tab_underlag')}</TabsTrigger>
+            <TabsTrigger value="alla">{t('tab_alla')}</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="oversikt">
+            <KpiDashboard periodId={selectedPeriod} />
+          </TabsContent>
+
+          <TabsContent value="analys">
+            <ReportSectionList
+              sections={getReadingSections('analys', entityType)}
+              onOpen={openReport}
+            />
+          </TabsContent>
+
+          <TabsContent value="underlag">
+            <ReportSectionList
+              sections={getReadingSections('underlag', entityType)}
+              onOpen={openReport}
+            />
+          </TabsContent>
+
+          <TabsContent value="alla" className="space-y-8">
+            <RecentReportsShelf
+              slugs={recents}
+              entityType={entityType}
+              onOpen={openReport}
+            />
+            <ReportLibrary entityType={entityType} onOpen={openReport} />
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   )
