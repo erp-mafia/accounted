@@ -13,6 +13,7 @@ import {
   Users,
   ArrowLeftRight,
   BookOpen,
+  ListTree,
   BarChart3,
   Settings,
   LogOut,
@@ -92,6 +93,7 @@ type NavLabelKey =
   | 'review'
   | 'transactions'
   | 'bookkeeping'
+  | 'chart_of_accounts'
   | 'assets'
   | 'reports'
   | 'import'
@@ -144,6 +146,7 @@ const navItems: NavItem[] = [
   // Redovisning dropdown
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'redovisning' },
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
+  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'redovisning' },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'redovisning' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },

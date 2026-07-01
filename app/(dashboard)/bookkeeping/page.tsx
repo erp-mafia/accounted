@@ -3,12 +3,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import NewJournalEntryDialog, { type CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
-import ChartOfAccountsManager from '@/components/bookkeeping/ChartOfAccountsManager'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -19,8 +17,6 @@ interface NextVoucher {
   next: number
   series: string
 }
-
-type TabValue = 'journal' | 'accounts'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -34,7 +30,6 @@ export default function BookkeepingPage() {
   }, [searchParams])
 
   const [refreshKey, setRefreshKey] = useState(0)
-  const [activeTab, setActiveTab] = useState<TabValue>('journal')
   const [showNewEntry, setShowNewEntry] = useState(false)
   const [copyPrefill, setCopyPrefill] = useState<CopyPrefill | null>(null)
   const [isLoadingCopy, setIsLoadingCopy] = useState(false)
@@ -146,20 +141,7 @@ export default function BookkeepingPage() {
         }
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
-        <TabsList>
-          <TabsTrigger value="journal">{t('tab_journal')}</TabsTrigger>
-          <TabsTrigger value="accounts">{t('tab_accounts')}</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="journal" forceMount className="space-y-4">
-          <JournalEntryList key={refreshKey} />
-        </TabsContent>
-
-        <TabsContent value="accounts" forceMount>
-          <ChartOfAccountsManager />
-        </TabsContent>
-      </Tabs>
+      <JournalEntryList key={refreshKey} />
 
       <NewJournalEntryDialog
         open={showNewEntry}

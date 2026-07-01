@@ -797,7 +797,7 @@ export default function TransactionsPage() {
                   if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
                     toast({
                       title: 'Kontot finns inte i BAS-planen',
-                      description: `Lägg till ${accountNumber} manuellt under Inställningar → Kontoplan.`,
+                      description: `Lägg till ${accountNumber} manuellt i Kontoplan.`,
                       variant: 'destructive',
                     })
                     return
@@ -857,7 +857,7 @@ export default function TransactionsPage() {
                   if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
                     toast({
                       title: 'Kunde inte hitta alla konton',
-                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`,
+                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt i Kontoplan.`,
                       variant: 'destructive',
                     })
                     return
