@@ -72,8 +72,11 @@ export function BokforingWorkspace({ userId }: { userId: string }) {
   const [isLoadingCopy, setIsLoadingCopy] = useState(false)
   const [nextVoucher, setNextVoucher] = useState<NextVoucher | null>(null)
 
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab as TabKey)
+  const handleTabChange = (raw: string) => {
+    // Never settle on the Underlag tab in a deployment where invoice-inbox is
+    // disabled (its trigger isn't rendered, but guard the URL defensively too).
+    const tab: TabKey = raw === 'underlag' && !inboxAvailable ? 'att-hantera' : (raw as TabKey)
+    setActiveTab(tab)
     const params = new URLSearchParams(searchParams.toString())
     params.set('tab', tab)
     params.delete('copy_from')
@@ -90,7 +93,7 @@ export function BokforingWorkspace({ userId }: { userId: string }) {
     setCopyPrefill(null)
     setIsLoadingCopy(true)
 
-    fetch(`/api/bookkeeping/journal-entries/${copyFromId}`)
+    fetch(`/api/bookkeeping/journal-entries/${encodeURIComponent(copyFromId)}`)
       .then((res) => res.json())
       .then(({ data, error }: { data?: JournalEntry; error?: string }) => {
         if (error || !data) {

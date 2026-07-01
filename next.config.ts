@@ -43,16 +43,19 @@ const nextConfig: NextConfig = {
       // The transactions + invoice-inbox surfaces are consolidated into the
       // unified Bokföring workspace. Destinations carry no query so an incoming
       // ?highlight= passes through (Att hantera auto-scrolls to it); the bare
-      // /transactions lands on the default Att hantera tab.
+      // /transactions lands on the default Att hantera tab. Temporary (307)
+      // while the consolidation settles — browsers don't cache these hard, so
+      // the IA can still change without cache-busting; promote to permanent once
+      // the workspace is locked in.
       {
         source: '/transactions',
         destination: '/bookkeeping',
-        permanent: true,
+        permanent: false,
       },
       {
         source: '/e/general/invoice-inbox',
         destination: '/bookkeeping?tab=underlag',
-        permanent: true,
+        permanent: false,
       },
       // Docs canonicalised to docs.gnubok.se. Every `docs_url` field on the
       // v1 error envelope still points at this host; the 308 forwards both
