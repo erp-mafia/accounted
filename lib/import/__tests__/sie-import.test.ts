@@ -1162,6 +1162,214 @@ describe('importVouchers — per-voucher series preservation', () => {
   })
 })
 
+describe('importVouchers — batch retry recovery (issue #160)', () => {
+  // Simulates the "ack-loss" scenario behind #160: an insert actually commits
+  // server-side (e.g. Supabase/Cloudflare timeout) but the client sees an
+  // error and retries. A blind retry of journal_entries hits
+  // uq_journal_entries_voucher_number and wrongly fails the whole batch,
+  // orphaning a lineless voucher; a blind retry of journal_entry_lines has no
+  // such constraint and would silently double-book every amount instead.
+  function buildRetryRecoverySupabase(opts: {
+    headerInsertFails?: boolean
+    recoveredHeaders?: { id: string; voucher_number: number }[]
+    lineInsertFails?: boolean
+    recoveredLineCount?: number
+  }) {
+    const journalEntryInserts: Array<Record<string, unknown>> = []
+    const journalEntryLineInserts: Array<Record<string, unknown>> = []
+    let headerInsertCalls = 0
+    let lineInsertCalls = 0
+    const nextNumberBySeries = new Map<string, number>()
+
+    const supabase = {
+      from: vi.fn((table: string) => {
+        if (table === 'chart_of_accounts') {
+          return {
+            select: () => ({
+              eq: () => ({
+                in: (_col: string, accountNumbers: string[]) =>
+                  Promise.resolve({
+                    data: accountNumbers.map((num, i) => ({ id: `acc-${i}`, account_number: num })),
+                    error: null,
+                  }),
+              }),
+            }),
+          }
+        }
+
+        if (table === 'journal_entries') {
+          return {
+            insert: (rows: Array<Record<string, unknown>>) => {
+              headerInsertCalls++
+              journalEntryInserts.push(...rows)
+              return {
+                select: () =>
+                  opts.headerInsertFails
+                    ? Promise.resolve({
+                        data: null,
+                        error: { message: 'duplicate key value violates unique constraint "uq_journal_entries_voucher_number"', code: '23505' },
+                      })
+                    : Promise.resolve({ data: rows.map((_, i) => ({ id: `entry-${headerInsertCalls}-${i}` })), error: null }),
+              }
+            },
+            // Recovery lookup issued on retry, before re-inserting.
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    in: () => Promise.resolve({ data: opts.recoveredHeaders ?? [], error: null }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+
+        if (table === 'journal_entry_lines') {
+          return {
+            insert: (rows: Array<Record<string, unknown>>) => {
+              lineInsertCalls++
+              journalEntryLineInserts.push(...rows)
+              if (opts.lineInsertFails && lineInsertCalls === 1) {
+                return Promise.resolve({ error: { message: 'Connection terminated unexpectedly' } })
+              }
+              return Promise.resolve({ error: null })
+            },
+            // Recovery count issued on retry, before re-inserting.
+            select: () => ({
+              in: () => Promise.resolve({ data: null, error: null, count: opts.recoveredLineCount ?? 0 }),
+            }),
+          }
+        }
+
+        throw new Error(`Unexpected table: ${table}`)
+      }),
+
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        if (name === 'next_voucher_number') {
+          const series = args.p_series as string
+          const next = (nextNumberBySeries.get(series) ?? 0) + 1
+          nextNumberBySeries.set(series, next)
+          return { data: next, error: null }
+        }
+        if (name === 'reserve_voucher_range' || name === 'release_voucher_range') {
+          return { data: null, error: null }
+        }
+        throw new Error(`Unexpected RPC: ${name}`)
+      }),
+    }
+
+    return {
+      supabase: supabase as unknown as SupabaseClient,
+      journalEntryInserts,
+      journalEntryLineInserts,
+      getHeaderInsertCalls: () => headerInsertCalls,
+      getLineInsertCalls: () => lineInsertCalls,
+    }
+  }
+
+  function makeSingleVoucherFile() {
+    return makeParsedFile({
+      vouchers: [
+        {
+          series: 'A',
+          number: 1,
+          date: new Date(2024, 0, 15),
+          description: 'Voucher A1',
+          lines: [
+            { account: '1510', amount: 1000 },
+            { account: '3001', amount: -1000 },
+          ],
+        },
+      ],
+    })
+  }
+
+  const accountMap = new Map([
+    ['1510', '1510'],
+    ['3001', '3001'],
+  ])
+
+  it('recovers headers already committed by a prior attempt instead of orphaning the voucher', async () => {
+    const { supabase, getHeaderInsertCalls } = buildRetryRecoverySupabase({
+      headerInsertFails: true,
+      recoveredHeaders: [{ id: 'entry-recovered', voucher_number: 1 }],
+    })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      makeSingleVoucherFile(),
+      accountMap,
+      'A',
+    )
+
+    // Only the original failed attempt called insert — the retry recovered
+    // via lookup instead of re-inserting (which would have hit the unique
+    // constraint a second time).
+    expect(getHeaderInsertCalls()).toBe(1)
+    expect(result.errors).toEqual([])
+    expect(result.created).toBe(1)
+    expect(result.ids).toEqual(['entry-recovered'])
+    expect(result.retriedBatches).toBe(1)
+    expect(result.failedBatches).toBe(0)
+  })
+
+  it('fails the batch (does not fabricate success) when no matching headers are found on retry', async () => {
+    vi.useFakeTimers()
+    try {
+      const { supabase } = buildRetryRecoverySupabase({
+        headerInsertFails: true,
+        recoveredHeaders: [], // genuine failure — nothing to recover
+      })
+
+      const resultPromise = importVouchers(
+        supabase,
+        'company-1',
+        'user-1',
+        'period-1',
+        makeSingleVoucherFile(),
+        accountMap,
+        'A',
+      )
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
+
+      expect(result.created).toBe(0)
+      expect(result.failedBatches).toBe(1)
+      expect(result.errors[0]).toMatch(/misslyckades/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('recovers lines already committed by a prior attempt instead of double-booking amounts', async () => {
+    const { supabase, getLineInsertCalls, journalEntryLineInserts } = buildRetryRecoverySupabase({
+      lineInsertFails: true,
+      recoveredLineCount: 2, // matches the 2 lines of the single test voucher
+    })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      makeSingleVoucherFile(),
+      accountMap,
+      'A',
+    )
+
+    // Only the original failed attempt called insert — the retry recovered
+    // via a count lookup instead of re-inserting the same lines a second time.
+    expect(getLineInsertCalls()).toBe(1)
+    expect(journalEntryLineInserts.length).toBe(2)
+    expect(result.errors).toEqual([])
+    expect(result.created).toBe(1)
+  })
+})
+
 describe('IB derivation from #UB -1 (issue #675)', () => {
   const derivedOverrides: Partial<ParsedSIEFile> = {
     openingBalances: [],

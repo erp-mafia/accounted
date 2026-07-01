@@ -1297,6 +1297,30 @@ export async function importVouchers(
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         batchWasRetried = true
+
+        // The previous attempt may have actually committed server-side even
+        // though the client saw an error (e.g. a dropped response after a
+        // Supabase/Cloudflare timeout). Check before blindly re-inserting —
+        // otherwise this retry hits uq_journal_entries_voucher_number, the
+        // whole batch is wrongly reported as failed, and an orphaned,
+        // lineless voucher is left behind under the burned number.
+        const expectedNumbers = entryInserts.map((e) => e.voucher_number)
+        const { data: existing } = await supabase
+          .from('journal_entries')
+          .select('id, voucher_number')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .eq('voucher_series', series)
+          .in('voucher_number', expectedNumbers)
+
+        if (existing && existing.length === entryInserts.length) {
+          const byNumber = new Map(existing.map((e) => [e.voucher_number as number, e.id as string]))
+          entries = expectedNumbers.map((n) => ({ id: byNumber.get(n)! }))
+          lastEntryError = null
+          console.log(`[sie-import] Batch ${batchNumber} recovered: entries already committed from a prior attempt`)
+          break
+        }
+
         const backoffMs = Math.pow(2, attempt - 1) * 1000 // 1s, 2s, 4s
         console.log(`[sie-import] Retrying batch ${batchNumber} (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${backoffMs}ms`)
         await new Promise(resolve => setTimeout(resolve, backoffMs))
@@ -1378,6 +1402,24 @@ export async function importVouchers(
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (attempt > 0) {
           batchWasRetried = true
+
+          // Same recovery as the headers loop above: journal_entry_lines has
+          // no unique constraint to surface a duplicate-key error, so a blind
+          // retry here would silently double-book every debit/credit in the
+          // batch if the prior attempt actually committed. Verify first.
+          const entryIds = [...new Set(allLines.map((l) => l.journal_entry_id))]
+          const { count } = await supabase
+            .from('journal_entry_lines')
+            .select('id', { count: 'exact', head: true })
+            .in('journal_entry_id', entryIds)
+
+          if (count === allLines.length) {
+            linesInserted = true
+            lastLinesError = null
+            console.log(`[sie-import] Batch ${batchNumber} lines recovered: already committed from a prior attempt`)
+            break
+          }
+
           const backoffMs = Math.pow(2, attempt - 1) * 1000
           console.log(`[sie-import] Retrying batch ${batchNumber} lines (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${backoffMs}ms`)
           await new Promise(resolve => setTimeout(resolve, backoffMs))
