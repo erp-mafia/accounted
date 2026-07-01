@@ -26,24 +26,25 @@ export default function TransactionStatusBar({
 }: TransactionStatusBarProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('transactions')
+  // Toolbar only — no page title. This surface lives inside the Bokföring
+  // workspace's "Att hantera" tab, which already carries the page heading, so a
+  // second <h1> here would double the hierarchy. The queue counts read as a calm
+  // status line; the actions sit right.
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div>
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight">{t('page_title')}</h1>
-        {uncategorizedCount > 0 && mode === 'inbox' && (
-          <p className="text-muted-foreground mt-1">
-            <span className="text-foreground font-semibold">{uncategorizedCount}</span> {t('subtitle_to_post')}
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="text-sm text-muted-foreground">
+        {mode === 'inbox' && uncategorizedCount > 0 && (
+          <span>
+            <span className="text-foreground font-medium tabular-nums">{uncategorizedCount}</span> {t('subtitle_to_post')}
             {invoiceMatchCount > 0 && (
               <span className="ml-2">
                 · <FileText className="inline h-3.5 w-3.5 text-primary" />{' '}
-                <span className="text-foreground font-semibold">{t('subtitle_matches', { count: invoiceMatchCount })}</span>
+                <span className="text-foreground font-medium">{t('subtitle_matches', { count: invoiceMatchCount })}</span>
               </span>
             )}
-          </p>
+          </span>
         )}
-        {mode === 'history' && (
-          <p className="text-muted-foreground">{t('history_subtitle')}</p>
-        )}
+        {mode === 'history' && <span>{t('history_subtitle')}</span>}
       </div>
 
       <div className="flex flex-wrap gap-2">

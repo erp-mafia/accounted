@@ -2062,7 +2062,7 @@ export default function TransactionsWorkbench() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Bankavstämning status — surfaces the reconciliation loop at the top of Att hantera */}
       <ReconciliationStatusStrip companyId={companyId} />
 

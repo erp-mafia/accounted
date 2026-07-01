@@ -160,42 +160,39 @@ export function BokforingWorkspace({ userId }: { userId: string }) {
     }
   }, [refreshKey])
 
-  const isJournalTab = activeTab === 'utkast' || activeTab === 'bokfort'
+  // Actions for the journal tabs, rendered in-pane (not in the page header) so
+  // the header stays a single stable "Bokföring" title and every tab keeps its
+  // own controls at the same altitude.
+  const journalToolbar = (
+    <div className="flex flex-wrap justify-end gap-2">
+      <Button
+        size="sm"
+        onClick={() => {
+          setCopyPrefill(null)
+          setShowNewEntry(true)
+        }}
+      >
+        <Plus className="mr-2 h-4 w-4" />
+        {t('tab_new_entry')}
+        {nextVoucher && (
+          <span className="ml-1 text-primary-foreground/70 tabular-nums">
+            ({nextVoucher.series}
+            {nextVoucher.next})
+          </span>
+        )}
+      </Button>
+      <AgentSparkleButton
+        intentId="verifikation.draft"
+        contextRef="verifikation:new"
+        label={t('create_with_assistant')}
+        size="sm"
+      />
+    </div>
+  )
 
   return (
-    <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          isJournalTab ? (
-            <div className="flex gap-2 w-full sm:w-auto">
-              <Button
-                className="w-full sm:w-auto"
-                onClick={() => {
-                  setCopyPrefill(null)
-                  setShowNewEntry(true)
-                }}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                {t('tab_new_entry')}
-                {nextVoucher && (
-                  <span className="ml-1 text-primary-foreground/70 tabular-nums">
-                    ({nextVoucher.series}
-                    {nextVoucher.next})
-                  </span>
-                )}
-              </Button>
-              <AgentSparkleButton
-                intentId="verifikation.draft"
-                contextRef="verifikation:new"
-                label={t('create_with_assistant')}
-                size="default"
-                className="w-full sm:w-auto"
-              />
-            </div>
-          ) : undefined
-        }
-      />
+    <div className="space-y-6">
+      <PageHeader title={t('title')} />
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
         <TabsList>
@@ -216,11 +213,17 @@ export function BokforingWorkspace({ userId }: { userId: string }) {
         )}
 
         <TabsContent value="utkast">
-          <JournalEntryList key={`drafts-${refreshKey}`} initialMode="drafts" hideModeToggle />
+          <div className="space-y-4">
+            {journalToolbar}
+            <JournalEntryList key={`drafts-${refreshKey}`} initialMode="drafts" hideModeToggle />
+          </div>
         </TabsContent>
 
         <TabsContent value="bokfort">
-          <JournalEntryList key={`committed-${refreshKey}`} initialMode="committed" hideModeToggle />
+          <div className="space-y-4">
+            {journalToolbar}
+            <JournalEntryList key={`committed-${refreshKey}`} initialMode="committed" hideModeToggle />
+          </div>
         </TabsContent>
       </Tabs>
 
