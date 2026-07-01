@@ -1,6 +1,6 @@
 # Agentic Loops — Playbook
 
-Proactive loops that scan the codebase and our external systems (GitHub, Vercel/Sentry), then
+Proactive loops that scan the codebase and our external systems (GitHub, Vercel), then
 **propose** fixes and file well-formed tickets. This file is the shared contract every loop obeys.
 Skills under `.claude/skills/loop-*` implement the loops; cloud routines and local `/loop` invocations
 run them on a schedule.
@@ -59,12 +59,13 @@ comment what was tried. Never retry the same failing action in a cycle.
 | # | Loop | Skill | Where | Cadence (default) | Per-run cap |
 |---|---|---|---|---|---|
 | 1 | PR + CI triage | `loop-pr-ci-triage` | **Cloud** `trig_01J2nG7eB9gsdAb9YSGBVwa8` | `0 7,11,15 * * *` UTC | ≤5 PRs |
-| 2 | Vercel/Sentry errors → tickets | `loop-vercel-errors` | **Cloud** `trig_014CmE3gTJ7ErnvL2trPYymu` | `0 6 * * *` UTC | ≤8 issues, ≤2 PRs |
+| 2 | Vercel errors → tickets | `loop-vercel-errors` | **Local** (Vercel MCP); cloud needs `VERCEL_TOKEN`. Trigger `trig_014CmE3gTJ7ErnvL2trPYymu` **disabled** | on-demand / `/loop` | ≤8 issues, ≤2 PRs |
 | 3 | Issue triage + easy-fix | `loop-issue-triage` | **Cloud** `trig_017hB94ieGVwreJqHpGRDVoM` | `0 7,15 * * *` UTC | triage all; ≤2 PRs |
 | 4 | UI/UX + design scan | `loop-design-scan` | **Local** (`/loop`) | on-demand | ≤1 area, ≤6 findings |
 
-Loops 1–3 are cloud routines (only need `gh` + an API). Loop 4 is **local** — it needs `npm run dev` +
-Chrome to render/screenshot the UI; a headless cloud session can't see it.
+Loops 1 & 3 are cloud routines (only need `gh`). Loop 2 (Vercel errors) is **local** — the Vercel MCP is
+only available locally, and there's no error-aggregation service (Sentry is not used). Loop 4 is
+**local** — it needs `npm run dev` + Chrome to render/screenshot the UI.
 
 ---
 
@@ -85,9 +86,11 @@ cloning `main`. For them to work:
    *"environment not provisioned"* if not. Verify via the completion notification of the first fire.
 2. **Cloud routines cannot reach interactively-authenticated MCPs** (Vercel/Supabase plugins are not in
    the routine tool allowlist). Loops rely on `gh` (via Bash) + HTTP APIs.
-3. **The Vercel/Sentry loop needs `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` / `SENTRY_PROJECT` as secrets in
-   the cloud env**, and the token needs `event:read` + `project:read` scope. As of 2026-07-01 the token
-   in `.env.local` returns **403** — a scoped token is required before this loop can work.
+3. **The Vercel-errors loop runs locally** (Vercel MCP). Sentry is **not** used in this codebase — the
+   `SENTRY_*` names in `.env.local`/CLAUDE.md are leftovers. To run this loop in the cloud instead, set a
+   `VERCEL_TOKEN` secret on the env and accept that Vercel runtime-log retention is short (recent window
+   only). `GH_TOKEN` is the one secret loops 1 & 3 actually require (private-repo access;
+   OAuth-only integration does not work for private repos — anthropics/claude-code#64130).
 
 ---
 
