@@ -274,7 +274,7 @@ export default function ArticleDetailPage({
             {article.type === 'tjanst' && article.housework_type && (
               <div className="text-sm flex items-center justify-between">
                 <span className="text-muted-foreground">{t('label_housework')}</span>
-                <Badge variant="secondary">{article.housework_type}</Badge>
+                <span>{article.housework_type}</span>
               </div>
             )}
           </CardContent>

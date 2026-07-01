@@ -17,7 +17,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
@@ -463,9 +462,9 @@ export default function BulkBookDialog({
                             <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                             <span className="text-sm font-medium truncate">{tpl.name}</span>
                             {tpl.is_system && (
-                              <Badge variant="outline" className="text-[10px]">
+                              <span className="flex-shrink-0 text-[10px] text-muted-foreground">
                                 {t('system_badge')}
-                              </Badge>
+                              </span>
                             )}
                           </div>
                           {tpl.description && (

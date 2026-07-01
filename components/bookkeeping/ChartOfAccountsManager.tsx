@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -283,9 +282,9 @@ export default function ChartOfAccountsManager() {
           <TabsList>
             <TabsTrigger value="my-accounts">
               {t('tab_my_accounts')}
-              <Badge variant="secondary" className="ml-1.5 text-xs">
-                {accounts.length}
-              </Badge>
+              <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">
+                ({accounts.length})
+              </span>
             </TabsTrigger>
             <TabsTrigger value="bas-catalog">
               <BookOpen className="mr-1.5 h-3.5 w-3.5" />
@@ -349,9 +348,9 @@ export default function ChartOfAccountsManager() {
                       <span className="font-semibold text-left">
                         {t('class_heading', { cls, label: classLabel(classNum) })}
                       </span>
-                      <Badge variant="secondary" className="text-xs">
-                        {activeCount}/{classAccounts.length}
-                      </Badge>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {t('active_count_label', { active: activeCount, total: classAccounts.length })}
+                      </span>
                     </div>
                   </button>
 
@@ -383,9 +382,9 @@ export default function ChartOfAccountsManager() {
                                 <span className="flex items-center gap-1.5">
                                   {account.account_name}
                                   {account.is_system_account && (
-                                    <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                                       {t('system_badge')}
-                                    </Badge>
+                                    </span>
                                   )}
                                 </span>
                               </td>
@@ -395,9 +394,9 @@ export default function ChartOfAccountsManager() {
                                 </span>
                               </td>
                               <td className="py-2 text-center">
-                                <Badge variant="outline" className="text-xs">
+                                <span className="text-xs text-muted-foreground">
                                   {typeLabel(account.account_type)}
-                                </Badge>
+                                </span>
                               </td>
                               <td className="py-2 text-center">
                                 <Switch
@@ -479,9 +478,9 @@ export default function ChartOfAccountsManager() {
                       <span className="font-semibold text-left">
                         {t('class_heading', { cls, label: classLabel(classNum) })}
                       </span>
-                      <Badge variant="secondary" className="text-xs">
+                      <span className="text-xs text-muted-foreground tabular-nums">
                         {t('active_count_label', { active: activatedCount, total: classAccounts.length })}
-                      </Badge>
+                      </span>
                     </div>
                   </button>
 
@@ -524,9 +523,9 @@ export default function ChartOfAccountsManager() {
                                 </span>
                               </td>
                               <td className="py-2 text-center">
-                                <Badge variant="outline" className="text-xs">
+                                <span className="text-xs text-muted-foreground">
                                   {typeLabel(account.account_type)}
-                                </Badge>
+                                </span>
                               </td>
                               <td className="py-2 text-right">
                                 {account.is_activated ? (

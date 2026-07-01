@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Download, AlertCircle } from 'lucide-react'
 import { AccountNumber } from '@/components/ui/account-number'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
@@ -128,14 +127,12 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
           {/* Company info */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>
-                  {data.companyInfo.companyName}
-                </CardTitle>
-                <Badge variant="secondary">
-                  {data.fiscalYear.name}
-                </Badge>
-              </div>
+              <CardTitle>
+                {data.companyInfo.companyName}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {data.fiscalYear.name}
+              </p>
               {data.companyInfo.orgNumber && (
                 <p className="text-sm text-muted-foreground">
                   Org.nr: {data.companyInfo.orgNumber}

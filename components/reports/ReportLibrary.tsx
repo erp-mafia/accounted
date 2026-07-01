@@ -63,7 +63,9 @@ export function ReportLibrary({
 }
 
 function EntityBadge({ item }: { item: ReportDescriptor }) {
-  if (item.entityType === 'enskild_firma') return <Badge variant="outline">EF</Badge>
-  if (item.entityType === 'aktiebolag') return <Badge variant="outline">AB</Badge>
+  if (item.entityType === 'enskild_firma')
+    return <span className="text-xs text-muted-foreground">EF</span>
+  if (item.entityType === 'aktiebolag')
+    return <span className="text-xs text-muted-foreground">AB</span>
   return null
 }

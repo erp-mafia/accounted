@@ -473,13 +473,12 @@ export default function TransactionInboxCard({
           {transaction.title_edited_at && (
             <>
               <DataListMetaSeparator />
-              <Badge
-                variant="secondary"
-                className="h-4 px-1.5 py-0 text-[10px]"
+              <span
+                className="text-muted-foreground"
                 title={originalName ? t('original_name_tooltip', { name: originalName }) : undefined}
               >
                 {t('edited_badge')}
-              </Badge>
+              </span>
             </>
           )}
           {skvCounterpartDate && (

@@ -204,7 +204,7 @@ export default function CustomerDetailPage({
             </div>
             <div>
               <h1 className="font-display text-2xl md:text-3xl tracking-tight">{customer.name}</h1>
-              <Badge variant="secondary">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</Badge>
+              <p className="text-sm text-muted-foreground">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</p>
             </div>
           </div>
         </div>
@@ -339,7 +339,7 @@ export default function CustomerDetailPage({
             <ReceiptText className="h-4 w-4" />
             {t('section_invoices')}
             {customer.invoices?.length > 0 && (
-              <Badge variant="secondary">{customer.invoices.length}</Badge>
+              <span className="text-sm text-muted-foreground tabular-nums">({customer.invoices.length})</span>
             )}
           </CardTitle>
         </CardHeader>

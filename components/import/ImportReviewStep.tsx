@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -373,9 +372,9 @@ export default function ImportReviewStep({
               <Label htmlFor="mark-no-doc-required" className="font-medium flex items-center gap-2">
                 Markera som &quot;Inget underlag krävs&quot;
                 {isHistoricalImport && (
-                  <Badge variant="secondary" className="text-[10px] font-normal">
-                    Rekommenderas vid migrering
-                  </Badge>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    · Rekommenderas vid migrering
+                  </span>
                 )}
               </Label>
               <p className="text-sm text-muted-foreground">

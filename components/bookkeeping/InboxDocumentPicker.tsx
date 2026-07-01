@@ -10,7 +10,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
@@ -228,15 +227,13 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                           <span className="text-sm font-medium truncate">
                             {it.supplier_name ?? it.file_name}
                           </span>
-                          <Badge variant="outline" className="shrink-0 text-[10px]">
-                            {sourceLabel}
-                          </Badge>
                         </div>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
                           {it.invoice_date && <span>{formatDate(it.invoice_date)}</span>}
                           {it.supplier_name && (
                             <span className="truncate font-normal">{it.file_name}</span>
                           )}
+                          <span className="shrink-0">{sourceLabel}</span>
                         </div>
                       </div>
                       {it.amount != null && (

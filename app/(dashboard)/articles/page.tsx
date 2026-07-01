@@ -375,10 +375,8 @@ function ArticlesPageInner() {
                           {article.name}
                         </Link>
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">
-                          {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
-                        </Badge>
+                      <TableCell className="text-muted-foreground">
+                        {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
                       </TableCell>
                       <TableCell className="text-muted-foreground">{article.unit}</TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -410,15 +408,9 @@ function ArticlesPageInner() {
                         <CardTitle className="text-base truncate group-hover:text-primary transition-colors">
                           {article.name}
                         </CardTitle>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Badge variant="secondary">
-                            {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
-                          </Badge>
-                          {article.article_number && (
-                            <span className="text-xs text-muted-foreground tabular-nums">
-                              {article.article_number}
-                            </span>
-                          )}
+                        <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                          {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
+                          {article.article_number ? ` · #${article.article_number}` : ''}
                         </div>
                       </div>
                       <span className="font-display text-lg tabular-nums shrink-0">

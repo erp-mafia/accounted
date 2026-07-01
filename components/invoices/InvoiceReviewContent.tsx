@@ -236,28 +236,14 @@ export function InvoiceReviewContent({
       {(yourReference || ourReference || notes) && (
         <div className="border-t pt-3 space-y-2 text-sm text-muted-foreground">
           {yourReference && (
-            <div>
-              <span>{t('your_reference')}</span>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {yourReference.split(',').map((ref, i) => (
-                  <Badge key={i} variant="secondary" className="text-xs font-normal">
-                    {ref.trim()}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <p>
+              <span>{t('your_reference')}</span> {yourReference}
+            </p>
           )}
           {ourReference && (
-            <div>
-              <span>{t('our_reference')}</span>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {ourReference.split(',').map((ref, i) => (
-                  <Badge key={i} variant="secondary" className="text-xs font-normal">
-                    {ref.trim()}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <p>
+              <span>{t('our_reference')}</span> {ourReference}
+            </p>
           )}
           {notes && <p>{t('notes_prefix', { notes })}</p>}
         </div>

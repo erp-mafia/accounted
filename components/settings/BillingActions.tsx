@@ -2,7 +2,6 @@
 
 import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import type { BillingPlan } from '@/lib/stripe/client'
 
@@ -96,7 +95,7 @@ export function BillingActions({ isPaying, configured }: { isPaying: boolean; co
           'yearly',
           <>
             Årsvis
-            <Badge variant="success" className="ml-2">Spara 2 mån</Badge>
+            <span className="ml-2 text-xs text-muted-foreground">Spara 2 mån</span>
           </>,
         )}
       </div>

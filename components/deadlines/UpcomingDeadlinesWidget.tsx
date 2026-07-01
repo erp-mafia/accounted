@@ -142,17 +142,16 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium truncate">{deadline.title}</p>
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      {formatDate(deadline.due_date)}
-                      {deadline.due_time && ` ${t('time_prefix')} ${deadline.due_time.slice(0, 5)}`}
-                    </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDate(deadline.due_date)}
+                    {deadline.due_time && ` ${t('time_prefix')} ${deadline.due_time.slice(0, 5)}`}
                     {deadline.tax_deadline_type && (
-                      <Badge variant="outline" className="text-xs px-1 py-0">
-                        {t('tax_badge')}
-                      </Badge>
+                      <>
+                        {' '}
+                        <span className="text-muted-foreground/30">·</span> {t('tax_badge')}
+                      </>
                     )}
-                  </div>
+                  </p>
                 </div>
               </div>
 

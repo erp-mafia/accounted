@@ -367,10 +367,8 @@ function CustomersPageInner() {
                             {customer.name}
                           </Link>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
-                          </Badge>
+                        <TableCell className="text-muted-foreground">
+                          {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
                         </TableCell>
                         <TableCell className="tabular-nums text-muted-foreground">
                           <div className="flex items-center gap-2">
@@ -413,9 +411,9 @@ function CustomersPageInner() {
                         <CardTitle className="text-base truncate group-hover:text-primary transition-colors">
                           {customer.name}
                         </CardTitle>
-                        <Badge variant="secondary" className="mt-1">
+                        <p className="text-sm text-muted-foreground mt-1 truncate">
                           {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
-                        </Badge>
+                        </p>
                       </div>
                     </div>
                   </CardHeader>

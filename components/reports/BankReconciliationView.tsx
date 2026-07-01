@@ -771,9 +771,9 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                     </td>
                     <td className="py-2 tabular-nums">{formatDate(m.entry_date)}</td>
                     <td className="py-2">
-                      <Badge variant="outline" className="text-xs">
+                      <span className="text-xs text-muted-foreground">
                         {METHOD_LABELS[m.method] || m.method}
-                      </Badge>
+                      </span>
                     </td>
                   </tr>
                 ))}
@@ -840,9 +840,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums">
                         <span>{formatDate(tx.date)}</span>
                         <span aria-hidden>·</span>
-                        <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
-                          {tx.currency}
-                        </Badge>
+                        <span>{tx.currency}</span>
                         {tx.reference && (
                           <>
                             <span aria-hidden>·</span>
@@ -1066,7 +1064,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                       <td className="py-2 tabular-nums">{formatDate(tx.date)}</td>
                       <td className="py-2 truncate max-w-[300px]">{tx.description}</td>
                       <td className="py-2 text-xs">
-                        <Badge variant="outline" className="text-xs">{tx.currency}</Badge>
+                        <span className="tabular-nums">{tx.currency}</span>
                       </td>
                       <td className="py-2 text-right tabular-nums">
                         {formatCurrency(tx.amount)}
@@ -1130,9 +1128,9 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                       </td>
                       <td className="py-2">
                         {tx.reconciliation_method && (
-                          <Badge variant="outline" className="text-xs">
+                          <span className="text-xs text-muted-foreground">
                             {METHOD_LABELS[tx.reconciliation_method] || tx.reconciliation_method}
-                          </Badge>
+                          </span>
                         )}
                       </td>
                       <td className="py-2">

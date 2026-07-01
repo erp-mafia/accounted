@@ -2,7 +2,6 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   Table,
   TableBody,
@@ -160,14 +159,8 @@ export default function BankFilePreviewStep({
                       </TableCell>
                     )}
                     {transactions.some((t) => t.reference) && (
-                      <TableCell className="text-sm">
-                        {tx.reference ? (
-                          <Badge variant="outline" className="font-mono text-xs">
-                            {tx.reference}
-                          </Badge>
-                        ) : (
-                          '–'
-                        )}
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {tx.reference ? tx.reference : '–'}
                       </TableCell>
                     )}
                   </TableRow>

@@ -4,7 +4,6 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Trash2, Users, ChevronDown } from 'lucide-react'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
@@ -130,9 +129,6 @@ export function CounterpartyTemplatesPanel() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-medium truncate">{formatCounterpartyName(tt.counterparty_name)}</p>
-                          <Badge variant="outline" className="text-[10px] shrink-0">
-                            {SOURCE_LABELS[tt.source] || tt.source}
-                          </Badge>
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
                           {isMultiLine ? (
@@ -157,6 +153,8 @@ export function CounterpartyTemplatesPanel() {
                           <span className={`tabular-nums ${confidenceColor(Number(tt.confidence))}`}>
                             {Math.round(Number(tt.confidence) * 100)}%
                           </span>
+                          <span className="text-muted-foreground/30">·</span>
+                          <span>{SOURCE_LABELS[tt.source] || tt.source}</span>
                         </div>
                       </div>
                       <ChevronDown className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
@@ -172,9 +170,9 @@ export function CounterpartyTemplatesPanel() {
                             <div className="space-y-1">
                               {tt.line_pattern!.map((lp, i) => (
                                 <div key={i} className="flex items-center gap-2 text-xs">
-                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0 w-14 justify-center">
+                                  <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                                     {lp.side === 'debit' ? t('debit_label') : t('credit_label')}
-                                  </Badge>
+                                  </span>
                                   <span className="font-mono">{formatAccountWithName(lp.account)}</span>
                                   {lp.type === 'vat' && lp.vat_rate && (
                                     <span className="text-muted-foreground">{t('vat_paren', { rate: Math.round(lp.vat_rate * 100) })}</span>
@@ -188,11 +186,11 @@ export function CounterpartyTemplatesPanel() {
                           ) : (
                             <div className="space-y-1">
                               <div className="flex items-center gap-2 text-xs">
-                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 w-14 justify-center">{t('debit_label')}</Badge>
+                                <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('debit_label')}</span>
                                 <span className="font-mono">{formatAccountWithName(tt.debit_account)}</span>
                               </div>
                               <div className="flex items-center gap-2 text-xs">
-                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 w-14 justify-center">{t('credit_label')}</Badge>
+                                <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('credit_label')}</span>
                                 <span className="font-mono">{formatAccountWithName(tt.credit_account)}</span>
                               </div>
                             </div>

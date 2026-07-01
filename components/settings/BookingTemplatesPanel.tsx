@@ -314,7 +314,7 @@ function TemplateSection({
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-muted-foreground" />
         <h3 className="text-sm font-medium">{title}</h3>
-        <Badge variant="secondary" className="text-xs">{templates.length}</Badge>
+        <span className="text-xs text-muted-foreground tabular-nums">{templates.length}</span>
       </div>
       <div className="space-y-1">
         {templates.map((tt) => {
@@ -335,14 +335,10 @@ function TemplateSection({
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium">{tt.name}</span>
                     <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      <span className="text-xs text-muted-foreground">
                         {TEMPLATE_CATEGORY_LABELS[tt.category]}
-                      </Badge>
-                      {tt.entity_type !== 'all' && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                          {entityLabels[tt.entity_type]}
-                        </Badge>
-                      )}
+                        {tt.entity_type !== 'all' && ` · ${entityLabels[tt.entity_type]}`}
+                      </span>
                       {!isConvertible && (
                         <Badge variant="warning" className="text-[10px] px-1.5 py-0">
                           {t('unconvertible_badge')}

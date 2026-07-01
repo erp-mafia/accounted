@@ -6,7 +6,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -242,9 +241,7 @@ export function CompanyMembersSection() {
                         {roleLabels[member.role] || member.role}
                       </span>
                       {member.source === 'team' && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                          {t('members_team_badge')}
-                        </Badge>
+                        <span className="text-xs text-muted-foreground">· {t('members_team_badge')}</span>
                       )}
                     </div>
                   </div>
@@ -295,9 +292,9 @@ export function CompanyMembersSection() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className="text-xs">
+                    <span className="text-xs text-muted-foreground">
                       {roleLabels[inv.role] || inv.role}
-                    </Badge>
+                    </span>
                     {canInvite && (
                       <Button
                         variant="ghost"

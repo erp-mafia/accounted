@@ -8,7 +8,6 @@ import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
-import { Badge } from '@/components/ui/badge'
 import { Calendar, Copy, RefreshCw, Loader2, ExternalLink, Check } from 'lucide-react'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import type { CalendarFeed } from '@/types'
@@ -261,9 +260,10 @@ export function CalendarFeedSettings() {
                   minute: '2-digit',
                 })}
               </span>
-              <Badge variant="secondary" className="text-xs">
+              <span className="text-muted-foreground/30">·</span>
+              <span className="tabular-nums">
                 {t('times_count', { count: feed.access_count })}
-              </Badge>
+              </span>
             </div>
           )}
 

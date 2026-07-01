@@ -6,7 +6,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Badge } from '@/components/ui/badge'
 import type { CompanySettings } from '@/types'
 
 interface TaxSettingsFormProps {
@@ -35,9 +34,9 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
           {t('entity_form_heading')}
         </h2>
         <div className="flex items-center gap-3">
-          <Badge variant="secondary" className="text-sm">
+          <span className="text-sm font-medium">
             {settings.entity_type === 'aktiebolag' ? t('entity_aktiebolag') : t('entity_enskild_firma')}
-          </Badge>
+          </span>
           <p className="text-xs text-muted-foreground">
             {t('entity_form_help')}
           </p>

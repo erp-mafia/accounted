@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
@@ -127,7 +126,7 @@ export default function ChartOfAccounts() {
                     <span className="font-semibold">
                       Klass {cls}: {CLASS_LABELS[classNum] || ''}
                     </span>
-                    <Badge variant="secondary">{classAccounts.length} konton</Badge>
+                    <span className="text-sm text-muted-foreground">{classAccounts.length} konton</span>
                   </div>
                 </button>
 
@@ -179,18 +178,16 @@ export default function ChartOfAccounts() {
                                 </button>
                               )}
                             </td>
-                            <td className="py-2 text-center">
-                              <Badge variant="outline" className="text-xs">
-                                {account.account_type === 'asset'
-                                  ? 'Tillgång'
-                                  : account.account_type === 'liability'
-                                    ? 'Skuld'
-                                    : account.account_type === 'equity'
-                                      ? 'EK'
-                                      : account.account_type === 'revenue'
-                                        ? 'Intäkt'
-                                        : 'Kostnad'}
-                              </Badge>
+                            <td className="py-2 text-center text-xs text-muted-foreground">
+                              {account.account_type === 'asset'
+                                ? 'Tillgång'
+                                : account.account_type === 'liability'
+                                  ? 'Skuld'
+                                  : account.account_type === 'equity'
+                                    ? 'EK'
+                                    : account.account_type === 'revenue'
+                                      ? 'Intäkt'
+                                      : 'Kostnad'}
                             </td>
                             <td className="py-2 text-center text-xs text-muted-foreground">
                               {account.normal_balance === 'debit' ? 'Debet' : 'Kredit'}
