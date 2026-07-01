@@ -3,7 +3,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Dialog,
@@ -193,17 +192,14 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{t.name}</span>
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
-                          <ScopeIcon className="h-3 w-3 mr-0.5" />
+                      <div className="font-medium text-sm">{t.name}</div>
+                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
+                        <ScopeIcon className="h-3 w-3 shrink-0" />
+                        <span>
                           {SCOPE_LABELS[scope]}
-                        </Badge>
-                        {t.entity_type !== 'all' && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
-                            {t.entity_type === 'enskild_firma' ? 'EF' : 'AB'}
-                          </Badge>
-                        )}
+                          {t.entity_type !== 'all' &&
+                            ` · ${t.entity_type === 'enskild_firma' ? 'EF' : 'AB'}`}
+                        </span>
                       </div>
                       {t.description && (
                         <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">

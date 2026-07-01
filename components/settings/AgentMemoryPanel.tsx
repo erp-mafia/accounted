@@ -298,8 +298,9 @@ export function AgentMemoryPanel() {
 
                     <div className="flex-1 min-w-0 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={kindBadge(row.kind)}>{KIND_LABEL[row.kind]}</Badge>
-                        <Badge variant="outline">{SOURCE_LABEL[row.source]}</Badge>
+                        <span className="text-[11px] text-muted-foreground">
+                          {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]}
+                        </span>
                         {dimmed && <Badge variant="secondary">Dold</Badge>}
                       </div>
 
@@ -387,17 +388,4 @@ export function AgentMemoryPanel() {
       </CardContent>
     </Card>
   )
-}
-
-function kindBadge(kind: Kind): 'default' | 'secondary' | 'outline' | 'success' | 'warning' {
-  switch (kind) {
-    case 'fact':
-      return 'default'
-    case 'preference':
-      return 'secondary'
-    case 'pattern':
-      return 'outline'
-    case 'correction':
-      return 'warning'
-  }
 }

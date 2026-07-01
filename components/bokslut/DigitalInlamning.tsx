@@ -641,19 +641,24 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 label: submission.status,
                 variant: 'outline' as const,
               }
+              const envLabel =
+                submission.environment === 'prod'
+                  ? ''
+                  : submission.environment === 'test'
+                    ? 'Testmiljö'
+                    : submission.environment === 'acceptans'
+                      ? 'Acceptansmiljö'
+                      : submission.environment.charAt(0).toUpperCase() +
+                        submission.environment.slice(1)
               return (
                 <div
                   key={submission.id}
                   className="flex items-start justify-between gap-4 border-b border-border last:border-b-0 pb-3 last:pb-0"
                 >
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={badge.variant}>{badge.label}</Badge>
-                      {submission.environment !== 'prod' && (
-                        <Badge variant="outline">{submission.environment}</Badge>
-                      )}
-                    </div>
+                    <Badge variant={badge.variant}>{badge.label}</Badge>
                     <p className="text-xs text-muted-foreground tabular-nums">
+                      {envLabel ? `${envLabel} · ` : ''}
                       {formatDate(submission.created_at)}
                       {submission.idnummer ? ` · id ${submission.idnummer}` : ''}
                       {submission.undertecknare_namn ? ` · ${submission.undertecknare_namn}` : ''}
