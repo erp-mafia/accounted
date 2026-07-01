@@ -3595,6 +3595,12 @@
   },
   "transactions": {
     "page_title": "Transaktioner",
+    "recon_title": "Bankavstämning",
+    "recon_unmatched_tx": "omatchade transaktioner",
+    "recon_unmatched_vouchers": "omatchade verifikationer",
+    "recon_difference": "Differens:",
+    "recon_open": "Öppna avstämning",
+    "recon_reconciled": "Avstämt",
     "subtitle_to_post": "att bokföra",
     "subtitle_matches": "{count} fakturamatchningar",
     "history_subtitle": "Alla dina transaktioner",
@@ -3677,6 +3683,10 @@
   "bookkeeping": {
     "edit_draft_dialog_title": "Redigera utkast",
     "title": "Bokföring",
+    "tab_att_hantera": "Att hantera",
+    "tab_underlag": "Underlag",
+    "tab_utkast": "Utkast",
+    "tab_bokfort": "Bokfört",
     "year_end": "Årsbokslut",
     "tab_journal": "Verifikationer",
     "tab_new_entry": "Ny verifikation",

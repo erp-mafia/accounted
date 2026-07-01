@@ -24,6 +24,7 @@ import { ChevronDown, EyeOff, Layers, Search, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
+import { ReconciliationStatusStrip } from '@/components/transactions/ReconciliationStatusStrip'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
@@ -94,7 +95,7 @@ interface QuickReviewState {
   linePattern: LinePatternEntry[] | null
 }
 
-export default function TransactionsPage() {
+export default function TransactionsWorkbench() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
   const t = useTranslations('transactions')
@@ -2062,6 +2063,9 @@ export default function TransactionsPage() {
 
   return (
     <div className="space-y-8">
+      {/* Bankavstämning status — surfaces the reconciliation loop at the top of Att hantera */}
+      <ReconciliationStatusStrip companyId={companyId} />
+
       {/* Status bar */}
       <TransactionStatusBar
         uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}

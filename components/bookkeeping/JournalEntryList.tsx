@@ -77,7 +77,18 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
-export default function JournalEntryList() {
+export default function JournalEntryList({
+  initialMode = 'committed',
+  hideModeToggle = false,
+}: {
+  /** Seeds the Verifikat/Utkast toggle — used by the Bokföring workspace to mount
+   *  the Utkast (drafts) and Bokfört (committed) tabs on the right view. */
+  initialMode?: 'committed' | 'drafts'
+  /** Hide the internal Verifikat/Utkast toggle when an outer surface (the
+   *  Bokföring workspace tabs) already owns the mode switch, to avoid a
+   *  duplicate control. */
+  hideModeToggle?: boolean
+} = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -117,7 +128,7 @@ export default function JournalEntryList() {
   const [search, setSearch] = useState('')
   // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
   // committed list server-side and surfaced here behind a count badge.
-  const [listMode, setListMode] = useState<'committed' | 'drafts'>('committed')
+  const [listMode, setListMode] = useState<'committed' | 'drafts'>(initialMode)
   // Collapse correction groups to the live correction (hide storno + reversed
   // original). Toggled off via the filter dialog to reveal the full chain.
   const [collapseCorrections, setCollapseCorrections] = useState(true)
@@ -654,28 +665,31 @@ export default function JournalEntryList() {
           on one aligned row (wraps on narrow screens) rather than four stacked rows. */}
       <div className="flex flex-wrap items-center gap-2">
         {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
-            they don't sink to the last page of the committed list. */}
-        <div className="inline-flex shrink-0 rounded-md border border-border p-0.5">
-          <button
-            type="button"
-            onClick={() => switchMode('committed')}
-            className={`h-7 rounded px-3 text-xs font-medium transition-colors ${listMode === 'committed' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            {t('mode_vouchers')}
-          </button>
-          <button
-            type="button"
-            onClick={() => switchMode('drafts')}
-            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${listMode === 'drafts' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            {t('mode_drafts')}
-            {draftCount > 0 && (
-              <Badge variant="secondary" className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums">
-                {draftCount}
-              </Badge>
-            )}
-          </button>
-        </div>
+            they don't sink to the last page of the committed list. Hidden when an
+            outer surface (the Bokföring workspace tabs) owns the mode switch. */}
+        {!hideModeToggle && (
+          <div className="inline-flex shrink-0 rounded-md border border-border p-0.5">
+            <button
+              type="button"
+              onClick={() => switchMode('committed')}
+              className={`h-7 rounded px-3 text-xs font-medium transition-colors ${listMode === 'committed' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {t('mode_vouchers')}
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode('drafts')}
+              className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${listMode === 'drafts' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {t('mode_drafts')}
+              {draftCount > 0 && (
+                <Badge variant="secondary" className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums">
+                  {draftCount}
+                </Badge>
+              )}
+            </button>
+          </div>
+        )}
         <div className="relative flex-1 sm:flex-none sm:w-[280px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <Input

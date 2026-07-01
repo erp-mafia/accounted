@@ -40,6 +40,20 @@ const nextConfig: NextConfig = {
         destination: '/kpi',
         permanent: true,
       },
+      // The transactions + invoice-inbox surfaces are consolidated into the
+      // unified Bokföring workspace. Destinations carry no query so an incoming
+      // ?highlight= passes through (Att hantera auto-scrolls to it); the bare
+      // /transactions lands on the default Att hantera tab.
+      {
+        source: '/transactions',
+        destination: '/bookkeeping',
+        permanent: true,
+      },
+      {
+        source: '/e/general/invoice-inbox',
+        destination: '/bookkeeping?tab=underlag',
+        permanent: true,
+      },
       // Docs canonicalised to docs.gnubok.se. Every `docs_url` field on the
       // v1 error envelope still points at this host; the 308 forwards both
       // humans and agents to the docs subdomain without us needing to

@@ -3595,6 +3595,12 @@
   },
   "transactions": {
     "page_title": "Transactions",
+    "recon_title": "Bank reconciliation",
+    "recon_unmatched_tx": "unmatched transactions",
+    "recon_unmatched_vouchers": "unmatched vouchers",
+    "recon_difference": "Difference:",
+    "recon_open": "Open reconciliation",
+    "recon_reconciled": "Reconciled",
     "subtitle_to_post": "to post",
     "subtitle_matches": "{count} invoice matches",
     "history_subtitle": "All your transactions",
@@ -3677,6 +3683,10 @@
   "bookkeeping": {
     "edit_draft_dialog_title": "Edit draft",
     "title": "Bookkeeping",
+    "tab_att_hantera": "To handle",
+    "tab_underlag": "Documents",
+    "tab_utkast": "Drafts",
+    "tab_bokfort": "Posted",
     "year_end": "Year-end (Årsbokslut)",
     "tab_journal": "Journal entries",
     "tab_new_entry": "New journal entry",
