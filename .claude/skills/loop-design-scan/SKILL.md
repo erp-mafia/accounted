@@ -7,7 +7,7 @@ description: Local loop that scans a given area of the Accounted UI against the 
 
 **Goal:** for one area of the app, surface concrete, design-system-grounded UI/UX improvements and file
 them as GitHub issues (deduped). This is the GitHub-Issues sibling of the `scout-design` skill (which
-targets Linear). Read `dev_docs/loops.md` first. **Runs locally** — it needs to render the UI.
+targets Linear). Read `.claude/loops.md` first. **Runs locally** — it needs to render the UI.
 
 ## Why local
 A headless cloud session can't see the UI. This loop starts `npm run dev` and drives Chrome to render

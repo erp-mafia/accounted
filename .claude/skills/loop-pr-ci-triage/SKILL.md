@@ -6,7 +6,7 @@ description: Proactive loop that watches open PRs in erp-mafia/accounted, fixes 
 # loop-pr-ci-triage
 
 **Goal:** every open, non-draft PR authored by our team or dependabot is either green + review-addressed,
-or explicitly escalated with `loop:needs-human`. **Never merge.** Read `dev_docs/loops.md` first.
+or explicitly escalated with `loop:needs-human`. **Never merge.** Read `.claude/loops.md` first.
 
 ## Preflight
 - `gh auth status` and confirm repo `erp-mafia/accounted`. If either fails, stop and report "environment not provisioned".

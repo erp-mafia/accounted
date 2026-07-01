@@ -6,7 +6,7 @@ description: Proactive loop that keeps GitHub Issues in erp-mafia/accounted tidy
 # loop-issue-triage
 
 **Goal:** the open-issue list is accurately labeled and free of stale/duplicate/already-fixed items,
-and a couple of small fixes ship as PRs each run. **Never merge.** Read `dev_docs/loops.md` first.
+and a couple of small fixes ship as PRs each run. **Never merge.** Read `.claude/loops.md` first.
 
 ## Preflight
 `gh auth status`, repo `erp-mafia/accounted`. If it fails, stop and report "environment not provisioned".
