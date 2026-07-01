@@ -190,7 +190,7 @@ export function PeriodiskSammanstallningView() {
                   Periodisk sammanställning — {data.period.label}
                 </CardTitle>
                 {data.totals.rowCount > 0 && (
-                  <Badge variant="secondary">
+                  <Badge variant={hasBlockingErrors ? 'destructive' : 'secondary'}>
                     {data.totals.rowCount} {data.totals.rowCount === 1 ? 'rad' : 'rader'}
                   </Badge>
                 )}
