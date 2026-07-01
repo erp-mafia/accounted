@@ -116,7 +116,17 @@
     "needs_company_tooltip": "Add a company to enable",
     "logout_sandbox": "Exit sandbox",
     "ext_tic": "Company profile",
-    "ext_invoice_inbox": "Document inbox"
+    "ext_invoice_inbox": "Document inbox",
+    "moms": "VAT",
+    "skattekonto": "Tax account",
+    "bokslut": "Year-end",
+    "moduler": "Modules",
+    "upgrade_for_ai": "Upgrade for AI",
+    "group_att_gora": "To do",
+    "group_arbeta": "Work",
+    "group_reports": "Reports",
+    "group_register": "Records & archive",
+    "group_skatt": "Tax & year-end"
   },
   "auth": {
     "login_title": "Sign in",

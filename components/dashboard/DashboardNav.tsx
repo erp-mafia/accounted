@@ -13,11 +13,9 @@ import {
   Users,
   ArrowLeftRight,
   BookOpen,
-  ListTree,
   BarChart3,
   Settings,
   LogOut,
-  Upload,
   Inbox,
   Menu,
   X,
@@ -32,6 +30,12 @@ import {
   Tag,
   ChevronsUpDown,
   Sparkles,
+  Percent,
+  Landmark,
+  CalendarClock,
+  FileCheck2,
+  Blocks,
+  Lock,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -50,6 +54,7 @@ import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
+import { CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import type { EntityType } from '@/types'
 
@@ -65,7 +70,7 @@ interface DashboardNavProps {
   companyName: string
   entityType: EntityType
   // Whether the company has registered as an employer (company_settings.
-  // pays_salaries). Drives visibility of the payroll (Personal) section for
+  // pays_salaries). Drives visibility of the payroll (Löner) surface for
   // non-aktiebolag — notably an enskild firma that hires staff. See #782.
   paysSalaries?: boolean
   uncategorizedTransactionCount?: number
@@ -93,36 +98,47 @@ type NavLabelKey =
   | 'review'
   | 'transactions'
   | 'bookkeeping'
-  | 'chart_of_accounts'
   | 'assets'
   | 'reports'
-  | 'import'
   | 'salary'
-  | 'employees'
+  | 'moms'
+  | 'skattekonto'
+  | 'deadlines'
+  | 'bokslut'
+  | 'moduler'
   | 'help'
   | 'settings'
 
-// New nav layout (May 2026):
-//   top-of-sidebar       — CompanySwitcher (active company / org context).
-//   top section          — flat, no dropdown: Hem (agent), Underlag,
-//                          Transaktioner, Granskning.
-//   four dropdowns       — Försäljning, Inköp, Redovisning, Personal.
-//   bottom-left popover  — signed-in user's name + initial, opens upward
-//                          to Inställningar, Hjälp, Support, Logga ut.
-// Help + Settings are NOT in `navItems` anymore; they live in the account
-// popover. KPI moved from main to redovisning. Pending stays visible at all
-// times — the inline badge carries the count.
-type GroupKey = 'top' | 'försäljning' | 'inköp' | 'redovisning' | 'personal'
+// Interaction-mode IA (July 2026 — Phase 0 regroup; see dev_docs/nav_ia_redesign.md):
+//   top-of-sidebar   — CompanySwitcher (active company / org context).
+//   SPINE            — flat, no header: Hem, Anna. Anna is capability-gated (ai):
+//                      free tier sees a locked upsell teaser → billing.
+//   ATT GÖRA         — the daily-work funnel: Underlag (ai-gated), Transaktioner
+//                      (badge), Granskning (badge). Folds into a unified /inbox
+//                      in a later phase.
+//   ARBETA           — produce: Fakturor, Leverantörsfakturor, Löner, Bokföring.
+//   RAPPORTER        — Nyckeltal, Rapporter (merge into a tabbed surface later).
+//   REGISTER & ARKIV — Kunder, Leverantörer, Artiklar, Anläggningar
+//                      (Kontakter merge + Dokument shelf land later).
+//   SKATT & BOKSLUT  — Moms, Skattekonto, Deadlines, Bokslut.
+//   META footer      — Moduler (the rescued marketplace; hidden in sandbox).
+//   bottom-left      — signed-in user popover: Inställningar, Hjälp, Support, Logga ut.
+type RegionKey = 'spine' | 'attgora' | 'arbeta' | 'rapporter' | 'register' | 'skatt'
 
 interface NavItem {
   href: string
   labelKey: NavLabelKey
   icon: typeof LayoutDashboard
-  group: GroupKey
+  group: RegionKey
   // Payroll surfaces — visible only to employers: every aktiebolag (unchanged
   // behaviour) plus any company that has registered as an employer via
   // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
   employerOnly?: boolean
+  // Paid capability required to USE this surface. When the company lacks it the
+  // row renders as a calm locked upsell teaser (→ /settings/billing) instead of
+  // linking to a feature that would 403. Server-side gating is the source of
+  // truth (see lib/entitlements); this only shapes the rail.
+  capability?: CapabilityKey
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -130,32 +146,33 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  // Top section — flat list, always visible, no header
-  { href: '/', labelKey: 'home', icon: Home, group: 'top' },
-  { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
-  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'top' },
-  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'top' },
-  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'top' },
-  // Försäljning dropdown
-  { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'försäljning' },
-  { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
-  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'försäljning' },
-  // Inköp dropdown
-  { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'inköp' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp' },
-  // Redovisning dropdown
-  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'redovisning' },
-  { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
-  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'redovisning' },
-  { href: '/assets', labelKey: 'assets', icon: Package, group: 'redovisning' },
-  { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
-  { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },
-  // Personal — "Beta" badge while we validate the end-to-end salary + AGI flow.
-  // employerOnly: shown to aktiebolag and to any employer (pays_salaries), so an
-  // enskild firma that hires staff gets payroll. Owner self-payroll stays
-  // blocked at the engine/DB layer (EF owner takes egna uttag, not lön). #782
-  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', employerOnly: true, betaBadge: true },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', employerOnly: true, betaBadge: true },
+  // Spine — flat list, always visible, no header
+  { href: '/', labelKey: 'home', icon: Home, group: 'spine' },
+  { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'spine', capability: CAPABILITY.ai },
+  // Att göra — the daily funnel
+  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'attgora', capability: CAPABILITY.ai },
+  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'attgora' },
+  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'attgora' },
+  // Arbeta — produce (sälj → köp → bokför)
+  { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
+  { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
+  // Löner — "Beta" while we validate the end-to-end salary + AGI flow.
+  // employerOnly: shown to aktiebolag and to any employer (pays_salaries). #782
+  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true, betaBadge: true },
+  { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
+  // Rapporter — the numbers (Nyckeltal + Rapporter merge into one tabbed surface later)
+  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'rapporter' },
+  { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'rapporter' },
+  // Register & arkiv — master data (Kontakter merge + Dokument shelf land later)
+  { href: '/customers', labelKey: 'customers', icon: Users, group: 'register' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'register' },
+  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'register' },
+  { href: '/assets', labelKey: 'assets', icon: Package, group: 'register' },
+  // Skatt & bokslut — comply
+  { href: '/reports/vat-declaration', labelKey: 'moms', icon: Percent, group: 'skatt' },
+  { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
+  { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
+  { href: '/bookkeeping/year-end', labelKey: 'bokslut', icon: FileCheck2, group: 'skatt' },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
@@ -166,11 +183,12 @@ function extensionLabelKey(href: string): string | null {
   return null
 }
 
-const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
-  försäljning: 'group_sales',
-  inköp: 'group_purchases',
-  redovisning: 'group_accounting',
-  personal: 'group_personnel',
+const groupLabelKey: Record<Exclude<RegionKey, 'spine'>, string> = {
+  attgora: 'group_att_gora',
+  arbeta: 'group_arbeta',
+  rapporter: 'group_reports',
+  register: 'group_register',
+  skatt: 'group_skatt',
 }
 
 // Best single-character initial we can show in the bottom-left account
@@ -189,10 +207,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
-  const { company } = useCompany()
-  // Agent identity drives the "Assistent" nav icon — when the user has
-  // built their assistant we show its chosen avatar instead of the
-  // generic Sparkles glyph.
+  const { company, capabilities } = useCompany()
+  // Agent identity drives the "Anna" nav icon — when the user has built their
+  // assistant we show its chosen avatar instead of the generic Sparkles glyph.
   const { identity: agentIdentity } = useAgentSheet()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
@@ -205,23 +222,29 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const refreshInFlightRef = useRef(false)
   const refreshQueuedRef = useRef(false)
 
+  // Capability axis (paid tier). Self-hosted resolves to all-on server-side, so
+  // capabilities already includes 'ai' there — no special-casing needed here.
+  const hasAi = capabilities.includes(CAPABILITY.ai)
+  // A paid surface is LOCKED (upsell teaser, not a working link) when the
+  // company doesn't hold its capability.
+  const isLocked = (item: NavItem) => item.capability != null && !capabilities.includes(item.capability)
+
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
-  // Per-group collapse state. Default: ALL groups expanded — the user
-  // can see every child link without hunting. Clicking the chevron
-  // collapses the group; opening it again restores the children.
-  // Active route still forces a group expanded even when the user has
-  // manually collapsed it (so deep-linking into /salary doesn't leave
-  // Personal hidden).
-  type ExpandableGroup = Exclude<GroupKey, 'top'>
-  const [manualCollapsed, setManualCollapsed] = useState<Record<ExpandableGroup, boolean>>({
-    försäljning: false,
-    inköp: false,
-    redovisning: false,
-    personal: false,
+  // Per-region collapse state. Default: all expanded — the user can see every
+  // child link without hunting. Clicking the chevron collapses; the active
+  // route still forces its region expanded (so a deep-link into /salary keeps
+  // Arbeta open even when manually collapsed).
+  type ExpandableRegion = Exclude<RegionKey, 'spine'>
+  const [manualCollapsed, setManualCollapsed] = useState<Record<ExpandableRegion, boolean>>({
+    attgora: false,
+    arbeta: false,
+    rapporter: false,
+    register: false,
+    skatt: false,
   })
-  const toggleGroup = (g: ExpandableGroup) =>
+  const toggleGroup = (g: ExpandableRegion) =>
     setManualCollapsed((prev) => ({ ...prev, [g]: !prev[g] }))
 
   const openMobileMenu = () => {
@@ -240,12 +263,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   }
 
   const isActive = (href: string) => {
-    if (href === '/') {
-      return pathname === '/'
-    }
-    if (href === '/salary') {
-      return pathname === '/salary' || pathname.startsWith('/salary/runs')
-    }
+    if (href === '/') return pathname === '/'
+    if (href === '/salary') return pathname.startsWith('/salary')
+    // Bokföring vs Bokslut — year-end is a sub-path, must not light up Bokföring.
+    if (href === '/bookkeeping') return pathname.startsWith('/bookkeeping') && !pathname.startsWith('/bookkeeping/year-end')
+    if (href === '/bookkeeping/year-end') return pathname.startsWith('/bookkeeping/year-end')
+    // Rapporter vs Moms — vat-declaration is a sub-path of /reports.
+    if (href === '/reports') return pathname.startsWith('/reports') && !pathname.startsWith('/reports/vat-declaration')
+    if (href === '/reports/vat-declaration') return pathname.startsWith('/reports/vat-declaration')
     return pathname.startsWith(href)
   }
 
@@ -320,21 +345,18 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 
-  // Render a nav item's leading glyph. The "Assistent" entry (/chat) shows
-  // the agent's chosen avatar once built; everything else (and the
-  // pre-onboarding /chat) uses its lucide icon. The passed className carries
-  // size + margin + active color; tailwind-merge lets the explicit h/w win
-  // over AgentAvatar's default box size.
+  // Render a nav item's leading glyph. The "Anna" entry (/chat) shows the
+  // agent's chosen avatar once built; everything else uses its lucide icon.
   const renderNavIcon = (
     item: { href: string; icon: typeof LayoutDashboard },
     className: string,
   ) => {
-    if (item.href === '/chat' && agentIdentity.avatarId) {
+    if (item.href === '/chat' && agentIdentity.avatarId && hasAi) {
       return (
         <AgentAvatar
           avatarId={agentIdentity.avatarId}
           size="xs"
-          alt={agentIdentity.displayName ?? 'Assistent'}
+          alt={agentIdentity.displayName ?? 'Anna'}
           className={className}
         />
       )
@@ -348,50 +370,47 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const filteredItems = navItems.filter(item => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
-    // Payroll (employerOnly) is hidden until the company is an employer — an
-    // aktiebolag, or any entity that has flagged pays_salaries. #782
+    // Payroll (employerOnly) is hidden until the company is an employer.
     if (item.employerOnly && !isEmployer) return false
-    // Hide the Assistent (/chat) tab until the agent is built — mirrors the
-    // floating AgentTrigger and avoids a nav entry that only bounces to the
-    // home checklist (chat/layout redirects unverified users to /).
-    if (item.href === '/chat' && !agentIdentity.isVerified) return false
-    // Granskning stays in the top nav at all times now — the badge
-    // surfaces the count when there are pending ops, but the link is
-    // always present so users can navigate there manually.
+    // Anna (/chat): when ENTITLED but not yet built, hide it (building happens
+    // via onboarding). When NOT entitled we keep the row as a locked upsell
+    // teaser (handled in render), so the free tier discovers the AI value.
+    if (item.href === '/chat' && hasAi && !agentIdentity.isVerified) return false
     return true
   })
 
-  const topItems = filteredItems.filter((i) => i.group === 'top')
+  const spineItems = filteredItems.filter((i) => i.group === 'spine')
 
-  // The TIC workspace (/e/general/tic, labelled "Företagsprofil") surfaces
-  // the same Bolagsuppgifter now shown under Inställningar → Företagsprofil.
-  // Drop it from the nav so the company profile lives in exactly one place.
+  // The TIC workspace (/e/general/tic) and any extension whose href we already
+  // hardcode as a core nav item are dropped so nothing double-lists.
+  const coreHrefs = new Set(navItems.map((i) => i.href))
   const visibleExtensionNavItems = extensionNavItems.filter(
-    (i) => i.href !== '/e/general/tic',
+    (i) => i.href !== '/e/general/tic' && !coreHrefs.has(i.href),
   )
 
-  const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = [
-    { key: 'försäljning', items: filteredItems.filter((i) => i.group === 'försäljning') },
-    { key: 'inköp', items: filteredItems.filter((i) => i.group === 'inköp') },
-    { key: 'redovisning', items: filteredItems.filter((i) => i.group === 'redovisning') },
-    { key: 'personal', items: filteredItems.filter((i) => i.group === 'personal') },
+  const sidebarGroups: { key: ExpandableRegion; items: NavItem[] }[] = [
+    { key: 'attgora', items: filteredItems.filter((i) => i.group === 'attgora') },
+    { key: 'arbeta', items: filteredItems.filter((i) => i.group === 'arbeta') },
+    { key: 'rapporter', items: filteredItems.filter((i) => i.group === 'rapporter') },
+    { key: 'register', items: filteredItems.filter((i) => i.group === 'register') },
+    { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
   ]
 
-  // A group is expanded when the user hasn't manually collapsed it OR
-  // an active route lives inside it (the active route always wins so a
-  // deep-link to /salary keeps Personal open even if previously collapsed).
-  const isGroupExpanded = (g: ExpandableGroup, items: NavItem[]) =>
+  // A region is expanded when the user hasn't manually collapsed it OR an active
+  // route lives inside it (the active route always wins so a deep-link keeps its
+  // region open even if previously collapsed).
+  const isGroupExpanded = (g: ExpandableRegion, items: NavItem[]) =>
     !manualCollapsed[g] || items.some((it) => isActive(it.href))
 
-  const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
-    { href: '/', labelKey: 'home', icon: Home },
-    { href: '/chat', labelKey: 'assistant', icon: Sparkles },
-    { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
+  // Mobile bottom tabs — the spine, verbatim (Hem, Anna when shown), plus
+  // Transaktioner as the highest-frequency daily action. Anna follows the same
+  // gate as the sidebar (locked teaser when unentitled, hidden when entitled-
+  // but-unbuilt).
+  const mobileNavItems: NavItem[] = [
+    navItems.find((i) => i.href === '/')!,
+    ...(spineItems.some((i) => i.href === '/chat') ? [navItems.find((i) => i.href === '/chat')!] : []),
+    navItems.find((i) => i.href === '/transactions')!,
   ]
-  // Same gate as the sidebar: no Assistent tab until the agent is built.
-  const mobileNavItems = allMobileNavItems.filter(
-    (item) => item.href !== '/chat' || agentIdentity.isVerified,
-  )
 
   const renderBadge = (item: NavItem | { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }, position: 'sidebar' | 'mobile') => {
     const baseClass =
@@ -404,76 +423,151 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return null
   }
 
+  // Count badge for an item (uncategorized transactions / pending review).
+  const countBadgeFor = (href: string): number | null => {
+    if (href === '/transactions' && liveUncategorizedTransactionCount > 0) return liveUncategorizedTransactionCount
+    if (href === '/pending' && pendingOperationsCount > 0) return pendingOperationsCount
+    return null
+  }
+
+  // Trailing element for a sidebar row: a lock (paid, unentitled), else a
+  // decorative badge (Beta), else a count badge. Locked wins so the free tier
+  // reads "upgrade" rather than a work count on a feature it can't use.
+  const trailingSidebar = (item: NavItem) => {
+    if (isLocked(item)) {
+      return <Lock className="ml-auto h-3.5 w-3.5 text-muted-foreground/60" aria-hidden="true" />
+    }
+    const decor = renderBadge(item, 'sidebar')
+    if (decor) return decor
+    const count = countBadgeFor(item.href)
+    if (count !== null) {
+      return (
+        <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
+          {count > 99 ? '99+' : count}
+        </span>
+      )
+    }
+    return null
+  }
+
+  // A desktop sidebar row. Locked paid rows route to billing; everything else
+  // links to its route (or renders disabled when there's no active company).
+  const renderSidebarRow = (item: NavItem) => {
+    const locked = isLocked(item)
+    const active = !locked && isActive(item.href)
+    const enabled = isItemEnabled(item.href) && !item.comingSoon
+    const href = locked ? '/settings/billing' : item.href
+    const content = (
+      <>
+        {renderNavIcon(
+          item,
+          cn(
+            'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+            active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
+          ),
+        )}
+        <span className="flex-1">{tNav(item.labelKey)}</span>
+        {trailingSidebar(item)}
+      </>
+    )
+    const baseClass = cn(
+      'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
+      enabled
+        ? cn(
+            'transition-colors duration-150',
+            active
+              ? 'bg-secondary text-foreground font-medium'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+          )
+        : 'text-muted-foreground/40 cursor-not-allowed',
+    )
+    if (!enabled) {
+      return (
+        <div key={item.href} className={baseClass} aria-disabled="true" title={tNav('needs_company_tooltip')}>
+          {content}
+        </div>
+      )
+    }
+    return (
+      <Link
+        key={item.href}
+        href={href}
+        className={baseClass}
+        title={locked ? tNav('upgrade_for_ai') : undefined}
+      >
+        {content}
+      </Link>
+    )
+  }
+
+  // A mobile drawer row — mirrors renderSidebarRow with touch sizing + the
+  // drawer's active styling.
+  const renderMobileRow = (item: NavItem) => {
+    const locked = isLocked(item)
+    const active = !locked && isActive(item.href)
+    const enabled = isItemEnabled(item.href) && !item.comingSoon
+    const href = locked ? '/settings/billing' : item.href
+    const badge = locked ? null : countBadgeFor(item.href)
+    const decor = renderBadge(item, 'mobile')
+    const content = (
+      <>
+        {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
+        <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
+        {locked ? (
+          <Lock className="h-3.5 w-3.5 text-muted-foreground/60" aria-hidden="true" />
+        ) : decor ? decor : badge !== null && (
+          <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </>
+    )
+    const baseClass = cn(
+      'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
+      enabled
+        ? cn(
+            'transition-colors',
+            active
+              ? 'bg-primary/10 text-primary font-medium'
+              : 'text-foreground active:bg-muted/60'
+          )
+        : 'text-muted-foreground/40'
+    )
+    return enabled ? (
+      <Link
+        key={item.href}
+        href={href}
+        onClick={closeMobileMenu}
+        className={baseClass}
+        title={locked ? tNav('upgrade_for_ai') : undefined}
+      >
+        {content}
+      </Link>
+    ) : (
+      <div key={item.href} className={baseClass} aria-disabled="true">
+        {content}
+      </div>
+    )
+  }
+
   return (
     <>
       {/* Desktop sidebar */}
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
         <div className="flex min-h-0 flex-1 flex-col border-r border-border bg-background">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
-            {/* Company switcher pinned to the top — the active company is
-                the strongest piece of context for everything below it. */}
+            {/* Company switcher pinned to the top — the active company is the
+                strongest piece of context for everything below it. */}
             <div className="px-5 mb-8">
               <CompanySwitcher />
             </div>
             <nav className="px-3" aria-label={tNav('main_navigation')}>
-              {/* Top section: flat, no header. Hem, Underlag, Transaktioner, Granskning. */}
+              {/* Spine: flat, no header. Hem, Anna. */}
               <div className="mb-4 space-y-px">
-                {topItems.map((item) => {
-                  const active = isActive(item.href)
-                  const enabled = isItemEnabled(item.href)
-                  const badge =
-                    item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                      ? liveUncategorizedTransactionCount
-                      : item.href === '/pending' && pendingOperationsCount > 0
-                        ? pendingOperationsCount
-                        : null
-                  const decorBadge = renderBadge(item, 'sidebar')
-                  const content = (
-                    <>
-                      {renderNavIcon(
-                        item,
-                        cn(
-                          'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-                          active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
-                        ),
-                      )}
-                      <span className="flex-1">{tNav(item.labelKey)}</span>
-                      {decorBadge ? decorBadge : badge !== null && (
-                        <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
-                          {badge > 99 ? '99+' : badge}
-                        </span>
-                      )}
-                    </>
-                  )
-                  const baseClass = cn(
-                    'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                    enabled
-                      ? cn(
-                          'transition-colors duration-150',
-                          active
-                            ? 'bg-secondary text-foreground font-medium'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-                        )
-                      : 'text-muted-foreground/40 cursor-not-allowed',
-                  )
-                  return enabled ? (
-                    <Link key={item.href} href={item.href} className={baseClass}>
-                      {content}
-                    </Link>
-                  ) : (
-                    <div
-                      key={item.href}
-                      className={baseClass}
-                      aria-disabled="true"
-                      title={tNav('needs_company_tooltip')}
-                    >
-                      {content}
-                    </div>
-                  )
-                })}
+                {spineItems.map((item) => renderSidebarRow(item))}
               </div>
 
-              {/* Collapsible groups: Försäljning, Inköp, Redovisning, Personal */}
+              {/* Regions: Att göra, Arbeta, Rapporter, Register & arkiv, Skatt & bokslut */}
               {sidebarGroups
                 .filter(({ items }) => items.length > 0)
                 .map(({ key, items }) => {
@@ -494,60 +588,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       </button>
                       {expanded && (
                         <div className="space-y-px animate-fade-in mb-2">
-                          {items.map((item) => {
-                            const Icon = item.icon
-                            const active = isActive(item.href)
-                            const enabled = isItemEnabled(item.href) && !item.comingSoon
-                            const decorBadge = renderBadge(item, 'sidebar')
-                            const content = (
-                              <>
-                                <Icon
-                                  className={cn(
-                                    'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-                                    active
-                                      ? 'text-primary'
-                                      : 'text-muted-foreground group-hover:text-foreground',
-                                  )}
-                                />
-                                <span className="flex-1">{tNav(item.labelKey)}</span>
-                                {decorBadge}
-                              </>
-                            )
-                            const baseClass = cn(
-                              'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                              enabled
-                                ? cn(
-                                    'transition-colors duration-150',
-                                    active
-                                      ? 'bg-secondary text-foreground font-medium'
-                                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-                                  )
-                                : 'text-muted-foreground/40 cursor-not-allowed',
-                            )
-                            return enabled ? (
-                              <Link key={item.href} href={item.href} className={baseClass}>
-                                {content}
-                              </Link>
-                            ) : (
-                              <div
-                                key={item.href}
-                                className={baseClass}
-                                aria-disabled="true"
-                                title={
-                                  item.comingSoon
-                                    ? tNav('badge_coming_soon')
-                                    : tNav('needs_company_tooltip')
-                                }
-                              >
-                                {content}
-                              </div>
-                            )
-                          })}
-                          {/* Extension nav items land in Redovisning since the
-                              current extensions (TIC workspace, etc.) are
-                              accounting-adjacent. Future categorised extensions
-                              can opt into a different group via their manifest. */}
-                          {key === 'redovisning' &&
+                          {items.map((item) => renderSidebarRow(item))}
+                          {/* Extension nav items land in Register & arkiv for now
+                              (accounting-adjacent). Future categorised extensions
+                              declare their own slot via the manifest. */}
+                          {key === 'register' &&
                             visibleExtensionNavItems.map((item) => {
                               const Icon = resolveIcon(item.icon)
                               const active = isActive(item.href)
@@ -603,75 +648,98 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             </nav>
           </div>
 
-          {/* Account popover (bottom-left). Triggered by the signed-in
-              user's name + initial. Holds Inställningar, Hjälp, Support,
-              Logga ut. CompanySwitcher lives at the top of the sidebar,
-              not in here — different concept ("which company am I working
-              with" vs "who am I logged in as"). */}
-          <div className="flex-shrink-0 px-3 py-3 border-t border-border">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+          {/* Meta footer: Moduler (rescued marketplace) + account popover.
+              Moduler is hidden in the sandbox (nothing to install there). */}
+          <div className="flex-shrink-0 border-t border-border">
+            {!isSandbox && hasCompany && (
+              <div className="px-3 pt-3">
+                <Link
+                  href="/extensions"
+                  className={cn(
+                    'group flex items-center px-3 py-[7px] text-[13px] rounded-lg transition-colors duration-150',
+                    isActive('/extensions')
+                      ? 'bg-secondary text-foreground font-medium'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+                  )}
                 >
-                  <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
-                    {accountInitial(userName, userEmail)}
-                  </span>
-                  <span className="flex-1 truncate font-medium text-foreground">
-                    {userName?.trim() || userEmail || tNav('mitt_konto')}
-                  </span>
-                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="w-60">
-                {(userName || userEmail) && (
-                  <>
-                    <DropdownMenuLabel className="font-normal">
-                      <div className="flex flex-col gap-0.5">
-                        {userName && (
-                          <span className="text-sm font-medium text-foreground truncate">
-                            {userName}
-                          </span>
-                        )}
-                        {userEmail && (
-                          <span className="text-xs text-muted-foreground truncate">
-                            {userEmail}
-                          </span>
-                        )}
-                      </div>
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem asChild>
-                  <Link href="/settings" className="cursor-pointer">
-                    <Settings className="mr-2 h-4 w-4" />
-                    {tNav('settings')}
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/help" className="cursor-pointer">
-                    <HelpCircle className="mr-2 h-4 w-4" />
-                    {tNav('help')}
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <SupportLink variant="muted" className="cursor-pointer" />
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    void handleLogout()
-                  }}
-                  className="cursor-pointer text-muted-foreground focus:text-foreground"
-                >
-                  <LogOut className="mr-2 h-4 w-4" />
-                  {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  <Blocks
+                    className={cn(
+                      'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+                      isActive('/extensions') ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
+                    )}
+                  />
+                  <span className="flex-1">{tNav('moduler')}</span>
+                </Link>
+              </div>
+            )}
+
+            {/* Account popover (bottom-left). Triggered by the signed-in user's
+                name + initial. Holds Inställningar, Hjälp, Support, Logga ut. */}
+            <div className="px-3 py-3">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+                  >
+                    <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
+                      {accountInitial(userName, userEmail)}
+                    </span>
+                    <span className="flex-1 truncate font-medium text-foreground">
+                      {userName?.trim() || userEmail || tNav('mitt_konto')}
+                    </span>
+                    <ChevronsUpDown className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="start" className="w-60">
+                  {(userName || userEmail) && (
+                    <>
+                      <DropdownMenuLabel className="font-normal">
+                        <div className="flex flex-col gap-0.5">
+                          {userName && (
+                            <span className="text-sm font-medium text-foreground truncate">
+                              {userName}
+                            </span>
+                          )}
+                          {userEmail && (
+                            <span className="text-xs text-muted-foreground truncate">
+                              {userEmail}
+                            </span>
+                          )}
+                        </div>
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuItem asChild>
+                    <Link href="/settings" className="cursor-pointer">
+                      <Settings className="mr-2 h-4 w-4" />
+                      {tNav('settings')}
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/help" className="cursor-pointer">
+                      <HelpCircle className="mr-2 h-4 w-4" />
+                      {tNav('help')}
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <SupportLink variant="muted" className="cursor-pointer" />
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault()
+                      void handleLogout()
+                    }}
+                    className="cursor-pointer text-muted-foreground focus:text-foreground"
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         </div>
       </aside>
@@ -680,17 +748,22 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-16 px-2">
           {mobileNavItems.map((item) => {
-            const active = isActive(item.href)
+            const locked = isLocked(item)
+            const active = !locked && isActive(item.href)
             const enabled = isItemEnabled(item.href)
-            const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-              ? liveUncategorizedTransactionCount
-              : null
+            const badge = locked ? null : countBadgeFor(item.href)
+            const href = locked ? '/settings/billing' : item.href
 
             const content = (
               <>
                 <div className="relative">
                   {renderNavIcon(item, cn('h-5 w-5 mb-1', active && 'text-primary'))}
-                  {badge !== null && (
+                  {locked && (
+                    <span className="absolute -top-1.5 -right-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted">
+                      <Lock className="h-2.5 w-2.5 text-muted-foreground" aria-hidden="true" />
+                    </span>
+                  )}
+                  {!locked && badge !== null && (
                     <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
                       {badge > 99 ? '99+' : badge}
                     </span>
@@ -713,7 +786,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             )
 
             return enabled ? (
-              <Link key={item.href} href={item.href} className={baseClass}>
+              <Link key={item.href} href={href} className={baseClass}>
                 {content}
               </Link>
             ) : (
@@ -781,58 +854,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
             {/* Navigation */}
             <div className="px-2">
-              {/* Top items (Hem, Underlag, Transaktioner, Granskning) */}
+              {/* Spine (Hem, Anna) */}
               <div className="space-y-0.5">
-                {topItems.map((item) => {
-                  const active = isActive(item.href)
-                  const enabled = isItemEnabled(item.href)
-                  const badge =
-                    item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                      ? liveUncategorizedTransactionCount
-                      : item.href === '/pending' && pendingOperationsCount > 0
-                        ? pendingOperationsCount
-                        : null
-                  const decorBadge = renderBadge(item, 'mobile')
-                  const content = (
-                    <>
-                      {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
-                      <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
-                      {decorBadge ? decorBadge : badge !== null && (
-                        <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
-                          {badge > 99 ? '99+' : badge}
-                        </span>
-                      )}
-                    </>
-                  )
-                  const baseClass = cn(
-                    'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                    enabled
-                      ? cn(
-                          'transition-colors',
-                          active
-                            ? 'bg-primary/10 text-primary font-medium'
-                            : 'text-foreground active:bg-muted/60'
-                        )
-                      : 'text-muted-foreground/40'
-                  )
-                  return enabled ? (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={closeMobileMenu}
-                      className={baseClass}
-                    >
-                      {content}
-                    </Link>
-                  ) : (
-                    <div key={item.href} className={baseClass} aria-disabled="true">
-                      {content}
-                    </div>
-                  )
-                })}
+                {spineItems.map((item) => renderMobileRow(item))}
               </div>
 
-              {/* AR / AP / Personal / Accounting groups (mobile) */}
+              {/* Regions */}
               {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items }) => (
                 <div key={key}>
                   <div className="flex items-center gap-3 my-1.5 px-3">
@@ -840,53 +867,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                     <div className="flex-1 h-px bg-border/30" />
                   </div>
                   <div className="space-y-0.5">
-                    {items.map((item) => {
-                      const Icon = item.icon
-                      const active = isActive(item.href)
-                      const enabled = isItemEnabled(item.href) && !item.comingSoon
-                      const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                        ? liveUncategorizedTransactionCount
-                        : item.href === '/pending' && pendingOperationsCount > 0
-                          ? pendingOperationsCount
-                          : null
-                      const decorBadge = renderBadge(item, 'mobile')
-                      const content = (
-                        <>
-                          <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                          <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
-                          {decorBadge ? decorBadge : badge !== null && (
-                            <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
-                              {badge > 99 ? '99+' : badge}
-                            </span>
-                          )}
-                        </>
-                      )
-                      const baseClass = cn(
-                        'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                        enabled
-                          ? cn(
-                              'transition-colors',
-                              active
-                                ? 'bg-primary/10 text-primary font-medium'
-                                : 'text-foreground active:bg-muted/60'
-                            )
-                          : 'text-muted-foreground/40'
-                      )
-                      return enabled ? (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          onClick={closeMobileMenu}
-                          className={baseClass}
-                        >
-                          {content}
-                        </Link>
-                      ) : (
-                        <div key={item.href} className={baseClass} aria-disabled="true">
-                          {content}
-                        </div>
-                      )
-                    })}
+                    {items.map((item) => renderMobileRow(item))}
                   </div>
                 </div>
               ))}
@@ -941,17 +922,22 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 </>
               )}
 
-              {/* Mitt konto divider */}
+              {/* Meta (Moduler) + Mitt konto */}
               <div className="flex items-center gap-3 my-1.5 px-3">
                 <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('mitt_konto')}</span>
                 <div className="flex-1 h-px bg-border/30" />
               </div>
 
               <div className="space-y-0.5">
-                {([
-                  { href: '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
-                  { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
-                ]).map((item) => {
+                {(
+                  [
+                    ...(!isSandbox && hasCompany
+                      ? [{ href: '/extensions', labelKey: 'moduler' as NavLabelKey, icon: Blocks }]
+                      : []),
+                    { href: '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
+                    { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
+                  ]
+                ).map((item) => {
                   const Icon = item.icon
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)

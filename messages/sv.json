@@ -116,7 +116,17 @@
     "needs_company_tooltip": "Lägg till ett företag för att aktivera",
     "logout_sandbox": "Avsluta sandbox",
     "ext_tic": "Företagsprofil",
-    "ext_invoice_inbox": "Dokumentinkorg"
+    "ext_invoice_inbox": "Dokumentinkorg",
+    "moms": "Moms",
+    "skattekonto": "Skattekonto",
+    "bokslut": "Bokslut",
+    "moduler": "Moduler",
+    "upgrade_for_ai": "Uppgradera för AI",
+    "group_att_gora": "Att göra",
+    "group_arbeta": "Arbeta",
+    "group_reports": "Rapporter",
+    "group_register": "Register & arkiv",
+    "group_skatt": "Skatt & bokslut"
   },
   "auth": {
     "login_title": "Logga in",
