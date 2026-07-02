@@ -325,6 +325,30 @@ describe('parseSIEFile', () => {
       expect(result.issues.some((i) => i.severity === 'warning' && i.message.toLowerCase().includes('objektlista'))).toBe(true)
     })
 
+    it('surfaces OIB/OUB drops and dimension presence as info issues', () => {
+      const sie = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#RAR 0 20240101 20241231',
+        '#DIM 6 "Projekt"',
+        '#OIB 0 1930 {6 "P001"} 5000.00',
+        '#OUB 0 1930 {6 "P001"} 7000.00',
+        '#VER A 1 20240115 "Taggad"',
+        '{',
+        '#TRANS 5010 {6 "P001"} 100.00',
+        '#TRANS 1930 {} -100.00',
+        '}',
+      ].join('\n')
+
+      const result = parseSIEFile(sie)
+      const infos = result.issues.filter((i) => i.severity === 'info').map((i) => i.message)
+      expect(infos.some((m) => m.includes('2 objektbalansrader'))).toBe(true)
+      expect(infos.some((m) => m.includes('dimensionsdata'))).toBe(true)
+      // Silence preserved for files without any dimension data.
+      const plain = parseSIEFile(['#FLAGGA 0', '#SIETYP 4', '#RAR 0 20240101 20241231'].join('\n'))
+      expect(plain.issues.some((i) => i.tag === 'DIM' || i.tag === 'OIB')).toBe(false)
+    })
+
     it('parses #DIM, #UNDERDIM and #OBJEKT into the registry arrays', () => {
       const sie = [
         '#FLAGGA 0',

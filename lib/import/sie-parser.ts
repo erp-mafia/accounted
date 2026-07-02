@@ -424,6 +424,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const vouchers: SIEVoucher[] = []
   const dimensions: SIEDimension[] = []
   const dimensionValues: SIEDimensionValue[] = []
+  let objectBalanceCount = 0
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -774,9 +775,13 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
         default:
           // Unknown tag - add info issue for notable ones. OIB/OUB (per-object
-          // opening/closing balances) stay ignored — dimension reporting is
-          // P&L-only in v1, so object-level balance records have no consumer.
-          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'OIB', 'OUB', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          // opening/closing balances) are counted and surfaced as ONE info
+          // issue below — dimension reporting is P&L-only in v1, so
+          // object-level balance records have no consumer yet, but dropping
+          // them must never be silent (#866 review).
+          if (tag === 'OIB' || tag === 'OUB') {
+            objectBalanceCount++
+          } else if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag} — ignoreras`, tag)
           }
       }
@@ -842,6 +847,31 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       0,
       `${rawVERCount} #VER-rader hittades men inga verifikationer kunde tolkas — kontrollera fältavskiljare och teckenkodning`,
       'VER'
+    )
+  }
+
+  // Dimension visibility: the preview step renders parse issues, so these
+  // make dimension handling explicit BEFORE the user executes the import.
+  if (objectBalanceCount > 0) {
+    addIssue(
+      issues,
+      'info',
+      0,
+      `${objectBalanceCount} objektbalansrader (#OIB/#OUB) hoppades över — balanser per objekt stöds inte ännu`,
+      'OIB'
+    )
+  }
+  const taggedLineCount = vouchers.reduce(
+    (sum, v) => sum + v.lines.filter((l) => l.dimensions).length,
+    0
+  )
+  if (dimensions.length > 0 || dimensionValues.length > 0 || taggedLineCount > 0) {
+    addIssue(
+      issues,
+      'info',
+      0,
+      `Filen innehåller dimensionsdata (kostnadsställen/projekt): ${taggedLineCount} taggade rader — dimensionerna följer med importen`,
+      'DIM'
     )
   }
 
