@@ -2914,10 +2914,21 @@ function normalizeVoucherLines(raw: unknown): CreateJournalEntryLineInput[] {
       amount_in_currency: line.amount_in_currency !== undefined ? Number(line.amount_in_currency) : undefined,
       exchange_rate: line.exchange_rate !== undefined ? Number(line.exchange_rate) : undefined,
       tax_code: line.tax_code ? String(line.tax_code) : undefined,
+      dimensions: normalizeDimensionsBag(line.dimensions),
       cost_center: line.cost_center ? String(line.cost_center) : undefined,
       project: line.project ? String(line.project) : undefined,
     }
   })
+}
+
+/** Coerce a staged dimensions bag ({sie_dim_no: code}) to Record<string,string>. */
+function normalizeDimensionsBag(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' || typeof value === 'number') out[key] = String(value)
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 async function commitCreateVoucher(

@@ -6,6 +6,7 @@ import type {
   JournalEntryLine,
 } from '@/types'
 import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { normalizeLineDimensions, lineDimensionColumns } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -271,22 +272,25 @@ export async function correctEntry(
     throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
   }
 
-  // Insert reversed lines (swap debit and credit)
-  const reversalLineInserts = originalLines.map((line, index) => ({
-    journal_entry_id: reversalEntry.id,
-    account_number: line.account_number,
-    account_id: line.account_id || null,
-    debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
-    credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
-    currency: line.currency || 'SEK',
-    amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
-    exchange_rate: line.exchange_rate || null,
-    line_description: `Storno: ${line.line_description || ''}`,
-    tax_code: line.tax_code || null,
-    cost_center: line.cost_center || null,
-    project: line.project || null,
-    sort_order: index,
-  }))
+  // Insert reversed lines (swap debit and credit, preserve dimensions)
+  const reversalLineInserts = originalLines.map((line, index) => {
+    const dimensions = normalizeLineDimensions(line)
+    return {
+      journal_entry_id: reversalEntry.id,
+      account_number: line.account_number,
+      account_id: line.account_id || null,
+      debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
+      credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
+      currency: line.currency || 'SEK',
+      amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
+      exchange_rate: line.exchange_rate || null,
+      line_description: `Storno: ${line.line_description || ''}`,
+      tax_code: line.tax_code || null,
+      dimensions,
+      ...lineDimensionColumns(dimensions),
+      sort_order: index,
+    }
+  })
 
   const { error: reversalLinesError } = await supabase
     .from('journal_entry_lines')
@@ -352,23 +356,26 @@ export async function correctEntry(
     correctedEntry = newEntry
 
     // Insert corrected lines
-    const correctedLineInserts = correctedLines.map((line, index) => ({
-      journal_entry_id: correctedEntry.id,
-      account_number: line.account_number,
-      account_id: accountIdMap.get(line.account_number) || null,
-      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-      currency: line.currency || 'SEK',
-      amount_in_currency: line.amount_in_currency
-        ? Math.round(line.amount_in_currency * 100) / 100
-        : null,
-      exchange_rate: line.exchange_rate || null,
-      line_description: line.line_description || null,
-      tax_code: line.tax_code || null,
-      cost_center: line.cost_center || null,
-      project: line.project || null,
-      sort_order: index,
-    }))
+    const correctedLineInserts = correctedLines.map((line, index) => {
+      const dimensions = normalizeLineDimensions(line)
+      return {
+        journal_entry_id: correctedEntry.id,
+        account_number: line.account_number,
+        account_id: accountIdMap.get(line.account_number) || null,
+        debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
+        credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
+        currency: line.currency || 'SEK',
+        amount_in_currency: line.amount_in_currency
+          ? Math.round(line.amount_in_currency * 100) / 100
+          : null,
+        exchange_rate: line.exchange_rate || null,
+        line_description: line.line_description || null,
+        tax_code: line.tax_code || null,
+        dimensions,
+        ...lineDimensionColumns(dimensions),
+        sort_order: index,
+      }
+    })
 
     const { error: correctedLinesError } = await supabase
       .from('journal_entry_lines')
@@ -526,6 +533,7 @@ export async function recordateEntry(
         line.amount_in_currency != null ? Number(line.amount_in_currency) : undefined,
       exchange_rate: line.exchange_rate != null ? Number(line.exchange_rate) : undefined,
       tax_code: line.tax_code || undefined,
+      dimensions: line.dimensions || undefined,
       cost_center: line.cost_center || undefined,
       project: line.project || undefined,
     }))

@@ -686,6 +686,17 @@ export const CreateJournalEntryLineSchema = z.object({
   amount_in_currency: z.number().optional(),
   exchange_rate: z.number().positive().optional(),
   tax_code: z.string().optional(),
+  // SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}.
+  // Keys are SIE dimension numbers; values must not contain chars that break
+  // SIE field framing. Wins per key over the cost_center/project aliases.
+  dimensions: z
+    .record(
+      z.string().regex(/^[1-9]\d*$/, 'Dimensionsnyckel måste vara ett SIE-dimensionsnummer'),
+      z.string().min(1).max(40).regex(/^[^"{}]+$/, 'Dimensionskod får inte innehålla ", { eller }')
+    )
+    .optional(),
+  // Deprecated aliases for dimensions['1'] / dimensions['6'] — kept forever
+  // for API/MCP compatibility.
   cost_center: z.string().optional(),
   project: z.string().optional(),
 })

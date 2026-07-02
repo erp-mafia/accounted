@@ -1364,6 +1364,10 @@ export interface JournalEntryLine {
   exchange_rate: number | null
   line_description: string | null
   tax_code: string | null
+  // SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}.
+  // Source of truth; cost_center/project mirror keys '1'/'6'. Optional so
+  // pre-migration fixtures and partial selects stay type-valid.
+  dimensions?: Record<string, string>
   cost_center: string | null
   project: string | null
   sort_order: number
@@ -1705,7 +1709,12 @@ export interface CreateJournalEntryLineInput {
   amount_in_currency?: number
   exchange_rate?: number
   tax_code?: string
+  // SIE dimension map {sie_dim_no: object_code}. Wins per key over the
+  // deprecated cost_center/project aliases (normalizeLineDimensions).
+  dimensions?: Record<string, string>
+  /** @deprecated alias for dimensions['1'] — kept for API/MCP compatibility */
   cost_center?: string
+  /** @deprecated alias for dimensions['6'] — kept for API/MCP compatibility */
   project?: string
 }
 

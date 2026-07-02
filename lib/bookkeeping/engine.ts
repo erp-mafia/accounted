@@ -14,6 +14,7 @@ import {
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { normalizeLineDimensions, lineDimensionColumns } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -185,21 +186,26 @@ function buildLineInserts(
   lines: CreateJournalEntryLineInput[],
   accountIdMap: Map<string, string>
 ) {
-  return lines.map((line, index) => ({
-    journal_entry_id: entryId,
-    account_number: line.account_number,
-    account_id: accountIdMap.get(line.account_number) || null,
-    debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-    credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-    currency: line.currency || 'SEK',
-    amount_in_currency: line.amount_in_currency ? Math.round(line.amount_in_currency * 100) / 100 : null,
-    exchange_rate: line.exchange_rate || null,
-    line_description: line.line_description || null,
-    tax_code: line.tax_code || null,
-    cost_center: line.cost_center || null,
-    project: line.project || null,
-    sort_order: index,
-  }))
+  return lines.map((line, index) => {
+    // dimensions JSONB is the source of truth; cost_center/project are
+    // derived mirrors (dual-write window — see lib/bookkeeping/dimension-resolver.ts)
+    const dimensions = normalizeLineDimensions(line)
+    return {
+      journal_entry_id: entryId,
+      account_number: line.account_number,
+      account_id: accountIdMap.get(line.account_number) || null,
+      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
+      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
+      currency: line.currency || 'SEK',
+      amount_in_currency: line.amount_in_currency ? Math.round(line.amount_in_currency * 100) / 100 : null,
+      exchange_rate: line.exchange_rate || null,
+      line_description: line.line_description || null,
+      tax_code: line.tax_code || null,
+      dimensions,
+      ...lineDimensionColumns(dimensions),
+      sort_order: index,
+    }
+  })
 }
 
 /**
@@ -662,6 +668,7 @@ export async function reverseEntry(
       : undefined,
     exchange_rate: line.exchange_rate || undefined,
     tax_code: line.tax_code || undefined,
+    dimensions: line.dimensions || undefined,
     cost_center: line.cost_center || undefined,
     project: line.project || undefined,
   }))
