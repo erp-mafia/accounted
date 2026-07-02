@@ -15,13 +15,11 @@ export default async function NewSupplierInvoicePage({
   const params = await searchParams
   const qs = new URLSearchParams()
   qs.set('new', '1')
-  for (const [key, value] of Object.entries(params)) {
-    if (value == null) continue
-    if (Array.isArray(value)) {
-      for (const v of value) qs.append(key, v)
-    } else {
-      qs.set(key, value)
-    }
+  // Allowlist: forward only what the list page actually consumes — arbitrary
+  // caller params must not pollute the destination query string.
+  const inboxItemId = params.inbox_item_id
+  if (typeof inboxItemId === 'string' && inboxItemId) {
+    qs.set('inbox_item_id', inboxItemId)
   }
   redirect(`/supplier-invoices?${qs.toString()}`)
 }
