@@ -3,6 +3,7 @@ import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 
 // ============================================================
 // Shared primitives
@@ -687,14 +688,10 @@ export const CreateJournalEntryLineSchema = z.object({
   exchange_rate: z.number().positive().optional(),
   tax_code: z.string().optional(),
   // SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}.
-  // Keys are SIE dimension numbers; values must not contain chars that break
-  // SIE field framing. Wins per key over the cost_center/project aliases.
-  dimensions: z
-    .record(
-      z.string().regex(/^[1-9]\d*$/, 'Dimensionsnyckel måste vara ett SIE-dimensionsnummer'),
-      z.string().min(1).max(40).regex(/^[^"{}]+$/, 'Dimensionskod får inte innehålla ", { eller }')
-    )
-    .optional(),
+  // Single source of truth for the constraints lives in dimension-resolver so
+  // the staged pending-operations path validates identically. Wins per key
+  // over the cost_center/project aliases.
+  dimensions: DimensionsBagSchema.optional(),
   // Deprecated aliases for dimensions['1'] / dimensions['6'] — kept forever
   // for API/MCP compatibility.
   cost_center: z.string().optional(),

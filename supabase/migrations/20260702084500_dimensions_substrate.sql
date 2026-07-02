@@ -59,6 +59,9 @@ CREATE POLICY "delete own-company dimensions"
 
 CREATE INDEX idx_dimensions_company_id ON public.dimensions (company_id);
 
+COMMENT ON COLUMN public.dimensions.resets_annually IS
+  'SIE4 balance semantics: true = flow-period dimension whose balances reset each fiscal year (dim 1 kostnadsställe — must NOT carry #IB/#OIB opening balances on export); false = accumulating dimension spanning years (dim 6 projekt). The SIE export/import path (PR2+) must honour this; it is data, not enforcement.';
+
 CREATE TRIGGER dimensions_updated_at
   BEFORE UPDATE ON public.dimensions
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -287,15 +290,30 @@ COMMENT ON COLUMN public.journal_entry_lines.project IS
 --   3. The change is reviewed under the Swedish-compliance CI workflow.
 -- A migration that needs to touch actual verifikat content must instead go
 -- through storno/rättelse (correctEntry) — never this pattern.
+--
+-- Concurrency: the DISABLE/UPDATE/ENABLE sequence runs inside ONE transaction.
+-- ALTER TABLE ... DISABLE TRIGGER takes ACCESS EXCLUSIVE on the table and
+-- holds it until COMMIT, so no concurrent writer can slip a line in while the
+-- trigger is off — the unguarded window the pattern would otherwise open
+-- during a live deployment does not exist. (If the migration runner already
+-- wraps the file in a transaction, the inner BEGIN degrades to a warning.)
+BEGIN;
+
 ALTER TABLE public.journal_entry_lines
   DISABLE TRIGGER enforce_journal_entry_line_immutability;
 
+-- NULLIF: an empty-string legacy mirror must not mint a {"n": ""} entry —
+-- normalizeLineDimensions treats empty string as "cleared" and never stores it.
 UPDATE public.journal_entry_lines
-SET dimensions = jsonb_strip_nulls(jsonb_build_object('1', cost_center, '6', project))
-WHERE cost_center IS NOT NULL OR project IS NOT NULL;
+SET dimensions = jsonb_strip_nulls(
+  jsonb_build_object('1', NULLIF(cost_center, ''), '6', NULLIF(project, ''))
+)
+WHERE NULLIF(cost_center, '') IS NOT NULL OR NULLIF(project, '') IS NOT NULL;
 
 ALTER TABLE public.journal_entry_lines
   ENABLE TRIGGER enforce_journal_entry_line_immutability;
+
+COMMIT;
 
 -- =============================================================================
 -- 7. Migrate the legacy registry tables into the new registry

@@ -10,11 +10,26 @@
  * mirror columns via lineDimensionColumns() — never set them independently.
  */
 
+import { z } from 'zod'
+
 /** SIE dimension numbers with first-class mirror columns. */
 export const DIM_COST_CENTER = '1'
 export const DIM_PROJECT = '6'
 
 export type LineDimensions = Record<string, string>
+
+/**
+ * THE schema for a dimensions bag ({sie_dim_no: object_code}) — the single
+ * source of truth for its constraints. The API layer
+ * (CreateJournalEntryLineSchema) and the staged pending-operations path
+ * (coerceDimensionsBag) both use this exact schema, so the two validation
+ * layers cannot drift. Keys are canonical SIE dimension numbers (no leading
+ * zeros); values must not contain characters that break SIE field framing.
+ */
+export const DimensionsBagSchema = z.record(
+  z.string().regex(/^[1-9]\d*$/, 'Dimensionsnyckel måste vara ett SIE-dimensionsnummer'),
+  z.string().min(1).max(40).regex(/^[^"{}]+$/, 'Dimensionskod får inte innehålla ", { eller }')
+)
 
 interface DimensionAliasInput {
   dimensions?: LineDimensions | null
@@ -58,24 +73,23 @@ export function normalizeLineDimensions(line: DimensionAliasInput): LineDimensio
 
 /**
  * Boundary validator for an untyped dimensions bag (staged pending-operation
- * params, tool payloads). Applies the SAME constraints as the Zod line schema
- * (CreateJournalEntryLineSchema): string values only, 1–40 chars after trim,
- * no SIE-framing-breaking characters, canonical numeric keys >= 1. Anything
- * else is dropped. Interior normalization (normalizeLineDimensions) stays
- * permissive on charset by design — it must preserve legacy DB values
- * verbatim on reversal/correction; this function is the input gate.
+ * params, tool payloads). Delegates to DimensionsBagSchema — the exact schema
+ * the API layer uses — so the staged path cannot drift from API validation.
+ * Whole-bag semantics: a bag containing ANY invalid entry is rejected
+ * (returns undefined) rather than partially salvaged; staged payloads were
+ * already schema-validated at staging time, so an invalid entry here means
+ * drift or tampering — booking then proceeds without dimensions, which are
+ * never load-bearing for validity. Interior normalization
+ * (normalizeLineDimensions) stays permissive on charset by design — it must
+ * preserve legacy DB values verbatim on reversal/correction; this function is
+ * the input gate.
  */
 export function coerceDimensionsBag(raw: unknown): LineDimensions | undefined {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-  const out: LineDimensions = {}
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!/^\d+$/.test(key) || Number(key) < 1) continue
-    if (typeof value !== 'string') continue
-    const trimmed = value.trim()
-    if (!trimmed || trimmed.length > 40 || /["{}]/.test(trimmed)) continue
-    out[String(Number(key))] = trimmed
-  }
-  return Object.keys(out).length > 0 ? out : undefined
+  if (raw === undefined || raw === null) return undefined
+  const parsed = DimensionsBagSchema.safeParse(raw)
+  if (!parsed.success) return undefined
+  const dims = normalizeLineDimensions({ dimensions: parsed.data })
+  return Object.keys(dims).length > 0 ? dims : undefined
 }
 
 /**

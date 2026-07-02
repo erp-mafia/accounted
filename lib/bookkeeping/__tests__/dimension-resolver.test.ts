@@ -86,16 +86,20 @@ describe('coerceDimensionsBag (boundary validator for staged payloads)', () => {
     expect(coerceDimensionsBag(['6', 'P001'])).toBeUndefined()
   })
 
-  it('accepts valid string values with canonical keys', () => {
-    expect(coerceDimensionsBag({ '06': ' P001 ', '1': 'KS01' })).toEqual({
+  it('accepts a valid bag and normalizes values', () => {
+    expect(coerceDimensionsBag({ '6': ' P001 ', '1': 'KS01' })).toEqual({
       '6': 'P001',
       '1': 'KS01',
     })
   })
 
-  it('drops non-string values (no numeric coercion bypassing the Zod schema)', () => {
+  it('rejects the WHOLE bag on any invalid entry — same as the API schema', () => {
+    // Numeric value (no silent coercion), invalid key, leading-zero key:
+    // exactly what CreateJournalEntryLineSchema would reject.
     expect(coerceDimensionsBag({ '6': 42 })).toBeUndefined()
-    expect(coerceDimensionsBag({ '6': 42, '1': 'KS01' })).toEqual({ '1': 'KS01' })
+    expect(coerceDimensionsBag({ '6': 42, '1': 'KS01' })).toBeUndefined()
+    expect(coerceDimensionsBag({ projekt: 'P001', '6': 'P001' })).toBeUndefined()
+    expect(coerceDimensionsBag({ '06': 'P001' })).toBeUndefined()
   })
 
   it('enforces the same length/charset constraints as the Zod line schema', () => {
@@ -105,8 +109,8 @@ describe('coerceDimensionsBag (boundary validator for staged payloads)', () => {
     expect(coerceDimensionsBag({ '6': 'x'.repeat(40) })).toEqual({ '6': 'x'.repeat(40) })
   })
 
-  it('drops invalid keys', () => {
-    expect(coerceDimensionsBag({ projekt: 'P001', '0': 'X' })).toBeUndefined()
+  it('returns undefined for an empty or whitespace-only bag', () => {
+    expect(coerceDimensionsBag({})).toBeUndefined()
   })
 })
 
