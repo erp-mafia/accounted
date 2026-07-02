@@ -20,6 +20,10 @@ import {
   DataListRow,
 } from '@/components/ui/data-list'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -199,6 +203,22 @@ export default function BulkTagWorkbench() {
       .map((l) => l.id)
   }, [lines, selected])
 
+  // Voucher labels of the unselected counter-vouchers — the blocking
+  // confirmation names them so the skew risk is concrete (#867 review:
+  // Srf U 14 gross reporting; an asymmetric storno pair silently skews
+  // project P&L, so the advisory alone is not enough).
+  const missingPairVouchers = useMemo(() => {
+    if (!lines || missingPairLineIds.length === 0) return [] as string[]
+    const ids = new Set(missingPairLineIds)
+    const labels = new Set<string>()
+    for (const line of lines) {
+      if (ids.has(line.id)) {
+        labels.add(`${line.voucher_series ?? ''}${line.voucher_number ?? ''}`)
+      }
+    }
+    return [...labels]
+  }, [lines, missingPairLineIds])
+
   const includeCounterVouchers = useCallback(() => {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -225,8 +245,21 @@ export default function BulkTagWorkbench() {
     reasonValid &&
     (replaceMode || pickedCount > 0)
 
+  const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
+
   const handleApply = useCallback(async () => {
     if (!lines || !canApply) return
+
+    // Storno-pair guard: tagging one leg of a reversal pair without the
+    // other skews project P&L. Blocking confirmation, not just the banner.
+    if (missingPairLineIds.length > 0) {
+      const ok = await confirm({
+        title: 'Motverifikat är inte valda',
+        description: `Du taggar verifikat utan deras motverifikat (${missingPairVouchers.join(', ')}). Projektresultatet blir skevt tills båda sidorna bär samma dimensioner. Vill du tagga ändå?`,
+        confirmLabel: 'Tagga ändå',
+      })
+      if (!ok) return
+    }
     const selectedLines = lines.filter((l) => selected.has(l.id))
 
     // Per-line resulting map, grouped so each distinct map is one POST
@@ -306,7 +339,7 @@ export default function BulkTagWorkbench() {
       setPicked({})
       setReason('')
     }
-  }, [lines, canApply, selected, replaceMode, picked, reason, toast])
+  }, [lines, canApply, selected, replaceMode, picked, reason, toast, missingPairLineIds, missingPairVouchers, confirm])
 
   const headerChecked: boolean | 'indeterminate' = allSelected
     ? true
@@ -598,7 +631,7 @@ export default function BulkTagWorkbench() {
                   disabled={isApplying}
                   className="flex-1"
                 />
-                <Button onClick={() => void handleApply()} disabled={!canApply}>
+                <Button onClick={() => void handleApply()} disabled={!canApply}>{/* storno-pair confirm inside */}
                   {isApplying ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -617,6 +650,7 @@ export default function BulkTagWorkbench() {
           </div>
         </div>
       )}
+      <DestructiveConfirmDialog {...confirmDialogProps} />
     </div>
   )
 }

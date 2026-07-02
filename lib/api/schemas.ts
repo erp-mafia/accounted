@@ -770,7 +770,13 @@ export const CreateDimensionValueSchema = z
  * the request. An empty bag {} untags the line.
  */
 export const RetagLineDimensionsSchema = z.object({
-  dimensions: DimensionsBagSchema, // {} passes (no entries to validate) = untag
+  // {} passes (no entries to validate) = UNTAG. Intentional divergence from
+  // the MCP staged path (RetagLineDimensionsParamsSchema), which rejects an
+  // empty bag: a human clearing phantom tags via the dialog/workbench is a
+  // deliberate act with a logged reason; an agent bulk-clearing history is
+  // not something we allow to be staged. The retag log records {} as the
+  // new value either way (#867 review).
+  dimensions: DimensionsBagSchema,
   reason: z.string().min(3).max(500),
 })
 

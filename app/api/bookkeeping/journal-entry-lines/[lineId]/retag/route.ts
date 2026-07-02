@@ -32,15 +32,20 @@ export const POST = withRouteContext<{ params: Promise<{ lineId: string }> }>(
     })
 
     if (error) {
-      // The RPC raises human-readable Swedish rule violations (stängd/låst
-      // period, låsdatum, okänt värde …) — surface them verbatim with 409
-      // so the dialog can show the specific rule. Everything else is a 500.
+      // Classify by SQLSTATE, not message text (#867 review): every rule
+      // violation in the RPC is a plain RAISE EXCEPTION (P0001) with a
+      // human-readable Swedish message — surface those verbatim as 409 so
+      // the dialog shows the specific rule. The tenant guard raises 42501.
+      // Anything else is unexpected infrastructure failure → 500 + log.
       const message = error.message ?? 'Kunde inte ändra dimensioner'
-      const isRuleViolation = /stängd|låst|aktivt värde|skrivbehörighet|bokförda|hittades inte|anledning|dimension/i.test(message)
-      if (!isRuleViolation) {
-        log.error('retag_line_dimensions failed', new Error(message), { lineId })
+      if (error.code === 'P0001') {
+        return NextResponse.json({ error: message }, { status: 409 })
       }
-      return NextResponse.json({ error: message }, { status: isRuleViolation ? 409 : 500 })
+      if (error.code === '42501') {
+        return NextResponse.json({ error: message }, { status: 403 })
+      }
+      log.error('retag_line_dimensions failed', new Error(message), { lineId })
+      return NextResponse.json({ error: 'Kunde inte ändra dimensioner' }, { status: 500 })
     }
 
     return NextResponse.json({ data })

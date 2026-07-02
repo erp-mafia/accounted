@@ -81,7 +81,7 @@ describe('POST /api/bookkeeping/journal-entry-lines/[lineId]/retag', () => {
   it('passes rule violations through as 409 with the Swedish message', async () => {
     rpcMock.mockResolvedValue({
       data: null,
-      error: { message: 'Perioden är stängd — använd rättelseverifikat (storno) för att ändra dimensioner.' },
+      error: { code: 'P0001', message: 'Perioden är stängd — använd rättelseverifikat (storno) för att ändra dimensioner.' },
     })
 
     const response = await POST(
@@ -95,7 +95,7 @@ describe('POST /api/bookkeeping/journal-entry-lines/[lineId]/retag', () => {
   })
 
   it('returns 500 on unexpected RPC failure', async () => {
-    rpcMock.mockResolvedValue({ data: null, error: { message: 'connection refused' } })
+    rpcMock.mockResolvedValue({ data: null, error: { code: '57P01', message: 'connection refused' } })
 
     const response = await POST(
       makeRetagRequest({ dimensions: { '6': 'P001' }, reason: 'Rätt projekt' }),

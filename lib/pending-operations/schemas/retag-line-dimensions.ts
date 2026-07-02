@@ -32,6 +32,11 @@ export const RetagLineDimensionsParamsSchema = z
       .array(z.string().uuid('line_ids must contain journal_entry_lines UUIDs'))
       .min(1, 'line_ids must contain at least one line')
       .max(RETAG_MAX_LINES, `line_ids is capped at ${RETAG_MAX_LINES} lines per operation`),
+    // Non-empty by design — and deliberately STRICTER than the direct API
+    // path (RetagLineDimensionsSchema in lib/api/schemas.ts), which allows
+    // {} so a human can untag phantom codes via the dialog/workbench. An
+    // agent bulk-clearing dimension history is not a stageable operation
+    // (#867 review documented the divergence).
     dimensions: DimensionsBagSchema.refine(
       (bag) => Object.keys(bag).length > 0,
       'dimensions must contain at least one {sie_dim_no: code} pair',
