@@ -763,6 +763,17 @@ export const CreateDimensionValueSchema = z
     { message: 'Slutdatum får inte vara före startdatum', path: ['end_date'] },
   )
 
+/**
+ * POST /api/bookkeeping/journal-entry-lines/[lineId]/retag — Tier-2 retro-
+ * tagging (dimensions plan PR6). The RPC enforces every rule (posted only,
+ * open period, lock date, active registry values); this schema only shapes
+ * the request. An empty bag {} untags the line.
+ */
+export const RetagLineDimensionsSchema = z.object({
+  dimensions: DimensionsBagSchema, // {} passes (no entries to validate) = untag
+  reason: z.string().min(3).max(500),
+})
+
 /** PATCH /api/dimensions/[id]/values/[valueId] — no `code` field by design. */
 export const UpdateDimensionValueSchema = z
   .object({
@@ -2138,3 +2149,41 @@ export const SalaryEmployeeOverrideSchema = z
     },
   )
 
+
+// ============================================================
+// Dimensions PR6 — bulk retro-tagging workbench (appended at end
+// of file by PR6 to avoid conflicts; keep new schemas below).
+// ============================================================
+
+/**
+ * Query filters for GET /api/dimensions/tagging/lines (the BulkTagWorkbench
+ * line browser). All filters optional; `limit` is a hard cap (default 200,
+ * max 500) — the route fetches limit+1 and reports `total_capped` instead of
+ * paginating (dimensions plan §3, v1 scope).
+ */
+export const DimensionTaggingLinesQuerySchema = z.object({
+  period_id: uuid.optional(),
+  date_from: saneIsoDate.optional(),
+  date_to: saneIsoDate.optional(),
+  account_from: accountNumber.optional(),
+  account_to: accountNumber.optional(),
+  /** Free-text ilike filter on journal_entries.description. */
+  text: z.string().trim().max(200).optional(),
+  /** '1' → only lines whose dimensions map is empty ({}). */
+  only_untagged: z.enum(['0', '1']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+})
+
+/**
+ * Body for POST /api/dimensions/tagging/apply. One dimensions object applied
+ * to every listed line via the retag_line_dimensions RPC (the UI groups
+ * selected lines by their computed resulting map and issues one POST per
+ * distinct map). `dimensions` reuses THE bag schema so validation cannot
+ * drift from the engine/API layers; an empty bag is allowed — replace mode
+ * uses it to clear phantom tags. `reason` mirrors the RPC's >= 3 chars CHECK.
+ */
+export const DimensionTaggingApplySchema = z.object({
+  line_ids: z.array(uuid).min(1).max(500),
+  dimensions: DimensionsBagSchema,
+  reason: z.string().trim().min(3).max(500),
+})

@@ -1836,6 +1836,9 @@ export type PendingOperationType =
   // Dimensions PR3: stage a new dimension value (kostnadsställe/projekt object
   // code, SIE #OBJEKT) — agents never silently mint reporting values.
   | 'create_dimension_value'
+  // Dimensions PR6: bulk retag of posted-line dimensions via the audited
+  // retag_line_dimensions RPC (gnubok_tag_journal_lines).
+  | 'retag_line_dimensions'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration

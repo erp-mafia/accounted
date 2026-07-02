@@ -210,6 +210,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_dimension_values:           'reports:read',
   gnubok_create_dimension_value:          'bookkeeping:write',
   gnubok_get_dimension_pnl:               'reports:read',
+  // Staged bulk retag of posted-line dimensions (dimensions PR6).
+  gnubok_tag_journal_lines:               'bookkeeping:write',
   // Document inbox
   gnubok_upload_document:                 'transactions:write',
   gnubok_list_inbox_items:                'transactions:read',

@@ -27,6 +27,8 @@ import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
+import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
@@ -65,6 +67,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // used to resolve display names for the line badges ('KS: Butik'); badges
   // fall back to raw codes when the fetch fails or a code is unregistered.
   const [registryDims, setRegistryDims] = useState<DimensionDto[] | null>(null)
+  // Tier-2 retro-tagging (dimensions plan PR6): pencil on posted lines opens
+  // the audited retag dialog; the log renders as a history disclosure below.
+  // Both render only when dimensions are enabled for the company.
+  const { settings } = useCompanySettings()
+  const dimensionsEnabled = settings?.dimensions_enabled === true
+  const [retagLine, setRetagLine] = useState<RetagLine | null>(null)
+  const [retagLog, setRetagLog] = useState<
+    { id: string; line_id: string; old_dimensions: Record<string, string>; new_dimensions: Record<string, string>; reason: string; created_at: string }[]
+  >([])
 
   useEffect(() => {
     if (registryDims !== null) return
@@ -85,10 +96,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     setIsLoading(true)
     setError(null)
     try {
-      const [chainRes, refsRes] = await Promise.all([
+      const [chainRes, refsRes, retagRes] = await Promise.all([
         fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
         fetch(`/api/bookkeeping/journal-entries/${id}/references`),
+        fetch(`/api/bookkeeping/journal-entries/${id}/retag-log`),
       ])
+      if (retagRes.ok) {
+        const retagPayload = await retagRes.json()
+        setRetagLog(Array.isArray(retagPayload.data) ? retagPayload.data : [])
+      }
       if (!chainRes.ok) {
         const { error: msg } = await chainRes.json()
         setError(msg || t('error_load_failed'))
@@ -633,7 +649,20 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     <tr key={line.id} className="border-b last:border-0">
                       <td className="py-2"><AccountNumber number={line.account_number} showName /></td>
                       <td className="py-2 text-muted-foreground">
-                        {line.line_description || ''}
+                        <span className="inline-flex items-center gap-1">
+                          {line.line_description || ''}
+                          {dimensionsEnabled && canWrite && entry.status === 'posted' && (
+                            <button
+                              type="button"
+                              onClick={() => setRetagLine(line as unknown as RetagLine)}
+                              className="p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
+                              aria-label="Ändra dimensioner"
+                              title="Ändra dimensioner (påverkar endast internredovisningen)"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </span>
                         {renderDimensionBadges(line)}
                       </td>
                       <td className="py-2 text-right tabular-nums">
@@ -685,7 +714,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               return (
                 <div key={line.id} className="flex items-center justify-between py-2 border-b last:border-0 gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm"><AccountNumber number={line.account_number} showName /></div>
+                    <div className="text-sm flex items-center gap-1">
+                      <AccountNumber number={line.account_number} showName />
+                      {dimensionsEnabled && canWrite && entry.status === 'posted' && (
+                        <button
+                          type="button"
+                          onClick={() => setRetagLine(line as unknown as RetagLine)}
+                          className="p-1 rounded text-muted-foreground/50 hover:text-foreground transition-colors"
+                          aria-label="Ändra dimensioner"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                     {line.line_description && (
                       <p className="text-xs text-muted-foreground truncate">{line.line_description}</p>
                     )}
@@ -776,6 +817,49 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           </CardContent>
         </Card>
       )}
+
+      {/* Dimension retag history (dimensions plan PR6) — the immutable
+          before/after trail. Stays Swedish (voucher detail surface). */}
+      {dimensionsEnabled && retagLog.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Ändringshistorik för dimensioner</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {retagLog.map((row) => {
+              const lineForRow = lines.find((l) => l.id === row.line_id)
+              const fmt = (dims: Record<string, string>) => {
+                const entries = Object.entries(dims ?? {}).sort(([a], [b]) => Number(a) - Number(b))
+                return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '—'
+              }
+              return (
+                <div key={row.id} className="text-sm border-b last:border-0 pb-3 last:pb-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground tabular-nums">{formatDate(row.created_at)}</span>
+                    {lineForRow && <AccountNumber number={lineForRow.account_number} />}
+                  </div>
+                  <p className="tabular-nums">
+                    <span className="text-muted-foreground line-through">{fmt(row.old_dimensions)}</span>
+                    {' → '}
+                    <span>{fmt(row.new_dimensions)}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">{row.reason}</p>
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Retag dialog (Tier-2 retro-tagging) */}
+      <RetagLineDialog
+        open={retagLine !== null}
+        onOpenChange={(open) => {
+          if (!open) setRetagLine(null)
+        }}
+        line={retagLine}
+        onRetagged={fetchData}
+      />
 
       {/* Correction dialog */}
       {showCorrection && entry && (

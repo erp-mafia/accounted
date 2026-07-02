@@ -63,6 +63,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (BFL 5 kap 6 §) and becomes immutable once the JE is posted. Medium so a
   // human confirms the doc-to-verifikat pairing before it locks.
   link_document_to_voucher: 'medium',
+  // Dimension-only diff on posted lines (verifikat stays immutable), fully
+  // audited via dimension_retag_log — but it rewrites reporting history, so
+  // it crosses a human at medium.
+  retag_line_dimensions: 'medium',
 
   // ── High: irreversible, compliance-critical, or external side-effects
   send_invoice: 'high',          // emails the customer

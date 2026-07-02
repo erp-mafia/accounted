@@ -37,6 +37,7 @@ import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
+import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -4822,6 +4823,218 @@ export const tools: McpTool[] = [
           description: 'Once approved, tag voucher lines with the new code via the dimensions bag on gnubok_create_voucher, or verify it with gnubok_list_dimension_values.',
           tool: 'gnubok_list_dimension_values',
           args: { sie_dim_no: dimension.sie_dim_no },
+        },
+        {
+          dryRun: Boolean(dry_run),
+          idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_tag_journal_lines',
+    title: 'Tag Journal Lines (Bulk Retag)',
+    description: "Bulk-tag POSTED journal lines with dimensions (kostnadsställe/projekt) selected by a filter block — e.g. all 4010 lines with 'Bygg AB' in 2024 → P01. Stages for approval; max 500 lines. Retags internal reporting only — the verifikat stays immutable, every change logged.",
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dimensions bag applied to every matched line, REPLACING its current bag: {"<sie_dim_no>":"<kod eller namn>"}, e.g. {"6":"P01"}. Values may be registry codes or names — resolved server-side (resolve-don\'t-select).',
+        },
+        reason: {
+          type: 'string',
+          minLength: 3,
+          maxLength: 500,
+          description: 'Why the lines are retagged — stored per line in the immutable dimension_retag_log.',
+        },
+        filters: {
+          type: 'object',
+          additionalProperties: false,
+          description: 'Line selection — at least one filter required. Preview the match set with gnubok_query_journal (same filter fields) first.',
+          properties: {
+            account_from: { type: 'string', description: 'Lowest account number (inclusive), e.g. "4010".' },
+            account_to: { type: 'string', description: 'Highest account number (inclusive).' },
+            accounts: { type: 'array', items: { type: 'string' }, description: 'Specific account numbers (overrides account_from/account_to). Up to 50.' },
+            date_from: { type: 'string', description: 'Earliest entry date (YYYY-MM-DD, inclusive).' },
+            date_to: { type: 'string', description: 'Latest entry date (YYYY-MM-DD, inclusive).' },
+            text: { type: 'string', maxLength: 200, description: 'Case-insensitive substring match on the ENTRY description (verifikattext) — line descriptions are not searched.' },
+            only_untagged: { type: 'boolean', description: 'Only lines whose dimensions bag is exactly empty ({}). Lines already carrying ANY dimension are excluded — partially tagged lines do not match.' },
+          },
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'If true, validate inputs and return the would-be preview without staging. No DB writes, no side-effects.',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+        },
+      },
+      required: ['dimensions', 'reason', 'filters'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { dry_run, idempotency_key } = args
+
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+      if (reason.length < 3 || reason.length > 500) {
+        throw new Error('reason must be 3–500 characters — it is stored in the immutable dimension_retag_log.')
+      }
+
+      const inputBag = parseDimensionsArg(args.dimensions, 'dimensions')
+      if (!inputBag) {
+        throw new Error('dimensions must contain at least one {"<sie_dim_no>":"<kod eller namn>"} pair, e.g. {"6":"P01"}.')
+      }
+
+      // ── Filters — validated before any DB work so bad input fails fast.
+      const filters = (args.filters && typeof args.filters === 'object' ? args.filters : {}) as Record<string, unknown>
+      const accounts = Array.isArray(filters.accounts) ? (filters.accounts as string[]) : undefined
+      if (accounts && accounts.length > 50) {
+        throw new Error('filters.accounts is capped at 50 — use account_from/account_to for ranges')
+      }
+      const accountFrom = typeof filters.account_from === 'string' ? filters.account_from : undefined
+      const accountTo = typeof filters.account_to === 'string' ? filters.account_to : undefined
+      const dateFrom = typeof filters.date_from === 'string' ? filters.date_from : undefined
+      const dateTo = typeof filters.date_to === 'string' ? filters.date_to : undefined
+      const text = typeof filters.text === 'string' ? filters.text.trim() : ''
+      if (text.length > 200) {
+        throw new Error('filters.text must be 200 characters or shorter')
+      }
+      const onlyUntagged = filters.only_untagged === true
+
+      const hasFilter = Boolean(
+        (accounts && accounts.length > 0) || accountFrom || accountTo || dateFrom || dateTo || text || onlyUntagged,
+      )
+      if (!hasFilter) {
+        throw new Error(
+          'Ange minst ett filter (konto, datum, text eller only_untagged) — en företagsbred omtaggning måste avgränsas. ' +
+          'Förhandsgranska träffmängden med gnubok_query_journal.',
+        )
+      }
+
+      // ── Resolve the bag (names → registry codes; resolve-don't-select).
+      //    DimensionResolutionError propagates with candidates/create-first
+      //    guidance — nothing unresolved is ever staged.
+      const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [inputBag])
+      const resolvedBag = bags[0] as Record<string, string>
+
+      // ── Match the lines. POSTED entries only — drafts are edited directly
+      //    (the retag RPC rejects them too). Fetch cap+1 to detect overflow.
+      let q = supabase
+        .from('journal_entry_lines')
+        .select('id, account_number, debit_amount, credit_amount, sort_order, journal_entries!inner(id, entry_date, voucher_number, voucher_series, status, company_id)')
+        .eq('journal_entries.company_id', companyId)
+        .eq('journal_entries.status', 'posted')
+
+      if (accounts && accounts.length > 0) {
+        q = q.in('account_number', accounts)
+      } else {
+        if (accountFrom) q = q.gte('account_number', accountFrom)
+        if (accountTo) q = q.lte('account_number', accountTo)
+      }
+      if (dateFrom) q = q.gte('journal_entries.entry_date', dateFrom)
+      if (dateTo) q = q.lte('journal_entries.entry_date', dateTo)
+      if (text) {
+        // LIKE wildcards escaped so the filter matches literal % / _ — same
+        // treatment as gnubok_query_journal's text legs. v1 searches the
+        // ENTRY description only (documented in the schema); the two-leg
+        // line+entry union query_journal runs is overkill for a write filter.
+        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+        q = q.ilike('journal_entries.description', `%${escaped}%`)
+      }
+      // Pragmatic v1 (documented in the schema): only-untagged means the bag
+      // is EXACTLY '{}' (column is NOT NULL DEFAULT '{}'). Partially tagged
+      // lines (e.g. only dim 1 set) do not match.
+      if (onlyUntagged) q = q.filter('dimensions', 'eq', '{}')
+
+      const res = await q
+        .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+        .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+        .order('sort_order', { ascending: true })
+        .limit(RETAG_MAX_LINES + 1)
+
+      if (res.error) {
+        log.warn('tag_journal_lines match query failed', { companyId, userId, error: res.error.message })
+        throw new Error('Database error while matching journal lines')
+      }
+
+      type MatchedRow = {
+        id: string
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        sort_order: number
+        journal_entries: { id: string; entry_date: string; voucher_number: number; voucher_series: string }
+      }
+      const rows = (res.data ?? []) as unknown as MatchedRow[]
+
+      if (rows.length === 0) {
+        throw new Error(
+          'Inga bokförda rader matchade filtret. Kontrollera konto/datum/text — förhandsgranska med gnubok_query_journal (samma filterfält).',
+        )
+      }
+      if (rows.length > RETAG_MAX_LINES) {
+        throw new Error(
+          `Filtret matchar fler än ${RETAG_MAX_LINES} rader — snäva av det (kortare datumintervall, färre konton) och kör i omgångar om högst ${RETAG_MAX_LINES}.`,
+        )
+      }
+
+      // Human description of the selection, carried on the op for the
+      // approval preview (the executor acts on line_ids verbatim).
+      const summaryParts: string[] = []
+      if (accounts && accounts.length > 0) summaryParts.push(`konto ${accounts.join(', ')}`)
+      else if (accountFrom || accountTo) summaryParts.push(`konto ${accountFrom ?? '…'}–${accountTo ?? '…'}`)
+      if (dateFrom || dateTo) summaryParts.push(`datum ${dateFrom ?? '…'}–${dateTo ?? '…'}`)
+      if (text) summaryParts.push(`text "${text}"`)
+      if (onlyUntagged) summaryParts.push('endast otaggade rader')
+      const filterSummary = summaryParts.join(', ').slice(0, 500)
+
+      const bagLabel = Object.entries(resolvedBag)
+        .map(([dim, code]) => `${dim}=${code}`)
+        .join(', ')
+
+      // Same Zod schema the commit executor re-validates with — the staged
+      // params can never drift from what commitRetagLineDimensions accepts.
+      const params = RetagLineDimensionsParamsSchema.parse({
+        line_ids: rows.map((r) => r.id),
+        dimensions: resolvedBag,
+        reason,
+        filter_summary: filterSummary,
+      })
+
+      // No dateForPeriodCheck: the matched lines span dates; the retag RPC
+      // enforces open-period + lock-date per line at commit time.
+      return stagePendingOperation(supabase, companyId, userId, 'retag_line_dimensions',
+        `Tagga om ${rows.length} verifikationsrader: ${bagLabel}`,
+        params as unknown as Record<string, unknown>,
+        {
+          matched_lines: rows.length,
+          dimensions: resolvedBag,
+          filter_summary: filterSummary,
+          sample: rows.slice(0, 10).map((r) => ({
+            account: r.account_number,
+            date: r.journal_entries.entry_date,
+            debit: r.debit_amount,
+            credit: r.credit_amount,
+          })),
+          ...(resolutions.length > 0 ? { dimension_resolutions: resolutions } : {}),
+          will: 'replace the dimensions bag on every matched POSTED line via the audited retag RPC — internal reporting only, the verifikat itself is untouched',
+        },
+        actor,
+        {
+          description: 'After approval, verify the retag with gnubok_query_journal (group_by_dimension) or gnubok_get_dimension_pnl.',
+          tool: 'gnubok_query_journal',
+          args: { group_by_dimension: Object.keys(resolvedBag)[0] },
         },
         {
           dryRun: Boolean(dry_run),

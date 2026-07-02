@@ -75,6 +75,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
+import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
@@ -553,6 +554,83 @@ async function commitCreateDimensionValue(
       name: created.name,
       is_active: created.is_active,
       already_existed: false,
+    },
+  }
+}
+
+/**
+ * Executor for the staged retag_line_dimensions operation
+ * (gnubok_tag_journal_lines — dimensions PR6). Loops the staged line_ids
+ * through the retag_line_dimensions RPC — the ONE audited write path for
+ * changing dimension tags on posted lines. The RPC enforces everything per
+ * line at commit time (open period, company lock date, active registry
+ * values, writer role, posted status) and writes an immutable
+ * dimension_retag_log row before touching the line.
+ *
+ * Partial-success semantics: one line failing (e.g. its period was locked
+ * between staging and approval) must not roll back the lines already
+ * retagged — each RPC call is its own transaction. Failures are collected
+ * and echoed (capped at 20) so the caller can re-stage just the failed set.
+ * Only when EVERY line fails does the operation as a whole fail.
+ */
+async function commitRetagLineDimensions(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so
+  // a tampered pending_operations row cannot inject arbitrary ids or a
+  // malformed bag (ASVS V4.5) — mirrors commitCreateDimensionValue.
+  let validated
+  try {
+    validated = RetagLineDimensionsParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      const path = issue?.path?.join('.') ?? 'params'
+      return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  let retagged = 0
+  let unchanged = 0
+  const failed: Array<{ line_id: string; error: string }> = []
+
+  for (const lineId of validated.line_ids) {
+    const { data, error } = await supabase.rpc('retag_line_dimensions', {
+      p_company_id: companyId,
+      p_line_id: lineId,
+      p_dimensions: validated.dimensions,
+      p_reason: validated.reason,
+      p_user_id: userId,
+    })
+    if (error) {
+      failed.push({ line_id: lineId, error: error.message })
+      continue
+    }
+    if ((data as { changed?: boolean } | null)?.changed) retagged++
+    else unchanged++
+  }
+
+  if (failed.length > 0 && retagged === 0 && unchanged === 0) {
+    return {
+      error: `Ingen rad kunde taggas om (${failed.length} rader misslyckades). Första felet: ${failed[0].error}`,
+      status: 400,
+    }
+  }
+
+  return {
+    data: {
+      retagged,
+      unchanged,
+      failed_count: failed.length,
+      // Echo at most 20 failures — enough to act on without bloating
+      // result_data on a pathological 500-line all-but-one failure.
+      failed: failed.slice(0, 20),
+      dimensions: validated.dimensions,
+      ...(validated.filter_summary ? { filter_summary: validated.filter_summary } : {}),
     },
   }
 }
@@ -3653,6 +3731,9 @@ async function commitPendingOperationInner(
         break
       case 'create_dimension_value':
         result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'retag_line_dimensions':
+        result = await commitRetagLineDimensions(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_invoice':
         result = await commitCreateInvoice(supabase, userId, companyId, pendingOp.params)
