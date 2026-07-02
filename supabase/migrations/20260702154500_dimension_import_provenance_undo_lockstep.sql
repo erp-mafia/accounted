@@ -55,6 +55,11 @@ CREATE OR REPLACE FUNCTION public.undo_sie_import(
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
+ -- CREATE OR REPLACE resets proconfig, so the function-local timeout from
+ -- 20260629160100 must be restated here or the service-client bulk delete
+ -- regresses to the authenticator role's 8s limit (pinned by
+ -- sie-import.replace.pg.test.ts).
+ SET statement_timeout TO '290s'
 AS $function$
 DECLARE
   v_fiscal_period_id          uuid;
