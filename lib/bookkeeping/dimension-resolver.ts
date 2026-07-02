@@ -39,18 +39,43 @@ export function normalizeLineDimensions(line: DimensionAliasInput): LineDimensio
   if (line.dimensions) {
     for (const [key, value] of Object.entries(line.dimensions)) {
       if (!/^\d+$/.test(key) || Number(key) < 1) continue
+      // Canonical numeric form: '01' and '1' must land on the same key, or
+      // lineDimensionColumns misses the mirror and reports split the value.
+      const dimNo = String(Number(key))
       const trimmed = typeof value === 'string' ? value.trim() : ''
       if (!trimmed) {
         // Explicit empty string in the bag means "clear this dimension" — it
         // must also override a non-empty alias, so remove any alias-filled key.
-        delete out[key]
+        delete out[dimNo]
         continue
       }
-      out[key] = trimmed
+      out[dimNo] = trimmed
     }
   }
 
   return out
+}
+
+/**
+ * Boundary validator for an untyped dimensions bag (staged pending-operation
+ * params, tool payloads). Applies the SAME constraints as the Zod line schema
+ * (CreateJournalEntryLineSchema): string values only, 1–40 chars after trim,
+ * no SIE-framing-breaking characters, canonical numeric keys >= 1. Anything
+ * else is dropped. Interior normalization (normalizeLineDimensions) stays
+ * permissive on charset by design — it must preserve legacy DB values
+ * verbatim on reversal/correction; this function is the input gate.
+ */
+export function coerceDimensionsBag(raw: unknown): LineDimensions | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: LineDimensions = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^\d+$/.test(key) || Number(key) < 1) continue
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed || trimmed.length > 40 || /["{}]/.test(trimmed)) continue
+    out[String(Number(key))] = trimmed
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**

@@ -274,6 +274,19 @@ COMMENT ON COLUMN public.journal_entry_lines.project IS
 -- byte-identical. The line-immutability trigger blocks ALL updates to posted
 -- lines regardless of column, so it is disabled for exactly this statement
 -- (sanctioned precedent: 20260415000000_schema_sync.sql cleanup routine).
+--
+-- ⚠️ REVIEWER GUIDANCE BEFORE REUSING THIS PATTERN (BFL 5 kap 5§ / BFNAR
+-- 2013:2: corrections must preserve original + change visibly; overwriting
+-- verifikat content is forbidden). Disabling this trigger is defensible ONLY
+-- when ALL of the following hold, as they do here:
+--   1. The UPDATE writes exclusively to a column that carries NO verifikat
+--      content (here: the brand-new `dimensions` column, populated from values
+--      already stored on the same row — no information is created or lost).
+--   2. Accounts, amounts, dates, descriptions and linkage columns are
+--      untouched (this statement's SET clause names only `dimensions`).
+--   3. The change is reviewed under the Swedish-compliance CI workflow.
+-- A migration that needs to touch actual verifikat content must instead go
+-- through storno/rättelse (correctEntry) — never this pattern.
 ALTER TABLE public.journal_entry_lines
   DISABLE TRIGGER enforce_journal_entry_line_immutability;
 

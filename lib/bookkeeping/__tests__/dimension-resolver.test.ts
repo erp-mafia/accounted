@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeLineDimensions,
   lineDimensionColumns,
+  coerceDimensionsBag,
   DIM_COST_CENTER,
   DIM_PROJECT,
 } from '@/lib/bookkeeping/dimension-resolver'
@@ -54,6 +55,58 @@ describe('normalizeLineDimensions', () => {
         dimensions: { projekt: 'X', '0': 'Y', '6': 'P001' } as Record<string, string>,
       })
     ).toEqual({ '6': 'P001' })
+  })
+
+  it("canonicalizes leading-zero keys ('01' -> '1') so mirrors are derived", () => {
+    const dims = normalizeLineDimensions({ dimensions: { '01': 'KS01', '06': 'P001' } })
+    expect(dims).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(lineDimensionColumns(dims)).toEqual({ cost_center: 'KS01', project: 'P001' })
+  })
+
+  it("clearing via a leading-zero key ('01': '') also clears the alias-filled '1'", () => {
+    expect(
+      normalizeLineDimensions({ dimensions: { '01': '' }, cost_center: 'KS-ALIAS' })
+    ).toEqual({})
+  })
+
+  it('reversal parity: empty bag + populated aliases equals alias-only input', () => {
+    // reverseEntry passes {dimensions: {}, cost_center, project} for legacy
+    // rows; storno passes the row directly — both must normalize identically.
+    expect(
+      normalizeLineDimensions({ dimensions: {}, cost_center: 'KS01', project: 'P001' })
+    ).toEqual(normalizeLineDimensions({ cost_center: 'KS01', project: 'P001' }))
+  })
+})
+
+describe('coerceDimensionsBag (boundary validator for staged payloads)', () => {
+  it('returns undefined for non-objects', () => {
+    expect(coerceDimensionsBag(undefined)).toBeUndefined()
+    expect(coerceDimensionsBag(null)).toBeUndefined()
+    expect(coerceDimensionsBag('P001')).toBeUndefined()
+    expect(coerceDimensionsBag(['6', 'P001'])).toBeUndefined()
+  })
+
+  it('accepts valid string values with canonical keys', () => {
+    expect(coerceDimensionsBag({ '06': ' P001 ', '1': 'KS01' })).toEqual({
+      '6': 'P001',
+      '1': 'KS01',
+    })
+  })
+
+  it('drops non-string values (no numeric coercion bypassing the Zod schema)', () => {
+    expect(coerceDimensionsBag({ '6': 42 })).toBeUndefined()
+    expect(coerceDimensionsBag({ '6': 42, '1': 'KS01' })).toEqual({ '1': 'KS01' })
+  })
+
+  it('enforces the same length/charset constraints as the Zod line schema', () => {
+    expect(coerceDimensionsBag({ '6': 'x'.repeat(41) })).toBeUndefined()
+    expect(coerceDimensionsBag({ '6': 'P"1' })).toBeUndefined()
+    expect(coerceDimensionsBag({ '6': 'P{1}' })).toBeUndefined()
+    expect(coerceDimensionsBag({ '6': 'x'.repeat(40) })).toEqual({ '6': 'x'.repeat(40) })
+  })
+
+  it('drops invalid keys', () => {
+    expect(coerceDimensionsBag({ projekt: 'P001', '0': 'X' })).toBeUndefined()
   })
 })
 
