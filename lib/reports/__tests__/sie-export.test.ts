@@ -395,6 +395,57 @@ describe('generateSIEExport', () => {
     expect(output).not.toContain('#UNDERDIM 1')
   })
 
+  it('declares a parent #DIM before an #UNDERDIM child with a LOWER number', async () => {
+    // SIE4 requires the parent to be declared before any #UNDERDIM that
+    // references it. A registry can hold a child whose sie_dim_no is LOWER
+    // than its parent's (dim 3 under dim 7 here), so a single numeric sort
+    // would emit the #UNDERDIM first — the two-pass emit (#DIM roots first,
+    // then #UNDERDIM) must keep the parent ahead.
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      {
+        data: [
+          { id: 'e1', entry_date: '2024-03-01', voucher_number: 1, voucher_series: 'A', description: 'Child below parent', status: 'posted' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { journal_entry_id: 'e1', account_number: '5010', debit_amount: 700, credit_amount: 0, line_description: null, dimensions: { '3': 'UND1', '7': 'EMP1' } },
+          { journal_entry_id: 'e1', account_number: '1930', debit_amount: 0, credit_amount: 700, line_description: null, dimensions: {} },
+        ],
+        error: null,
+      },
+      {
+        // dim 3 is a child of dim 7 — numerically BEFORE its parent.
+        data: [
+          { id: 'dim-3', sie_dim_no: 3, parent_sie_dim_no: 7, name: 'Underavdelning' },
+          { id: 'dim-7', sie_dim_no: 7, parent_sie_dim_no: null, name: 'Anställd' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { dimension_id: 'dim-3', code: 'UND1', name: 'Under 1' },
+          { dimension_id: 'dim-7', code: 'EMP1', name: 'Anna' },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#DIM 7 "Anställd"')
+    expect(output).toContain('#UNDERDIM 3 "Underavdelning" 7')
+    // The parent #DIM must precede the child #UNDERDIM in the file.
+    expect(output.indexOf('#DIM 7 "Anställd"')).toBeLessThan(
+      output.indexOf('#UNDERDIM 3 "Underavdelning" 7'),
+    )
+  })
+
   it('generates #UB for class 1-2 and #RES for class 3-8', async () => {
     results = [
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },

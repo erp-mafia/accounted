@@ -55,10 +55,22 @@ export default function DimensionCombobox({
   const containerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
+  // Refs mirroring the committed `value` prop and the fetched values. The
+  // blur timeout below runs 150ms after render, so reading `value`/`values`
+  // directly would act on a stale snapshot — a selection landing during that
+  // window (updating the prop via onChange) must win over the revert.
+  const committedRef = useRef(value)
+  const valuesRef = useRef(values)
+
   // Sync external value changes into the search field
   useEffect(() => {
+    committedRef.current = value
     setSearch(value ?? '')
   }, [value])
+
+  useEffect(() => {
+    valuesRef.current = values
+  }, [values])
 
   const loadValues = useCallback(async () => {
     setLoadState('loading')
@@ -217,17 +229,20 @@ export default function DimensionCombobox({
     // Small delay so a dropdown mousedown fires first (same trick as
     // AccountCombobox — option clicks preventDefault, so they never blur).
     // An emptied field clears the dimension; anything that isn't a known
-    // code reverts to the committed value.
+    // code reverts to the committed value. Committed value and values are
+    // read through refs so a selection that lands during the 150ms window
+    // wins over the revert (the closure's render snapshot would be stale).
     const snapshot = search
     setTimeout(() => {
+      const committed = committedRef.current
       const trimmed = snapshot.trim()
       if (!trimmed) {
         setSearch('')
-        if (value !== null) onChange(null)
+        if (committed !== null) onChange(null)
         return
       }
-      if (trimmed !== value && !values.some((v) => v.code === trimmed)) {
-        setSearch(value ?? '')
+      if (trimmed !== committed && !valuesRef.current.some((v) => v.code === trimmed)) {
+        setSearch(committed ?? '')
       }
     }, 150)
   }

@@ -75,6 +75,9 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
   })
 
   it('archives a value via is_active=false (happy path)', async () => {
+    // The request carries end_date, so the route first checks the parent
+    // dimension's resets_annually flag (accumulating → dates allowed).
+    enqueue({ data: { id: 'dim-1', resets_annually: false } })
     enqueue({
       data: {
         id: 'v1', dimension_id: 'dim-1', code: 'BUTIK', name: 'Butiken',
@@ -93,6 +96,44 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
     expect(body.data.is_active).toBe(false)
     // Code untouched — immutable in v1.
     expect(body.data.code).toBe('BUTIK')
+  })
+
+  it('rejects start/end dates on a resets-annually dimension with 400', async () => {
+    enqueue({ data: { id: 'dim-1', resets_annually: true } })
+
+    const request = createMockRequest(URL_PATH, {
+      method: 'PATCH',
+      body: { start_date: '2026-01-01' },
+    })
+    const response = await PATCH(request, params())
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DIMENSION_VALUE_DATES_NOT_ALLOWED')
+    expect(body.error.message).toBe(
+      'Datum kan bara sättas på ackumulerande dimensioner (t.ex. projekt).',
+    )
+  })
+
+  it('allows clearing dates (explicit null) without checking the dimension', async () => {
+    // start_date: null clears the field — a harmless no-op on any dimension,
+    // so the route must not spend a dimension fetch on it. The single queued
+    // result feeds the update itself.
+    enqueue({
+      data: {
+        id: 'v1', dimension_id: 'dim-1', code: 'BUTIK', name: 'Butiken',
+        is_active: true, start_date: null, end_date: null,
+      },
+    })
+
+    const request = createMockRequest(URL_PATH, {
+      method: 'PATCH',
+      body: { start_date: null, end_date: null },
+    })
+    const response = await PATCH(request, params())
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
   })
 })
 

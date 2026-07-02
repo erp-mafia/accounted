@@ -190,9 +190,12 @@ export default function DimensionsManager() {
         if (!res.ok) throw json ?? new Error()
         toast({ title: t('updated_title') })
       } else {
+        // "Create as archived" rides the create contract's is_active field —
+        // one atomic POST, no follow-up PATCH.
         const body: Record<string, unknown> = {
           code: input.code,
           name: input.name,
+          is_active: input.is_active,
         }
         if (input.start_date) body.start_date = input.start_date
         if (input.end_date) body.end_date = input.end_date
@@ -203,26 +206,6 @@ export default function DimensionsManager() {
         })
         const json = await res.json().catch(() => null)
         if (!res.ok) throw json ?? new Error()
-
-        // The create contract has no is_active — new values are born active.
-        // "Create as archived" is a follow-up PATCH; resolve the id from the
-        // response envelope or, failing that, from a fresh registry read.
-        if (!input.is_active) {
-          let valueId: string | undefined = json?.data?.id
-          if (!valueId) {
-            const fresh = await fetchDimensions()
-            valueId = fresh
-              .find((d) => d.id === activeDim.id)
-              ?.values.find((v) => v.code === input.code)?.id
-          }
-          if (valueId) {
-            await fetch(`/api/dimensions/${activeDim.id}/values/${valueId}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ is_active: false }),
-            })
-          }
-        }
         toast({
           title: t('created_title'),
           description: t('created_description', { code: input.code }),

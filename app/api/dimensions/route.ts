@@ -42,6 +42,10 @@ interface DimensionRow {
 export const GET = withRouteContext(
   'dimension.list',
   async (_request, ctx) => {
+    // dimensions_enabled is deliberately NOT enforced here — it is a
+    // UI-visibility flag only (dev_docs/dimensions_implementation_plan.md §2).
+    // Agents/MCP and SIE import must operate on the registry regardless of the
+    // toggle; the security boundary is company scoping (withRouteContext + RLS).
     const { supabase, companyId, log, requestId } = ctx
 
     const { error: ensureError } = await supabase.rpc('ensure_company_dimensions', {

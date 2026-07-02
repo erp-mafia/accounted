@@ -1,8 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
+import { createLogger } from '@/lib/logger'
 import { getOpeningBalances } from './opening-balances'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
+
+const log = createLogger('reports:sie-export')
 
 function sanitizeProgramName(str: string): string {
   return str.replace(/"/g, '').replace(/[\r\n]/g, ' ').substring(0, 60)
@@ -393,6 +396,12 @@ function buildDimensionSection(
   registryValues: RegistryValue[],
   journalLines: JournalEntryLine[]
 ): string[] {
+  // Defence in depth: a value row whose dimension_id doesn't resolve in
+  // dimNoById is skipped by construction (the `continue` below). Both fetches
+  // are scoped to the same company_id (query filter + RLS), so every
+  // dimension_id in registryValues should resolve; a miss can only mean the
+  // dimension row vanished mid-export — skipping just omits its #OBJEKT,
+  // never leaks a foreign company's data into the file.
   const dimsByNo = new Map<number, RegistryDimension>()
   const dimNoById = new Map<string, number>()
   for (const dim of registryDimensions) {
@@ -452,13 +461,31 @@ function buildDimensionSection(
   const sortedDimNos = [...emitDimNos].sort((a, b) => a - b)
   const out: string[] = []
 
+  // Synthesized placeholders collected for the operator warning below:
+  // #DIM "Dimension n" fallbacks and #OBJEKT rows with name = code.
+  const synthesizedDimNos: number[] = []
+  const orphanObjects: Array<{ dimNo: number; code: string }> = []
+
+  // Two passes: every root #DIM first (sorted by sie_dim_no), then every
+  // #UNDERDIM (sorted by sie_dim_no). SIE4 requires a parent to be declared
+  // before any #UNDERDIM referencing it, and a child may carry a LOWER
+  // number than its parent — so a single numeric sort is not enough.
   for (const dimNo of sortedDimNos) {
     const { name, parent } = declarationFor(dimNo)
-    if (parent !== null) {
-      out.push(`#UNDERDIM ${dimNo} "${escapeQuotes(name)}" ${parent}`)
-    } else {
-      out.push(`#DIM ${dimNo} "${escapeQuotes(name)}"`)
+    if (parent !== null) continue
+    if (!dimsByNo.has(dimNo) && !SIE_RESERVED_DIMENSIONS[dimNo]) {
+      synthesizedDimNos.push(dimNo)
     }
+    out.push(`#DIM ${dimNo} "${escapeQuotes(name)}"`)
+  }
+
+  // "Dimension n" fallbacks never carry a parent (declarationFor only
+  // assigns parents from the registry or the reserved seed), so #UNDERDIM
+  // lines are never synthesized placeholders.
+  for (const dimNo of sortedDimNos) {
+    const { name, parent } = declarationFor(dimNo)
+    if (parent === null) continue
+    out.push(`#UNDERDIM ${dimNo} "${escapeQuotes(name)}" ${parent}`)
   }
 
   for (const dimNo of sortedDimNos) {
@@ -468,10 +495,24 @@ function buildDimensionSection(
       ...(referencedByDimNo.get(dimNo) ?? []),
     ])
     for (const code of [...codes].sort((a, b) => a.localeCompare(b, 'sv'))) {
+      const registryName = registry.get(code)
+      if (registryName === undefined) {
+        orphanObjects.push({ dimNo, code })
+      }
       out.push(
-        `#OBJEKT ${dimNo} "${escapeQuotes(code)}" "${escapeQuotes(registry.get(code) ?? code)}"`
+        `#OBJEKT ${dimNo} "${escapeQuotes(code)}" "${escapeQuotes(registryName ?? code)}"`
       )
     }
+  }
+
+  // Operators must know the file contains synthesized placeholder names
+  // (BFNAR 2013:2 behandlingshistorik) — one structured warning listing the
+  // pairs; silent when the registry covered everything.
+  if (orphanObjects.length > 0 || synthesizedDimNos.length > 0) {
+    log.warn('SIE export synthesized placeholder dimension declarations', {
+      orphanObjects,
+      synthesizedDimNos,
+    })
   }
 
   return out

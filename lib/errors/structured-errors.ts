@@ -2489,6 +2489,12 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett värde med samma kod finns redan i dimensionen.',
     message_en: 'A value with that code already exists in the dimension.',
   },
+  DIMENSION_VALUE_DATES_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv: 'Datum kan bara sättas på ackumulerande dimensioner (t.ex. projekt).',
+    message_en:
+      'Start/end dates can only be set on accumulating dimensions (e.g. projects) — this dimension resets annually.',
+  },
   DIMENSION_VALUE_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Dimensionsvärdet kunde inte skapas.',

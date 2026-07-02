@@ -754,6 +754,8 @@ export const CreateDimensionValueSchema = z
   .object({
     code: dimensionValueCode,
     name: z.string().min(1).max(120),
+    /** Omitted → true. Lets "create as archived" be a single atomic POST. */
+    is_active: z.boolean().optional(),
     ...dimensionValueDates,
   })
   .refine(

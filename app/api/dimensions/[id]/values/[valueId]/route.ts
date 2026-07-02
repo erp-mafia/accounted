@@ -15,7 +15,7 @@ import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateDimensionValueSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 ensureInitialized()
 
@@ -34,6 +34,29 @@ export const PATCH = withRouteContext(
     })
     if (!result.success) return result.response
     const body = result.data
+
+    // Value dates only make sense on accumulating dimensions (projekt-style
+    // ranges). When the request carries an actual date (explicit null = clear,
+    // always allowed), check the parent dimension's resets_annually flag.
+    if (body.start_date != null || body.end_date != null) {
+      const { data: dimension, error: dimError } = await supabase
+        .from('dimensions')
+        .select('id, resets_annually')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (dimError) {
+        opLog.error('dimension fetch failed', dimError)
+        return errorResponse(dimError, opLog, { requestId })
+      }
+      if (!dimension) {
+        return errorResponseFromCode('DIMENSION_NOT_FOUND', opLog, { requestId })
+      }
+      if (dimension.resets_annually) {
+        return errorResponseFromCode('DIMENSION_VALUE_DATES_NOT_ALLOWED', opLog, { requestId })
+      }
+    }
 
     // Sparse update — only the fields the caller actually sent. `code` is
     // deliberately absent from the schema: renaming a code would silently

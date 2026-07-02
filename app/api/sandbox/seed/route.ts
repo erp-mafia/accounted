@@ -180,6 +180,7 @@ export async function POST(request: Request) {
     ) as Record<number, string>
 
     if (dimIdByNo[1] && dimIdByNo[6]) {
+      const seededDimensionCodes = ['BUTIK', 'WEBB', 'P001', 'P002']
       const { error: dimValuesError } = await supabase
         .from('dimension_values')
         .insert([
@@ -189,6 +190,7 @@ export async function POST(request: Request) {
           { company_id: companyId, dimension_id: dimIdByNo[6], code: 'P002', name: 'Projekt Alm' },
         ])
       if (dimValuesError) throw dimValuesError
+      log.info('seeded sandbox dimension values', { companyId, codes: seededDimensionCodes })
     }
 
     // 4. Create fiscal period (current year)

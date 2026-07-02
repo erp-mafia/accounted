@@ -35,7 +35,7 @@ export const POST = withRouteContext(
     // depth alongside the composite FK — a foreign dimension id 404s here).
     const { data: dimension, error: dimError } = await supabase
       .from('dimensions')
-      .select('id')
+      .select('id, resets_annually')
       .eq('id', id)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -48,6 +48,13 @@ export const POST = withRouteContext(
       return errorResponseFromCode('DIMENSION_NOT_FOUND', opLog, { requestId })
     }
 
+    // Value dates only make sense on accumulating dimensions (projekt-style
+    // ranges). A resets-annually dimension (e.g. kostnadsställe) rejects any
+    // request carrying an actual date (explicit null is a harmless no-op).
+    if (dimension.resets_annually && (body.start_date != null || body.end_date != null)) {
+      return errorResponseFromCode('DIMENSION_VALUE_DATES_NOT_ALLOWED', opLog, { requestId })
+    }
+
     const { data, error } = await supabase
       .from('dimension_values')
       .insert({
@@ -55,6 +62,9 @@ export const POST = withRouteContext(
         dimension_id: id,
         code: body.code,
         name: body.name,
+        // Default true; is_active=false makes "create as archived" atomic
+        // (no follow-up PATCH from the register UI).
+        is_active: body.is_active ?? true,
         start_date: body.start_date ?? null,
         end_date: body.end_date ?? null,
       })

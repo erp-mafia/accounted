@@ -1,9 +1,10 @@
 /**
  * Tests for POST /api/dimensions/import-existing (backfill scan).
  *
- * Covers: 401, the empty-company early exit, and the happy path where codes
+ * Covers: 401, the empty-company early exit, the happy path where codes
  * found on journal lines but missing from the registry are created as
- * inactive placeholder values ({ created: n }).
+ * inactive placeholder values ({ created: n }), code sanitization (PR1
+ * backfill parity), and duplicate-tolerant upserts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -79,14 +80,59 @@ describe('POST /api/dimensions/import-existing', () => {
     })
     // Existing values: BUTIK is already registered under dim 1.
     enqueue({ data: [{ dimension_id: 'dim-1', code: 'BUTIK' }] })
-    // Insert of the two missing values succeeds.
-    enqueue({ data: null })
+    // Upsert of the two missing values succeeds — created counts returned rows.
+    enqueue({ data: [{ id: 'nv1' }, { id: 'nv2' }] })
 
     const response = await POST(request(), noParams)
     const { status, body } = await parseJsonResponse<{ created: number }>(response)
 
     expect(status).toBe(200)
     expect(body.created).toBe(2) // KS01 + P001; BUTIK skipped (already registered)
+  })
+
+  it('sanitizes candidate codes like the PR1 backfill and de-duplicates after sanitization', async () => {
+    enqueue({ data: null }) // ensure RPC
+    // 'KS"01"' and 'KS{01}' both sanitize to KS01 (one candidate); a 50-char
+    // code is capped at 40; '"{}"' sanitizes to empty and is dropped entirely.
+    enqueue({
+      data: [
+        { id: 'l1', dimensions: { '1': 'KS"01"' } },
+        { id: 'l2', dimensions: { '1': 'KS{01}' } },
+        { id: 'l3', dimensions: { '1': 'X'.repeat(50) } },
+        { id: 'l4', dimensions: { '1': '"{}"' } },
+      ],
+    })
+    enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
+    enqueue({ data: [] }) // no existing values
+    // Upsert returns the two surviving sanitized codes (KS01 + the capped one).
+    enqueue({ data: [{ id: 'nv1' }, { id: 'nv2' }] })
+
+    const response = await POST(request(), noParams)
+    const { status, body } = await parseJsonResponse<{ created: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.created).toBe(2)
+  })
+
+  it('tolerates duplicates in the batch — created counts only the rows the upsert returned', async () => {
+    enqueue({ data: null }) // ensure RPC
+    enqueue({
+      data: [
+        { id: 'l1', dimensions: { '1': 'KS01' } },
+        { id: 'l2', dimensions: { '1': 'KS02' } },
+      ],
+    })
+    enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
+    enqueue({ data: [] }) // existing-values snapshot missed a raced KS02
+    // ignoreDuplicates upsert skips the conflicting row instead of aborting
+    // the batch — only KS01 comes back.
+    enqueue({ data: [{ id: 'nv1' }] })
+
+    const response = await POST(request(), noParams)
+    const { status, body } = await parseJsonResponse<{ created: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.created).toBe(1)
   })
 
   it('creates a registry dimension for an unregistered dim number found on lines', async () => {
@@ -99,12 +145,12 @@ describe('POST /api/dimensions/import-existing', () => {
         { id: 'dim-6', sie_dim_no: 6 },
       ],
     })
-    // Insert of the missing dimension row returns its id.
+    // Upsert of the missing dimension row returns its id.
     enqueue({ data: [{ id: 'dim-7', sie_dim_no: 7 }] })
     // No existing values.
     enqueue({ data: [] })
-    // Value insert succeeds.
-    enqueue({ data: null })
+    // Value upsert succeeds.
+    enqueue({ data: [{ id: 'nv1' }] })
 
     const response = await POST(request(), noParams)
     const { status, body } = await parseJsonResponse<{ created: number }>(response)

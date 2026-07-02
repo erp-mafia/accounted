@@ -2,8 +2,9 @@
  * Tests for POST /api/dimensions/[id]/values (create dimension value).
  *
  * Covers: 401, the strict Fortnox code format (400), 404 on a foreign
- * dimension, the duplicate-code conflict (409 with Swedish message), and the
- * happy path.
+ * dimension, the duplicate-code conflict (409 with Swedish message), the
+ * dates-on-resets-annually rejection (400), atomic create-as-archived
+ * (is_active=false), and the happy path.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -93,6 +94,46 @@ describe('POST /api/dimensions/[id]/values', () => {
 
     expect(status).toBe(404)
     expect(body.error.code).toBe('DIMENSION_NOT_FOUND')
+  })
+
+  it('rejects start/end dates on a resets-annually dimension with 400', async () => {
+    // Kostnadsställe-style dims reset annually — value date ranges are only
+    // meaningful on accumulating dims (projekt).
+    enqueue({ data: { id: 'dim-1', resets_annually: true } })
+
+    const request = createMockRequest('/api/dimensions/dim-1/values', {
+      method: 'POST',
+      body: { code: 'KS01', name: 'Kontoret', start_date: '2026-01-01' },
+    })
+    const response = await POST(request, params())
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DIMENSION_VALUE_DATES_NOT_ALLOWED')
+    expect(body.error.message).toBe(
+      'Datum kan bara sättas på ackumulerande dimensioner (t.ex. projekt).',
+    )
+  })
+
+  it('creates a value as archived when is_active=false (atomic, no follow-up PATCH)', async () => {
+    enqueue({ data: { id: 'dim-1', resets_annually: false } })
+    enqueue({
+      data: {
+        id: 'v2', dimension_id: 'dim-1', code: 'NEDLAGD', name: 'Nedlagd avdelning',
+        is_active: false, start_date: null, end_date: null,
+      },
+    })
+
+    const request = createMockRequest('/api/dimensions/dim-1/values', {
+      method: 'POST',
+      body: { code: 'NEDLAGD', name: 'Nedlagd avdelning', is_active: false },
+    })
+    const response = await POST(request, params())
+    const { status, body } = await parseJsonResponse<{ data: { id: string; is_active: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.id).toBe('v2')
+    expect(body.data.is_active).toBe(false)
   })
 
   it('returns 409 with a Swedish message on a duplicate code', async () => {
