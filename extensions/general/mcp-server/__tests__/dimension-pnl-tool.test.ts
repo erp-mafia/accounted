@@ -84,14 +84,13 @@ describe('gnubok_get_dimension_pnl — execute', () => {
     mockGenerate.mockResolvedValueOnce(report as never)
 
     const result = await tool.execute(
-      { sie_dim_no: '6', period_id: 'fp-1', from_date: '2026-01-01', to_date: '2026-03-31' },
+      { sie_dim_no: '6', period_id: 'fp-1', to_date: '2026-03-31' },
       'company-1',
       'user-1',
       supabase as never,
     )
 
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', '6', {
-      fromDate: '2026-01-01',
       toDate: '2026-03-31',
     })
     expect(result).toEqual(report)
@@ -108,7 +107,6 @@ describe('gnubok_get_dimension_pnl — execute', () => {
 
     expect(supabase.from).toHaveBeenCalledWith('fiscal_periods')
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-latest', '1', {
-      fromDate: undefined,
       toDate: undefined,
     })
   })
@@ -142,7 +140,6 @@ describe('gnubok_get_dimension_pnl — execute', () => {
     await tool.execute({ sie_dim_no: 6, period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never)
 
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', '6', {
-      fromDate: undefined,
       toDate: undefined,
     })
   })

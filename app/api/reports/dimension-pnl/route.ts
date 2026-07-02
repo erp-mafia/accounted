@@ -18,7 +18,7 @@ export const GET = withRouteContext(
     if (!periodId) {
       return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
     }
-    if (!/^[1-9]\d*$/.test(dimNo)) {
+    if (!/^[1-9]\d{0,3}$/.test(dimNo)) {
       return NextResponse.json({ error: 'dim_no must be an SIE dimension number' }, { status: 400 })
     }
 
@@ -29,17 +29,21 @@ export const GET = withRouteContext(
       .eq('company_id', companyId)
       .single()
 
-    let range: { fromDate?: string; toDate?: string } = {}
-    if (period) {
-      const parsed = parseReportDateRange(searchParams, period)
-      if (!parsed.ok) {
-        return NextResponse.json({ error: parsed.error }, { status: 400 })
-      }
-      range = parsed.range
+    if (!period) {
+      return NextResponse.json({ error: 'Fiscal period not found' }, { status: 404 })
+    }
+
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
     }
 
     try {
-      const data = await generateDimensionPnl(supabase, companyId!, periodId, dimNo, range)
+      // Only toDate — the matrix is cumulative from period_start by design
+      // (closing-balance semantics; see lib/reports/dimension-pnl.ts).
+      const data = await generateDimensionPnl(supabase, companyId!, periodId, dimNo, {
+        toDate: parsed.range.toDate,
+      })
       return NextResponse.json({ data })
     } catch (err) {
       log.error('dimension pnl generation failed', err as Error, { periodId, dimNo })

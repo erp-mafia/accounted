@@ -10,7 +10,7 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import type { IncomeStatementSection } from '@/types'
-import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 
 interface FlatRow {
   section: string
@@ -146,6 +146,21 @@ export async function GET(request: Request) {
     ]
     const mapRow = (r: FlatRow) => [r.section, r.account_number, r.account_name, r.amount]
 
+    // Partial-view disclosure on every sheet — any tab opened alone must
+    // still identify the export as filtered (BFNAR 2013:2).
+    const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
+    if (disclosure) {
+      const note: FlatRow = {
+        section: disclosure,
+        account_number: '',
+        account_name: '',
+        amount: null as unknown as number,
+      }
+      for (const sheetRows of [revenueRows, expenseRows, financialRows, summaryRows]) {
+        sheetRows.unshift(note)
+      }
+    }
+
     const buffer = reportToWorkbook<FlatRow>([
       { name: 'Intäkter', columns, rows: revenueRows, mapRow },
       { name: 'Kostnader', columns, rows: expenseRows, mapRow },
@@ -154,7 +169,7 @@ export async function GET(request: Request) {
     ])
 
     const filename = xlsxFilename(
-      'resultatrakning',
+      `resultatrakning${dimensionFilterFileSuffix(dimFilter.dimensions)}`,
       companyRow?.company_name ?? '',
       effectiveEnd,
     )

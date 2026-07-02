@@ -4841,8 +4841,7 @@ export const tools: McpTool[] = [
       properties: {
         sie_dim_no: { type: 'string', description: "SIE dimension number: '1' = kostnadsställe, '6' = projekt, or a custom dim from gnubok_list_dimensions." },
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
-        from_date: { type: 'string', description: 'Optional start date (YYYY-MM-DD) within the period' },
-        to_date: { type: 'string', description: 'Optional end date (YYYY-MM-DD) within the period' },
+        to_date: { type: 'string', description: 'Optional end date (YYYY-MM-DD); the matrix is always cumulative from period start (closing-balance semantics, reconciles with resultatrapport)' },
       },
       required: ['sie_dim_no'],
     },
@@ -4935,10 +4934,9 @@ export const tools: McpTool[] = [
         periodId = periods.id
       }
 
-      const fromDate = args.from_date as string | undefined
       const toDate = args.to_date as string | undefined
 
-      return await generateDimensionPnl(supabase, companyId, periodId!, sieDimNo, { fromDate, toDate })
+      return await generateDimensionPnl(supabase, companyId, periodId!, sieDimNo, { toDate })
     },
   },
 

@@ -6,7 +6,7 @@ import { ResultatrapportPDF } from '@/lib/reports/operational-report-pdf-templat
 import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
-import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -72,10 +72,12 @@ export async function GET(request: Request) {
         report,
         company: companyRow as CompanySettings,
         generatedAt: new Date().toISOString(),
+        // Partial-view disclosure in the document header (BFNAR 2013:2).
+        filterNote: dimensionFilterDisclosure(dimFilter.dimensions) ?? undefined,
       })
     )
 
-    const filename = `resultatrapport-${report.period.start}--${report.period.end}.pdf`
+    const filename = `resultatrapport${dimensionFilterFileSuffix(dimFilter.dimensions)}-${report.period.start}--${report.period.end}.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {

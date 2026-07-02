@@ -252,9 +252,11 @@ interface CommonHeaderProps {
   title: string
   company: CompanySettings
   period: { start: string; end: string }
+  /** Partial-view disclosure (dimension-filtered exports, BFNAR 2013:2). */
+  filterNote?: string
 }
 
-function HeaderBlock({ title, company, period }: CommonHeaderProps) {
+function HeaderBlock({ title, company, period, filterNote }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
     ? `${formatDateSv(period.start)} – ${formatDateSv(period.end)}`
@@ -268,6 +270,9 @@ function HeaderBlock({ title, company, period }: CommonHeaderProps) {
         )}
         {periodLabel && (
           <Text style={styles.period}>Period: {periodLabel}</Text>
+        )}
+        {filterNote && (
+          <Text style={styles.period}>{filterNote}</Text>
         )}
       </View>
       <View style={styles.companyInfo}>
@@ -307,15 +312,17 @@ interface ResultatrapportPDFProps {
   report: ResultatrapportReport
   company: CompanySettings
   generatedAt: string
+  /** Partial-view disclosure line (dimension-filtered exports). */
+  filterNote?: string
 }
 
-export function ResultatrapportPDF({ report, company, generatedAt }: ResultatrapportPDFProps) {
+export function ResultatrapportPDF({ report, company, generatedAt, filterNote }: ResultatrapportPDFProps) {
   const hasPrior = report.prior_period !== null
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <HeaderBlock title="Resultatrapport" company={company} period={report.period} />
+        <HeaderBlock title="Resultatrapport" company={company} period={report.period} filterNote={filterNote} />
 
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>

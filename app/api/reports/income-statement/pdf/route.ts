@@ -6,7 +6,7 @@ import { FinancialStatementPDF, type FinancialStatementGroup, type FinancialStat
 import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
-import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
 // into three named blocks with subtotals:
@@ -205,7 +205,10 @@ export async function GET(request: Request) {
 
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
-        title: 'Resultaträkning',
+        // Partial-view disclosure in the document title (BFNAR 2013:2).
+        title: dimensionFilterDisclosure(dimFilter.dimensions)
+          ? `Resultaträkning — ${dimensionFilterDisclosure(dimFilter.dimensions)}`
+          : 'Resultaträkning',
         groups,
         summary,
         period: report.period,
@@ -216,7 +219,7 @@ export async function GET(request: Request) {
 
     // "-utkast" suffix keeps the draft status visible even after the file
     // leaves the browser — complements the in-document ÅRL 2:7 disclaimer.
-    const filename = `resultatrakning-${report.period.start}--${report.period.end}-utkast.pdf`
+    const filename = `resultatrakning${dimensionFilterFileSuffix(dimFilter.dimensions)}-${report.period.start}--${report.period.end}-utkast.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {

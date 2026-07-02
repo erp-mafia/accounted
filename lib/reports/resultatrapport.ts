@@ -64,9 +64,13 @@ export async function generateResultatrapport(
   // compared against a full prior year would be misleading; until we ship a
   // proper "same window, prior year" comparison the cleanest move is to
   // drop the prior column entirely when the user narrows the range.
+  // Same rule for a dimension filter: project codes are time-limited under
+  // K2/K3 (registry start/end dates), so "this code last year" may be a
+  // different project entirely — drop the column rather than compare
+  // unrelated activity (#862 review).
   let priorRows: TrialBalanceRow[] = []
   let priorPeriodInfo: { start: string; end: string } | null = null
-  const isFullPeriod = !options?.fromDate && !options?.toDate
+  const isFullPeriod = !options?.fromDate && !options?.toDate && !options?.dimensions
   if (isFullPeriod) {
     // Prefer the explicit continuity chain; fall back to the period that ends
     // immediately before this one. The fallback keeps the comparison working
@@ -93,14 +97,7 @@ export async function generateResultatrapport(
         .single()
 
       if (prior) {
-        // Same dimension scope for the comparison column — KS/projekt codes
-        // are stable across years, so "this project last year" is meaningful.
-        // Unfiltered calls keep the bare 3-arg form (back-compat, incl. mocks).
-        const priorTb = options?.dimensions
-          ? await generateTrialBalance(supabase, companyId, priorPeriodId, {
-              dimensions: options.dimensions,
-            })
-          : await generateTrialBalance(supabase, companyId, priorPeriodId)
+        const priorTb = await generateTrialBalance(supabase, companyId, priorPeriodId)
         priorRows = filterPnl(priorTb.rows)
         priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
       }

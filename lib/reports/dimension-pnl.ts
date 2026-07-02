@@ -40,13 +40,17 @@ export async function generateDimensionPnl(
   companyId: string,
   fiscalPeriodId: string,
   sieDimNo: string,
-  options?: { fromDate?: string; toDate?: string }
+  // No fromDate: the matrix uses closing-balance semantics (cumulative from
+  // period_start) to reconcile with resultatrapport, so a lower bound cannot
+  // be honoured — accepting one and labelling the report with it would be a
+  // lie (#862 review). toDate caps the window on both sides identically.
+  options?: { toDate?: string }
 ): Promise<DimensionPnlReport> {
   // The dim number is interpolated into a PostgREST jsonb path expression
   // below (`dimensions->>N`). Both entry points (route, MCP tool) validate,
   // but the generator is exported — guard here too so no future caller can
   // smuggle filter syntax through.
-  if (!/^[1-9]\d*$/.test(sieDimNo)) {
+  if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
     throw new Error('sieDimNo must be a positive SIE dimension number')
   }
 
@@ -63,7 +67,6 @@ export async function generateDimensionPnl(
 
   // ── Totalt column: identical inputs to resultatrapport ─────────
   const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    fromDate: options?.fromDate,
     toDate: options?.toDate,
   })
   const pnlRows = filterPnl(tb.rows)
@@ -94,9 +97,8 @@ export async function generateDimensionPnl(
 
   // ── Tagged lines: one pass over lines carrying this dimension ──
   // Mirrors trial-balance closing semantics: the fiscal_period_id join scopes
-  // to the period, toDate caps the window, and fromDate is deliberately NOT
-  // applied — closing balances include roll-forward from period_start, so the
-  // buckets must too or they would not sum to the Totalt column.
+  // to the period and toDate caps the window — both sides of the matrix
+  // cover period_start..toDate, so the buckets sum to the Totalt column.
   const taggedLines = await fetchAllRows<{
     id: string
     account_number: string
@@ -220,8 +222,10 @@ export async function generateDimensionPnl(
     groups,
     net_per_column: netPerColumn,
     net_total: netTotal,
+    // The label reflects actual coverage: always cumulative from
+    // period_start (closing-balance semantics), capped at toDate.
     period: {
-      start: options?.fromDate ?? period.period_start,
+      start: period.period_start,
       end: options?.toDate ?? period.period_end,
     },
   }

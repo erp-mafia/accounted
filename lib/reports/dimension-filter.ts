@@ -1,4 +1,5 @@
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { slugifyCompanyName } from './xlsx-export'
 
 /**
  * Parse the report-route dimension filter pair (?dim_no=6&dim_code=P001)
@@ -36,4 +37,33 @@ export function parseDimensionFilterParams(searchParams: URLSearchParams):
     return { ok: false, error: 'Invalid dimension filter' }
   }
   return { ok: true, dimensions: parsed.data }
+}
+
+/**
+ * Filename suffix for a dimension-filtered export ('' when unfiltered).
+ * A filtered file must not share its name with the authoritative report —
+ * BFL 5 kap / BFNAR 2013:2: what a report covers must be identifiable.
+ * Example: { "6": "P001" } → "-dim6-p001".
+ */
+export function dimensionFilterFileSuffix(dimensions?: Record<string, string>): string {
+  if (!dimensions || Object.keys(dimensions).length === 0) return ''
+  return Object.entries(dimensions)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([dimNo, code]) => {
+      const slug = slugifyCompanyName(code)
+      return slug === 'foretag' ? `-dim${dimNo}` : `-dim${dimNo}-${slug}`
+    })
+    .join('')
+}
+
+/**
+ * Human-readable partial-view disclosure for inside exported files, or null
+ * when unfiltered. Swedish only — report surface.
+ */
+export function dimensionFilterDisclosure(dimensions?: Record<string, string>): string | null {
+  if (!dimensions || Object.keys(dimensions).length === 0) return null
+  const parts = Object.entries(dimensions)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([dimNo, code]) => `dimension ${dimNo}: ${code}`)
+  return `Filtrerad (${parts.join(', ')}) — ej fullständig rapport`
 }

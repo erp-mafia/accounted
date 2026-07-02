@@ -97,13 +97,26 @@ describe('dimension filter — statutory exclusion', () => {
 
   it('statutory generators do not receive dimensions through generateTrialBalance', () => {
     // They may call generateTrialBalance, but never with a dimensions option.
+    // The scan is paren-aware (walks to the call's closing paren), not a
+    // fixed character window — a long options object cannot slip the key
+    // past the guard (#862 review).
     for (const rel of STATUTORY_GENERATORS) {
       const src = readFileSync(join(ROOT, rel), 'utf8')
-      if (!src.includes('generateTrialBalance')) continue
-      const callSites = src.split('generateTrialBalance(').slice(1)
-      for (const site of callSites) {
-        // Inspect the argument window of each call.
-        expect(site.slice(0, 300)).not.toContain('dimensions')
+      let idx = src.indexOf('generateTrialBalance(')
+      while (idx !== -1) {
+        const argsStart = idx + 'generateTrialBalance('.length
+        let depth = 1
+        let end = argsStart
+        while (end < src.length && depth > 0) {
+          if (src[end] === '(') depth++
+          else if (src[end] === ')') depth--
+          end++
+        }
+        const argList = src.slice(argsStart, end)
+        expect(argList, `${rel} passes dimensions to generateTrialBalance`).not.toContain(
+          'dimensions',
+        )
+        idx = src.indexOf('generateTrialBalance(', end)
       }
     }
   })

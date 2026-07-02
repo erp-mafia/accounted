@@ -33,7 +33,7 @@ export const GET = withRouteContext(
     if (!periodId) {
       return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
     }
-    if (!/^[1-9]\d*$/.test(dimNo)) {
+    if (!/^[1-9]\d{0,3}$/.test(dimNo)) {
       return NextResponse.json({ error: 'dim_no must be an SIE dimension number' }, { status: 400 })
     }
 
@@ -51,22 +51,23 @@ export const GET = withRouteContext(
         .single(),
     ])
 
-    let range: { fromDate?: string; toDate?: string } = {}
-    if (period) {
-      const parsed = parseReportDateRange(searchParams, period)
-      if (!parsed.ok) {
-        return NextResponse.json({ error: parsed.error }, { status: 400 })
-      }
-      range = parsed.range
+    if (!period) {
+      return NextResponse.json({ error: 'Fiscal period not found' }, { status: 404 })
+    }
+
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
     }
 
     try {
+      // Only toDate — the matrix is cumulative from period_start by design.
       const report: DimensionPnlReport = await generateDimensionPnl(
         supabase,
         companyId!,
         periodId,
         dimNo,
-        range,
+        { toDate: parsed.range.toDate },
       )
 
       const valueHeaders = report.columns.map((c) =>

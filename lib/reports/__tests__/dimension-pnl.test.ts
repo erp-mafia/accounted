@@ -202,15 +202,44 @@ describe('generateDimensionPnl', () => {
     }
     mockTrialBalance.mockResolvedValue(tb([]))
 
-    await generateDimensionPnl(supabase, 'company-1', 'period-1', '6', {
-      fromDate: '2026-06-01',
+    const report = await generateDimensionPnl(supabase, 'company-1', 'period-1', '6', {
       toDate: '2026-06-30',
     })
 
     expect(mockTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', 'period-1', {
-      fromDate: '2026-06-01',
       toDate: '2026-06-30',
     })
+    // The label reflects actual coverage: cumulative from period_start.
+    expect(report.period).toEqual({ start: '2026-01-01', end: '2026-06-30' })
+  })
+
+  it('handles fully untagged periods — one residual column carrying the whole result', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      dimensions: [{ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }],
+      dimension_values: [{ data: [], error: null }],
+      journal_entry_lines: [{ data: [], error: null }],
+    }
+    mockTrialBalance.mockResolvedValue(
+      tb([
+        tbRow({ account_number: '3001', account_class: 3, closing_credit: 1000 }),
+        tbRow({ account_number: '4010', account_name: 'Inköp', account_class: 4, closing_debit: 250 }),
+      ]),
+    )
+
+    const report = await generateDimensionPnl(supabase, 'company-1', 'period-1', '6')
+
+    expect(report.columns).toEqual([{ code: null, name: null }])
+    expect(report.groups.find((g) => g.class === 3)?.rows[0].values).toEqual([1000])
+    expect(report.groups.find((g) => g.class === 4)?.rows[0].values).toEqual([-250])
+    expect(report.net_per_column).toEqual([750])
+    expect(report.net_total).toBe(750)
+  })
+
+  it('rejects a non-numeric dimension number (PostgREST path guard)', async () => {
+    await expect(
+      generateDimensionPnl(supabase, 'company-1', 'period-1', '6,is.null'),
+    ).rejects.toThrow('positive SIE dimension number')
   })
 
   it('throws when the fiscal period does not exist', async () => {

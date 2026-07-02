@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { requireCompanyId } from '@/lib/company/context'
-import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import {
   reportToWorkbook,
   textColumn,
@@ -107,6 +107,24 @@ export async function GET(request: Request) {
       })
     }
 
+    // Partial-view disclosure: a filtered huvudbok starts balance accounts
+    // at zero IB (opening balances cannot be dimension-scoped) — the export
+    // must say so or a project-filtered ledger reads as a full one.
+    const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
+    if (disclosure) {
+      rows.unshift({
+        account_number: disclosure,
+        account_name: '',
+        date: null as unknown as Date,
+        voucher: '',
+        description: 'Ingående balanser ingår inte i filtrerad vy',
+        source_type: '',
+        debit: null as unknown as number,
+        credit: null as unknown as number,
+        balance: null as unknown as number,
+      })
+    }
+
     const buffer = reportToWorkbook<FlatRow>([
       {
         name: 'Huvudbok',
@@ -136,7 +154,7 @@ export async function GET(request: Request) {
       },
     ])
 
-    const filename = xlsxFilename('huvudbok', companyRow?.company_name ?? '', report.period.end)
+    const filename = xlsxFilename(`huvudbok${dimensionFilterFileSuffix(dimFilter.dimensions)}`, companyRow?.company_name ?? '', report.period.end)
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
