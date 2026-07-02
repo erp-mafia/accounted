@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { ReportLibrary } from '@/components/reports/ReportLibrary'
 import { RecentReportsShelf } from '@/components/reports/RecentReportsShelf'
@@ -25,6 +26,7 @@ export default function ReportsPage() {
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [isLoadingInit, setIsLoadingInit] = useState(true)
   const { company } = useCompany()
+  const { settings } = useCompanySettings()
   const t = useTranslations('reports')
   const { recents, pushRecent } = useRecentReports(company?.id)
 
@@ -85,6 +87,7 @@ export default function ReportsPage() {
           />
           <ReportLibrary
             entityType={company?.entity_type}
+            dimensionsEnabled={settings?.dimensions_enabled === true}
             onOpen={openReport}
           />
         </div>

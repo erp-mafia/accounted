@@ -71,9 +71,16 @@ describe('tools/list payload size guard', () => {
     //     agent-briefing dimensions block. Descriptions were trimmed first
     //     (~200 tokens recovered); the remainder is schema structure agents
     //     depend on for resolve-don't-select, not trimmable prose.
+    //   * 42K → 43K with dimensions PR4 reports: gnubok_get_dimension_pnl (the
+    //     value-as-column matrix outputSchema is the wire contract agents read
+    //     the report through), the shared `dimensions` filter arg + echo props
+    //     on trial balance / income statement / general ledger, and
+    //     group_by/group_by_dimension + totals_scope + groups on
+    //     gnubok_query_journal. Descriptions trimmed first (~100 tokens
+    //     recovered); the ~55-token remainder is schema structure.
     // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(42_000)
+    expect(approxTokens).toBeLessThan(43_000)
   })
 })

@@ -20,14 +20,16 @@ import type { EntityType } from '@/types'
 export function ReportLibrary({
   entityType,
   hasEmployees,
+  dimensionsEnabled,
   onOpen,
 }: {
   entityType?: EntityType
   hasEmployees?: boolean
+  dimensionsEnabled?: boolean
   onOpen: (slug: string) => void
 }) {
   const t = useTranslations('reports')
-  const sections = getLibrarySections(entityType, hasEmployees)
+  const sections = getLibrarySections(entityType, hasEmployees, dimensionsEnabled)
 
   return (
     <div className="space-y-8">

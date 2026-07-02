@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { generateResultatrapport } from '@/lib/reports/resultatrapport'
 import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -37,8 +38,16 @@ export async function GET(request: Request) {
     range = parsed.range
   }
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const result = await generateResultatrapport(supabase, companyId, periodId, range)
+    const result = await generateResultatrapport(supabase, companyId, periodId, {
+      ...range,
+      dimensions: dimFilter.dimensions,
+    })
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(

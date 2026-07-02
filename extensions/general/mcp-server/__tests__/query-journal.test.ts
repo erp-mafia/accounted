@@ -1,9 +1,12 @@
 /**
  * Unit tests for gnubok_query_journal.
  *
- * Verifies tool registration and the post-fetch amount filter + totals
- * computation. The supabase query-builder chain is exercised by the live
- * MCP smoke test; here we just check the result-shape pipeline.
+ * Verifies tool registration, the post-fetch amount filter, the full-match
+ * aggregate pass (totals/groups over ALL matching lines via fetchAllRows,
+ * totals_scope='full_match'), and the slice-scoped free-text path
+ * (totals_scope='returned_slice'). The supabase query-builder chain is
+ * exercised by the live MCP smoke test; here we check the result-shape
+ * pipeline.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { tools } from '../server'
@@ -19,10 +22,12 @@ describe('gnubok_query_journal — registration', () => {
 
   it('declares the expected output fields', () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const schema = tool.outputSchema as { required?: string[] }
+    const schema = tool.outputSchema as { required?: string[]; properties?: Record<string, unknown> }
     expect(schema.required).toContain('lines')
     expect(schema.required).toContain('totals')
     expect(schema.required).toContain('total_lines')
+    expect(schema.required).toContain('totals_scope')
+    expect(schema.properties?.groups).toBeDefined()
   })
 
   it('is mapped to reports:read scope', () => {
@@ -33,7 +38,9 @@ describe('gnubok_query_journal — registration', () => {
 /**
  * Build a minimal supabase mock that returns a fixed line set when the chain
  * is awaited. Uses a chainable proxy whose every method returns itself, with
- * the terminal awaitable resolving to { data, error, count }.
+ * the terminal awaitable resolving to { data, error, count }. Every .from()
+ * call sees the SAME rows, so on the non-text path both the display query and
+ * the fetchAllRows full-match aggregate pass read one identical match set.
  */
 function makeChainMock(lines: unknown[], count: number) {
   const result = { data: lines, error: null, count }
@@ -183,9 +190,11 @@ describe('gnubok_query_journal — execute', () => {
     )) as {
       lines: { line_id: string }[]
       totals: { debit: number; credit: number; net: number }
+      totals_scope: string
       truncated: boolean
       total_lines: number
       returned_lines: number
+      db_matched_pre_amount_filter: number | null
     }
 
     // amount_min: 1000 should filter out the 50-line
@@ -194,6 +203,10 @@ describe('gnubok_query_journal — execute', () => {
     expect(result.totals.debit).toBe(5000)
     expect(result.totals.credit).toBe(0)
     expect(result.totals.net).toBe(5000)
+    // Non-text path: totals come from the full-match aggregate pass.
+    expect(result.totals_scope).toBe('full_match')
+    expect(result.total_lines).toBe(1)
+    expect(result.db_matched_pre_amount_filter).toBe(2)
   })
 
   it('caps accounts list at 50', async () => {
@@ -206,33 +219,125 @@ describe('gnubok_query_journal — execute', () => {
     ).rejects.toThrow(/capped at 50/)
   })
 
-  it('marks truncated=true when count exceeds returned', async () => {
+  it('marks truncated=true and computes totals over the FULL match set when the slice is capped', async () => {
+    // Regression for the slice-totals bug: the display query is capped at
+    // `limit`, but totals/total_lines must come from the fetchAllRows
+    // aggregate pass over ALL matching lines (totals_scope='full_match').
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const lines = [
-      {
-        id: 'l1', account_number: '1930',
-        debit_amount: 100, credit_amount: 0,
-        currency: 'SEK', line_description: null, project: null, cost_center: null, sort_order: 0,
-        journal_entries: {
-          id: 'e1', voucher_number: 1, voucher_series: 'A',
-          entry_date: '2026-01-01', description: 'Inbetalning',
-          source_type: 'bank_transaction', status: 'posted',
-        },
-      },
+    const displaySlice = [makeLineRow({ id: 'l1', account_number: '1930', debit_amount: 100 })]
+    const fullMatchSet = [
+      makeLineRow({ id: 'l1', account_number: '1930', debit_amount: 100 }),
+      makeLineRow({ id: 'l2', account_number: '1930', debit_amount: 200 }),
+      makeLineRow({ id: 'l3', account_number: '1930', debit_amount: 300 }),
     ]
-    // count=999 simulates "many more matched than were returned"
-    const supabase = makeChainMock(lines, 999)
+
+    // .from() call order: display query first, then the aggregate pass
+    // (single page — 3 rows < PAGE_SIZE ends the fetchAllRows loop).
+    const { supabase, callCount } = makeQueueMock([
+      { data: displaySlice, count: 1 },
+      { data: fullMatchSet, count: 3 },
+    ])
 
     const result = (await tool.execute(
       { accounts: ['1930'], limit: 1 },
       'company-1',
       'user-1',
       supabase,
-    )) as { truncated: boolean; total_lines: number; returned_lines: number }
+    )) as {
+      truncated: boolean
+      total_lines: number
+      returned_lines: number
+      totals: { debit: number; credit: number; net: number }
+      totals_scope: string
+    }
 
+    expect(callCount()).toBe(2)
     expect(result.truncated).toBe(true)
-    expect(result.total_lines).toBe(999)
+    expect(result.total_lines).toBe(3)
     expect(result.returned_lines).toBe(1)
+    expect(result.totals).toEqual({ debit: 600, credit: 0, net: 600 })
+    expect(result.totals_scope).toBe('full_match')
+  })
+
+  it('rejects group_by + group_by_dimension together', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const supabase = makeChainMock([], 0)
+
+    await expect(
+      tool.execute(
+        { group_by: 'account_number', group_by_dimension: '6' },
+        'company-1',
+        'user-1',
+        supabase,
+      ),
+    ).rejects.toThrow(/either group_by or group_by_dimension/)
+  })
+
+  it('group_by buckets the full match set and sorts by |net| descending', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      makeLineRow({ id: 'l1', account_number: '4010', debit_amount: 100 }),
+      makeLineRow({ id: 'l2', account_number: '4010', debit_amount: 50 }),
+      makeLineRow({ id: 'l3', account_number: '5010', debit_amount: 0, credit_amount: 30 }),
+    ]
+    // makeChainMock feeds the SAME rows to display + aggregate passes.
+    const supabase = makeChainMock(rows, 3)
+
+    const result = (await tool.execute(
+      { group_by: 'account_number', limit: 100 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as {
+      groups: Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
+      totals_scope: string
+      applied_filters: { group_by: string | null; group_by_dimension: string | null }
+    }
+
+    expect(result.totals_scope).toBe('full_match')
+    expect(result.groups).toEqual([
+      { key: '4010', debit: 150, credit: 0, net: 150, line_count: 2 },
+      { key: '5010', debit: 0, credit: 30, net: -30, line_count: 1 },
+    ])
+    expect(result.applied_filters.group_by).toBe('account_number')
+    expect(result.applied_filters.group_by_dimension).toBeNull()
+  })
+
+  it('group_by_dimension buckets by the dimensions jsonb with an untagged fallback', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      { ...makeLineRow({ id: 'l1', account_number: '4010', debit_amount: 100 }), dimensions: { '6': 'P001' } },
+      { ...makeLineRow({ id: 'l2', account_number: '4011', debit_amount: 50 }), dimensions: { '6': 'P001', '1': 'KS01' } },
+      { ...makeLineRow({ id: 'l3', account_number: '5010', debit_amount: 0, credit_amount: 30 }), dimensions: null },
+    ]
+    const supabase = makeChainMock(rows, 3)
+
+    const result = (await tool.execute(
+      { group_by_dimension: '6', limit: 100 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as {
+      groups: Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
+      totals_scope: string
+      applied_filters: { group_by: string | null; group_by_dimension: string | null }
+    }
+
+    expect(result.totals_scope).toBe('full_match')
+    expect(result.groups).toEqual([
+      { key: 'P001', debit: 150, credit: 0, net: 150, line_count: 2 },
+      { key: '(utan dimension)', debit: 0, credit: 30, net: -30, line_count: 1 },
+    ])
+    expect(result.applied_filters.group_by_dimension).toBe('6')
+  })
+
+  it('rejects a non-numeric group_by_dimension', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const supabase = makeChainMock([], 0)
+
+    await expect(
+      tool.execute({ group_by_dimension: 'projekt' }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/positive SIE dimension number/)
   })
 })
 
@@ -264,12 +369,14 @@ describe('gnubok_query_journal — free-text search', () => {
       'company-1',
       'user-1',
       supabase,
-    )) as { lines: Array<{ line_id: string }>; returned_lines: number }
+    )) as { lines: Array<{ line_id: string }>; returned_lines: number; totals_scope: string }
 
     expect(callCount()).toBe(2)
     expect(result.returned_lines).toBe(2)
     const ids = result.lines.map((l) => l.line_id).sort()
     expect(ids).toEqual(['L1', 'L2'])
+    // Free-text path never runs the full aggregate pass — the output says so.
+    expect(result.totals_scope).toBe('returned_slice')
   })
 
   it('deduplicates rows returned by both query legs', async () => {

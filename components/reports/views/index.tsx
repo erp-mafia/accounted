@@ -29,12 +29,14 @@ import type {
 } from '@/lib/reports/source-lines'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
+import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import type {
   TrialBalanceRow,
   IncomeStatementReport,
   BalanceSheetReport,
   ResultatrapportReport,
   BalansrapportReport,
+  DimensionPnlReport,
   VatDeclaration,
   VatPeriodType,
 } from '@/types'
@@ -43,10 +45,18 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function reportQuery(periodId: string, range?: DateRangeValue): string {
+function reportQuery(
+  periodId: string,
+  range?: DateRangeValue,
+  dimensionFilter?: DimensionFilterValue | null,
+): string {
   const params = new URLSearchParams({ period_id: periodId })
   if (range?.fromDate) params.set('from_date', range.fromDate)
   if (range?.toDate) params.set('to_date', range.toDate)
+  if (dimensionFilter) {
+    params.set('dim_no', dimensionFilter.dimNo)
+    params.set('dim_code', dimensionFilter.code)
+  }
   return params.toString()
 }
 
@@ -369,13 +379,13 @@ function TrialBalanceDetailedRow({
     </>
   )
 }
-export function IncomeStatementView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+export function IncomeStatementView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
   const [data, setData] = useState<IncomeStatementReport | null>(null)
   const [monthlyData, setMonthlyData] = useState<MonthlyDataPoint[]>([])
   const [monthlyLoading, setMonthlyLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const reportQs = reportQuery(periodId, dateRange)
+  const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
 
   useEffect(() => {
     setLoading(true)
@@ -399,7 +409,9 @@ export function IncomeStatementView({ periodId, dateRange, onNavigateToAccount }
 
     // Monthly breakdown is full-period by design (it IS the per-month view),
     // so the date range only affects the headline numbers above the chart.
-    fetch(`/api/reports/monthly-breakdown?period_id=${periodId}`)
+    // The dimension filter DOES apply — a dimension-scoped view must not
+    // silently chart company-wide months.
+    fetch(`/api/reports/monthly-breakdown?${reportQuery(periodId, undefined, dimensionFilter)}`)
       .then((res) => res.json())
       .then((result) => {
         if (result.data?.months) {
@@ -648,11 +660,11 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
   )
 }
 
-export function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+export function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
   const [data, setData] = useState<ResultatrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const reportQs = reportQuery(periodId, dateRange)
+  const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
 
   useEffect(() => {
     setLoading(true)
@@ -1775,6 +1787,7 @@ interface GeneralLedgerData {
       debit: number
       credit: number
       balance: number
+      dimensions?: Record<string, string>
     }[]
     closing_balance: number
     total_debit: number
@@ -1783,7 +1796,7 @@ interface GeneralLedgerData {
   period: { start: string; end: string }
 }
 
-export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId: string; initialAccountFilter: string | null }) {
+export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null }) {
   const [data, setData] = useState<GeneralLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1799,6 +1812,10 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
       const params = new URLSearchParams({ period_id: periodId })
       if (from) params.set('account_from', from)
       if (to) params.set('account_to', to)
+      if (dimensionFilter) {
+        params.set('dim_no', dimensionFilter.dimNo)
+        params.set('dim_code', dimensionFilter.code)
+      }
       const res = await fetch(`/api/reports/general-ledger?${params}`)
       const result = await res.json()
       if (result.error) {
@@ -1811,7 +1828,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
     } finally {
       setLoading(false)
     }
-  }, [periodId, accountFrom, accountTo])
+  }, [periodId, accountFrom, accountTo, dimensionFilter])
 
   // When initialAccountFilter changes (drill-down from another report), apply it
   useEffect(() => {
@@ -1822,7 +1839,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
     } else {
       fetchData()
     }
-  }, [periodId, initialAccountFilter])
+  }, [periodId, initialAccountFilter, dimensionFilter])
 
   if (loading) {
     return (
@@ -1857,7 +1874,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?period_id=${periodId}` }]} />
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, undefined, dimensionFilter)}` }]} />
       {/* Account range filter */}
       <Card>
         <CardContent className="pt-6">
@@ -1931,7 +1948,17 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
                       </Link>
                     </td>
                     <td className="py-1.5">{formatDate(line.date)}</td>
-                    <td className="py-1.5 truncate max-w-[200px]">{line.description}</td>
+                    <td className="py-1.5 max-w-[240px]">
+                      <span className="truncate block">{line.description}</span>
+                      {line.dimensions && Object.keys(line.dimensions).length > 0 && (
+                        <span className="text-[11px] text-muted-foreground tabular-nums">
+                          {Object.entries(line.dimensions)
+                            .sort(([a], [b]) => Number(a) - Number(b))
+                            .map(([, code]) => code)
+                            .join(' · ')}
+                        </span>
+                      )}
+                    </td>
                     <td className="py-1.5 text-right tabular-nums">
                       {line.debit > 0 ? formatAmount(line.debit) : ''}
                     </td>
@@ -2502,6 +2529,217 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+// --- Resultat per projekt/kostnadsställe (dimension P&L matrix) ---
+
+export function DimensionPnlView({ periodId, dateRange }: { periodId: string; dateRange: DateRangeValue }) {
+  // Loading is DERIVED (result key ≠ current query string) instead of a
+  // setState at effect start — keeps react-hooks/set-state-in-effect clean
+  // and is race-safe when the pivot/date changes mid-flight.
+  const [result, setResult] = useState<{
+    qs: string
+    data: DimensionPnlReport | null
+    error: string | null
+  } | null>(null)
+  const [dims, setDims] = useState<{ sie_dim_no: number; name: string }[]>([])
+  const [dimNo, setDimNo] = useState('6')
+  const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}`
+
+  // Registered dimensions for the pivot picker (best-effort; the report
+  // defaults to projekt if the registry read fails).
+  useEffect(() => {
+    fetch('/api/dimensions')
+      .then((res) => res.json())
+      .then((payload) => {
+        if (Array.isArray(payload.data)) {
+          setDims(payload.data.map((d: { sie_dim_no: number; name: string }) => ({ sie_dim_no: d.sie_dim_no, name: d.name })))
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/reports/dimension-pnl?${reportQs}`)
+      .then((res) => res.json())
+      .then((payload) => {
+        if (cancelled) return
+        if (payload.error) {
+          setResult({
+            qs: reportQs,
+            data: null,
+            error: typeof payload.error === 'string' ? payload.error : 'Kunde inte hämta rapporten',
+          })
+        } else {
+          setResult({ qs: reportQs, data: payload.data, error: null })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ qs: reportQs, data: null, error: 'Kunde inte hämta rapporten' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reportQs])
+
+  const loading = result?.qs !== reportQs
+  const error = loading ? null : result?.error ?? null
+  const data = loading ? null : result?.data ?? null
+
+  const pivotPicker = dims.length > 1 && (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {dims.map((d) => {
+        const active = String(d.sie_dim_no) === dimNo
+        return (
+          <button
+            key={d.sie_dim_no}
+            type="button"
+            onClick={() => setDimNo(String(d.sie_dim_no))}
+            className={
+              active
+                ? 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-secondary border-border text-foreground'
+                : 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+            }
+          >
+            {d.name}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        {pivotPicker}
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            Laddar rapport...
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-4">
+        {pivotPicker}
+        <Card>
+          <CardContent className="p-8 text-center text-destructive">
+            <AlertCircle className="h-6 w-6 mx-auto mb-2" />
+            {error}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (!data || data.groups.length === 0) {
+    return (
+      <div className="space-y-4">
+        {pivotPicker}
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            Inga taggade intäkter eller kostnader i denna period.
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  const columnLabel = (c: DimensionPnlReport['columns'][number]) =>
+    c.code === null ? '(Utan dimension)' : c.code
+
+  const colCount = 2 + data.columns.length + 1
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {pivotPicker || <span />}
+        <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/dimension-pnl/xlsx?${reportQs}` }]} />
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
+                  <th className="text-left font-medium px-4 py-2">Kontonamn</th>
+                  {data.columns.map((c, i) => (
+                    <th key={i} className="text-right font-medium px-4 py-2 w-32 tabular-nums" title={c.name ?? undefined}>
+                      {columnLabel(c)}
+                    </th>
+                  ))}
+                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Totalt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.groups.map((group) => (
+                  <React.Fragment key={group.class}>
+                    <tr className="bg-muted/30">
+                      <td colSpan={colCount} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                        {group.class_label}
+                      </td>
+                    </tr>
+                    {group.rows.map((row) => (
+                      <tr key={row.account_number} className="border-b last:border-0">
+                        <td className="px-4 py-1.5">
+                          <AccountNumber number={row.account_number} name={row.account_name} />
+                        </td>
+                        <td className="px-4 py-1.5">{row.account_name}</td>
+                        {row.values.map((v, i) => (
+                          <td key={i} className="px-4 py-1.5 text-right tabular-nums">
+                            {Math.abs(v) >= 0.005 ? formatAmount(v) : ''}
+                          </td>
+                        ))}
+                        <td className="px-4 py-1.5 text-right tabular-nums font-medium">{formatAmount(row.total)}</td>
+                      </tr>
+                    ))}
+                    <tr className="border-b font-medium">
+                      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
+                        Summa
+                      </td>
+                      {group.subtotals.map((v, i) => (
+                        <td key={i} className="px-4 py-1.5 text-right tabular-nums">{formatAmount(v)}</td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_total)}</td>
+                    </tr>
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2">
+        <CardContent className="py-4">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <tbody>
+                <tr>
+                  <td className="px-4 font-bold text-lg">Beräknat resultat</td>
+                  <td className="px-4" />
+                  {data.net_per_column.map((v, i) => (
+                    <td key={i} className={`px-4 text-right tabular-nums font-semibold w-32 ${v >= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {formatAmount(v)}
+                    </td>
+                  ))}
+                  <td className={`px-4 text-right tabular-nums font-bold text-lg w-32 ${data.net_total >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {formatAmount(data.net_total)} kr
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

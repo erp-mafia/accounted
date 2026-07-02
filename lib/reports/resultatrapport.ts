@@ -32,7 +32,12 @@ export async function generateResultatrapport(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options?: { fromDate?: string; toDate?: string }
+  options?: {
+    fromDate?: string
+    toDate?: string
+    /** SIE dim → code filter ({"6":"P001"}). P&L-safe: see trial-balance.ts. */
+    dimensions?: Record<string, string>
+  }
 ): Promise<ResultatrapportReport> {
   const { data: period } = await supabase
     .from('fiscal_periods')
@@ -51,6 +56,7 @@ export async function generateResultatrapport(
   const currentTb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     fromDate: options?.fromDate,
     toDate: options?.toDate,
+    dimensions: options?.dimensions,
   })
   const currentRows = filterPnl(currentTb.rows)
 
@@ -87,7 +93,14 @@ export async function generateResultatrapport(
         .single()
 
       if (prior) {
-        const priorTb = await generateTrialBalance(supabase, companyId, priorPeriodId)
+        // Same dimension scope for the comparison column — KS/projekt codes
+        // are stable across years, so "this project last year" is meaningful.
+        // Unfiltered calls keep the bare 3-arg form (back-compat, incl. mocks).
+        const priorTb = options?.dimensions
+          ? await generateTrialBalance(supabase, companyId, priorPeriodId, {
+              dimensions: options.dimensions,
+            })
+          : await generateTrialBalance(supabase, companyId, priorPeriodId)
         priorRows = filterPnl(priorTb.rows)
         priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
       }

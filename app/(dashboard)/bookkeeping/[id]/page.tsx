@@ -272,9 +272,12 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // Include current entry in the chain for the visualization
   const fullChain = [entry, ...chain]
 
-  // SIE dimension badge prefixes — statutory Swedish abbreviations
-  // (kostnadsställe/projekt); stays Swedish per .claude/rules/i18n.md.
-  const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS', '6': 'PR' }
+  // SIE dimension badge prefixes. 'KS' is the market-standard abbreviation
+  // for kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma
+  // show the dimension name, and 'PR' collides with prisnivå in some BAS
+  // setups — flagged in the #859 compliance review), so dim 6 falls through
+  // to the registry name below. Stays Swedish per .claude/rules/i18n.md.
+  const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS' }
 
   // Display-only dimension badges for a line (e.g. 'KS: Butik', 'PR: P001').
   // Names resolve through the registry when loaded; raw codes otherwise.

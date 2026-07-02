@@ -1,23 +1,26 @@
 import { NextResponse } from 'next/server'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { generateDimensionPnl } from '@/lib/reports/dimension-pnl'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
-import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
+// Resultat per projekt/kostnadsställe — value-as-column P&L matrix over one
+// SIE dimension. ?dim_no picks the dimension (default 6, projekt).
 export const GET = withRouteContext(
-  'report.income_statement',
+  'report.dimension_pnl',
   async (request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
     const { searchParams } = new URL(request.url)
     const periodId = searchParams.get('period_id')
+    const dimNo = searchParams.get('dim_no') ?? '6'
 
     if (!periodId) {
       return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
     }
-
-    const opLog = log.child({ periodId })
+    if (!/^[1-9]\d*$/.test(dimNo)) {
+      return NextResponse.json({ error: 'dim_no must be an SIE dimension number' }, { status: 400 })
+    }
 
     const { data: period } = await supabase
       .from('fiscal_periods')
@@ -35,28 +38,12 @@ export const GET = withRouteContext(
       range = parsed.range
     }
 
-    const dimFilter = parseDimensionFilterParams(searchParams)
-    if (!dimFilter.ok) {
-      return NextResponse.json({ error: dimFilter.error }, { status: 400 })
-    }
-
     try {
-      const result = await generateIncomeStatement(supabase, companyId!, periodId, {
-        ...range,
-        dimensions: dimFilter.dimensions,
-      })
-
-      if (period) {
-        result.period = {
-          start: range.fromDate ?? period.period_start,
-          end: range.toDate ?? period.period_end,
-        }
-      }
-
-      return NextResponse.json({ data: result })
+      const data = await generateDimensionPnl(supabase, companyId!, periodId, dimNo, range)
+      return NextResponse.json({ data })
     } catch (err) {
-      opLog.error('income statement generation failed', err as Error)
-      return errorResponseFromCode('REPORT_GENERATION_FAILED', opLog, {
+      log.error('dimension pnl generation failed', err as Error, { periodId, dimNo })
+      return errorResponseFromCode('REPORT_GENERATION_FAILED', log, {
         requestId,
         details: { reason: err instanceof Error ? err.message : 'unknown' },
       })

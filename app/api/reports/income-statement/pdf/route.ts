@@ -6,6 +6,7 @@ import { FinancialStatementPDF, type FinancialStatementGroup, type FinancialStat
 import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
 // into three named blocks with subtotals:
@@ -80,8 +81,16 @@ export async function GET(request: Request) {
   const effectiveStart = range.fromDate ?? period.period_start
   const effectiveEnd = range.toDate ?? period.period_end
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const report = await generateIncomeStatement(supabase, companyId, periodId, range)
+    const report = await generateIncomeStatement(supabase, companyId, periodId, {
+      ...range,
+      dimensions: dimFilter.dimensions,
+    })
     report.period = { start: effectiveStart, end: effectiveEnd }
 
     const operatingResult = Math.round((report.total_revenue - report.total_expenses) * 100) / 100

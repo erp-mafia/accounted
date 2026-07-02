@@ -15,7 +15,12 @@ export async function generateIncomeStatement(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options?: { fromDate?: string; toDate?: string }
+  options?: {
+    fromDate?: string
+    toDate?: string
+    /** SIE dim → code filter ({"6":"P001"}). P&L-safe: see trial-balance.ts. */
+    dimensions?: Record<string, string>
+  }
 ): Promise<IncomeStatementReport> {
   // Exclude year-end closing entries: after closing, P&L accounts (3-8) are
   // zeroed by the closing verifikat (8999 → 2099). Including them collapses
@@ -25,6 +30,7 @@ export async function generateIncomeStatement(
     excludeYearEndClosing: true,
     fromDate: options?.fromDate,
     toDate: options?.toDate,
+    dimensions: options?.dimensions,
   })
 
   // Filter to income/expense accounts (class 3-8)

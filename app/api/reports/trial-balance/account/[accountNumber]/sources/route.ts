@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 
 /**
@@ -39,6 +40,14 @@ export async function GET(
       { error: 'fiscal_period_id is required' },
       { status: 400 }
     )
+  }
+
+  // Same filter as the parent report, so drill-down totals match the row the
+  // user expanded (a filtered resultatrapport row must not expand to
+  // unfiltered lines).
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
   }
 
   // Look up account name (and verify account belongs to the company)
@@ -85,15 +94,17 @@ export async function GET(
     id: string
     debit_amount: number
     credit_amount: number
+    dimensions: Record<string, string> | null
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     journal_entries: any
-  }>(({ from, to }) =>
-    supabase
+  }>(({ from, to }) => {
+    let query = supabase
       .from('journal_entry_lines')
       .select(`
         id,
         debit_amount,
         credit_amount,
+        dimensions,
         journal_entry_id,
         journal_entries!inner(
           id,
@@ -110,8 +121,14 @@ export async function GET(
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
       .in('journal_entries.status', ['posted', 'reversed'])
-      .order('id', { ascending: true })
-      .range(from, to), { dedupeBy: (r) => r.id })
+
+    if (dimFilter.dimensions) {
+      // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+      query = query.contains('dimensions', dimFilter.dimensions)
+    }
+
+    return query.order('id', { ascending: true }).range(from, to)
+  }, { dedupeBy: (r) => r.id })
 
   // Map then sort in JS (date ASC, voucher_number ASC, journal_entry_id ASC as
   // a final deterministic tiebreak for lines sharing a date and voucher number
@@ -124,6 +141,9 @@ export async function GET(
     description: row.journal_entries.description || '',
     debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
     credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
+    ...(row.dimensions && Object.keys(row.dimensions).length > 0
+      ? { dimensions: row.dimensions }
+      : {}),
   }))
   allMapped.sort((a, b) => {
     const dateComp = a.date.localeCompare(b.date)

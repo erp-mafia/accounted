@@ -10,6 +10,7 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import type { IncomeStatementSection } from '@/types'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 interface FlatRow {
   section: string
@@ -92,8 +93,16 @@ export async function GET(request: Request) {
   const range = parsedRange.range
   const effectiveEnd = range.toDate ?? period.period_end
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const report = await generateIncomeStatement(supabase, companyId, periodId, range)
+    const report = await generateIncomeStatement(supabase, companyId, periodId, {
+      ...range,
+      dimensions: dimFilter.dimensions,
+    })
 
     const revenueRows = flatten(
       report.revenue_sections,

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { generateResultatrapport } from '@/lib/reports/resultatrapport'
 import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 import {
   reportToWorkbook,
   textColumn,
@@ -58,8 +59,16 @@ export async function GET(request: Request) {
     range = parsed.range
   }
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const report = await generateResultatrapport(supabase, companyId, periodId, range)
+    const report = await generateResultatrapport(supabase, companyId, periodId, {
+      ...range,
+      dimensions: dimFilter.dimensions,
+    })
 
     const rows: FlatRow[] = []
     for (const g of report.groups) {

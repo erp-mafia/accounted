@@ -1651,6 +1651,39 @@ export interface ResultatrapportReport {
   prior_period: { start: string; end: string } | null
 }
 
+// Resultat per projekt/kostnadsställe — value-as-column P&L matrix over one
+// SIE dimension. `code: null` marks the "(Utan dimension)" residual bucket,
+// which is computed as Totalt − tagged columns so every row sums exactly to
+// its resultatrapport counterpart.
+export interface DimensionPnlColumn {
+  code: string | null
+  name: string | null
+}
+
+export interface DimensionPnlRow {
+  account_number: string
+  account_name: string
+  values: number[]
+  total: number
+}
+
+export interface DimensionPnlGroup {
+  class: number
+  class_label: string
+  rows: DimensionPnlRow[]
+  subtotals: number[]
+  subtotal_total: number
+}
+
+export interface DimensionPnlReport {
+  dimension: { sie_dim_no: string; name: string }
+  columns: DimensionPnlColumn[]
+  groups: DimensionPnlGroup[]
+  net_per_column: number[]
+  net_total: number
+  period: { start: string; end: string }
+}
+
 export interface BalansrapportRow {
   account_number: string
   account_name: string

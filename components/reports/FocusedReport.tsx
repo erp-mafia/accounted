@@ -12,7 +12,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
-import { DATE_RANGE_SLUGS, getReport } from '@/lib/reports/catalog'
+import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import { NEDeclarationView } from '@/components/reports/NEDeclarationView'
 import { PeriodiskSammanstallningView } from '@/components/reports/PeriodiskSammanstallningView'
 import { INK2DeclarationView } from '@/components/reports/INK2DeclarationView'
@@ -28,6 +29,7 @@ import {
   GeneralLedgerView,
   JournalRegisterView,
   ARLedgerView,
+  DimensionPnlView,
 } from '@/components/reports/views'
 
 /**
@@ -46,6 +48,7 @@ function FocusedReportInner({ slug }: { slug: string }) {
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(null)
   const [dateRange, setDateRange] = useState<DateRangeValue>({})
+  const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(null)
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
@@ -101,6 +104,10 @@ function FocusedReportInner({ slug }: { slug: string }) {
         />
       )}
 
+      {DIMENSION_FILTER_SLUGS.has(slug) && selectedPeriod && (
+        <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
+      )}
+
       {!isReady && !isPeriodless ? (
         <Card>
           <CardContent className="p-6 space-y-4">
@@ -114,6 +121,7 @@ function FocusedReportInner({ slug }: { slug: string }) {
           periodId={selectedPeriod}
           periodBounds={selectedPeriodBounds}
           dateRange={dateRange}
+          dimensionFilter={dimensionFilter}
           accountFilter={accountFilter}
           isEnskildFirma={isEnskildFirma}
           isAktiebolag={isAktiebolag}
@@ -136,6 +144,7 @@ function FocusedView({
   periodId,
   periodBounds,
   dateRange,
+  dimensionFilter,
   accountFilter,
   isEnskildFirma,
   isAktiebolag,
@@ -145,6 +154,7 @@ function FocusedView({
   periodId: string
   periodBounds: { start: string; end: string } | null
   dateRange: DateRangeValue
+  dimensionFilter: DimensionFilterValue | null
   accountFilter: string | null
   isEnskildFirma: boolean
   isAktiebolag: boolean
@@ -152,13 +162,15 @@ function FocusedView({
 }) {
   switch (slug) {
     case 'resultatrapport':
-      return <ResultatrapportView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
+      return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} onNavigateToAccount={onNavigateToAccount} />
+    case 'dimension-pnl':
+      return <DimensionPnlView periodId={periodId} dateRange={dateRange} />
     case 'balansrapport':
       return <BalansrapportView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
     case 'trial-balance':
       return <TrialBalanceView periodId={periodId} onNavigateToAccount={onNavigateToAccount} />
     case 'income-statement':
-      return <IncomeStatementView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
+      return <IncomeStatementView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} onNavigateToAccount={onNavigateToAccount} />
     case 'balance-sheet':
       return <BalanceSheetView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
     case 'vat-declaration':
@@ -170,7 +182,7 @@ function FocusedView({
     case 'ink2-declaration':
       return isAktiebolag ? <INK2DeclarationView periodId={periodId} /> : null
     case 'huvudbok':
-      return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} />
+      return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} />
     case 'grundbok':
       return <JournalRegisterView periodId={periodId} />
     case 'kundreskontra':

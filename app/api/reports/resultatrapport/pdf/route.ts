@@ -6,6 +6,7 @@ import { ResultatrapportPDF } from '@/lib/reports/operational-report-pdf-templat
 import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -55,8 +56,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: parsedRange.error }, { status: 400 })
   }
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const report = await generateResultatrapport(supabase, companyId, periodId, parsedRange.range)
+    const report = await generateResultatrapport(supabase, companyId, periodId, {
+      ...parsedRange.range,
+      dimensions: dimFilter.dimensions,
+    })
 
     const pdfBuffer = await renderToBuffer(
       ResultatrapportPDF({

@@ -43,7 +43,9 @@ import {
   parseDimensionsArg,
   mergeLineDimensions,
   resolveDimensionBags,
+  type DimensionResolution,
 } from './dimensions'
+import { generateDimensionPnl } from '@/lib/reports/dimension-pnl'
 import Fuse from 'fuse.js'
 import { z } from 'zod'
 import {
@@ -1545,6 +1547,47 @@ function previousPeriodArgs(
   }
   return null
 }
+
+// Shared by the report tools' optional `dimensions` filter arg: parse the raw
+// bag, then resolve value NAMES → registry codes in one pass (resolve-don't-
+// select — the exact contract gnubok_create_voucher uses, incl. free-text
+// passthrough while dimensions_enabled is off). A DimensionResolutionError
+// propagates to the caller with ranked candidates. The resolved bag is echoed
+// back as `dimension_filter` so the agent can verify what a name attached to.
+async function resolveReportDimensionFilter(
+  supabase: SupabaseClient,
+  companyId: string,
+  raw: unknown,
+): Promise<{ filter?: Record<string, string>; resolutions: DimensionResolution[] }> {
+  if (!raw || typeof raw !== 'object' || Object.keys(raw as object).length === 0) {
+    return { resolutions: [] }
+  }
+  const parsed = parseDimensionsArg(raw, 'dimensions')
+  const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [parsed])
+  return { filter: bags[0], resolutions }
+}
+
+// Input-schema fragment for that arg — identical shape on trial balance,
+// income statement, and general ledger.
+const REPORT_DIMENSIONS_FILTER_SCHEMA = {
+  type: 'object',
+  additionalProperties: { type: 'string' },
+  description: 'Filter: SIE dim no → value (code OR name, resolved server-side), e.g. {"6":"P001"}. P&L view only — opening balances are excluded when set.',
+} as const
+
+// Output-schema fragments for the echo fields (never in `required`).
+const DIMENSION_FILTER_OUTPUT_PROPS = {
+  dimension_filter: {
+    type: 'object',
+    additionalProperties: { type: 'string' },
+    description: 'Echo of the applied filter, resolved to registry codes.',
+  },
+  dimension_resolutions: {
+    type: 'array',
+    items: { type: 'object' },
+    description: 'Non-exact name→code resolution echoes (resolve-don\'t-select).',
+  },
+} as const
 
 // ── Tools ────────────────────────────────────────────────────
 
@@ -3467,12 +3510,13 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_trial_balance',
     title: 'Trial Balance (Råbalans)',
-    description: 'Trial balance (huvudbok) for a fiscal period — all account balances with debit/credit totals. Defaults to most recent period.',
+    description: 'Trial balance (huvudbok) for a fiscal period — all account balances with debit/credit totals. Defaults to most recent period. Optional dimensions filter scopes to tagged lines (kostnadsställe/projekt).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
     outputSchema: {
@@ -3487,6 +3531,7 @@ export const tools: McpTool[] = [
         period_start: { type: 'string' },
         period_end: { type: 'string' },
         account_count: { type: 'number' },
+        ...DIMENSION_FILTER_OUTPUT_PROPS,
       },
       required: ['rows', 'total_debit', 'total_credit', 'is_balanced'],
     },
@@ -3525,12 +3570,22 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found.')
 
+      // Optional dimensions filter — names resolve to registry codes first
+      // (resolve-don't-select), then flow into the generator's jsonb
+      // containment filter.
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
+
       // Delegate to the canonical, paginated trial-balance builder. The
       // previous inline query had no pagination, so PostgREST's 1000-row
       // default silently truncated any period with >1000 entry lines (wrong
       // sums, false "not balanced"), and it ignored opening balances.
       // generateTrialBalance paginates and rolls IB forward.
-      const trialBalance = await generateTrialBalance(supabase, companyId, periodId!)
+      const trialBalance = await generateTrialBalance(
+        supabase,
+        companyId,
+        periodId!,
+        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+      )
 
       const rows = trialBalance.rows
         .map((r) => {
@@ -3558,6 +3613,8 @@ export const tools: McpTool[] = [
         period_start: period.period_start,
         period_end: period.period_end,
         account_count: rows.length,
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
       }
     },
   },
@@ -3776,15 +3833,19 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_income_statement',
     title: 'Income Statement (Resultaträkning)',
-    description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category.',
+    description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category. Optional dimensions filter scopes to tagged lines (kostnadsställe/projekt).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
-    outputSchema: { type: 'object' },
+    outputSchema: {
+      type: 'object',
+      properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
+    },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -3818,12 +3879,21 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found.')
 
-      const result = await generateIncomeStatement(supabase, companyId, periodId!)
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
+
+      const result = await generateIncomeStatement(
+        supabase,
+        companyId,
+        periodId!,
+        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+      )
       result.period = { start: period.period_start, end: period.period_end }
 
       return {
         period_name: period.name,
         ...result,
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
       }
     },
   },
@@ -4761,6 +4831,117 @@ export const tools: McpTool[] = [
     },
   },
 
+  {
+    name: 'gnubok_get_dimension_pnl',
+    title: 'P&L per Dimension (Resultat per projekt)',
+    description: 'Resultat per projekt/kostnadsställe: P&L matrix over one SIE dimension — each value with activity becomes a column plus an untagged bucket, and the Totalt column reconciles exactly with the resultatrapport. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sie_dim_no: { type: 'string', description: "SIE dimension number: '1' = kostnadsställe, '6' = projekt, or a custom dim from gnubok_list_dimensions." },
+        period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        from_date: { type: 'string', description: 'Optional start date (YYYY-MM-DD) within the period' },
+        to_date: { type: 'string', description: 'Optional end date (YYYY-MM-DD) within the period' },
+      },
+      required: ['sie_dim_no'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dimension: {
+          type: 'object',
+          properties: {
+            sie_dim_no: { type: 'string' },
+            name: { type: 'string' },
+          },
+        },
+        columns: {
+          type: 'array',
+          description: 'One per value with activity; code null = the "(Utan dimension)" residual bucket.',
+          items: {
+            type: 'object',
+            properties: {
+              code: { type: ['string', 'null'] },
+              name: { type: ['string', 'null'] },
+            },
+          },
+        },
+        groups: {
+          type: 'array',
+          description: 'BAS class groups (3–8); each row\'s values[] aligns with columns[].',
+          items: {
+            type: 'object',
+            properties: {
+              class: { type: 'number' },
+              class_label: { type: 'string' },
+              rows: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    account_number: { type: 'string' },
+                    account_name: { type: 'string' },
+                    values: { type: 'array', items: { type: 'number' } },
+                    total: { type: 'number' },
+                  },
+                },
+              },
+              subtotals: { type: 'array', items: { type: 'number' } },
+              subtotal_total: { type: 'number' },
+            },
+          },
+        },
+        net_per_column: { type: 'array', items: { type: 'number' } },
+        net_total: { type: 'number', description: 'Matches resultatrapport net result for the same window.' },
+        period: {
+          type: 'object',
+          properties: { start: { type: 'string' }, end: { type: 'string' } },
+        },
+      },
+      required: ['dimension', 'columns', 'groups', 'net_per_column', 'net_total'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const sieDimNo = String(args.sie_dim_no ?? '').trim()
+      // Positive-integer guard — the value is interpolated into a PostgREST
+      // jsonb path expression downstream, so free-form strings are rejected.
+      if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
+        throw new Error("sie_dim_no must be a positive SIE dimension number, e.g. '1' (kostnadsställe) or '6' (projekt).")
+      }
+
+      let periodId = args.period_id as string | undefined
+
+      // If no period specified, find the most recent one (same default as
+      // gnubok_get_trial_balance).
+      if (!periodId) {
+        const { data: periods } = await supabase
+          .from('fiscal_periods')
+          .select('id, name')
+          .eq('company_id', companyId)
+          .order('period_start', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (!periods) {
+          throw new Error('No fiscal periods found. Categorize some transactions first to auto-create a period.')
+        }
+        periodId = periods.id
+      }
+
+      const fromDate = args.from_date as string | undefined
+      const toDate = args.to_date as string | undefined
+
+      return await generateDimensionPnl(supabase, companyId, periodId!, sieDimNo, { fromDate, toDate })
+    },
+  },
+
   // ── Reports ──────────────────────────────────────────────────
 
   {
@@ -4819,7 +5000,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_general_ledger',
     title: 'General Ledger (Huvudbok)',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Optional account range filter. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Optional account range + dimensions filters. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4827,9 +5008,13 @@ export const tools: McpTool[] = [
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
         account_from: { type: 'string', description: 'Starting account number filter' },
         account_to: { type: 'string', description: 'Ending account number filter' },
+        dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
-    outputSchema: { type: 'object' },
+    outputSchema: {
+      type: 'object',
+      properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
+    },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -4855,14 +5040,28 @@ export const tools: McpTool[] = [
       const accountFrom = args.account_from as string | undefined
       const accountTo = args.account_to as string | undefined
 
-      return await generateGeneralLedger(supabase, companyId, periodId!, accountFrom, accountTo)
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
+
+      const report = await generateGeneralLedger(
+        supabase,
+        companyId,
+        periodId!,
+        accountFrom,
+        accountTo,
+        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+      )
+      return {
+        ...report,
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+      }
     },
   },
 
   {
     name: 'gnubok_query_journal',
     title: 'Query Journal Lines',
-    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher series/number, source type, status, project, cost center, free-text. Returns lines with voucher metadata + totals.",
+    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher series/number, source type, status, project, cost center, free-text. Optional group_by aggregation. Returns lines + totals over the full match set (see totals_scope).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4882,7 +5081,9 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
         project: { type: 'string', description: 'Filter by project code' },
         cost_center: { type: 'string', description: 'Filter by cost center' },
-        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
+        group_by: { type: 'string', enum: ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'], description: 'Aggregate matching lines into groups by this field. Mutually exclusive with group_by_dimension.' },
+        group_by_dimension: { type: 'string', description: 'Aggregate by SIE dimension number (e.g. "6" = projekt) from each line\'s dimensions bag; untagged → "(utan dimension)". Mutually exclusive with group_by.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Totals/groups cover the FULL match set even when truncated, except under free-text search (see totals_scope).' },
       },
     },
     outputSchema: {
@@ -4903,9 +5104,28 @@ export const tools: McpTool[] = [
             net: { type: 'number', description: 'debit minus credit (positive = net debit)' },
           },
         },
+        totals_scope: {
+          type: 'string',
+          enum: ['full_match', 'returned_slice'],
+          description: 'full_match: totals/groups aggregate ALL matching lines regardless of limit. returned_slice: free-text search aggregates only the returned window.',
+        },
+        groups: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string' },
+              debit: { type: 'number' },
+              credit: { type: 'number' },
+              net: { type: 'number' },
+              line_count: { type: 'number' },
+            },
+          },
+          description: 'Present when group_by/group_by_dimension is set; sorted by |net| desc. Scope follows totals_scope.',
+        },
         applied_filters: { type: 'object' },
       },
-      required: ['lines', 'total_lines', 'returned_lines', 'totals'],
+      required: ['lines', 'total_lines', 'returned_lines', 'totals', 'totals_scope'],
     },
     annotations: {
       readOnlyHint: true,
@@ -4933,16 +5153,44 @@ export const tools: McpTool[] = [
       const project = args.project as string | undefined
       const costCenter = args.cost_center as string | undefined
 
-      // Each text-search leg needs its own builder instance — PostgREST
-      // query builders are not reusable across awaits. The factory closes
-      // over the resolved filter values above.
-      const buildBaseQuery = () => {
+      const GROUP_BY_FIELDS = ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'] as const
+      const groupBy = args.group_by as (typeof GROUP_BY_FIELDS)[number] | undefined
+      const groupByDimension =
+        args.group_by_dimension !== undefined && args.group_by_dimension !== null
+          ? String(args.group_by_dimension).trim()
+          : undefined
+
+      if (groupBy && groupByDimension) {
+        throw new Error('Use either group_by or group_by_dimension, not both')
+      }
+      if (groupBy && !GROUP_BY_FIELDS.includes(groupBy)) {
+        throw new Error(`group_by must be one of: ${GROUP_BY_FIELDS.join(', ')}`)
+      }
+      // Positive-integer guard — the schema says string but hosts don't always
+      // validate, and the value keys into the dimensions jsonb bag.
+      if (groupByDimension && !/^[1-9]\d{0,3}$/.test(groupByDimension)) {
+        throw new Error('group_by_dimension must be a positive SIE dimension number, e.g. "6" (projekt)')
+      }
+      const wantsGroups = Boolean(groupBy || groupByDimension)
+
+      // The dimensions jsonb only rides along when a group needs it — it is
+      // the widest column on the line and the aggregate pass fetches ALL rows.
+      const dimsSelect = groupByDimension ? ', dimensions' : ''
+      const DISPLAY_SELECT = `id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center${dimsSelect}, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)`
+      // Lean projection for the full-match aggregate pass — only what totals
+      // and group buckets need. journal_entries stays embedded (!inner)
+      // because the entry-level filters bind to it.
+      const AGGREGATE_SELECT = `id, account_number, debit_amount, credit_amount, project, cost_center${dimsSelect}, journal_entries!inner(voucher_series, source_type, company_id)`
+
+      // Each query pass needs its own builder instance — PostgREST query
+      // builders are not reusable across awaits. The factory closes over the
+      // resolved filter values above and applies IDENTICAL filters for every
+      // projection, so display, text legs, and the aggregate pass always see
+      // the same match set.
+      const buildFilteredQuery = (select: string) => {
         let q = supabase
           .from('journal_entry_lines')
-          .select(
-            'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
-            { count: 'exact' }
-          )
+          .select(select)
           .eq('journal_entries.company_id', companyId)
 
         if (status === 'all') {
@@ -4973,7 +5221,7 @@ export const tools: McpTool[] = [
         return q
       }
 
-      const applyOrderAndLimit = <T extends ReturnType<typeof buildBaseQuery>>(q: T): T =>
+      const applyOrderAndLimit = <T extends ReturnType<typeof buildFilteredQuery>>(q: T): T =>
         q
           .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
           .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
@@ -4989,6 +5237,7 @@ export const tools: McpTool[] = [
         line_description: string | null
         project: string | null
         cost_center: string | null
+        dimensions?: Record<string, string> | null
         sort_order: number
         journal_entries: {
           id: string
@@ -4999,6 +5248,20 @@ export const tools: McpTool[] = [
           source_type: string
           status: string
         }
+      }
+
+      // Lean row shape of the full-match aggregate pass. Field-compatible
+      // with LineRow everywhere groupKey/totals read, so both can feed the
+      // same aggregation code.
+      type AggregateRow = {
+        id: string
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        project: string | null
+        cost_center: string | null
+        dimensions?: Record<string, string> | null
+        journal_entries: { voucher_series: string; source_type: string }
       }
 
       // Free-text search runs as two parallel .ilike() queries — one against
@@ -5043,7 +5306,7 @@ export const tools: McpTool[] = [
         const legLimit = Math.min(limit * 2, 500)
 
         const buildLeg = (column: 'line_description' | 'journal_entries.description') =>
-          buildBaseQuery()
+          buildFilteredQuery(DISPLAY_SELECT)
             .ilike(column, pattern)
             .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
             .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
@@ -5089,36 +5352,73 @@ export const tools: McpTool[] = [
           (byLine.data?.length ?? 0) >= legLimit ||
           (byEntry.data?.length ?? 0) >= legLimit
       } else {
-        const res = await applyOrderAndLimit(buildBaseQuery())
+        const res = await applyOrderAndLimit(buildFilteredQuery(DISPLAY_SELECT))
         if (res.error) {
           log.warn('query_journal failed', { companyId, userId, error: res.error.message })
           throw new Error('Database error while running journal query')
         }
         data = (res.data ?? []) as unknown as LineRow[]
-        dbMatched = res.count ?? data.length
+        dbMatched = data.length
+      }
+
+      // Full-match aggregate pass (non-text path only): re-run the same
+      // filters with a lean projection over ALL matching rows so totals and
+      // groups are exact regardless of `limit`. The free-text path stays
+      // slice-scoped (its per-leg windows make a full pass unbounded) and
+      // says so via totals_scope='returned_slice'.
+      let fullRows: AggregateRow[] | null = null
+      if (!text) {
+        try {
+          fullRows = await fetchAllRows<AggregateRow>(
+            ({ from, to }) =>
+              buildFilteredQuery(AGGREGATE_SELECT)
+                // Stable total order on the line PK for correct paging.
+                .order('id', { ascending: true })
+                .range(from, to) as unknown as PromiseLike<{
+                data: AggregateRow[] | null
+                error: { message: string } | null
+              }>,
+            { dedupeBy: (r) => r.id },
+          )
+        } catch (err) {
+          log.warn('query_journal aggregate pass failed', {
+            companyId,
+            userId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          throw new Error('Database error while running journal query')
+        }
       }
 
       // Apply amount filter post-fetch — PostgREST can't OR an abs(debit) >= n
       // with abs(credit) >= n cleanly. Lines are debit XOR credit, so checking
-      // max(debit, credit) works.
+      // max(debit, credit) works. The SAME predicate runs over the display
+      // slice and the full aggregate set so both describe one match set.
       const amountMin = args.amount_min as number | undefined
       const amountMax = args.amount_max as number | undefined
       const amountFilterApplied = typeof amountMin === 'number' || typeof amountMax === 'number'
-      const filtered = data.filter((r) => {
+      const passesAmountFilter = (r: { debit_amount: number; credit_amount: number }) => {
         const lineAmount = Math.max(Number(r.debit_amount) || 0, Number(r.credit_amount) || 0)
         if (typeof amountMin === 'number' && lineAmount < amountMin) return false
         if (typeof amountMax === 'number' && lineAmount > amountMax) return false
         return true
-      })
+      }
+      const filtered = data.filter(passesAmountFilter)
+      const fullFiltered = fullRows ? fullRows.filter(passesAmountFilter) : null
 
-      // Compute totals on the fetched-and-filtered set. Note: when truncated,
-      // these are totals of the returned slice, not the full match. The
-      // truncated flag tells the agent whether to issue a narrower query.
+      // Totals aggregate over the full match set when available (non-text),
+      // else over the returned slice (free-text) — totals_scope tells the
+      // agent which one it got.
+      const totalsSource: Array<{ debit_amount: number; credit_amount: number }> =
+        fullFiltered ?? filtered
       let totalDebit = 0
       let totalCredit = 0
-      const lines = filtered.map((r) => {
+      for (const r of totalsSource) {
         totalDebit += Number(r.debit_amount) || 0
         totalCredit += Number(r.credit_amount) || 0
+      }
+
+      const lines = filtered.map((r) => {
         return {
           line_id: r.id,
           journal_entry_id: r.journal_entries.id,
@@ -5138,31 +5438,74 @@ export const tools: McpTool[] = [
         }
       })
 
-      // PostgREST's `count` is computed before the post-fetch amount filter,
-      // so when amount_min/amount_max is set it reflects the wider DB-side
-      // match — not the lines actually returned. Reporting that as
-      // `total_lines` would mislead an agent into chasing a truncated tail
-      // that has already been filtered out client-side. When the amount
-      // filter ran, anchor `total_lines` and `truncated` to the filtered
-      // result, and surface the pre-filter count + a flag separately so an
-      // agent can still tell the DB matched more (it just didn't pass the
-      // amount predicate).
-      const total_lines = amountFilterApplied ? lines.length : dbMatched
-      const truncated = amountFilterApplied
-        ? data.length >= limit && lines.length === limit
-        : dbMatched > lines.length || legCapHit
+      // Optional group_by aggregation — over the same set totals used, so
+      // group sums always reconcile with `totals`.
+      let groups:
+        | Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
+        | undefined
+      if (wantsGroups) {
+        const groupSource: Array<AggregateRow | LineRow> = fullFiltered ?? filtered
+        const keyOf = (r: AggregateRow | LineRow): string => {
+          if (groupByDimension) return r.dimensions?.[groupByDimension] ?? '(utan dimension)'
+          switch (groupBy) {
+            case 'voucher_series': return r.journal_entries.voucher_series
+            case 'source_type': return r.journal_entries.source_type
+            case 'cost_center': return r.cost_center ?? '(utan dimension)'
+            case 'project': return r.project ?? '(utan dimension)'
+            default: return r.account_number
+          }
+        }
+        const bucketMap = new Map<string, { debit: number; credit: number; count: number }>()
+        for (const r of groupSource) {
+          const key = keyOf(r)
+          const bucket = bucketMap.get(key) ?? { debit: 0, credit: 0, count: 0 }
+          bucket.debit += Number(r.debit_amount) || 0
+          bucket.credit += Number(r.credit_amount) || 0
+          bucket.count += 1
+          bucketMap.set(key, bucket)
+        }
+        groups = [...bucketMap.entries()]
+          .map(([key, bucket]) => ({
+            key,
+            debit: roundOre(bucket.debit),
+            credit: roundOre(bucket.credit),
+            net: roundOre(bucket.debit - bucket.credit),
+            line_count: bucket.count,
+          }))
+          .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+      }
+
+      // Non-text path: the aggregate pass IS the full match set, so
+      // total_lines / truncated / pre-amount count all anchor to it. Text
+      // path: no full pass exists — total_lines stays slice-anchored exactly
+      // as before (amount filter → post-filter slice; otherwise the merged
+      // distinct count), and legCapHit keeps `truncated` honest.
+      const total_lines = fullFiltered
+        ? fullFiltered.length
+        : amountFilterApplied
+          ? lines.length
+          : dbMatched
+      const truncated = fullFiltered
+        ? fullFiltered.length > lines.length
+        : amountFilterApplied
+          ? data.length >= limit && lines.length === limit
+          : dbMatched > lines.length || legCapHit
       return {
         lines,
         truncated,
         total_lines,
         returned_lines: lines.length,
         amount_filter_applied_post_fetch: amountFilterApplied,
-        db_matched_pre_amount_filter: amountFilterApplied ? dbMatched : null,
+        db_matched_pre_amount_filter: amountFilterApplied
+          ? (fullRows ? fullRows.length : dbMatched)
+          : null,
         totals: {
           debit: Math.round(totalDebit * 100) / 100,
           credit: Math.round(totalCredit * 100) / 100,
           net: Math.round((totalDebit - totalCredit) * 100) / 100,
         },
+        totals_scope: fullFiltered ? 'full_match' : 'returned_slice',
+        ...(groups ? { groups } : {}),
         applied_filters: {
           account_from: accountFrom ?? null,
           account_to: accountTo ?? null,
@@ -5179,6 +5522,8 @@ export const tools: McpTool[] = [
           status,
           project: project ?? null,
           cost_center: costCenter ?? null,
+          group_by: groupBy ?? null,
+          group_by_dimension: groupByDimension ?? null,
         },
       }
     },

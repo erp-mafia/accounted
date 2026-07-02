@@ -12,6 +12,8 @@ export interface GeneralLedgerLine {
   debit: number
   credit: number
   balance: number
+  /** SIE dim → code tags on the line; omitted when untagged. */
+  dimensions?: Record<string, string>
 }
 
 export interface GeneralLedgerAccount {
@@ -49,8 +51,17 @@ export async function generateGeneralLedger(
   companyId: string,
   periodId: string,
   accountFrom?: string,
-  accountTo?: string
+  accountTo?: string,
+  options?: {
+    /** SIE dim → code filter ({"6":"P001"}). Opening balances are dropped
+     *  when set — they are company-wide and cannot be dimension-scoped. */
+    dimensions?: Record<string, string>
+  }
 ): Promise<GeneralLedgerReport> {
+  const dimensionFilter =
+    options?.dimensions && Object.keys(options.dimensions).length > 0
+      ? options.dimensions
+      : undefined
 
   // Get fiscal period dates and opening_balance_entry_id
   const { data: period } = await supabase
@@ -71,8 +82,10 @@ export async function generateGeneralLedger(
 
   // Convert to net balance (debit - credit) for GL running balance
   const openingBalances = new Map<string, number>()
-  for (const [accNum, { debit, credit }] of openingByAccount) {
-    openingBalances.set(accNum, debit - credit)
+  if (!dimensionFilter) {
+    for (const [accNum, { debit, credit }] of openingByAccount) {
+      openingBalances.set(accNum, debit - credit)
+    }
   }
 
   // ── Period lines via joined query (excluding OB entry) ─────────
@@ -88,6 +101,7 @@ export async function generateGeneralLedger(
     debit_amount: number
     credit_amount: number
     journal_entry_id: string
+    dimensions: Record<string, string> | null
     journal_entries: {
       entry_date: string
       voucher_number: number
@@ -98,10 +112,15 @@ export async function generateGeneralLedger(
   }>(({ from, to }) => {
     let query = supabase
       .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status)')
+      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, dimensions, journal_entries!inner(entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status)')
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', periodId)
       .in('journal_entries.status', ['posted', 'reversed'])
+
+    if (dimensionFilter) {
+      // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+      query = query.contains('dimensions', dimensionFilter)
+    }
 
     if (obEntryId) {
       query = query.neq('journal_entry_id', obEntryId)
@@ -144,6 +163,8 @@ export async function generateGeneralLedger(
       accountLines.set(accNum, [])
     }
 
+    const hasDims = line.dimensions && Object.keys(line.dimensions).length > 0
+
     accountLines.get(accNum)!.push({
       date: entry.entry_date,
       voucher_series: entry.voucher_series || 'A',
@@ -154,6 +175,7 @@ export async function generateGeneralLedger(
       debit: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
       credit: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
       balance: 0, // computed below
+      ...(hasDims ? { dimensions: line.dimensions as Record<string, string> } : {}),
     })
   }
 
