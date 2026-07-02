@@ -42,6 +42,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
+import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
@@ -240,6 +241,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Match-to-bank-transaction picker (opens when user clicks "Matcha mot
   // transaktion" on an unmatched inbox item).
   const [matchPickerOpen, setMatchPickerOpen] = useState(false)
+  // "Skapa leverantörsfaktura" modal for the selected underlag — opens in
+  // place (instead of navigating to a form page) so the user lands right back
+  // here to pick the next document.
+  const [createSupplierInvoiceOpen, setCreateSupplierInvoiceOpen] = useState(false)
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
   // the company settings so we don't flicker the CTA order on first paint.
@@ -1002,6 +1007,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
+              onCreateSupplierInvoice={() => setCreateSupplierInvoiceOpen(true)}
               onMatchTransaction={() => setMatchPickerOpen(true)}
               onUnmatchTransaction={async () => {
                 const targetId = selected.id
@@ -1069,6 +1075,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         docUrl={docUrl}
         docMime={docMime}
         onSuccess={async () => {
+          await Promise.all([fetchItems(), handleSelect(selected.id)])
+        }}
+      />
+    )}
+    {selected && (
+      <NewSupplierInvoiceDialog
+        open={createSupplierInvoiceOpen}
+        onOpenChange={setCreateSupplierInvoiceOpen}
+        inboxItemId={selected.id}
+        onCreated={async () => {
+          // Stay in the inbox (the whole point of the modal): close, then
+          // refresh the list + the selected item so it shows as converted.
+          setCreateSupplierInvoiceOpen(false)
           await Promise.all([fetchItems(), handleSelect(selected.id)])
         }}
       />
@@ -1492,6 +1511,7 @@ function FieldsRail({
   accountingMethod,
   onDelete,
   onBookDirect,
+  onCreateSupplierInvoice,
   onMatchTransaction,
   onUnmatchTransaction,
   onAskAssistant,
@@ -1503,6 +1523,7 @@ function FieldsRail({
   accountingMethod: AccountingMethod
   onDelete: () => void
   onBookDirect: () => void
+  onCreateSupplierInvoice: () => void
   onMatchTransaction: () => void
   onUnmatchTransaction: () => Promise<void>
   onAskAssistant?: (transactionId: string) => void
@@ -1766,16 +1787,14 @@ function FieldsRail({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-64">
-                <DropdownMenuItem asChild>
-                  <Link
-                    href={`/supplier-invoices/new?inbox_item_id=${item.id}`}
-                    className="flex flex-col items-start gap-1"
-                  >
-                    <span>Skapa leverantörsfaktura</span>
-                    <span className="text-xs text-muted-foreground">
-                      För leverantörsskulder du vill följa (periodisering).
-                    </span>
-                  </Link>
+                <DropdownMenuItem
+                  onClick={onCreateSupplierInvoice}
+                  className="flex flex-col items-start gap-1"
+                >
+                  <span>Skapa leverantörsfaktura</span>
+                  <span className="text-xs text-muted-foreground">
+                    För leverantörsskulder du vill följa (periodisering).
+                  </span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={onBookDirect}

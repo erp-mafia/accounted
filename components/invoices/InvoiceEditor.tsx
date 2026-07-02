@@ -67,9 +67,13 @@ export type InvoiceForEdit = Invoice & { items: InvoiceItem[] }
 // `create` is the original "new invoice" flow (unchanged). `edit` pre-fills the
 // form from an existing DRAFT and saves via PATCH instead of POST — no review
 // dialog, no number allocation, no self-billed tab, no send/logo prompts.
-export type InvoiceEditorProps =
+// `bare` renders the editor without page chrome (back button, full-size
+// heading, fixed mobile action bar) so it drops into NewInvoiceDialog — the
+// same convention as JournalEntryForm's `bare`.
+export type InvoiceEditorProps = (
   | { mode?: 'create' }
   | { mode: 'edit'; initial: InvoiceForEdit }
+) & { bare?: boolean }
 
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
@@ -85,6 +89,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Edit mode pre-fills the form from an existing draft and saves via PATCH.
   const isEditMode = props.mode === 'edit'
   const initial = props.mode === 'edit' ? props.initial : null
+  const bare = props.bare === true
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -1105,22 +1110,29 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       ? t('subtitle_delivery_note')
       : t('subtitle_invoice')
 
+  // In bare (dialog) mode the dialog owns the accessible title (sr-only
+  // DialogTitle) and the page already has its own h1, so the visible heading
+  // steps down to h2 — it still tracks document type and number preview live.
+  const Heading = bare ? 'h2' : 'h1'
+
   return (
-    <div className="space-y-8">
+    <div className={bare ? 'space-y-6' : 'space-y-8'}>
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
+        {!bare && (
+          <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+        )}
         <div className="flex-1 min-w-0">
-          <h1 className="font-display text-2xl md:text-3xl tracking-tight">
+          <Heading className={bare ? 'font-display text-xl tracking-tight' : 'font-display text-2xl md:text-3xl tracking-tight'}>
             {titleText}
             {numberPreview && !isSelfBilled && (
-              <span className="ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl">
+              <span className={bare ? 'ml-2 text-muted-foreground tabular-nums text-lg' : 'ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl'}>
                 ({numberPreview})
               </span>
             )}
-          </h1>
-          <p className="text-muted-foreground">{subtitleText}</p>
+          </Heading>
+          {!bare && <p className="text-muted-foreground">{subtitleText}</p>}
         </div>
         <AgentSparkleButton
           intentId="invoice.draft"
@@ -1148,7 +1160,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 pb-28 md:pb-0">
+      <form onSubmit={handleSubmit(onSubmit)} className={bare ? 'space-y-6' : 'space-y-6 pb-28 md:pb-0'}>
         <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
           {/* Main content */}
           <div className="lg:col-span-2 space-y-6">
@@ -1992,8 +2004,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </CardContent>
           </Card>
 
-            {/* Actions — desktop/tablet only */}
-            <div className="hidden md:flex md:flex-col md:gap-2">
+            {/* Actions — desktop/tablet only. In bare (dialog) mode the fixed
+                mobile bar is unusable (DialogContent's transform re-anchors
+                `fixed` children), so these buttons show at every width. */}
+            <div className={bare ? 'flex flex-col gap-2' : 'hidden md:flex md:flex-col md:gap-2'}>
               <Button
                 type="submit"
                 className="w-full"
@@ -2023,7 +2037,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           </div>
         </div>
 
-        {/* Mobile sticky total bar */}
+        {/* Mobile sticky total bar — page mode only (see bare note above) */}
+        {!bare && (
         <div className="md:hidden fixed left-0 right-0 z-40 bg-card/98 backdrop-blur-sm border-t border-border/40 px-5 py-3" style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}>
           <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
             <div>
@@ -2057,6 +2072,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </div>
           </div>
         </div>
+        )}
       </form>
 
       {selectedCustomer && vatRules && (

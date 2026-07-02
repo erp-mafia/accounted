@@ -244,7 +244,7 @@ export default function SupplierDetailPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg">{t('invoices_section_title')}</CardTitle>
-          <Link href="/supplier-invoices/new">
+          <Link href="/supplier-invoices?new=1">
             <Button size="sm">
               <FileText className="mr-2 h-4 w-4" />
               {t('new_invoice')}

@@ -17,6 +17,8 @@ export default async function NewExpenseRedirectPage({
       qs.set(key, value)
     }
   }
-  const suffix = qs.toString()
-  redirect(`/supplier-invoices/new${suffix ? `?${suffix}` : ''}`)
+  // Supplier invoice registration lives in a modal on the list page now
+  // (?new=1) — go there directly instead of bouncing via /supplier-invoices/new.
+  qs.set('new', '1')
+  redirect(`/supplier-invoices?${qs.toString()}`)
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
@@ -11,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, FileInput, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { PageHeader } from '@/components/ui/page-header'
+import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import type { SupplierInvoice } from '@/types'
@@ -44,9 +46,21 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
+
+  // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
+  // optionally with inbox_item_id for the invoice-inbox conversion flow) so
+  // every entry point — the header button, the empty state, the command
+  // palette, and the legacy /supplier-invoices/new redirect — opens the same
+  // dialog, and the browser back button closes it.
+  const showNewInvoice = searchParams.has('new')
+  const inboxItemId = searchParams.get('inbox_item_id')
+  const closeNewInvoice = () => router.replace('/supplier-invoices', { scroll: false })
+  const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
     setIsLoading(true)
@@ -59,6 +73,23 @@ export default function SupplierInvoicesPage() {
   useEffect(() => {
     fetchInvoices()
   }, [])
+
+  // Mirrors the old standalone page's post-create navigation: inbox
+  // conversions land back in the inbox, a created invoice opens its detail
+  // page, and flows that end here (e.g. private expense) close the modal and
+  // refresh the list in place.
+  const handleCreated = (invoiceId?: string) => {
+    if (inboxItemId) {
+      router.push('/e/general/invoice-inbox')
+      return
+    }
+    if (invoiceId) {
+      router.push(`/supplier-invoices/${invoiceId}`)
+      return
+    }
+    closeNewInvoice()
+    fetchInvoices()
+  }
 
   const filteredInvoices = invoices.filter((inv) => {
     switch (activeTab) {
@@ -76,12 +107,10 @@ export default function SupplierInvoicesPage() {
         title={t('title')}
         action={
           canWrite ? (
-            <Link href="/supplier-invoices/new">
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('register_invoice')}
-              </Button>
-            </Link>
+            <Button onClick={openNewInvoice}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('register_invoice')}
+            </Button>
           ) : (
             <Button
               disabled
@@ -134,9 +163,7 @@ export default function SupplierInvoicesPage() {
                 }
                 action={
                   activeTab === 'all' && canWrite ? (
-                    <Button asChild>
-                      <Link href="/supplier-invoices/new">{t('register_invoice')}</Link>
-                    </Button>
+                    <Button onClick={openNewInvoice}>{t('register_invoice')}</Button>
                   ) : undefined
                 }
               />
@@ -185,6 +212,15 @@ export default function SupplierInvoicesPage() {
           </DataList>
         </TabsContent>
       </Tabs>
+
+      <NewSupplierInvoiceDialog
+        open={showNewInvoice}
+        onOpenChange={(open) => {
+          if (!open) closeNewInvoice()
+        }}
+        inboxItemId={inboxItemId}
+        onCreated={handleCreated}
+      />
     </div>
   )
 }

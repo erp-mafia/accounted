@@ -99,7 +99,7 @@ export function EmptyState({
 
 // Preset empty states for common pages
 
-export function EmptyInvoices() {
+export function EmptyInvoices({ onAction }: { onAction?: () => void } = {}) {
   const t = useTranslations('empty')
   return (
     <EmptyState
@@ -107,7 +107,8 @@ export function EmptyInvoices() {
       title={t('preset_invoices_title')}
       description={t('preset_invoices_description')}
       actionLabel={t('preset_invoices_action')}
-      actionHref="/invoices/new"
+      actionHref={onAction ? undefined : '/invoices?new=1'}
+      onAction={onAction}
     />
   )
 }
@@ -186,7 +187,7 @@ export function EmptyReports() {
       title={t('preset_reports_title')}
       description={t('preset_reports_description')}
       actionLabel={t('preset_reports_action')}
-      actionHref="/invoices/new"
+      actionHref="/invoices?new=1"
       secondaryActionLabel={t('preset_reports_secondary')}
       secondaryActionHref="/import"
     />

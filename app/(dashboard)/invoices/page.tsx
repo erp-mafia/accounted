@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, ReceiptText, Lock, Repeat } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
+import NewInvoiceDialog from '@/components/invoices/NewInvoiceDialog'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Invoice, InvoiceStatus } from '@/types'
@@ -69,6 +71,8 @@ function useRelativeTimeLabel() {
 export default function InvoicesPage() {
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [isLoading, setIsLoading] = useState(true)
@@ -78,6 +82,15 @@ export default function InvoicesPage() {
   const supabase = createClient()
   const t = useTranslations('invoices')
   const getRelativeTimeLabel = useRelativeTimeLabel()
+
+  // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
+  // — the header button, empty states, the command palette, and the legacy
+  // /invoices/new redirect — opens the same dialog, and the browser back
+  // button closes it. No canWrite gate here: like the old /invoices/new page,
+  // the editor itself disables submission for viewers.
+  const showNewInvoice = searchParams.has('new')
+  const closeNewInvoice = () => router.replace('/invoices', { scroll: false })
+  const openNewInvoice = () => router.push('/invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
     if (!company) return
@@ -160,12 +173,10 @@ export default function InvoicesPage() {
               </Button>
             </Link>
             {canWrite ? (
-              <Link href="/invoices/new">
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('new_invoice')}
-                </Button>
-              </Link>
+              <Button onClick={openNewInvoice}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t('new_invoice')}
+              </Button>
             ) : (
               <Button
                 disabled
@@ -261,7 +272,7 @@ export default function InvoicesPage() {
               description={t('no_search_results_description', { term: searchTerm })}
             />
           ) : invoices.length === 0 ? (
-            <EmptyInvoices />
+            <EmptyInvoices onAction={openNewInvoice} />
           ) : (
             <DataListEmpty
               icon={<ReceiptText className="h-6 w-6" />}
@@ -381,6 +392,13 @@ export default function InvoicesPage() {
           })
         )}
       </DataList>
+
+      <NewInvoiceDialog
+        open={showNewInvoice}
+        onOpenChange={(open) => {
+          if (!open) closeNewInvoice()
+        }}
+      />
     </div>
   )
 }
