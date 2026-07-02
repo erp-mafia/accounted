@@ -498,6 +498,8 @@ function SIEImportWizard() {
         closingBalances: [],
         resultBalances: [],
         vouchers: [],
+        dimensions: [],
+        dimensionValues: [],
         issues: data.parsed.issues,
         stats: data.parsed.stats,
       })

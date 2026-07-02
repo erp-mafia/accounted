@@ -275,14 +275,81 @@ describe('parseSIEFile', () => {
       expect(v1.lines[2]).toMatchObject({ account: '2611', amount: -2500 })
     })
 
-    it('handles object lists in braces', () => {
+    it('handles object lists in braces and captures them as dimensions', () => {
       const result = parseSIEFile(SIE_WITH_OBJECT_LIST)
       expect(result.vouchers).toHaveLength(1)
 
       const v = result.vouchers[0]
       expect(v.lines).toHaveLength(2)
       expect(v.lines[0]).toMatchObject({ account: '5010', amount: 15000 })
+      // The object list is data, not noise — lossless import (PR5).
+      expect(v.lines[0].dimensions).toEqual({ '1': 'Kontor' })
       expect(v.lines[1]).toMatchObject({ account: '1930', amount: -15000 })
+      // Empty object list {} → no dimensions key at all.
+      expect(v.lines[1].dimensions).toBeUndefined()
+    })
+
+    it('parses multi-pair object lists with quoted codes and canonical keys', () => {
+      const sie = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#RAR 0 20240101 20241231',
+        '#VER A 1 20240115 "Projektköp"',
+        '{',
+        '#TRANS 5010 {"1" "KS 01" 06 "P001"} 15000.00',
+        '#TRANS 1930 {} -15000.00',
+        '}',
+      ].join('\n')
+
+      const result = parseSIEFile(sie)
+      // '06' canonicalizes to '6' (matches normalizeLineDimensions); quoted
+      // codes may contain spaces.
+      expect(result.vouchers[0].lines[0].dimensions).toEqual({ '1': 'KS 01', '6': 'P001' })
+    })
+
+    it('warns on a malformed (odd-field) object list but keeps the line', () => {
+      const sie = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#RAR 0 20240101 20241231',
+        '#VER A 1 20240115 "Trasig objektlista"',
+        '{',
+        '#TRANS 5010 {6} 100.00',
+        '#TRANS 1930 {} -100.00',
+        '}',
+      ].join('\n')
+
+      const result = parseSIEFile(sie)
+      expect(result.vouchers[0].lines[0]).toMatchObject({ account: '5010', amount: 100 })
+      expect(result.vouchers[0].lines[0].dimensions).toBeUndefined()
+      expect(result.issues.some((i) => i.severity === 'warning' && i.message.toLowerCase().includes('objektlista'))).toBe(true)
+    })
+
+    it('parses #DIM, #UNDERDIM and #OBJEKT into the registry arrays', () => {
+      const sie = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#RAR 0 20240101 20241231',
+        '#DIM 1 "Kostnadsställe"',
+        '#DIM 6 "Projekt"',
+        '#UNDERDIM 2 "Kostnadsbärare" 1',
+        '#OBJEKT 1 "KS01" "Butiken"',
+        '#OBJEKT 6 "P001" "Villa Almgren"',
+        '#OBJEKT 6 "P002" ""',
+      ].join('\n')
+
+      const result = parseSIEFile(sie)
+      expect(result.dimensions).toEqual([
+        { sieDimNo: 1, name: 'Kostnadsställe' },
+        { sieDimNo: 6, name: 'Projekt' },
+        { sieDimNo: 2, name: 'Kostnadsbärare', parentSieDimNo: 1 },
+      ])
+      expect(result.dimensionValues).toEqual([
+        { sieDimNo: 1, code: 'KS01', name: 'Butiken' },
+        { sieDimNo: 6, code: 'P001', name: 'Villa Almgren' },
+        // Nameless objekt falls back to its code.
+        { sieDimNo: 6, code: 'P002', name: 'P002' },
+      ])
     })
 
     it('parses quoted VER fields (series, number, date)', () => {

@@ -99,6 +99,8 @@ function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
       { yearIndex: 0, account: '2010', amount: -160406.0 },
     ],
     resultBalances: [],
+    dimensions: [],
+    dimensionValues: [],
     vouchers: [],
     issues: [],
     stats: {

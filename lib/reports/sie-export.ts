@@ -344,7 +344,7 @@ interface RegistryValue {
  * PR lands, and an undeclared dimension would make importers reject the file.
  * Dim 2 (kostnadsbärare) is a reserved sub-dimension of 1 → #UNDERDIM.
  */
-const SIE_RESERVED_DIMENSIONS: Record<number, { name: string; parent?: number }> = {
+export const SIE_RESERVED_DIMENSIONS: Record<number, { name: string; parent?: number }> = {
   1: { name: 'Kostnadsställe' },
   2: { name: 'Kostnadsbärare', parent: 1 },
   6: { name: 'Projekt' },

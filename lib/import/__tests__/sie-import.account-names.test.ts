@@ -46,6 +46,8 @@ function makeParsedFile(): ParsedSIEFile {
     openingBalances: [],
     closingBalances: [],
     resultBalances: [],
+    dimensions: [],
+    dimensionValues: [],
     vouchers: [
       {
         series: 'A',

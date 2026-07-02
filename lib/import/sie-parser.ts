@@ -18,6 +18,8 @@ import type {
   SIEBalance,
   SIEVoucher,
   SIETransactionLine,
+  SIEDimension,
+  SIEDimensionValue,
   ParsedSIEFile,
   ParseIssue,
   ParseIssueSeverity,
@@ -344,6 +346,41 @@ function splitSIELine(line: string): string[] {
 }
 
 /**
+ * Parse a #TRANS object list — `{1 "KS01" 6 "P001"}` — into an SIE dim
+ * number → object code map. The list arrives as ONE field thanks to the
+ * brace-aware splitter; the inner content is itself space-separated with
+ * SIE quoting, so it re-runs through splitSIELine. Returns undefined for an
+ * empty list ({}), malformed pairs are skipped with a warning issue.
+ */
+function parseObjectList(
+  raw: string,
+  issues: ParseIssue[],
+  lineNum: number
+): Record<string, string> | undefined {
+  const inner = raw.replace(/^\{/, '').replace(/\}$/, '').trim()
+  if (!inner) return undefined
+
+  const parts = splitSIELine(inner)
+  if (parts.length % 2 !== 0) {
+    addIssue(issues, 'warning', lineNum, `Objektlista med udda antal fält ignoreras delvis: ${raw}`, 'TRANS')
+  }
+
+  const dims: Record<string, string> = {}
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const dimNoRaw = parseStringField(parts[i])
+    const code = parseStringField(parts[i + 1]).trim()
+    const dimNo = parseInt(dimNoRaw, 10)
+    if (isNaN(dimNo) || dimNo < 1 || !code) {
+      addIssue(issues, 'warning', lineNum, `Ogiltigt objektpar i objektlista: ${dimNoRaw} ${code}`, 'TRANS')
+      continue
+    }
+    // Canonical numeric key ('01' → '1') — matches normalizeLineDimensions.
+    dims[String(dimNo)] = code
+  }
+  return Object.keys(dims).length > 0 ? dims : undefined
+}
+
+/**
  * Add an issue to the issues list
  */
 function addIssue(
@@ -385,6 +422,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const closingBalances: SIEBalance[] = []
   const resultBalances: SIEBalance[] = []
   const vouchers: SIEVoucher[] = []
+  const dimensions: SIEDimension[] = []
+  const dimensionValues: SIEDimensionValue[] = []
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -644,12 +683,16 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             break
           }
 
-          // Parse account and skip object list (in braces)
+          // Parse account and capture the object list (in braces)
           let fieldIndex = 1
           const account = parseStringField(fields[fieldIndex++])
 
-          // Skip object list if present (now a single field thanks to brace-aware splitting)
+          // Object list (single field thanks to brace-aware splitting) —
+          // dimension tags like {1 "KS01" 6 "P001"}. Parsed onto the line so
+          // import is lossless (dimensions plan PR5).
+          let objectListRaw: string | null = null
           if (fields[fieldIndex]?.startsWith('{')) {
+            objectListRaw = fields[fieldIndex]
             fieldIndex++
           }
 
@@ -664,6 +707,13 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           const transLine: SIETransactionLine = {
             account,
             amount,
+          }
+
+          if (objectListRaw) {
+            const dims = parseObjectList(objectListRaw, issues, lineNum)
+            if (dims) {
+              transLine.dimensions = dims
+            }
           }
 
           // Optional fields
@@ -684,9 +734,49 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           break
         }
 
+        case 'DIM': {
+          // #DIM dimNo "name"
+          const dimNo = parseInt(parseStringField(fields[1]), 10)
+          const name = parseStringField(fields[2])
+          if (!isNaN(dimNo) && dimNo >= 1) {
+            dimensions.push({ sieDimNo: dimNo, name: name || '' })
+          } else {
+            addIssue(issues, 'warning', lineNum, 'Ogiltig dimensionsdefinition — numret kunde inte tolkas', tag)
+          }
+          break
+        }
+
+        case 'UNDERDIM': {
+          // #UNDERDIM dimNo "name" parentDimNo
+          const dimNo = parseInt(parseStringField(fields[1]), 10)
+          const name = parseStringField(fields[2])
+          const parent = parseInt(parseStringField(fields[3]), 10)
+          if (!isNaN(dimNo) && dimNo >= 1 && !isNaN(parent) && parent >= 1) {
+            dimensions.push({ sieDimNo: dimNo, name: name || '', parentSieDimNo: parent })
+          } else {
+            addIssue(issues, 'warning', lineNum, 'Ogiltig underdimension — nummer eller överdimension kunde inte tolkas', tag)
+          }
+          break
+        }
+
+        case 'OBJEKT': {
+          // #OBJEKT dimNo "code" "name"
+          const dimNo = parseInt(parseStringField(fields[1]), 10)
+          const code = parseStringField(fields[2]).trim()
+          const name = parseStringField(fields[3])
+          if (!isNaN(dimNo) && dimNo >= 1 && code) {
+            dimensionValues.push({ sieDimNo: dimNo, code, name: name || code })
+          } else {
+            addIssue(issues, 'warning', lineNum, 'Ogiltigt objekt — dimension eller kod kunde inte tolkas', tag)
+          }
+          break
+        }
+
         default:
-          // Unknown tag - add info issue for notable ones
-          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'DIM', 'OBJEKT', 'OIB', 'OUB', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          // Unknown tag - add info issue for notable ones. OIB/OUB (per-object
+          // opening/closing balances) stay ignored — dimension reporting is
+          // P&L-only in v1, so object-level balance records have no consumer.
+          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'OIB', 'OUB', 'PBUDGET', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag} — ignoreras`, tag)
           }
       }
@@ -766,6 +856,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     closingBalances,
     resultBalances,
     vouchers,
+    dimensions,
+    dimensionValues,
     issues,
     stats: {
       totalAccounts: accounts.length,

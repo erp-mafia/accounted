@@ -7,6 +7,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { normalizeLineDimensions, lineDimensionColumns } from '@/lib/bookkeeping/dimension-resolver'
+import { importDimensionRegistry } from './sie-dimensions'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import type {
   ParsedSIEFile,
@@ -1012,7 +1014,13 @@ export async function importVouchers(
     // 'import' for ordinary migrated vouchers; 'opening_balance' for a #VER that
     // is really the year's ingående balans (see isLikelyOpeningBalance below).
     sourceType: 'import' | 'opening_balance'
-    lines: { account_number: string; debit_amount: number; credit_amount: number; line_description: string | null }[]
+    lines: {
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+      line_description: string | null
+      dimensions?: Record<string, string>
+    }[]
   }
 
   const preparedVouchers: PreparedVoucher[] = []
@@ -1060,6 +1068,7 @@ export async function importVouchers(
           debit_amount: Math.round(line.amount * 100) / 100,
           credit_amount: 0,
           line_description: line.description || null,
+          ...(line.dimensions ? { dimensions: line.dimensions } : {}),
         })
       } else if (line.amount < 0) {
         lines.push({
@@ -1067,6 +1076,7 @@ export async function importVouchers(
           debit_amount: 0,
           credit_amount: Math.round(Math.abs(line.amount) * 100) / 100,
           line_description: line.description || null,
+          ...(line.dimensions ? { dimensions: line.dimensions } : {}),
         })
       }
       // Note: lines with amount === 0 are silently dropped
@@ -1334,6 +1344,9 @@ export async function importVouchers(
       currency: string
       line_description: string | null
       sort_order: number
+      dimensions: Record<string, string>
+      cost_center: string | null
+      project: string | null
     }[] = []
 
     for (let i = 0; i < batch.length; i++) {
@@ -1343,6 +1356,12 @@ export async function importVouchers(
       const voucher = batch[i]
       const assignedNumber = currentVoucherNumber + batchStart + i
       voucher.lines.forEach((line, lineIndex) => {
+        // dimensions jsonb is the source of truth; cost_center/project are
+        // derived mirrors — the same dual-write every sanctioned writer uses
+        // (see lib/bookkeeping/dimension-resolver.ts). SIE object-list codes
+        // survive verbatim on lines (legacy free-text is a documented
+        // exception to the registry format rules).
+        const dims = normalizeLineDimensions({ dimensions: line.dimensions ?? null })
         allLines.push({
           journal_entry_id: entryId,
           account_number: line.account_number,
@@ -1352,6 +1371,8 @@ export async function importVouchers(
           currency: 'SEK',
           line_description: line.line_description,
           sort_order: lineIndex,
+          dimensions: dims,
+          ...lineDimensionColumns(dims),
         })
       })
 
@@ -2080,6 +2101,26 @@ export async function executeSIEImport(
       options.fileContent,
       options.filename
     )
+
+    // Dimension registry (#DIM/#UNDERDIM/#OBJEKT + object-list references):
+    // upsert missing rows and auto-enable the toggle with a notice. Runs
+    // before vouchers so tagged lines land with their registry rows present.
+    // Files without dimension data return null — nothing changes.
+    const dimensionSummary = await importDimensionRegistry(
+      supabase,
+      companyId,
+      parsed,
+      result.importId
+    )
+    if (dimensionSummary) {
+      result.dimensionsImported = {
+        dimensions: dimensionSummary.dimensionsCreated,
+        values: dimensionSummary.valuesCreated,
+        taggedLines: dimensionSummary.taggedLines,
+        toggleEnabled: dimensionSummary.toggleEnabled,
+      }
+      result.warnings.push(...dimensionSummary.warnings)
+    }
 
     // Build account mapping lookup
     const accountMap = mappingsToMap(mappings)

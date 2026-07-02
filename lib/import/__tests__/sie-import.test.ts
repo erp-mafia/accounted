@@ -43,6 +43,8 @@ function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
     ],
     closingBalances: [],
     resultBalances: [],
+    dimensions: [],
+    dimensionValues: [],
     vouchers: [
       {
         series: 'A',

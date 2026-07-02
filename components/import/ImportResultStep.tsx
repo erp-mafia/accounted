@@ -107,6 +107,33 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
         </Card>
       )}
 
+      {/* Dimensions detected (lossless SIE round-trip, dimensions plan PR5) */}
+      {result.success && result.dimensionsImported && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Info className="h-5 w-5 text-muted-foreground" />
+              Dimensioner följde med importen
+            </CardTitle>
+            <CardDescription>
+              Filen innehöll kostnadsställen/projekt: {result.dimensionsImported.taggedLines}{' '}
+              taggade rader importerades
+              {result.dimensionsImported.values > 0 && (
+                <> och {result.dimensionsImported.values} nya värden lades till i registret</>
+              )}
+              .{' '}
+              {result.dimensionsImported.toggleEnabled && (
+                <>Dimensioner aktiverades automatiskt för företaget — du hittar registret under{' '}
+                <Link href="/dimensions" className="underline underline-offset-4">
+                  Kostnadsställen &amp; projekt
+                </Link>
+                .</>
+              )}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
       {/* Statistics */}
       {result.success && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">

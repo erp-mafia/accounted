@@ -84,6 +84,27 @@ export interface SIETransactionLine {
   quantity?: number
   signature?: string
   objectId?: string
+  /** Object list ({dimNo "code" …}) as SIE dim number → object code. */
+  dimensions?: Record<string, string>
+}
+
+/**
+ * Dimension declaration from #DIM or #UNDERDIM
+ */
+export interface SIEDimension {
+  sieDimNo: number
+  name: string
+  /** Set when declared via #UNDERDIM — the parent dimension number. */
+  parentSieDimNo?: number
+}
+
+/**
+ * Dimension value from #OBJEKT
+ */
+export interface SIEDimensionValue {
+  sieDimNo: number
+  code: string
+  name: string
 }
 
 /**
@@ -126,6 +147,10 @@ export interface ParsedSIEFile {
 
   // Transactions (SIE4 only)
   vouchers: SIEVoucher[]
+
+  // Dimension registry records (#DIM / #UNDERDIM / #OBJEKT)
+  dimensions: SIEDimension[]
+  dimensionValues: SIEDimensionValue[]
 
   // Parse issues
   issues: ParseIssue[]
@@ -319,6 +344,16 @@ export interface ImportResult {
   // If the next period's IB needed resync but we couldn't do it (locked,
   // closed, or no existing IB), the human-readable reason.
   nextPeriodIBResyncSkipped?: { reason: string; nextPeriodName: string } | null
+
+  // Populated when the file carried dimension data (#DIM/#OBJEKT/object
+  // lists): what landed in the registry and whether the import flipped
+  // company_settings.dimensions_enabled on (with a UI notice).
+  dimensionsImported?: {
+    dimensions: number
+    values: number
+    taggedLines: number
+    toggleEnabled: boolean
+  } | null
 }
 
 /**
