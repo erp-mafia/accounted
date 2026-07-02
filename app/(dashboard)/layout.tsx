@@ -188,7 +188,7 @@ export default async function DashboardLayout({
   ] = await Promise.all([
     supabase
       .from('company_settings')
-      .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox')
+      .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled')
       .eq('company_id', companyId)
       .single(),
     // Shared worklist predicates (lib/worklist) — the badge must show the
@@ -226,6 +226,10 @@ export default async function DashboardLayout({
     (companyRow.entity_type as EntityType) ||
     'enskild_firma'
   const paysSalaries = settings?.pays_salaries ?? false
+  // Dimensions register visibility (Kostnadsställen & projekt nav row). Same
+  // mechanism as paysSalaries: UI gate only, never load-bearing for
+  // correctness (dimensions plan §2).
+  const dimensionsEnabled = settings?.dimensions_enabled ?? false
   const companyWithName = {
     ...companyRow,
     name: displayName,
@@ -292,6 +296,7 @@ export default async function DashboardLayout({
             companyName={settings?.company_name || 'Min verksamhet'}
             entityType={entityType}
             paysSalaries={paysSalaries}
+            dimensionsEnabled={dimensionsEnabled}
             uncategorizedTransactionCount={uncategorizedCount}
             pendingOperationsCount={pendingOpsCount}
             isSandbox={isSandbox}

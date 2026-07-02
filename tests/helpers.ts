@@ -587,6 +587,7 @@ export function makeCompanySettings(
     reminder_fee_enabled: true,
     reminder_fee_amount: 60,
     reminder_interest_rate_override: null,
+    dimensions_enabled: false,
     logo_url: null,
     onboarding_step: 6,
     onboarding_complete: true,

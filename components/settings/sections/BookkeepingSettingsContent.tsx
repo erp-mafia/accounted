@@ -12,6 +12,7 @@ import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { PeriodiseringAutoDetectToggle } from '@/components/settings/PeriodiseringAutoDetectToggle'
+import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -163,6 +164,11 @@ export function BookkeepingSettingsContent() {
       {/* Periodisering auto-detect toggle */}
       <div className="border-t border-border pt-8">
         <PeriodiseringAutoDetectToggle />
+      </div>
+
+      {/* Kostnadsställen & projekt (dimensions) toggle */}
+      <div className="border-t border-border pt-8">
+        <DimensionsToggle />
       </div>
 
       {/* Cross-links */}

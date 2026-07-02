@@ -142,19 +142,21 @@ export async function generateSIEExport(
     entry.lines = linesByEntryId.get(entry.id) || []
   }
 
-  // Fetch cost centers and projects for dimension records
-  const { data: costCenters } = await supabase
-    .from('cost_centers')
-    .select('*')
+  // Fetch the dimension registry (#DIM/#UNDERDIM + #OBJEKT source).
+  // Deliberately NO is_active filter: lines referencing archived codes still
+  // serialize into #TRANS object lists, and Visma rejects files whose #TRANS
+  // references an undeclared #OBJEKT (plan §5 latent bug #2 — the legacy
+  // cost_centers/projects read filtered is_active=true and dropped them).
+  const { data: registryDimensions } = await supabase
+    .from('dimensions')
+    .select('id, sie_dim_no, parent_sie_dim_no, name')
     .eq('company_id', companyId)
-    .eq('is_active', true)
-    .order('code')
+    .order('sie_dim_no')
 
-  const { data: projects } = await supabase
-    .from('projects')
-    .select('*')
+  const { data: registryValues } = await supabase
+    .from('dimension_values')
+    .select('dimension_id, code, name')
     .eq('company_id', companyId)
-    .eq('is_active', true)
     .order('code')
 
   const lines: string[] = []
@@ -183,25 +185,10 @@ export async function generateSIEExport(
     lines.push(`#RAR -1 ${dateStringToSIE(prevPeriod.period_start)} ${dateStringToSIE(prevPeriod.period_end)}`)
   }
 
-  // === Dimension definitions ===
-  // SIE standard: dimension 1 = kostnadsställe, dimension 6 = projekt
-  const hasCostCenters = costCenters && costCenters.length > 0
-  const hasProjects = projects && projects.length > 0
-
-  if (hasCostCenters) {
-    lines.push('#DIM 1 "Kostnadsställe"')
-  }
-  if (hasProjects) {
-    lines.push('#DIM 6 "Projekt"')
-  }
-
-  // === Dimension objects (#OBJEKT) ===
-  for (const cc of costCenters || []) {
-    lines.push(`#OBJEKT 1 "${escapeQuotes(cc.code)}" "${escapeQuotes(cc.name)}"`)
-  }
-  for (const proj of projects || []) {
-    lines.push(`#OBJEKT 6 "${escapeQuotes(proj.code)}" "${escapeQuotes(proj.name)}"`)
-  }
+  // === Dimension definitions (#DIM / #UNDERDIM) + objects (#OBJEKT) ===
+  lines.push(
+    ...buildDimensionSection(registryDimensions ?? [], registryValues ?? [], allLines)
+  )
 
   // === Chart of accounts ===
   for (const account of (accounts as BASAccount[]) || []) {
@@ -257,14 +244,12 @@ export async function generateSIEExport(
         ? ` "${escapeQuotes(line.line_description)}"`
         : ''
 
-      // Build dimension object list for #TRANS line
-      const dimParts: string[] = []
-      if (line.cost_center) {
-        dimParts.push(`1 "${escapeQuotes(line.cost_center)}"`)
-      }
-      if (line.project) {
-        dimParts.push(`6 "${escapeQuotes(line.project)}"`)
-      }
+      // Build dimension object list for #TRANS from the jsonb map — the
+      // single source of truth. The legacy cost_center/project columns are
+      // derived mirrors of keys '1'/'6' and are no longer read here.
+      const dimParts = lineDimensionEntries(line.dimensions).map(
+        ([dimNo, code]) => `${dimNo} "${escapeQuotes(code)}"`
+      )
       const objList = dimParts.length > 0 ? `{${dimParts.join(' ')}}` : '{}'
 
       lines.push(`\t#TRANS ${line.account_number} ${objList} ${formatAmount(amount)} ${entryDate}${lineDesc}`)
@@ -332,6 +317,164 @@ function formatAmount(amount: number): string {
  */
 function escapeQuotes(str: string): string {
   return str.replace(/"/g, '\\"')
+}
+
+// ── Dimensions (#DIM / #UNDERDIM / #OBJEKT) ─────────────────────────────────
+
+interface RegistryDimension {
+  id: string
+  sie_dim_no: number
+  parent_sie_dim_no: number | null
+  name: string
+}
+
+interface RegistryValue {
+  dimension_id: string
+  code: string
+  name: string
+}
+
+/**
+ * SIE reserved dimension numbers. Used to synthesize a #DIM declaration for
+ * dimension numbers referenced by exported lines but absent from the registry
+ * — free-text writers can still mint arbitrary numbers until the write-path
+ * PR lands, and an undeclared dimension would make importers reject the file.
+ * Dim 2 (kostnadsbärare) is a reserved sub-dimension of 1 → #UNDERDIM.
+ */
+const SIE_RESERVED_DIMENSIONS: Record<number, { name: string; parent?: number }> = {
+  1: { name: 'Kostnadsställe' },
+  2: { name: 'Kostnadsbärare', parent: 1 },
+  6: { name: 'Projekt' },
+  7: { name: 'Anställd' },
+  8: { name: 'Kund' },
+  9: { name: 'Leverantör' },
+  10: { name: 'Faktura' },
+}
+
+/**
+ * Normalize a line's jsonb dimensions map ({"1":"KS01","6":"P001"}) into
+ * [dimNo, code] entries sorted by numeric dimension number. Defensive on
+ * shape: non-numeric keys and blank codes are skipped, and duplicate keys
+ * ('01' vs '1') collapse onto the canonical number with last-write-wins —
+ * mirroring normalizeLineDimensions in lib/bookkeeping/dimension-resolver.ts.
+ */
+function lineDimensionEntries(dimensions: unknown): Array<[number, string]> {
+  if (!dimensions || typeof dimensions !== 'object' || Array.isArray(dimensions)) {
+    return []
+  }
+  const byDimNo = new Map<number, string>()
+  for (const [key, value] of Object.entries(dimensions as Record<string, unknown>)) {
+    if (!/^\d+$/.test(key)) continue
+    const dimNo = Number(key)
+    if (dimNo < 1) continue
+    const code = typeof value === 'string' ? value.trim() : ''
+    if (!code) continue
+    byDimNo.set(dimNo, code)
+  }
+  return [...byDimNo.entries()].sort((a, b) => a[0] - b[0])
+}
+
+/**
+ * Build the #DIM/#UNDERDIM + #OBJEKT section from the dimension registry and
+ * the exported journal lines.
+ *
+ * Completeness guarantee: every (dimNo, code) pair referenced by any exported
+ * line gets an #OBJEKT record — registry rows contribute their name, orphan
+ * codes (no registry row) synthesize name = code, and dimension numbers with
+ * no registry row synthesize a #DIM from the SIE reserved-number seed. A file
+ * whose #TRANS references an undeclared object is rejected by Visma et al.
+ *
+ * Silence guarantee: registry dimensions with no values and no line
+ * references (e.g. lazily seeded system dims 1/6 that were never used) emit
+ * nothing, so companies that never touch dimensions keep dimension-free files.
+ */
+function buildDimensionSection(
+  registryDimensions: RegistryDimension[],
+  registryValues: RegistryValue[],
+  journalLines: JournalEntryLine[]
+): string[] {
+  const dimsByNo = new Map<number, RegistryDimension>()
+  const dimNoById = new Map<string, number>()
+  for (const dim of registryDimensions) {
+    dimsByNo.set(dim.sie_dim_no, dim)
+    dimNoById.set(dim.id, dim.sie_dim_no)
+  }
+
+  // Registry values grouped by dimension number: dimNo → (code → name)
+  const valuesByDimNo = new Map<number, Map<string, string>>()
+  for (const value of registryValues) {
+    const dimNo = dimNoById.get(value.dimension_id)
+    if (dimNo === undefined) continue
+    let codeMap = valuesByDimNo.get(dimNo)
+    if (!codeMap) {
+      codeMap = new Map()
+      valuesByDimNo.set(dimNo, codeMap)
+    }
+    if (!codeMap.has(value.code)) codeMap.set(value.code, value.name)
+  }
+
+  // (dimNo, code) pairs referenced by exported lines
+  const referencedByDimNo = new Map<number, Set<string>>()
+  for (const line of journalLines) {
+    for (const [dimNo, code] of lineDimensionEntries(line.dimensions)) {
+      let codes = referencedByDimNo.get(dimNo)
+      if (!codes) {
+        codes = new Set()
+        referencedByDimNo.set(dimNo, codes)
+      }
+      codes.add(code)
+    }
+  }
+
+  const emitDimNos = new Set<number>([
+    ...valuesByDimNo.keys(),
+    ...referencedByDimNo.keys(),
+  ])
+
+  const declarationFor = (dimNo: number): { name: string; parent: number | null } => {
+    const dim = dimsByNo.get(dimNo)
+    if (dim) return { name: dim.name, parent: dim.parent_sie_dim_no ?? null }
+    const reserved = SIE_RESERVED_DIMENSIONS[dimNo]
+    return { name: reserved?.name ?? `Dimension ${dimNo}`, parent: reserved?.parent ?? null }
+  }
+
+  // An #UNDERDIM must not reference an undeclared parent — pull parents into
+  // the emit set transitively (the has-guard also breaks registry cycles).
+  const pending = [...emitDimNos]
+  while (pending.length > 0) {
+    const { parent } = declarationFor(pending.pop()!)
+    if (parent !== null && !emitDimNos.has(parent)) {
+      emitDimNos.add(parent)
+      pending.push(parent)
+    }
+  }
+
+  const sortedDimNos = [...emitDimNos].sort((a, b) => a - b)
+  const out: string[] = []
+
+  for (const dimNo of sortedDimNos) {
+    const { name, parent } = declarationFor(dimNo)
+    if (parent !== null) {
+      out.push(`#UNDERDIM ${dimNo} "${escapeQuotes(name)}" ${parent}`)
+    } else {
+      out.push(`#DIM ${dimNo} "${escapeQuotes(name)}"`)
+    }
+  }
+
+  for (const dimNo of sortedDimNos) {
+    const registry = valuesByDimNo.get(dimNo) ?? new Map<string, string>()
+    const codes = new Set<string>([
+      ...registry.keys(),
+      ...(referencedByDimNo.get(dimNo) ?? []),
+    ])
+    for (const code of [...codes].sort((a, b) => a.localeCompare(b, 'sv'))) {
+      out.push(
+        `#OBJEKT ${dimNo} "${escapeQuotes(code)}" "${escapeQuotes(registry.get(code) ?? code)}"`
+      )
+    }
+  }
+
+  return out
 }
 
 /**

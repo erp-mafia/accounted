@@ -2462,6 +2462,69 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Dimensions registry (kostnadsställe/projekt) — dev_docs/dimensions_implementation_plan.md §6
+const DIMENSION: Record<string, StructuredErrorEntry> = {
+  DIMENSION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Dimensionen kunde inte hittas.',
+    message_en: 'Dimension not found.',
+  },
+  DIMENSION_SYSTEM_RENAME: {
+    httpStatus: 400,
+    message_sv: 'Systemdimensioner kan inte döpas om.',
+    message_en: 'System dimensions (kostnadsställe/projekt) cannot be renamed.',
+  },
+  DIMENSION_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionen kunde inte uppdateras.',
+    message_en: 'Failed to update dimension.',
+  },
+  DIMENSION_VALUE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Dimensionsvärdet kunde inte hittas.',
+    message_en: 'Dimension value not found.',
+  },
+  DIMENSION_VALUE_DUPLICATE_CODE: {
+    httpStatus: 409,
+    message_sv: 'Ett värde med samma kod finns redan i dimensionen.',
+    message_en: 'A value with that code already exists in the dimension.',
+  },
+  DIMENSION_VALUE_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionsvärdet kunde inte skapas.',
+    message_en: 'Failed to create dimension value.',
+  },
+  DIMENSION_VALUE_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionsvärdet kunde inte uppdateras.',
+    message_en: 'Failed to update dimension value.',
+  },
+  // The DB retention trigger (enforce_dimension_value_retention) raises when a
+  // code is referenced by posted/reversed lines. Routes surface the trigger's
+  // own Swedish message via `messageSv` so the code + kod appear in the toast.
+  DIMENSION_VALUE_REFERENCED: {
+    httpStatus: 409,
+    message_sv:
+      'Värdet används på bokförda verifikat och kan inte tas bort — arkivera det istället.',
+    message_en:
+      'The value is referenced by posted vouchers and cannot be deleted — archive (inactivate) it instead.',
+    remediation: {
+      description:
+        'Archive the value instead: PATCH the dimension value with { "is_active": false }. Codes referenced by posted lines are retained for the BFL 7-year period.',
+    },
+  },
+  DIMENSION_VALUE_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionsvärdet kunde inte tas bort.',
+    message_en: 'Failed to delete dimension value.',
+  },
+  DIMENSION_IMPORT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Import av befintliga dimensionskoder misslyckades.',
+    message_en: 'Failed to import existing dimension codes from journal lines.',
+  },
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
@@ -2505,6 +2568,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SKATTEVERKET,
   ...BOLAGSVERKET,
   ...ASSETS,
+  ...DIMENSION,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

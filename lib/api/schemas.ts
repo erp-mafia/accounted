@@ -713,6 +713,65 @@ export const CorrectJournalEntrySchema = z.object({
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
 })
 
+// ============================================================
+// Dimension registry schemas (kostnadsställe/projekt)
+// ============================================================
+// dev_docs/dimensions_implementation_plan.md §6. The registry tables
+// (dimensions/dimension_values) shipped in 20260702084500_dimensions_substrate.
+
+/**
+ * Object code for USER-CREATED dimension values: strict Fortnox format.
+ * Deliberately tighter than both the DB CHECK (1..40 chars, no `"{}`') and
+ * DimensionsBagSchema (line-level values) — legacy free-text codes from the
+ * backfill/SIE import must survive on lines, but new registry codes minted
+ * through the API stay portable to Fortnox/Visma.
+ */
+const dimensionValueCode = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9ÅÄÖåäö_+\-]{1,20}$/,
+    'Koden får bara innehålla bokstäver (A–Ö), siffror, _, + och - (max 20 tecken)',
+  )
+
+const dimensionValueDates = {
+  start_date: isoDate.nullable().optional(),
+  end_date: isoDate.nullable().optional(),
+}
+
+/** PATCH /api/dimensions/[id] — name is rejected route-side for is_system dims. */
+export const UpdateDimensionSchema = z
+  .object({
+    name: z.string().min(1).max(80).optional(),
+    is_active: z.boolean().optional(),
+    sort_order: z.number().int().min(0).optional(),
+  })
+  .refine((body) => Object.values(body).some((v) => v !== undefined), {
+    message: 'Minst ett fält måste anges',
+  })
+
+/** POST /api/dimensions/[id]/values — code is immutable after creation (v1: no rename). */
+export const CreateDimensionValueSchema = z
+  .object({
+    code: dimensionValueCode,
+    name: z.string().min(1).max(120),
+    ...dimensionValueDates,
+  })
+  .refine(
+    (body) => !body.start_date || !body.end_date || body.end_date >= body.start_date,
+    { message: 'Slutdatum får inte vara före startdatum', path: ['end_date'] },
+  )
+
+/** PATCH /api/dimensions/[id]/values/[valueId] — no `code` field by design. */
+export const UpdateDimensionValueSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    is_active: z.boolean().optional(),
+    ...dimensionValueDates,
+  })
+  .refine((body) => Object.values(body).some((v) => v !== undefined), {
+    message: 'Minst ett fält måste anges',
+  })
+
 /**
  * Move a posted verifikation to a different date (and thereby fiscal period)
  * without changing its lines — fixes a booking entered with the wrong
@@ -1172,6 +1231,9 @@ export const UpdateSettingsSchema = z.object({
     .optional(),
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
+  // Dimensions (kostnadsställe/projekt) — UI-visibility toggle only, never
+  // load-bearing for correctness (dev_docs/dimensions_implementation_plan.md §2).
+  dimensions_enabled: z.boolean().optional(),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
 }).refine(

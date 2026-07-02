@@ -7,6 +7,7 @@ import { createLogger } from '@/lib/logger'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import { lineDimensionColumns } from '@/lib/bookkeeping/dimension-resolver'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -146,6 +147,8 @@ export async function POST(request: Request) {
         onboarding_step: 6,
         onboarding_complete: true,
         is_sandbox: true,
+        // Dimensions demo — the register/pickers render out of the box.
+        dimensions_enabled: true,
       })
 
     if (settingsError) throw settingsError
@@ -156,6 +159,37 @@ export async function POST(request: Request) {
       p_entity_type: 'enskild_firma',
     })
     if (coaError) throw coaError
+
+    // 3b. Seed demo dimensions (kostnadsställe/projekt). ensure_company_dimensions
+    // lazily creates the system dims 1/6; two values per dim give the register,
+    // pickers, and the dimension-tagged journal lines below something to show.
+    const { error: dimsRpcError } = await supabase.rpc('ensure_company_dimensions', {
+      p_company_id: companyId,
+    })
+    if (dimsRpcError) throw dimsRpcError
+
+    const { data: demoDims, error: demoDimsError } = await supabase
+      .from('dimensions')
+      .select('id, sie_dim_no')
+      .eq('company_id', companyId)
+      .in('sie_dim_no', [1, 6])
+    if (demoDimsError) throw demoDimsError
+
+    const dimIdByNo = Object.fromEntries(
+      (demoDims ?? []).map(d => [d.sie_dim_no as number, d.id as string])
+    ) as Record<number, string>
+
+    if (dimIdByNo[1] && dimIdByNo[6]) {
+      const { error: dimValuesError } = await supabase
+        .from('dimension_values')
+        .insert([
+          { company_id: companyId, dimension_id: dimIdByNo[1], code: 'BUTIK', name: 'Butiken' },
+          { company_id: companyId, dimension_id: dimIdByNo[1], code: 'WEBB', name: 'Webbshoppen' },
+          { company_id: companyId, dimension_id: dimIdByNo[6], code: 'P001', name: 'Projekt Björk' },
+          { company_id: companyId, dimension_id: dimIdByNo[6], code: 'P002', name: 'Projekt Alm' },
+        ])
+      if (dimValuesError) throw dimValuesError
+    }
 
     // 4. Create fiscal period (current year)
     const currentYear = new Date().getFullYear()
@@ -424,11 +458,20 @@ export async function POST(request: Request) {
 
     if (je2Error) throw je2Error
 
-    // 10. Create journal entry lines
+    // 10. Create journal entry lines. The P&L line carries demo dimensions
+    // ({"1":"BUTIK","6":"P001"}) so the register's "antal taggade rader",
+    // voucher-detail badges, and the dimension P&L report light up in the
+    // sandbox. Mirror columns derived via lineDimensionColumns — never set
+    // independently of the dimensions map.
+    const revenueDims = { '1': 'BUTIK', '6': 'P001' }
     const { error: jelError } = await supabase
       .from('journal_entry_lines')
       .insert([
         // JE1: Invoice creation — Debit AR, Credit Revenue + VAT
+        // NB: `dimensions` must be set explicitly on EVERY row — same PostgREST
+        // bulk-insert normalization as paid_amount below: omitting it on some
+        // rows while one row sets it sends null (violating NOT NULL) instead
+        // of falling through to the schema default '{}'.
         {
           journal_entry_id: je1.id,
           account_number: '1510',
@@ -436,6 +479,7 @@ export async function POST(request: Request) {
           debit_amount: 18750,
           credit_amount: 0,
           sort_order: 0,
+          dimensions: {},
         },
         {
           journal_entry_id: je1.id,
@@ -444,6 +488,8 @@ export async function POST(request: Request) {
           debit_amount: 0,
           credit_amount: 15000,
           sort_order: 1,
+          dimensions: revenueDims,
+          ...lineDimensionColumns(revenueDims),
         },
         {
           journal_entry_id: je1.id,
@@ -452,6 +498,7 @@ export async function POST(request: Request) {
           debit_amount: 0,
           credit_amount: 3750,
           sort_order: 2,
+          dimensions: {},
         },
         // JE2: Invoice payment — Debit Bank, Credit AR
         {
@@ -461,6 +508,7 @@ export async function POST(request: Request) {
           debit_amount: 18750,
           credit_amount: 0,
           sort_order: 0,
+          dimensions: {},
         },
         {
           journal_entry_id: je2.id,
@@ -469,6 +517,7 @@ export async function POST(request: Request) {
           debit_amount: 0,
           credit_amount: 18750,
           sort_order: 1,
+          dimensions: {},
         },
       ])
 

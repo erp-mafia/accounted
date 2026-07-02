@@ -181,6 +181,12 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/salary-runs/:id/book': 'payroll:write',
   'POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi': 'payroll:write',
 
+  // Dimensions (kostnadsställe/projekt) — dimensions PR2. Reads ride
+  // reports:read (registry data feeds report filters/pickers); value creation
+  // is bookkeeping:write (it mints codes that journal lines reference).
+  'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  'POST /api/v1/companies/:companyId/dimensions/:id/values': 'bookkeeping:write',
+
   // Webhooks (Phase 6 PR-1)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',
   'POST /api/v1/companies/:companyId/webhooks': 'webhooks:manage',

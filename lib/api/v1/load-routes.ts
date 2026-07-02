@@ -132,4 +132,8 @@ import '@/app/api/v1/companies/[companyId]/webhooks/[id]/rotate-secret/route'
 // Inbox item stamp.
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/stamp/route'
 
+// Dimensions PR2 — registry list + value creation (kostnadsställe/projekt).
+import '@/app/api/v1/companies/[companyId]/dimensions/route'
+import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/route'
+
 export {}

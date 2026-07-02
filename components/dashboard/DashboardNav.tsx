@@ -30,6 +30,7 @@ import {
   HandCoins,
   Package,
   Tag,
+  Tags,
   ChevronsUpDown,
   Sparkles,
 } from 'lucide-react'
@@ -68,6 +69,10 @@ interface DashboardNavProps {
   // pays_salaries). Drives visibility of the payroll (Personal) section for
   // non-aktiebolag — notably an enskild firma that hires staff. See #782.
   paysSalaries?: boolean
+  // Whether the dimensions register (company_settings.dimensions_enabled) is
+  // switched on. Drives visibility of the Kostnadsställen & projekt row —
+  // same mechanism as paysSalaries: fetched by the dashboard layout.
+  dimensionsEnabled?: boolean
   uncategorizedTransactionCount?: number
   pendingOperationsCount?: number
   isSandbox?: boolean
@@ -94,6 +99,7 @@ type NavLabelKey =
   | 'transactions'
   | 'bookkeeping'
   | 'chart_of_accounts'
+  | 'dimensions'
   | 'assets'
   | 'reports'
   | 'import'
@@ -123,6 +129,10 @@ interface NavItem {
   // behaviour) plus any company that has registered as an employer via
   // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
   employerOnly?: boolean
+  // Dimension surfaces — visible only when the company has opted in via
+  // company_settings.dimensions_enabled (UI-visibility gate only; the pages
+  // and APIs work regardless — dimensions plan §2).
+  requiresDimensions?: boolean
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -147,6 +157,7 @@ const navItems: NavItem[] = [
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'redovisning' },
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
   { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'redovisning' },
+  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'redovisning', requiresDimensions: true },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'redovisning' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },
@@ -185,7 +196,7 @@ function accountInitial(name: string | null, email: string | null): string {
   return '?'
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -351,6 +362,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Payroll (employerOnly) is hidden until the company is an employer — an
     // aktiebolag, or any entity that has flagged pays_salaries. #782
     if (item.employerOnly && !isEmployer) return false
+    // Dimension surfaces are hidden until the company opts in via the
+    // bookkeeping settings toggle (company_settings.dimensions_enabled).
+    if (item.requiresDimensions && !dimensionsEnabled) return false
     // Hide the Assistent (/chat) tab until the agent is built — mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).
