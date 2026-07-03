@@ -59,6 +59,8 @@ function makeMock(opts: {
   inserts?: Array<Record<string, unknown>>
   /** Served by the awaited (non-maybeSingle) suppliers list query — candidate search. */
   supplierList?: Array<Record<string, unknown>>
+  /** Served by the .single() defaults/tenancy fetch. Pass explicit null to simulate a supplier missing from the company. */
+  supplierRecord?: Record<string, unknown> | null
 }) {
   const inboxResult = { data: opts.inbox ?? null, error: opts.inbox ? null : { message: 'not found' } }
   const supplierByOrgResult = { data: opts.supplierByOrg ?? null, error: null }
@@ -80,6 +82,14 @@ function makeMock(opts: {
               supplierLookupCall++
               return Promise.resolve(supplierLookupCall === 1 ? supplierByOrgResult : supplierByNameResult)
             }
+          }
+          if (prop === 'single') {
+            return () =>
+              Promise.resolve(
+                'supplierRecord' in opts
+                  ? { data: opts.supplierRecord, error: opts.supplierRecord ? null : { message: 'not found' } }
+                  : { data: { id: 'resolved-supplier', default_expense_account: null }, error: null },
+              )
           }
           if (prop === 'then') {
             return (resolve: (v: unknown) => void) =>
@@ -332,6 +342,27 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     // confirms against the underlag; fuzzy never auto-resolves.
     expect(result.next.tool).toBe('gnubok_create_supplier_invoice_from_inbox')
     expect(result.next.args).toEqual({ inbox_item_id: 'inbox-8', supplier_id_override: 'sup-polarn' })
+  })
+
+  it('rejects a supplier_id_override that does not exist in the company', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-9',
+        status: 'received',
+        extracted_data: baseExtracted,
+        matched_supplier_id: null,
+        created_supplier_invoice_id: null,
+        document_id: 'doc-9',
+      },
+      supplierRecord: null, // tenancy fetch finds nothing for the override id
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    await expect(
+      tool.execute(
+        { inbox_item_id: 'inbox-9', supplier_id_override: 'sup-foreign' },
+        'company-1', 'user-1', supabase,
+      ),
+    ).rejects.toThrow(/supplier_id_override sup-foreign does not match any supplier in this company/)
   })
 
   it('applies line_overrides — overridden account wins over extracted accountSuggestion', async () => {

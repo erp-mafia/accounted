@@ -2,8 +2,25 @@ import { describe, expect, it } from 'vitest'
 import {
   findSupplierCandidates,
   normalizeSupplierName,
+  orgNumberKey,
   scoreSupplierName,
 } from '../supplier-candidates'
+
+describe('orgNumberKey', () => {
+  it('canonicalizes 10- and 12-digit forms to the same key', () => {
+    // Enskild firma: org number IS the personnummer; extraction often yields
+    // the 12-digit form while the register stores the 10-digit form.
+    expect(orgNumberKey('19660101-1234')).toBe('6601011234')
+    expect(orgNumberKey('660101-1234')).toBe('6601011234')
+    expect(orgNumberKey('556677-8899')).toBe('5566778899')
+  })
+
+  it('rejects lengths that are not Swedish org numbers', () => {
+    expect(orgNumberKey('12345')).toBeNull()
+    expect(orgNumberKey('12345678901')).toBeNull() // 11 digits
+    expect(orgNumberKey('')).toBeNull()
+  })
+})
 
 describe('normalizeSupplierName', () => {
   it('lowercases, strips punctuation and legal-form suffixes', () => {
@@ -50,6 +67,13 @@ describe('findSupplierCandidates', () => {
     const c = findSupplierCandidates(suppliers, null, '5562358797')
     expect(c).toHaveLength(1)
     expect(c[0]).toMatchObject({ supplier_id: 'sup-polarn', score: 1, matched_on: 'org_number' })
+  })
+
+  it('matches a 12-digit personnummer extraction against a 10-digit stored EF org number', () => {
+    const withEf = [...suppliers, { id: 'sup-ef', name: 'Eriks Snickeri', org_number: '660101-1234' }]
+    const c = findSupplierCandidates(withEf, null, '19660101-1234')
+    expect(c).toHaveLength(1)
+    expect(c[0]).toMatchObject({ supplier_id: 'sup-ef', score: 1, matched_on: 'org_number' })
   })
 
   it('surfaces the near-miss name candidate for the Polarn case', () => {

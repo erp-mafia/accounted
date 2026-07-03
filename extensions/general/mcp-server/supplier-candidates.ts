@@ -60,6 +60,20 @@ function digitsOnly(s: string): string {
 }
 
 /**
+ * Canonical 10-digit key for a Swedish org number. Orgnr is exactly 10
+ * significant digits; enskild firma uses the owner's personnummer, which
+ * appears in both 10-digit (YYMMDDXXXX) and 12-digit (YYYYMMDDXXXX) forms —
+ * the last 10 digits are the same identifier. Anything else is not a Swedish
+ * org number and must not fuzzy-match.
+ */
+export function orgNumberKey(raw: string): string | null {
+  const d = digitsOnly(raw)
+  if (d.length === 10) return d
+  if (d.length === 12) return d.slice(-10)
+  return null
+}
+
+/**
  * Similarity in [0, 1]. Exact normalized match = 1; containment
  * ("polarn o pyret" ⊂ "polarn o pyret sverige") = 0.9; otherwise token
  * Jaccard scaled to max 0.8 so partial overlaps never outrank containment.
@@ -86,17 +100,14 @@ export function findSupplierCandidates(
 ): SupplierCandidate[] {
   const limit = options.limit ?? 5
   const minScore = options.minScore ?? 0.4
-  const extractedOrgDigits = extractedOrgNumber ? digitsOnly(extractedOrgNumber) : ''
+  const extractedOrgKey = extractedOrgNumber ? orgNumberKey(extractedOrgNumber) : null
 
   const scored: SupplierCandidate[] = []
   for (const s of suppliers) {
-    // Org number digits-equality catches formatting variants ('556677-8899'
-    // vs '5566778899') that the exact .eq() lookup upstream cannot.
-    if (
-      extractedOrgDigits.length >= 10 &&
-      s.org_number &&
-      digitsOnly(s.org_number) === extractedOrgDigits
-    ) {
+    // Canonical-key equality catches formatting variants ('556677-8899' vs
+    // '5566778899') and the 10- vs 12-digit personnummer forms of enskild
+    // firma org numbers — none of which the exact .eq() lookup upstream can.
+    if (extractedOrgKey && s.org_number && orgNumberKey(s.org_number) === extractedOrgKey) {
       scored.push({
         supplier_id: s.id,
         name: s.name,
