@@ -57,6 +57,8 @@ function makeMock(opts: {
   }
   /** When provided, every pending_operations .insert(payload) is recorded here. */
   inserts?: Array<Record<string, unknown>>
+  /** Served by the awaited (non-maybeSingle) suppliers list query — candidate search. */
+  supplierList?: Array<Record<string, unknown>>
 }) {
   const inboxResult = { data: opts.inbox ?? null, error: opts.inbox ? null : { message: 'not found' } }
   const supplierByOrgResult = { data: opts.supplierByOrg ?? null, error: null }
@@ -80,7 +82,8 @@ function makeMock(opts: {
             }
           }
           if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => resolve(supplierByOrgResult)
+            return (resolve: (v: unknown) => void) =>
+              resolve(opts.supplierList ? { data: opts.supplierList, error: null } : supplierByOrgResult)
           }
           return () => supplierChain()
         },
@@ -252,7 +255,7 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     ).rejects.toThrow(/already converted/)
   })
 
-  it('throws when supplier cannot be resolved', async () => {
+  it('unresolved supplier with no similar suppliers returns staged:false + create-supplier next hint', async () => {
     const supabase = makeMock({
       inbox: {
         id: 'inbox-4',
@@ -266,9 +269,69 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
       supplierByName: null,
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
-    await expect(
-      tool.execute({ inbox_item_id: 'inbox-4', dry_run: true }, 'company-1', 'user-1', supabase),
-    ).rejects.toThrow(/Cannot resolve supplier/)
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-4' },
+      'company-1', 'user-1', supabase,
+    )) as {
+      staged: boolean
+      risk_level: string
+      preview: { supplier_resolution: string; candidates: unknown[]; unresolved_supplier: Record<string, unknown> }
+      next: { tool: string; args: Record<string, unknown> }
+    }
+
+    expect(result.staged).toBe(false)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.supplier_resolution).toBe('unresolved')
+    expect(result.preview.candidates).toEqual([])
+    expect(result.preview.unresolved_supplier).toEqual({
+      extracted_name: 'Acme AB',
+      extracted_org_number: '5566778899',
+    })
+    // Next hint prefills gnubok_create_supplier from the extraction.
+    expect(result.next.tool).toBe('gnubok_create_supplier')
+    expect(result.next.args).toEqual({ name: 'Acme AB', org_number: '5566778899' })
+  })
+
+  it('unresolved supplier with a near-miss candidate returns it with a retry-with-override next hint', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-8',
+        status: 'received',
+        extracted_data: {
+          ...baseExtracted,
+          supplier: { name: 'Polarn o Pyret' }, // OCR variant: no punctuation, no AB, no org number
+        },
+        matched_supplier_id: null,
+        created_supplier_invoice_id: null,
+        document_id: 'doc-8',
+      },
+      supplierByOrg: null,
+      supplierByName: null, // exact ilike on the full name misses the punctuation/suffix variant
+      supplierList: [
+        { id: 'sup-dnb', name: 'DNB Bank AB', org_number: '5169077454' },
+        { id: 'sup-polarn', name: 'Polarn O. Pyret AB', org_number: '556235-8797' },
+      ],
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-8' },
+      'company-1', 'user-1', supabase,
+    )) as {
+      staged: boolean
+      preview: { candidates: Array<{ supplier_id: string; score: number; matched_on: string }> }
+      next: { tool: string; args: Record<string, unknown> }
+    }
+
+    expect(result.staged).toBe(false)
+    expect(result.preview.candidates[0]).toMatchObject({
+      supplier_id: 'sup-polarn',
+      score: 1,
+      matched_on: 'name',
+    })
+    // Next hint is the retry with the best candidate as override — the agent
+    // confirms against the underlag; fuzzy never auto-resolves.
+    expect(result.next.tool).toBe('gnubok_create_supplier_invoice_from_inbox')
+    expect(result.next.args).toEqual({ inbox_item_id: 'inbox-8', supplier_id_override: 'sup-polarn' })
   })
 
   it('applies line_overrides — overridden account wins over extracted accountSuggestion', async () => {
