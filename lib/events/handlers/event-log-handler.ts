@@ -53,7 +53,8 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   // whether a loaded atom helps or hurts.
   'mcp.skill_loaded',
   // Agent self-reported feedback — surfaces "this tool was missing", "this
-  // description was wrong", etc. Quarterly review → roadmap.
+  // description was wrong", etc. Reviewed weekly (matches the gnubok_feedback
+  // reply copy); triage → dev_docs/mcp_optimization_plan.md.
   'agent.feedback',
   // Bank connection consent lifecycle — required audit trail per ASVS V16
   // and GDPR Art.30 (records of processing) for PSD2 consent decisions.
