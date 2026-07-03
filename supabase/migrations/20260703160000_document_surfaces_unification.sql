@@ -130,6 +130,12 @@ BEGIN
 END;
 $$;
 
+-- CREATE OR REPLACE preserves the grants from 20260703130000 (verified on
+-- prod: authenticated + service_role only). Restated explicitly so this
+-- migration is self-contained and safe even standalone.
+REVOKE ALL ON FUNCTION public.verifikat_without_documents(uuid, date, numeric, integer, integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.verifikat_without_documents(uuid, date, numeric, integer, integer) TO authenticated, service_role;
+
 -- ────────────────────────────────────────────────────────────────────
 -- 2. Transactions surface: the bank-driven subset of the same predicate
 -- ────────────────────────────────────────────────────────────────────

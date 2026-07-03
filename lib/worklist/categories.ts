@@ -171,6 +171,9 @@ export async function countVerifikatMissingDocument(
   companyId: string,
 ): Promise<number> {
   try {
+    // p_limit only sizes the page — total_count is computed over the FULL
+    // filtered set inside the RPC (independent CTE), so 1 is the cheapest
+    // valid page size for a count-only call.
     const { data, error } = await supabase.rpc('verifikat_without_documents', {
       p_company_id: companyId,
       p_limit: 1,
