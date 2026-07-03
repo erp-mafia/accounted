@@ -166,11 +166,11 @@ Konton som **inte** används för denna vertikal trots vanliga missförstånd: 1
 
 ## Overflow-filer (planerad utbyggnad)
 
-Token-budget för denna SKILL.md är hållen under 15k. Föreslagna overflow-filer för djupare detaljer:
+Token-budget för denna SKILL.md är hållen under 15k. Föreslagna overflow-ämnen för djupare detaljer (inga av dessa referensfiler är skapade ännu):
 
-- **references/principal-vs-agent-mediainkop.md** — Beslutsmatris med IFRS 15 B37-indikatorer, K3 23.2-tillämpning, exempelposteringar för principal/agent/utlägg, mall för principal-/agent-analys per kund.
-- **references/a-sink-influencer-utlandsbetalningar.md** — A-SINK vs SINK-beslut, AGI-rapportering, skatteavtal (OECD art. 17), formulärflöden (SKV 520, SINK-ansökan), KU70 till utländska mottagare.
-- **references/sponsring-motprestationsbedomning.md** — Mall för sponsoravtal med marknadsvärdering per komponent, checklista för dokumentation, fullständig praxisgenomgång (RÅ 1976 ref. 127 I/II, RÅ 2000 ref. 31 I/II, HFD 2014 ref. 62, HFD 2018 ref. 55, KR Göteborg 2024-12), SOU 2026:5-bevakning.
-- **references/url-upphovsratt-byraavtal.md** — Branschmallar för upphovsrätts-överlåtelse i byrå-kundavtal, NJA 2010 s. 559-tolkning, DSM-direktivets §§ i URL (15 a–15 c, 29, 29 d–e, 48 b–d, 52 i–u), AD 2002 nr 87.
-- **references/ai-content-och-ai-act-byraer.md** — EU AI Act-tidslinje (art. 4, art. 50), TDM-opt-out under 15 a § URL, AI-klausulbibliotek för byråavtal, bokföring av AI-prenumerationer och API-konsumtion (5420 vs 6540), C-250/25-bevakning.
-- **references/pagaende-arbeten-konsultrorelse.md** — K2 6.13–6.24 och K3 23.18–23.37 jämförelse, IL 17 kap 23–32 §§, RÅ 2006 ref. 28 frikoppling, Srf U 14 + U 15, BFNAR 2025:1-kvittningsförbud, exempelflöden för retainer, kampanj fast pris och blandade uppdrag.
+- **principal-vs-agent-mediainkop** — Beslutsmatris med IFRS 15 B37-indikatorer, K3 23.2-tillämpning, exempelposteringar för principal/agent/utlägg, mall för principal-/agent-analys per kund.
+- **a-sink-influencer-utlandsbetalningar** — A-SINK vs SINK-beslut, AGI-rapportering, skatteavtal (OECD art. 17), formulärflöden (SKV 520, SINK-ansökan), KU70 till utländska mottagare.
+- **sponsring-motprestationsbedomning** — Mall för sponsoravtal med marknadsvärdering per komponent, checklista för dokumentation, fullständig praxisgenomgång (RÅ 1976 ref. 127 I/II, RÅ 2000 ref. 31 I/II, HFD 2014 ref. 62, HFD 2018 ref. 55, KR Göteborg 2024-12), SOU 2026:5-bevakning.
+- **url-upphovsratt-byraavtal** — Branschmallar för upphovsrätts-överlåtelse i byrå-kundavtal, NJA 2010 s. 559-tolkning, DSM-direktivets §§ i URL (15 a–15 c, 29, 29 d–e, 48 b–d, 52 i–u), AD 2002 nr 87.
+- **ai-content-och-ai-act-byraer** — EU AI Act-tidslinje (art. 4, art. 50), TDM-opt-out under 15 a § URL, AI-klausulbibliotek för byråavtal, bokföring av AI-prenumerationer och API-konsumtion (5420 vs 6540), C-250/25-bevakning.
+- **pagaende-arbeten-konsultrorelse** — K2 6.13–6.24 och K3 23.18–23.37 jämförelse, IL 17 kap 23–32 §§, RÅ 2006 ref. 28 frikoppling, Srf U 14 + U 15, BFNAR 2025:1-kvittningsförbud, exempelflöden för retainer, kampanj fast pris och blandade uppdrag.

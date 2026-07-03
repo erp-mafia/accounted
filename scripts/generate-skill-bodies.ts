@@ -160,6 +160,30 @@ async function main() {
     process.exit(1)
   }
 
+  // Dangling references/ links (mcp_optimization_plan P2-2): an atom body
+  // pointing at a references/ file that does not exist ships a 404 to every
+  // agent that follows it. Fails BOTH modes so a dangling pointer can never
+  // reach the registry. Top-level atoms only — reference children live inside
+  // references/ themselves, so relative links would double-resolve.
+  const refLinkRe = /(?:\]\(|\b)\.?\/?(references\/[A-Za-z0-9._/-]+\.md)/g
+  const danglingRefs: string[] = []
+  for (const atom of atoms) {
+    if (atom.parent_atom_id) continue
+    const baseDir = dirname(join(ROOT, atom.body_path))
+    const seen = new Set<string>()
+    for (const m of atom.body.matchAll(refLinkRe)) {
+      const rel = m[1]
+      if (seen.has(rel)) continue
+      seen.add(rel)
+      if (!existsSync(join(baseDir, rel))) danglingRefs.push(`${atom.id}: ${rel}`)
+    }
+  }
+  if (danglingRefs.length > 0) {
+    console.error('✗ dangling references/ link(s) in atom bodies — create the file or remove the pointer:')
+    for (const d of danglingRefs) console.error(`  ${d}`)
+    process.exit(1)
+  }
+
   const manifest = loadManifest()
   const onDisk = new Map(atoms.map((a) => [a.id, sha256(a.body)]))
 

@@ -24,14 +24,14 @@
     "version": 3
   },
   "horizontal/swedish-asset-accounting": {
-    "hash": "f7c79332c0fbc24f391aac3aeb1a01327bb803d11864dd68e52e37a6df2e8588",
-    "version": 2
+    "hash": "8f2e88b7d1b1d1f309c8533e8d05b8d0504a1c21d52a4d3257127eb25a52767f",
+    "version": 3
   },
   "horizontal/swedish-asset-accounting/accounts-and-registry": {
     "hash": "b33d044b36d290aebb3677ae82020e0890aff3664070f2d1ec510f38b63793f4",
     "version": 1
   },
-  "horizontal/swedish-asset-accounting/depreciaton": {
+  "horizontal/swedish-asset-accounting/depreciation": {
     "hash": "f764c19f11c8613ba5014ca2767ddb1ae2926928e04c3abb43444ba27c286aec",
     "version": 1
   },
@@ -40,8 +40,8 @@
     "version": 1
   },
   "horizontal/swedish-e-invoicing": {
-    "hash": "bbcb94de81be7663384085104811a801ed6a12aa37cb2a34eefc6d0ba41267e6",
-    "version": 4
+    "hash": "0483ca6d461699a9651ab6e5b7484dfcc2442f4746f3a0fada4dd97269942496",
+    "version": 5
   },
   "horizontal/swedish-e-invoicing/consumer-and-b2c": {
     "hash": "886cf35d3663b88d3b5bc8ca1766e14f073eb3de1f9e75aa55479582e638f32c",
@@ -328,8 +328,8 @@
     "version": 1
   },
   "modifier/single-shareholder-ab-fmb": {
-    "hash": "d79be2b50e33774453b8d6baaec59b79fd4bb7771550cec00f7edd7afedfb30a",
-    "version": 2
+    "hash": "f2398ee0bbf5e76e796a986f89b2f56e518bcc8830997fec197fac563e20960b",
+    "version": 3
   },
   "vertical/bygg-hantverk": {
     "hash": "9670e3515b607176efbdab05be8fc0d76f531ddb1fee8b2d70cbf78802ef571a",
@@ -424,8 +424,8 @@
     "version": 1
   },
   "vertical/reklambyra-marknadsforing": {
-    "hash": "6d67fd8ab8c1032168d072025241a0157d68f13f87b92be5e3a84e554265afee",
-    "version": 1
+    "hash": "4eb3a4770caa13d16d693e4ec92aa63c5097e223913a7adc08528051e41b72ee",
+    "version": 2
   },
   "vertical/software-saas-ai": {
     "hash": "63fd0c3f1ddfde9978cd072ee5c76f89900acc5807d5085fa626e611b28a81cd",

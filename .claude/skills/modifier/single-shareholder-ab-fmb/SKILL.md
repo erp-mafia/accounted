@@ -74,5 +74,5 @@ This modifier composes with:
 
 ## References
 
-- See `references/k10-walkthrough.md` for a step-by-step K10 example (TODO — user to author).
-- See `references/loneunderlag-2026.md` for the 2026 reformed parameters (TODO — user to author).
+- Planned reference (not yet authored): a step-by-step K10 walkthrough example.
+- Planned reference (not yet authored): the 2026 reformed löneunderlag parameters.
