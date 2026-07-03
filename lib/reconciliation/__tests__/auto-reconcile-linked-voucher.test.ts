@@ -55,7 +55,7 @@ function enqueueManualLinkSuccess(
   enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: null, amount: txAmount, currency: 'SEK' }) })
   enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
   enqueue({ data: [{ debit_amount: Math.max(txAmount, 0), credit_amount: Math.max(-txAmount, 0), account_number: '1930' }] })
-  enqueue({ data: null, error: null }) // update
+  enqueue({ data: [{ id: 'tx-1' }] }) // update — .select('id') returns the updated row
 }
 
 describe('autoReconcileTransactionForLinkedVoucher', () => {

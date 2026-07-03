@@ -41,16 +41,22 @@ const { runRecMock, statusMock } = vi.hoisted(() => ({
       },
     ],
     applied: 1,
-    errors: [],
+    errors: 0,
   }),
+  // The REAL ReconciliationStatus shape from lib/reconciliation. The mock used
+  // to return the registry's invented shape (matched_transactions, bank_balance,
+  // …), which hid that documented and actual payloads had drifted apart.
   statusMock: vi.fn().mockResolvedValue({
-    matched_transactions: 100,
-    unmatched_transactions: 5,
-    unmatched_gl_lines: 2,
-    total_unmatched_amount: 1500,
-    bank_balance: 50000,
-    gl_balance: 48500,
+    bank_transaction_total: 48500,
+    gl_1930_balance: 98500,
+    gl_1930_period_movement: 47000,
+    gl_1930_opening_balance: 51500,
+    gl_1930_correction_adjustment: 0,
     difference: 1500,
+    is_reconciled: false,
+    matched_count: 100,
+    unmatched_transaction_count: 5,
+    unmatched_gl_line_count: 2,
   }),
 }))
 
@@ -261,8 +267,12 @@ describe('GET /reconciliation/bank/status', () => {
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.matched_transactions).toBe(100)
-    expect(body.data.unmatched_transactions).toBe(5)
+    // Passthrough of the lib's ReconciliationStatus — assert the real field
+    // names so a registry/actual drift can never hide behind the mock again.
+    expect(body.data.matched_count).toBe(100)
+    expect(body.data.unmatched_transaction_count).toBe(5)
+    expect(body.data.bank_transaction_total).toBe(48500)
+    expect(body.data.is_reconciled).toBe(false)
   })
 
   it('rejects invalid date filter', async () => {

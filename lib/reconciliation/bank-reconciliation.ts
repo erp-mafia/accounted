@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 // ============================================================
 // Types
@@ -102,6 +103,15 @@ export interface ReconciliationOptions {
    * currency-only callers (where cashAccountId is omitted and this is moot).
    */
   includeUnassigned?: boolean
+  /**
+   * Apply only these transaction↔journal-entry pairs (ignored on dry runs).
+   * The UI's dry-run preview lets the user untick suspicious matches; a
+   * subsequent apply passes the ticked pairs here so the server never commits
+   * a match the user excluded — and never commits a pair the matcher itself
+   * didn't propose on the re-run, since the filter intersects with the fresh
+   * match set rather than trusting the client's pairs blindly.
+   */
+  applyOnly?: Array<{ transactionId: string; journalEntryId: string }>
 }
 
 /**
@@ -251,34 +261,48 @@ export async function runReconciliation(
     currency = 'SEK',
     cashAccountId,
     includeUnassigned = true,
+    applyOnly,
   } = options
 
   // Fetch unlinked GL lines via RPC
   const glLines = await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)
 
   // Fetch unmatched transactions, scoped to the selected cash account.
-  let query = supabase
-    .from('transactions')
-    .select('*')
-    .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-    .eq('is_ignored', false)
-  query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
+  // Paginated: a busy company can exceed PostgREST's silent 1000-row cap, which
+  // would make the matcher skip transactions without any signal. Ordered on id
+  // (unique) so pages never duplicate or skip rows.
+  const transactions = await fetchAllRows<Transaction>(({ from, to }) => {
+    let query = supabase
+      .from('transactions')
+      .select('*')
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .eq('is_ignored', false)
+    query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
+    if (dateFrom) query = query.gte('date', dateFrom)
+    if (dateTo) query = query.lte('date', dateTo)
+    return query.order('id').range(from, to)
+  })
 
-  if (dateFrom) query = query.gte('date', dateFrom)
-  if (dateTo) query = query.lte('date', dateTo)
-
-  const { data: transactions } = await query
-
-  if (!transactions || transactions.length === 0 || glLines.length === 0) {
+  if (transactions.length === 0 || glLines.length === 0) {
     return { matches: [], applied: 0, errors: 0 }
   }
 
   // Run greedy matching, highest confidence first
-  const matches = greedyMatch(transactions as Transaction[], glLines, currency)
+  let matches = greedyMatch(transactions, glLines, currency)
 
   if (dryRun) {
     return { matches, applied: 0, errors: 0 }
+  }
+
+  // When the caller reviewed a dry-run and ticked a subset, apply ONLY pairs
+  // that BOTH the user selected AND the fresh match run still proposes — the
+  // intersection guards against data that changed between preview and apply.
+  if (applyOnly) {
+    const selected = new Set(applyOnly.map((p) => `${p.transactionId}:${p.journalEntryId}`))
+    matches = matches.filter((m) =>
+      selected.has(`${m.transaction.id}:${m.glLine.journal_entry_id}`),
+    )
   }
 
   // Apply matches
@@ -287,7 +311,12 @@ export async function runReconciliation(
 
   for (const match of matches) {
     try {
-      const { error } = await supabase
+      // .is('journal_entry_id', null) is an optimistic-lock guard: if a
+      // concurrent user (or another surface) linked this transaction between
+      // the read above and this write, the update matches zero rows instead of
+      // silently re-pointing an existing link. Same pattern as
+      // lib/transactions/link-journal-entry.ts.
+      const { data: updatedRows, error } = await supabase
         .from('transactions')
         .update({
           journal_entry_id: match.glLine.journal_entry_id,
@@ -296,8 +325,10 @@ export async function runReconciliation(
         })
         .eq('id', match.transaction.id)
         .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .select('id')
 
-      if (error) {
+      if (error || !updatedRows || updatedRows.length === 0) {
         errors++
       } else {
         applied++
@@ -353,16 +384,27 @@ export async function getReconciliationStatus(
   // user has explicitly said they don't want them surfacing as something to
   // reconcile. Scoping by cash account (not just currency) is what stops a
   // second same-currency account from inflating bankTotal here.
-  let txQuery = supabase
-    .from('transactions')
-    .select('date, amount, journal_entry_id, reconciliation_method, is_ignored')
-    .eq('company_id', companyId)
-  txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
-
-  if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
-  if (dateTo) txQuery = txQuery.lte('date', dateTo)
-
-  const { data: transactions } = await txQuery
+  // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at 1000
+  // rows, which would undercount bank_transaction_total for a busy company and
+  // manufacture a phantom, unexplainable difference. Ordered on id (unique) so
+  // pages never duplicate or skip rows across boundaries.
+  type StatusTxRow = {
+    date: string | null
+    amount: number | string | null
+    journal_entry_id: string | null
+    reconciliation_method: string | null
+    is_ignored: boolean | null
+  }
+  const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
+    let txQuery = supabase
+      .from('transactions')
+      .select('date, amount, journal_entry_id, reconciliation_method, is_ignored')
+      .eq('company_id', companyId)
+    txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
+    if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
+    if (dateTo) txQuery = txQuery.lte('date', dateTo)
+    return txQuery.order('id').range(from, to)
+  })
 
   // Get GL bank-account lines. We fetch posted AND reversed entries and count
   // them TOGETHER — the exact inclusion rule the trial balance and balance sheet
@@ -374,18 +416,6 @@ export async function getReconciliationStatus(
   // the headline bug this widget had (a corrected bank receipt showed one figure
   // here and a different one on the balance sheet). source_type is still pulled
   // so we can split out the opening balance and surface correction activity.
-  let glQuery = supabase
-    .from('journal_entry_lines')
-    .select('debit_amount, credit_amount, journal_entries!inner(id, company_id, entry_date, status, source_type)')
-    .eq('account_number', bankAccount)
-    .eq('journal_entries.company_id', companyId)
-    .in('journal_entries.status', ['posted', 'reversed'])
-
-  if (dateFrom) glQuery = glQuery.gte('journal_entries.entry_date', dateFrom)
-  if (dateTo) glQuery = glQuery.lte('journal_entries.entry_date', dateTo)
-
-  const { data: glLines } = await glQuery
-
   type GlEntry = {
     id?: string | null
     status?: string | null
@@ -410,7 +440,19 @@ export async function getReconciliationStatus(
 
   // posted + reversed = the ledger balance, exactly as the trial balance counts
   // it. The .in() filter on the query already excludes draft/cancelled.
-  const fetchedLines = (glLines || []) as GlLineRow[]
+  // Paginated for the same 1000-row-cap reason as the transactions above — a
+  // silently truncated GL side would corrupt gl_1930_balance and the difference.
+  const fetchedLines = await fetchAllRows<GlLineRow>(({ from, to }) => {
+    let glQuery = supabase
+      .from('journal_entry_lines')
+      .select('debit_amount, credit_amount, journal_entries!inner(id, company_id, entry_date, status, source_type)')
+      .eq('account_number', bankAccount)
+      .eq('journal_entries.company_id', companyId)
+      .in('journal_entries.status', ['posted', 'reversed'])
+    if (dateFrom) glQuery = glQuery.gte('journal_entries.entry_date', dateFrom)
+    if (dateTo) glQuery = glQuery.lte('journal_entries.entry_date', dateTo)
+    return glQuery.order('id').range(from, to)
+  })
 
   // Floor the window at the most recent opening-balance date on this account
   // (issue #751). Everything dated before that IB is prior history the IB entry
@@ -597,8 +639,11 @@ export async function manualLink(
   // already-matched voucher when the user opts in via "Visa även matchade
   // verifikationer", so this can't happen by accident.
 
-  // Apply link
-  const { error: updateError } = await supabase
+  // Apply link. The .is('journal_entry_id', null) guard re-checks the "not
+  // already linked" precondition inside the write itself — the read above is
+  // advisory, and two concurrent linkers would otherwise silently re-point the
+  // row (same optimistic-lock pattern as lib/transactions/link-journal-entry.ts).
+  const { data: updatedRows, error: updateError } = await supabase
     .from('transactions')
     .update({
       journal_entry_id: journalEntryId,
@@ -607,9 +652,14 @@ export async function manualLink(
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .select('id')
 
   if (updateError) {
     return { success: false, error: 'Kunde inte koppla transaktionen. Försök igen.' }
+  }
+  if (!updatedRows || updatedRows.length === 0) {
+    return { success: false, error: 'Transaktionen är redan kopplad till en verifikation.' }
   }
 
   try {
@@ -637,7 +687,8 @@ export async function manualLink(
 export async function unlinkReconciliation(
   supabase: SupabaseClient,
   companyId: string,
-  transactionId: string
+  transactionId: string,
+  userId: string,
 ): Promise<{ success: boolean; error?: string }> {
   // Fetch transaction
   const { data: tx, error: txError } = await supabase
@@ -673,7 +724,7 @@ export async function unlinkReconciliation(
     return { success: false, error: 'Failed to unlink transaction' }
   }
 
-  logMatchEvent(supabase, companyId, transactionId, 'unmatched', {
+  logMatchEvent(supabase, userId, transactionId, 'unmatched', {
     previousState: {
       journal_entry_id: tx.journal_entry_id,
       reconciliation_method: tx.reconciliation_method,
@@ -900,15 +951,30 @@ export async function fetchUnlinkedGLLines(
   dateFrom?: string,
   dateTo?: string,
 ): Promise<UnlinkedGLLine[]> {
-  const { data, error } = await supabase.rpc('get_unlinked_gl_lines', {
-    p_company_id: companyId,
-    p_account_number: accountNumber,
-    p_date_from: dateFrom || null,
-    p_date_to: dateTo || null,
-  })
-
-  if (error || !data) return []
-  return data as UnlinkedGLLine[]
+  // Paginated: the RPC returns SETOF and is subject to the same silent
+  // 1000-row PostgREST cap as table selects; truncation here would hide match
+  // candidates and undercount unmatched_gl_line_count. The .order() chain
+  // preserves the RPC's chronological order for consumers (the UI table, the
+  // picker) while the unique line_id tiebreaker keeps pages stable — several
+  // lines of one entry share entry_date/voucher_number. Errors keep the legacy
+  // contract: callers get [] rather than a throw.
+  try {
+    return await fetchAllRows<UnlinkedGLLine>(({ from, to }) =>
+      supabase
+        .rpc('get_unlinked_gl_lines', {
+          p_company_id: companyId,
+          p_account_number: accountNumber,
+          p_date_from: dateFrom || null,
+          p_date_to: dateTo || null,
+        })
+        .order('entry_date')
+        .order('voucher_number')
+        .order('line_id')
+        .range(from, to),
+    )
+  } catch {
+    return []
+  }
 }
 
 /** A match candidate that carries how many transactions already point at it. */
@@ -933,17 +999,29 @@ export async function fetchGLLinesForMatching(
   dateTo?: string,
   includeMatched: boolean = false,
 ): Promise<GLLineForMatching[]> {
-  const { data, error } = await supabase.rpc('get_account_gl_lines_for_matching', {
-    p_company_id: companyId,
-    p_account_number: accountNumber,
-    p_date_from: dateFrom || null,
-    p_date_to: dateTo || null,
-    p_include_matched: includeMatched,
-  })
-
-  if (error || !data) return []
+  // Paginated + ordered chronologically with the unique line_id tiebreaker,
+  // for the same reasons as fetchUnlinkedGLLines.
+  let data: GLLineForMatching[]
+  try {
+    data = await fetchAllRows<GLLineForMatching>(({ from, to }) =>
+      supabase
+        .rpc('get_account_gl_lines_for_matching', {
+          p_company_id: companyId,
+          p_account_number: accountNumber,
+          p_date_from: dateFrom || null,
+          p_date_to: dateTo || null,
+          p_include_matched: includeMatched,
+        })
+        .order('entry_date')
+        .order('voucher_number')
+        .order('line_id')
+        .range(from, to),
+    )
+  } catch {
+    return []
+  }
   // count(*) can arrive as a bigint string over the wire — coerce defensively.
-  return (data as GLLineForMatching[]).map((line) => ({
+  return data.map((line) => ({
     ...line,
     linked_transaction_count: Number(line.linked_transaction_count) || 0,
   }))

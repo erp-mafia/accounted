@@ -445,14 +445,98 @@ describe('runReconciliation', () => {
     enqueue({ data: [glLine] })
     // from('transactions') returns unmatched transactions
     enqueue({ data: [tx] })
-    // Update transaction with link
-    enqueue({ data: null, error: null })
+    // Update transaction with link — .select('id') returns the updated row
+    enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: false })
 
     expect(result.matches).toHaveLength(1)
     expect(result.applied).toBe(1)
     expect(result.errors).toBe(0)
+  })
+
+  it('counts a conflicted apply (0 rows updated) as an error, not applied', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const glLine: UnlinkedGLLine = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      credit_amount: 500,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [glLine] })
+    enqueue({ data: [tx] })
+    // Optimistic-lock guard: a concurrent linker got there first — the
+    // .is('journal_entry_id', null) filter matches zero rows.
+    enqueue({ data: [] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: false })
+
+    expect(result.applied).toBe(0)
+    expect(result.errors).toBe(1)
+  })
+
+  it('applies only the pairs in applyOnly, intersected with the fresh match run', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx1 = makeTransaction({ id: 'tx-1', amount: 1000, date: '2024-06-15', currency: 'SEK' })
+    const tx2 = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const line1 = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      debit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+    const line2 = makeGLLine({
+      line_id: 'line-2',
+      journal_entry_id: 'je-2',
+      credit_amount: 500,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [line1, line2] })
+    enqueue({ data: [tx1, tx2] })
+    // Only ONE update should run — for the single selected pair.
+    enqueue({ data: [{ id: 'tx-2' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      applyOnly: [
+        { transactionId: 'tx-2', journalEntryId: 'je-2' },
+        // A pair the matcher never proposed must be ignored, not applied.
+        { transactionId: 'tx-99', journalEntryId: 'je-99' },
+      ],
+    })
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].transaction.id).toBe('tx-2')
+    expect(result.applied).toBe(1)
+    expect(result.errors).toBe(0)
+  })
+
+  it('ignores applyOnly on dry runs and returns the full match set', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx1 = makeTransaction({ id: 'tx-1', amount: 1000, date: '2024-06-15', currency: 'SEK' })
+    const line1 = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      debit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [line1] })
+    enqueue({ data: [tx1] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: true,
+      applyOnly: [],
+    })
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.applied).toBe(0)
   })
 })
 
@@ -569,12 +653,29 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Line exists on the selected account
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // Update succeeds
-    enqueue({ data: null, error: null })
+    // Update succeeds — .select('id') returns the updated row
+    enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
+  })
+
+  it('rejects when a concurrent linker won the race (0 rows updated)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    // The .is('journal_entry_id', null) optimistic-lock filter matched nothing:
+    // another session linked the transaction between our read and this write.
+    enqueue({ data: [] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
   })
 
   it('succeeds for a bound transaction when the account matches', async () => {
@@ -591,8 +692,8 @@ describe('manualLink', () => {
     enqueue({ data: { ledger_account: '1930' } })
     // Line exists on 1930
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // Update succeeds
-    enqueue({ data: null, error: null })
+    // Update succeeds — .select('id') returns the updated row
+    enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
@@ -612,7 +713,7 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     // Update succeeds — note there is NO existing-link lookup in the sequence.
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'tx-2' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930')
 
@@ -672,7 +773,7 @@ describe('unlinkReconciliation', () => {
       },
     })
 
-    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1')
+    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('Cannot unlink')
@@ -692,9 +793,51 @@ describe('unlinkReconciliation', () => {
     // Update succeeds
     enqueue({ data: null, error: null })
 
-    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1')
+    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
 
     expect(result.success).toBe(true)
+  })
+
+  it('attributes the audit log row to the acting user, not the company', async () => {
+    // Regression: unlinkReconciliation used to pass companyId where
+    // logMatchEvent expects userId, so payment_match_log.user_id recorded the
+    // company UUID (or the insert failed its FK silently).
+    const inserts: Record<string, unknown>[] = []
+    const resultQueue: { data: unknown; error: unknown }[] = [
+      {
+        data: { id: 'tx-1', journal_entry_id: 'je-1', reconciliation_method: 'manual' },
+        error: null,
+      },
+      { data: null, error: null }, // update
+    ]
+    const buildChain = (table?: string): unknown => {
+      const handler: ProxyHandler<object> = {
+        get(_target, prop) {
+          if (prop === 'then') {
+            const next = resultQueue.shift() ?? { data: null, error: null }
+            return (resolve: (v: unknown) => void) => resolve(next)
+          }
+          if (prop === 'insert') {
+            return (row: Record<string, unknown>) => {
+              if (table === 'payment_match_log') inserts.push(row)
+              return buildChain(table)
+            }
+          }
+          return (..._args: unknown[]) => buildChain(table)
+        },
+      }
+      return new Proxy({}, handler)
+    }
+    const supabase = {
+      from: vi.fn().mockImplementation((table: string) => buildChain(table)),
+      rpc: vi.fn().mockImplementation(() => buildChain()),
+    }
+
+    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
+
+    expect(result.success).toBe(true)
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].user_id).toBe('user-1')
   })
 })
 

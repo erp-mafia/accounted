@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import Link from 'next/link'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -1836,7 +1837,15 @@ export default function TransactionsPage() {
     }
     setBatchProgress(null)
     if (failures.length === 0) {
-      toast({ title: 'Klart', description: `${successes} transaktioner ignorerade` })
+      toast({
+        title: 'Klart',
+        description: `${successes} transaktioner ignorerade`,
+        action: (
+          <ToastAction altText="Öppna Bankavstämning" asChild>
+            <Link href="/reports/bank-reconciliation">Bankavstämning</Link>
+          </ToastAction>
+        ),
+      })
     } else {
       toast({
         title: 'Delvis klart',
@@ -2075,6 +2084,12 @@ export default function TransactionsPage() {
       <div className="flex flex-wrap items-center gap-2">
         <BankSyncStatusChip />
         <BankSyncNowButton />
+        {/* The ignore flows tell users to "återställ under Bankavstämning" —
+            this is the path there. Bankavstämning has no nav entry of its own,
+            so without a link here the copy points at an unreachable place. */}
+        <Button asChild variant="ghost" size="sm" className="ml-auto h-9 text-sm text-muted-foreground">
+          <Link href="/reports/bank-reconciliation">Bankavstämning →</Link>
+        </Button>
       </div>
       <BankSyncSinceLastVisit />
 

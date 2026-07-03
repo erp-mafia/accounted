@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
   const validation = await validateBody(request, RunReconciliationSchema)
   if (!validation.success) return validation.response
-  const { date_from, date_to, account_number, dry_run } = validation.data
+  const { date_from, date_to, account_number, dry_run, selected_matches } = validation.data
 
   const accountNumber = account_number ?? '1930'
 
@@ -59,6 +59,10 @@ export async function POST(request: Request) {
     // a secondary same-currency account must scope strictly to its own id.
     includeUnassigned: Boolean(cashAccount?.is_primary),
     dryRun: dry_run ?? false,
+    applyOnly: selected_matches?.map((m) => ({
+      transactionId: m.transaction_id,
+      journalEntryId: m.journal_entry_id,
+    })),
   })
 
   return NextResponse.json({

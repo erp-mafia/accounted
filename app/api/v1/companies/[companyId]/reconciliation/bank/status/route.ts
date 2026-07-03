@@ -12,14 +12,27 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 
+// Mirrors ReconciliationStatus from lib/reconciliation/bank-reconciliation.ts —
+// the handler passes that object straight through. This schema previously
+// documented a different, invented shape (matched_transactions, bank_balance,
+// total_unmatched_amount, …) that the endpoint never returned; any client coded
+// against it read undefined for every field except difference.
 const StatusResponse = z.object({
-  matched_transactions: z.number().int(),
-  unmatched_transactions: z.number().int(),
-  unmatched_gl_lines: z.number().int(),
-  total_unmatched_amount: z.number(),
-  bank_balance: z.number(),
-  gl_balance: z.number(),
+  /** Sum of bank-feed transactions in the window (the bank side). */
+  bank_transaction_total: z.number(),
+  /** Full ledger balance on the account incl. opening balance — matches the balance sheet. */
+  gl_1930_balance: z.number(),
+  /** Ledger movement excluding opening balance — what `difference` compares against. */
+  gl_1930_period_movement: z.number(),
+  gl_1930_opening_balance: z.number(),
+  /** Net storno/correction activity in the window. Informational; included in the movement. */
+  gl_1930_correction_adjustment: z.number(),
+  /** bank_transaction_total − gl_1930_period_movement. */
   difference: z.number(),
+  is_reconciled: z.boolean(),
+  matched_count: z.number().int(),
+  unmatched_transaction_count: z.number().int(),
+  unmatched_gl_line_count: z.number().int(),
 })
 
 registerEndpoint({
@@ -35,18 +48,22 @@ registerEndpoint({
     'Running the matcher — that\'s POST `/reconciliation/bank/run`. Per-transaction detail — use the transaction list with `?status=unbooked`.',
   pitfalls: [
     'A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.',
-    'total_unmatched_amount is the absolute sum — positive even when the unmatched rows include both credits and debits.',
+    'difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.',
+    'is_reconciled means |difference| < 0.01 for the window — an aggregate check, not a per-transaction guarantee.',
   ],
   example: {
     response: {
       data: {
-        matched_transactions: 142,
-        unmatched_transactions: 3,
-        unmatched_gl_lines: 2,
-        total_unmatched_amount: 1850.0,
-        bank_balance: 50000,
-        gl_balance: 48150,
-        difference: 1850,
+        bank_transaction_total: 48150,
+        gl_1930_balance: 98150,
+        gl_1930_period_movement: 48150,
+        gl_1930_opening_balance: 50000,
+        gl_1930_correction_adjustment: 0,
+        difference: 0,
+        is_reconciled: true,
+        matched_count: 142,
+        unmatched_transaction_count: 3,
+        unmatched_gl_line_count: 2,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },

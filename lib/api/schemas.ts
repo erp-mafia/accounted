@@ -1380,6 +1380,18 @@ export const RunReconciliationSchema = z.object({
     .regex(/^[0-9]{4}$/, 'Kontonummer måste vara 4 siffror')
     .optional(),
   dry_run: z.boolean().optional(),
+  // Pairs the user ticked in the dry-run preview. When present on an apply
+  // (dry_run false), only these pairs are committed — intersected server-side
+  // with a fresh match run, so a stale or fabricated pair is never applied.
+  selected_matches: z
+    .array(
+      z.object({
+        transaction_id: uuid,
+        journal_entry_id: uuid,
+      }),
+    )
+    .max(500)
+    .optional(),
 })
 
 // ============================================================

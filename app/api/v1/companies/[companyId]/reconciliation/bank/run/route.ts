@@ -55,7 +55,10 @@ const MatchOut = z.object({
 const RunResponse = z.object({
   matches: z.array(MatchOut),
   applied: z.number().int(),
-  errors: z.array(z.string()),
+  // Count of matches that failed to apply (DB error or lost an optimistic-lock
+  // race). Documented as z.array(z.string()) until 2026-07 — the lib has always
+  // returned a number.
+  errors: z.number().int(),
 })
 
 registerEndpoint({
@@ -73,12 +76,13 @@ registerEndpoint({
     'date_from / date_to default to the company\'s full bank history if omitted. Specify a window for predictable performance.',
     'account_number defaults to 1930. Multi-account companies must pass the BAS code of the account they are reconciling (e.g. 1932 for a EUR account), or it silently reconciles 1930.',
     'Idempotency-Key is mandatory.',
-    'matches.confidence is between 0 and 1; the matcher only applies matches above the internal threshold (currently ~0.85).',
+    'A non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75 — there is no internal confidence threshold. Dry-run first and review matches.confidence before applying.',
+    'The 366-day window bound only applies when BOTH date_from and date_to are set; a single-sided or absent window scans full history.',
   ],
   example: {
     request: { date_from: '2026-05-01', date_to: '2026-05-31' },
     response: {
-      data: { matches: [], applied: 0, errors: [] },
+      data: { matches: [], applied: 0, errors: 0 },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
