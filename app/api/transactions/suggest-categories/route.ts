@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getSuggestedCategories, getSuggestedTemplates, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName, toCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { requireCompanyId } from '@/lib/company/context'
 import type { Transaction, EntityType } from '@/types'
@@ -48,22 +48,19 @@ export async function POST(request: Request) {
     .eq('is_active', true)
     .order('priority', { ascending: false })
 
-  // Build category history from user's past categorized transactions
+  // Counterparty-keyed history from past categorized transactions — the
+  // suggestion engine only surfaces history tied to the SAME merchant
+  // (global frequency padding produced identical low-confidence spreads).
   const { data: historicalTxns } = await supabase
     .from('transactions')
-    .select('category')
+    .select('category, merchant_name')
     .eq('company_id', companyId)
     .not('is_business', 'is', null)
     .neq('category', 'uncategorized')
     .neq('category', 'private')
     .limit(200)
 
-  const categoryHistory: Record<string, number> = {}
-  if (historicalTxns) {
-    for (const tx of historicalTxns) {
-      categoryHistory[tx.category] = (categoryHistory[tx.category] || 0) + 1
-    }
-  }
+  const merchantHistory = buildMerchantHistory(historicalTxns ?? [])
 
   // Fetch entity type for template matching
   const { data: settings } = await supabase
@@ -84,7 +81,7 @@ export async function POST(request: Request) {
     suggestions[tx.id] = getSuggestedCategories(
       tx as Transaction,
       mappingRules || [],
-      categoryHistory
+      merchantHistoryFor(merchantHistory, (tx as Transaction).merchant_name)
     )
     template_suggestions[tx.id] = await getSuggestedTemplates(tx as Transaction, entityType, mappingRules || undefined)
   }

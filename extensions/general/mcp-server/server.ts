@@ -78,7 +78,7 @@ import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/book
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { getSuggestedCategories } from '@/lib/transactions/category-suggestions'
+import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -4435,7 +4435,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_suggest_categories',
     title: 'Suggest Transaction Categories',
-    description: 'Suggest categories for uncategorized transactions using mapping rules, pattern matching, history, and counterparty templates. Up to 20 transactions per call.',
+    description: 'Suggest categories for uncategorized transactions using mapping rules, patterns, counterparty history and templates. Up to 20 per call. no_signal_transaction_ids = nothing matched; investigate via gnubok_query_journal instead of guessing.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4454,8 +4454,13 @@ export const tools: McpTool[] = [
       properties: {
         suggestions: { type: 'object' },
         counterparty_matches: { type: 'object' },
+        no_signal_transaction_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Transactions where no source (rule, pattern, counterparty history, template) matched. An honest empty — do not infer categories from the other rows; investigate the counterparty (e.g. gnubok_query_journal) instead.',
+        },
       },
-      required: ['suggestions', 'counterparty_matches'],
+      required: ['suggestions', 'counterparty_matches', 'no_signal_transaction_ids'],
     },
     annotations: {
       readOnlyHint: true,
@@ -4487,19 +4492,19 @@ export const tools: McpTool[] = [
         .order('priority', { ascending: false })
 
       // Build category history from past categorizations
+      // Counterparty-keyed history: the engine only surfaces history tied to
+      // the SAME merchant — global frequency padding produced the identical
+      // ~0.5 four-way spread agents reported as pure noise (P2-1).
       const { data: historicalTxns } = await supabase
         .from('transactions')
-        .select('category')
+        .select('category, merchant_name')
         .eq('company_id', companyId)
         .not('is_business', 'is', null)
         .neq('category', 'uncategorized')
         .neq('category', 'private')
         .limit(200)
 
-      const categoryHistory: Record<string, number> = {}
-      for (const tx of historicalTxns || []) {
-        if (tx.category) categoryHistory[tx.category] = (categoryHistory[tx.category] || 0) + 1
-      }
+      const merchantHistory = buildMerchantHistory(historicalTxns ?? [])
 
       // Batch counterparty template matching
       const counterpartyMatches = await findCounterpartyTemplatesBatch(
@@ -4512,7 +4517,8 @@ export const tools: McpTool[] = [
 
       for (const tx of transactions) {
         suggestions[tx.id] = getSuggestedCategories(
-          tx as Transaction, mappingRules ?? [], categoryHistory
+          tx as Transaction, mappingRules ?? [],
+          merchantHistoryFor(merchantHistory, (tx as Transaction).merchant_name)
         )
 
         const cpMatch = counterpartyMatches.get(tx.id)
@@ -4529,7 +4535,18 @@ export const tools: McpTool[] = [
         }
       }
 
-      return { suggestions, counterparty_matches: counterpartyResult }
+      // Honest absence beats fabricated confidence: mark transactions where
+      // NO source produced a suggestion so agents investigate instead of
+      // pattern-matching on unrelated rows (P2-1).
+      const noSignal = transactions
+        .filter((tx) => (suggestions[tx.id]?.length ?? 0) === 0 && !counterpartyResult[tx.id])
+        .map((tx) => tx.id)
+
+      return {
+        suggestions,
+        counterparty_matches: counterpartyResult,
+        no_signal_transaction_ids: noSignal,
+      }
     },
   },
 
