@@ -2733,62 +2733,42 @@ export const tools: McpTool[] = [
       const offset = Math.max(0, Number(args.offset) || 0)
       const since = typeof args.since === 'string' ? args.since : null
       const minAmount = typeof args.min_amount === 'number' && Number.isFinite(args.min_amount)
-        ? args.min_amount
+        ? Math.max(0, args.min_amount)
         : 0
 
-      // PostgREST left-join filter: journal_entries left-joined to
-      // document_attachments and filtered to rows where the join produced
-      // no document. The filter syntax `document_attachments.id=is.null`
-      // applies the predicate post-join (Supabase: foreign-table is-null).
-      let query = supabase
-        .from('journal_entries')
-        .select(
-          'id, voucher_series, voucher_number, entry_date, description, source_type, document_attachments!left(id), journal_entry_lines(debit_amount)',
-          { count: 'exact' },
-        )
-        .eq('company_id', companyId)
-        .eq('status', 'posted')
-        .is('document_attachments.id', null)
-      if (since) query = query.gte('entry_date', since)
-
-      const { data, error, count } = await query
-        .order('entry_date', { ascending: false })
-        .order('voucher_number', { ascending: false })
-        .range(offset, offset + limit - 1)
+      // gross_amount is an aggregate over journal_entry_lines, which PostgREST
+      // cannot filter on — filtering it in memory after .range() made
+      // total_count ignore min_amount and consecutive pages overlap. The RPC
+      // filters, counts and paginates in SQL so the total respects the filter
+      // and next_offset advances by exactly the rows consumed.
+      const { data, error } = await supabase.rpc('verifikat_without_documents', {
+        p_company_id: companyId,
+        p_since: since,
+        p_min_amount: minAmount,
+        p_limit: limit,
+        p_offset: offset,
+      })
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const rows = ((data ?? []) as Array<{
-        id: string
-        voucher_series: string
-        voucher_number: number
-        entry_date: string
-        description: string
-        source_type: string
-        journal_entry_lines: { debit_amount: number | string }[] | null
-      }>).map((e) => {
-        const lines = e.journal_entry_lines ?? []
-        const gross = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
-        return {
-          journal_entry_id: e.id,
-          voucher_series: e.voucher_series,
-          voucher_number: e.voucher_number,
-          entry_date: e.entry_date,
-          description: e.description,
-          source_type: e.source_type,
-          gross_amount: Math.round(gross * 100) / 100,
-        }
-      })
+      const result = data as {
+        ok: boolean
+        code?: string
+        total_count?: number
+        verifikat?: unknown[]
+      } | null
+      if (!result?.ok) {
+        throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+      }
 
-      const filtered = minAmount > 0 ? rows.filter((r) => r.gross_amount >= minAmount) : rows
-
-      const total = count ?? 0
-      const hasMore = total > offset + filtered.length
+      const rows = result.verifikat ?? []
+      const total = result.total_count ?? 0
+      const hasMore = offset + rows.length < total
       return {
-        verifikat: filtered,
-        count: filtered.length,
+        verifikat: rows,
+        count: rows.length,
         total_count: total,
         has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + filtered.length } : {}),
+        ...(hasMore ? { next_offset: offset + rows.length } : {}),
       }
     },
   },
