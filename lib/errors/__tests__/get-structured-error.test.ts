@@ -84,3 +84,50 @@ describe('getStructuredError', () => {
     expect(result.message_sv.length).toBeGreaterThan(0)
   })
 })
+
+describe('retryable contract (always present, transient inference)', () => {
+  it('is explicitly false for a plain unclassified error', () => {
+    const result = getStructuredError(new Error('nope'))
+    expect(result.code).toBe('UNKNOWN_ERROR')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies a wrapped deadlock message as TRANSIENT_ERROR, retryable', () => {
+    // Tools wrap DB errors as plain strings, losing the SQLSTATE — the
+    // message pattern must survive that wrapping.
+    const result = getStructuredError(new Error('Database error: deadlock detected'))
+    expect(result.code).toBe('TRANSIENT_ERROR')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('classifies a Postgres serialization-failure SQLSTATE as transient', () => {
+    const err = Object.assign(new Error('could not complete'), { code: '40001' })
+    const result = getStructuredError(err)
+    expect(result.code).toBe('TRANSIENT_ERROR')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('classifies upstream 429/503 statuses as transient', () => {
+    expect(getStructuredError(Object.assign(new Error('slow down'), { status: 429 })).retryable).toBe(true)
+    expect(getStructuredError(Object.assign(new Error('bad gateway'), { statusCode: 502 })).retryable).toBe(true)
+  })
+
+  it('classifies fetch/socket failures as transient', () => {
+    expect(getStructuredError(new Error('fetch failed')).code).toBe('TRANSIENT_ERROR')
+    expect(getStructuredError(new Error('socket hang up')).retryable).toBe(true)
+    expect(getStructuredError(new Error('connect ECONNRESET 1.2.3.4:443')).retryable).toBe(true)
+  })
+
+  it('keeps a specific inferred code but still computes retryable from the failure', () => {
+    // NOT_FOUND is permanent even though nothing in the registry says so explicitly.
+    const result = getStructuredError(new Error('Transaction not found'))
+    expect(result.code).toBe('NOT_FOUND')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('lets an explicit registry retryable:true win over inference', () => {
+    const tagged = Object.assign(new Error('over the cap'), { code: 'RATE_LIMITED' })
+    const result = getStructuredError(tagged)
+    expect(result.retryable).toBe(true)
+  })
+})

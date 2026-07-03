@@ -2837,6 +2837,7 @@ export const tools: McpTool[] = [
           description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Tags the expense/business lines of the generated voucher — never the bank or VAT lines. Unknown values rejected, never auto-created.',
         },
         allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard (default false). Set true ONLY after the user confirms this bank line is a genuinely separate event — the guard blocks a second verifikat for an event already booked (e.g. a paid invoice or a salary payout).' },
+        idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries — a replayed call returns the already-staged operation instead of staging twice.' },
       },
       required: ['transaction_id', 'category'],
     },
@@ -2953,7 +2954,13 @@ export const tools: McpTool[] = [
           description: 'Once approved, the journal entry is posted. Continue with gnubok_list_uncategorized_transactions to keep clearing the backlog, or lock the period once it is empty.',
           tool: 'gnubok_list_uncategorized_transactions',
         },
-        tx?.date ? { dateForPeriodCheck: tx.date } : {},
+        {
+          ...(tx?.date ? { dateForPeriodCheck: tx.date } : {}),
+          // Categorize is the tool agents blind-retry after ambiguous
+          // client-side failures (approval elicitation drops) — the key makes
+          // that retry safe instead of double-staging.
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
       )
     },
   },

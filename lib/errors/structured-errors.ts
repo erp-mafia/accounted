@@ -47,6 +47,15 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Något gick fel. Försök igen.',
     message_en: 'An unexpected error occurred.',
   },
+  // Unclassified-but-transient failures (DB deadlock/timeout, connection
+  // drop, upstream 5xx/429) inferred by isTransientFailure() when no
+  // specific code applies. Stable code so agents can dispatch on it.
+  TRANSIENT_ERROR: {
+    httpStatus: 503,
+    message_sv: 'Tillfälligt fel — försök igen om en stund.',
+    message_en: 'Transient failure — retry the same request after a short backoff.',
+    retryable: true,
+  },
   INTERNAL_ERROR: {
     httpStatus: 500,
     message_sv: 'Ett oväntat serverfel uppstod. Försök igen senare.',

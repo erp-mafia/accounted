@@ -51,11 +51,60 @@ export interface StructuredError {
   message_en: string
   remediation?: StructuredErrorRemediation
   /**
-   * Present (true) only when the failure is transient. Agents may retry the
-   * same request after a short backoff. Absent or false means the request
-   * will fail the same way until inputs or system state change.
+   * ALWAYS present. `true` → transient failure: the identical request may
+   * succeed after a short backoff (pair with idempotency_key on staging
+   * tools). `false` → permanent for these inputs: retrying is wasted work
+   * until arguments or system state change. From the registry entry when the
+   * code declares it; otherwise inferred by isTransientFailure().
    */
-  retryable?: boolean
+  retryable: boolean
+}
+
+// Postgres SQLSTATEs that indicate a transient condition — the same statement
+// can succeed on retry without any input change.
+const TRANSIENT_SQLSTATES = new Set([
+  '40001', // serialization_failure
+  '40P01', // deadlock_detected
+  '57014', // query_canceled (statement timeout)
+  '57P03', // cannot_connect_now
+  '53300', // too_many_connections
+  '53400', // configuration_limit_exceeded
+  '55P03', // lock_not_available
+  '08000', // connection_exception
+  '08003', // connection_does_not_exist
+  '08006', // connection_failure
+])
+
+const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 502, 503, 504, 522, 524])
+
+// Message-level signatures for transient failures. Tools commonly wrap DB
+// errors as plain `Error(\`Database error: ${message}\`)`, losing the
+// SQLSTATE — these patterns survive that wrapping.
+const TRANSIENT_MESSAGE_PATTERNS = [
+  /fetch failed/i,
+  /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN/,
+  /socket hang up/i,
+  /deadlock detected/i,
+  /could not serialize access/i,
+  /canceling statement due to statement timeout/i,
+  /connection terminated/i,
+  /too many clients/i,
+  /rate limit/i,
+  /timed out/i,
+]
+
+function isTransientFailure(error: unknown, message: string): boolean {
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>
+    const inner = typeof obj.error === 'object' && obj.error !== null ? (obj.error as Record<string, unknown>) : undefined
+    for (const c of [obj.code, inner?.code]) {
+      if (typeof c === 'string' && TRANSIENT_SQLSTATES.has(c)) return true
+    }
+    for (const s of [obj.status, obj.statusCode]) {
+      if (typeof s === 'number' && TRANSIENT_HTTP_STATUSES.has(s)) return true
+    }
+  }
+  return TRANSIENT_MESSAGE_PATTERNS.some((re) => re.test(message))
 }
 
 interface StructuredErrorOptions {
@@ -138,7 +187,11 @@ export function getStructuredError(
   const message_en = extractEnglishMessage(error)
   const message_sv = getErrorMessage(error)
 
-  const code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
+  const transient = isTransientFailure(error, message_en)
+  let code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
+  // Nothing more specific matched but the failure is transient — surface the
+  // stable TRANSIENT_ERROR code so agents can dispatch on it.
+  if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
 
   const entry = getErrorEntry(code)
   let remediation = entry?.remediation
@@ -156,7 +209,9 @@ export function getStructuredError(
     message_sv,
     message_en,
     ...(remediation ? { remediation } : {}),
-    ...(entry?.retryable ? { retryable: true } : {}),
+    // Registry declaration wins; otherwise the transient inference decides.
+    // Always explicit — agents must never have to distinguish absent from false.
+    retryable: entry?.retryable ?? transient,
   }
 }
 
