@@ -77,11 +77,14 @@ export function TaxSettingsContent() {
 
   return (
     <div className="space-y-8">
+      {/* Connection panel first: the skattekonto and momsdeklaration pages
+          send users here specifically to (re)connect — below the long tax
+          form it sat out of view. */}
+      {showSkatteverket && <SkatteverketConnectPanel />}
+
       <SettingsFormWrapper onSave={handleSave} className="space-y-0">
         <TaxSettingsForm settings={settings} />
       </SettingsFormWrapper>
-
-      {showSkatteverket && <SkatteverketConnectPanel />}
     </div>
   )
 }
