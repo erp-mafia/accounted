@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
@@ -11,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, ArrowLeft, UserCircle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
+import NewEmployeeDialog from '@/components/salary/NewEmployeeDialog'
 import type { Employee } from '@/types'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
@@ -24,6 +26,19 @@ export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
   const { canWrite } = useCanWrite()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // The "Ny anställd" modal is driven by the URL (?new=1) so every entry
+  // point — the header button, the empty state, and the legacy
+  // /salary/employees/new redirect — opens the same dialog, and the browser
+  // back button closes it. Same pattern as /invoices.
+  const showNewEmployee = searchParams.has('new')
+  const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
+  const openNewEmployee = () => router.push('/salary/employees?new=1', { scroll: false })
+
+  // Bumped after a create in the dialog so the effect refetches the list.
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
     async function load() {
@@ -35,7 +50,7 @@ export default function EmployeesPage() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [refreshKey])
 
   return (
     <div className="space-y-8">
@@ -50,11 +65,9 @@ export default function EmployeesPage() {
           </div>
         </div>
         {canWrite && (
-          <Button asChild>
-            <Link href="/salary/employees/new">
-              <Plus className="mr-2 h-4 w-4" />
-              {t('new_employee')}
-            </Link>
+          <Button onClick={openNewEmployee}>
+            <Plus className="mr-2 h-4 w-4" />
+            {t('new_employee')}
           </Button>
         )}
       </div>
@@ -73,7 +86,7 @@ export default function EmployeesPage() {
               title={t('empty_title')}
               description={t('empty_description')}
               actionLabel={canWrite ? t('add_employee') : undefined}
-              actionHref={canWrite ? '/salary/employees/new' : undefined}
+              onAction={canWrite ? openNewEmployee : undefined}
             />
           </CardContent>
         </Card>
@@ -125,6 +138,17 @@ export default function EmployeesPage() {
           </CardContent>
         </Card>
       )}
+
+      <NewEmployeeDialog
+        open={showNewEmployee}
+        onOpenChange={(open) => {
+          if (!open) closeNewEmployee()
+        }}
+        onCreated={() => {
+          closeNewEmployee()
+          setRefreshKey((k) => k + 1)
+        }}
+      />
     </div>
   )
 }

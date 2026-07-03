@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -21,6 +20,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import { Plus, Repeat, Lock, AlertTriangle } from 'lucide-react'
+import NewRecurringScheduleDialog from '@/components/invoices/NewRecurringScheduleDialog'
 import type { RecurringInvoiceSchedule, Customer } from '@/types'
 
 type ScheduleRow = RecurringInvoiceSchedule & {
@@ -33,7 +33,16 @@ export default function RecurringInvoicesPage() {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const t = useTranslations('invoice_recurring')
+
+  // The "Nytt schema" modal is driven by the URL (?new=1) so every entry
+  // point — the header button, the empty state, and the legacy
+  // /invoices/recurring/new redirect — opens the same dialog, and the
+  // browser back button closes it. Same pattern as /invoices.
+  const showNewSchedule = searchParams.has('new')
+  const closeNewSchedule = () => router.replace('/invoices/recurring', { scroll: false })
+  const openNewSchedule = () => router.push('/invoices/recurring?new=1', { scroll: false })
 
   async function fetchSchedules() {
     setIsLoading(true)
@@ -95,12 +104,10 @@ export default function RecurringInvoicesPage() {
         title={t('title')}
         action={
           canWrite ? (
-            <Link href="/invoices/recurring/new">
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('new_schedule')}
-              </Button>
-            </Link>
+            <Button onClick={openNewSchedule}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('new_schedule')}
+            </Button>
           ) : (
             <Button disabled title={t('viewer_disabled_tooltip')}>
               <Lock className="mr-2 h-4 w-4" />
@@ -124,7 +131,7 @@ export default function RecurringInvoicesPage() {
               title={t('empty_title')}
               description={t('empty_description')}
               actionLabel={canWrite ? t('new_schedule') : undefined}
-              actionHref={canWrite ? '/invoices/recurring/new' : undefined}
+              onAction={canWrite ? openNewSchedule : undefined}
             />
           </CardContent>
         </Card>
@@ -208,6 +215,17 @@ export default function RecurringInvoicesPage() {
           </CardContent>
         </Card>
       )}
+
+      <NewRecurringScheduleDialog
+        open={showNewSchedule}
+        onOpenChange={(open) => {
+          if (!open) closeNewSchedule()
+        }}
+        onCreated={() => {
+          closeNewSchedule()
+          fetchSchedules()
+        }}
+      />
     </div>
   )
 }

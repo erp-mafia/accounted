@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,6 +14,7 @@ import { Plus, Users, HandCoins, CalendarDays, ArrowRight } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import NewSalaryRunDialog from '@/components/salary/NewSalaryRunDialog'
 import type { SalaryRun } from '@/types'
 
 const STATUS_LABEL_KEYS: Record<string, string> = {
@@ -36,7 +38,17 @@ export default function SalaryPage() {
   const [employeeCount, setEmployeeCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const { canWrite } = useCanWrite()
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const t = useTranslations('salary')
+
+  // The "Ny lönekörning" modal is driven by the URL (?new=1) so every entry
+  // point — the header button, the empty state, and the legacy
+  // /salary/runs/new redirect — opens the same dialog, and the browser back
+  // button closes it. Same pattern as /invoices.
+  const showNewRun = searchParams.has('new')
+  const closeNewRun = () => router.replace('/salary', { scroll: false })
+  const openNewRun = () => router.push('/salary?new=1', { scroll: false })
 
   useEffect(() => {
     async function load() {
@@ -93,11 +105,9 @@ export default function SalaryPage() {
               </Link>
             </Button>
             {canWrite && (
-              <Button asChild>
-                <Link href="/salary/runs/new">
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('new_run')}
-                </Link>
+              <Button onClick={openNewRun}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t('new_run')}
               </Button>
             )}
           </div>
@@ -153,7 +163,7 @@ export default function SalaryPage() {
               title={t('empty_runs_title')}
               description={t('empty_runs_description')}
               actionLabel={canWrite ? t('create_run') : undefined}
-              actionHref={canWrite ? '/salary/runs/new' : undefined}
+              onAction={canWrite ? openNewRun : undefined}
             />
           ) : (
             <Table>
@@ -203,6 +213,13 @@ export default function SalaryPage() {
           )}
         </CardContent>
       </Card>
+
+      <NewSalaryRunDialog
+        open={showNewRun}
+        onOpenChange={(open) => {
+          if (!open) closeNewRun()
+        }}
+      />
     </div>
   )
 }
