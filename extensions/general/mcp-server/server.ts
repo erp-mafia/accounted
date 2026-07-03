@@ -1936,12 +1936,13 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string' },
+        id: { type: 'string', description: 'Deprecated — read fact_id instead' },
+        fact_id: { type: 'string' },
         kind: { type: 'string' },
         content: { type: 'string' },
         created_at: { type: 'string' },
       },
-      required: ['id', 'kind', 'content', 'created_at'],
+      required: ['id', 'fact_id', 'kind', 'content', 'created_at'],
     },
     annotations: {
       readOnlyHint: false,
@@ -1994,6 +1995,7 @@ export const tools: McpTool[] = [
           .eq('id', dupe.id)
         return {
           id: dupe.id,
+          fact_id: dupe.id,
           kind: dupe.kind,
           content: dupe.content,
           created_at: dupe.created_at,
@@ -2015,7 +2017,7 @@ export const tools: McpTool[] = [
         .select('id, kind, content, created_at')
         .single()
       if (error) throw new Error(`Failed to remember fact: ${error.message}`)
-      return data
+      return { ...data, fact_id: data.id }
     },
   },
 
@@ -2036,10 +2038,11 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string' },
+        id: { type: 'string', description: 'Deprecated — read fact_id instead' },
+        fact_id: { type: 'string' },
         is_active: { type: 'boolean' },
       },
-      required: ['id', 'is_active'],
+      required: ['id', 'fact_id', 'is_active'],
     },
     annotations: {
       readOnlyHint: false,
@@ -2058,7 +2061,7 @@ export const tools: McpTool[] = [
         .select('id, is_active')
         .single()
       if (error) throw new Error(`Failed to forget fact: ${error.message}`)
-      return data
+      return { ...data, fact_id: data.id }
     },
   },
 
@@ -2180,7 +2183,8 @@ export const tools: McpTool[] = [
           description:
             'The single company every tool call in this session reads and writes. Confirm this is the entity the user means BEFORE any staged write — there is no per-call company switch; scope is fixed by the API key.',
           properties: {
-            id: { type: 'string', description: 'company_id this session is scoped to.' },
+            id: { type: 'string', description: 'Deprecated — read company_id instead.' },
+            company_id: { type: 'string', description: 'company_id this session is scoped to.' },
             name: { type: ['string', 'null'] },
             org_number: { type: ['string', 'null'] },
             entity_type: { type: ['string', 'null'], description: 'e.g. "aktiebolag", "enskild_firma". Null if unset.' },
@@ -2190,7 +2194,7 @@ export const tools: McpTool[] = [
               description: 'accrual = faktureringsmetoden: payment debits 19xx AND credits 1510 (both sides). cash = kontantmetoden: payment debits 19xx and books revenue + moms. Drives the settlement posting. Null defaults to accrual.',
             },
           },
-          required: ['id'],
+          required: ['id', 'company_id'],
         },
         user_name: {
           type: ['string', 'null'],
@@ -2208,12 +2212,13 @@ export const tools: McpTool[] = [
             type: 'object',
             additionalProperties: false,
             properties: {
-              id: { type: 'string', description: 'Atom id (e.g. "horizontal/swedish-vat", "vertical/konsult-it", "modifier/holding-ab"). Use as gnubok_load_skill slug.' },
+              id: { type: 'string', description: 'Deprecated — read atom_id instead.' },
+              atom_id: { type: 'string', description: 'Atom id (e.g. "horizontal/swedish-vat", "vertical/konsult-it", "modifier/holding-ab"). Use as gnubok_load_skill slug.' },
               tier: { type: 'string', enum: ['horizontal', 'vertical', 'modifier'] },
               title: { type: 'string' },
               description: { type: 'string' },
             },
-            required: ['id', 'tier', 'title', 'description'],
+            required: ['id', 'atom_id', 'tier', 'title', 'description'],
           },
         },
         memory: {
@@ -2223,12 +2228,13 @@ export const tools: McpTool[] = [
             type: 'object',
             additionalProperties: false,
             properties: {
-              id: { type: 'string' },
+              id: { type: 'string', description: 'Deprecated — read fact_id instead.' },
+              fact_id: { type: 'string', description: 'Pass to gnubok_forget_fact to deactivate.' },
               kind: { type: 'string', enum: ['fact', 'preference', 'pattern', 'correction'] },
               content: { type: 'string' },
               relevance_score: { type: ['number', 'null'] },
             },
-            required: ['id', 'kind', 'content'],
+            required: ['id', 'fact_id', 'kind', 'content'],
           },
         },
         dimensions: {
@@ -2373,6 +2379,7 @@ export const tools: McpTool[] = [
         | null
       const company = {
         id: companyId,
+        company_id: companyId,
         name: companyRow?.name ?? null,
         org_number: companyRow?.org_number ?? null,
         entity_type: companyRow?.entity_type ?? null,
@@ -2437,7 +2444,7 @@ export const tools: McpTool[] = [
         ...(profile?.modifier_atoms ?? []),
       ]
 
-      let atoms: Array<{ id: string; tier: string; title: string; description: string }> = []
+      let atoms: Array<{ id: string; atom_id: string; tier: string; title: string; description: string }> = []
       if (atomIds.length > 0) {
         const { data: atomRows, error: atomErr } = await supabase
           .from('agent_atom_registry')
@@ -2452,6 +2459,7 @@ export const tools: McpTool[] = [
           description: string
         }>).map((r) => ({
           id: r.id,
+          atom_id: r.id,
           tier: r.tier,
           title: r.title ?? r.id,
           // Trim the keyword-stuffed registry description to a clean one-liner —
@@ -2467,6 +2475,7 @@ export const tools: McpTool[] = [
         atoms,
         memory: memoryRows.map((m) => ({
           id: m.id,
+          fact_id: m.id,
           kind: m.kind,
           content: m.content,
           relevance_score: m.relevance_score,
@@ -2605,7 +2614,8 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string' },
+        id: { type: 'string', description: 'Deprecated — read transaction_id instead' },
+        transaction_id: { type: 'string' },
         date: { type: 'string' },
         description: { type: 'string' },
         amount: { type: 'number' },
@@ -2647,15 +2657,16 @@ export const tools: McpTool[] = [
 
       if (error) throw new Error(`Database error: ${error.message}`)
 
+      const rows = (data ?? []).map((t: { id: string }) => ({ ...t, transaction_id: t.id }))
       const total = totalCount ?? 0
-      const hasMore = total > offset + (data?.length ?? 0)
+      const hasMore = total > offset + rows.length
 
       return {
-        transactions: data,
-        count: data?.length ?? 0,
+        transactions: rows,
+        count: rows.length,
         total_count: total,
         has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + (data?.length ?? 0) } : {}),
+        ...(hasMore ? { next_offset: offset + rows.length } : {}),
       }
     },
   },
@@ -4594,7 +4605,8 @@ export const tools: McpTool[] = [
             type: 'object',
             additionalProperties: false,
             properties: {
-              id: { type: 'string' },
+              id: { type: 'string', description: 'Deprecated — read dimension_id instead' },
+              dimension_id: { type: 'string' },
               sie_dim_no: { type: 'number' },
               name: { type: 'string' },
               resets_annually: { type: 'boolean' },
@@ -4607,18 +4619,19 @@ export const tools: McpTool[] = [
                   type: 'object',
                   additionalProperties: false,
                   properties: {
-                    id: { type: 'string' },
+                    id: { type: 'string', description: 'Deprecated — read dimension_value_id instead' },
+                    dimension_value_id: { type: 'string' },
                     code: { type: 'string' },
                     name: { type: 'string' },
                     is_active: { type: 'boolean' },
                     start_date: { type: ['string', 'null'] },
                     end_date: { type: ['string', 'null'] },
                   },
-                  required: ['id', 'code', 'name', 'is_active', 'start_date', 'end_date'],
+                  required: ['id', 'dimension_value_id', 'code', 'name', 'is_active', 'start_date', 'end_date'],
                 },
               },
             },
-            required: ['id', 'sie_dim_no', 'name', 'resets_annually', 'is_system', 'is_active', 'sort_order', 'values'],
+            required: ['id', 'dimension_id', 'sie_dim_no', 'name', 'resets_annually', 'is_system', 'is_active', 'sort_order', 'values'],
           },
         },
       },
@@ -4636,7 +4649,13 @@ export const tools: McpTool[] = [
     async execute(_args, companyId, _userId, supabase) {
       await ensureCompanyDimensions(supabase, companyId)
       const dimensions = await fetchDimensionRegistry(supabase, companyId)
-      return { dimensions }
+      return {
+        dimensions: dimensions.map((d) => ({
+          ...d,
+          dimension_id: d.id,
+          values: d.values.map((v) => ({ ...v, dimension_value_id: v.id })),
+        })),
+      }
     },
   },
 
@@ -4663,13 +4682,14 @@ export const tools: McpTool[] = [
           type: 'object',
           additionalProperties: false,
           properties: {
-            id: { type: 'string' },
+            id: { type: 'string', description: 'Deprecated — read dimension_id instead' },
+            dimension_id: { type: 'string' },
             sie_dim_no: { type: 'number' },
             name: { type: 'string' },
             resets_annually: { type: 'boolean' },
             is_active: { type: 'boolean' },
           },
-          required: ['id', 'sie_dim_no', 'name', 'resets_annually', 'is_active'],
+          required: ['id', 'dimension_id', 'sie_dim_no', 'name', 'resets_annually', 'is_active'],
         },
         values: {
           type: 'array',
@@ -4677,7 +4697,8 @@ export const tools: McpTool[] = [
             type: 'object',
             additionalProperties: false,
             properties: {
-              id: { type: 'string' },
+              id: { type: 'string', description: 'Deprecated — read dimension_value_id instead' },
+              dimension_value_id: { type: 'string' },
               code: { type: 'string' },
               name: { type: 'string' },
               is_active: { type: 'boolean' },
@@ -4685,7 +4706,7 @@ export const tools: McpTool[] = [
               end_date: { type: ['string', 'null'] },
               confidence: { type: 'number', description: 'Fuzzy confidence 0–1; present only with query.' },
             },
-            required: ['id', 'code', 'name', 'is_active', 'start_date', 'end_date'],
+            required: ['id', 'dimension_value_id', 'code', 'name', 'is_active', 'start_date', 'end_date'],
           },
         },
         count: { type: 'number' },
@@ -4741,9 +4762,11 @@ export const tools: McpTool[] = [
         end_date: string | null
       }>
 
+      const qualifiedDimension = { ...dimension, dimension_id: dimension.id }
+
       if (!query) {
-        const values = all.slice(0, limit)
-        return { dimension, values, count: values.length }
+        const values = all.slice(0, limit).map((v) => ({ ...v, dimension_value_id: v.id }))
+        return { dimension: qualifiedDimension, values, count: values.length }
       }
 
       // Fuzzy ranking — same fuse.js setup as the resolve step so what this
@@ -4754,9 +4777,10 @@ export const tools: McpTool[] = [
         .slice(0, limit)
         .map((hit) => ({
           ...hit.item,
+          dimension_value_id: hit.item.id,
           confidence: roundOre(1 - (hit.score ?? 1)),
         }))
-      return { dimension, values, count: values.length }
+      return { dimension: qualifiedDimension, values, count: values.length }
     },
   },
 

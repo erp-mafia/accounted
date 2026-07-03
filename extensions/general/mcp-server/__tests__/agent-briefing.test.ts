@@ -234,6 +234,7 @@ describe('gnubok_get_agent_briefing tool', () => {
     }
     expect(result.company).toEqual({
       id: 'company-1',
+      company_id: 'company-1',
       name: 'Acme AB',
       org_number: '556677-8899',
       entity_type: 'aktiebolag',
@@ -254,6 +255,7 @@ describe('gnubok_get_agent_briefing tool', () => {
       company: { id: string; name: string | null; accounting_method: string | null }
     }
     expect(result.company.id).toBe('company-1')
+    expect((result.company as { company_id?: string }).company_id).toBe('company-1')
     expect(result.company.name).toBeNull()
     expect(result.company.accounting_method).toBeNull()
   })
