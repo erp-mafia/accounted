@@ -10,7 +10,7 @@ the way our CI would. If any step fails, fix and rerun from the top — do not p
 verified work.
 
 ## 0. Guard rails first (hard stops — no fix is worth breaking these)
-Read [Accounting Guard Rails](../../../CLAUDE.md#accounting-guard-rails). A change is **rejected outright** if it:
+Read [Hard Rules](../../../CLAUDE.md#hard-rules). A change is **rejected outright** if it:
 - edits or deletes a `posted` journal entry (use `reverseEntry`/`correctEntry` — storno, never edit),
 - makes an entry that doesn't balance, or sets a voucher number manually,
 - writes to a locked/closed period, or deletes a retained document,

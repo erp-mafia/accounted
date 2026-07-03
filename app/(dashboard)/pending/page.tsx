@@ -933,14 +933,6 @@ export default function PendingOperationsPage() {
         </DropdownMenu>
       </div>
 
-      {/* First-time reviewers haven't necessarily used the AI chat that staged
-          these — say what the buttons do and that ignoring a proposal is safe. */}
-      {activeTab === 'pending' && (
-        <p className="text-xs text-muted-foreground">
-          {t('explainer')} {t('auto_expiry_note')}
-        </p>
-      )}
-
       <DataList>
         {showBulkControls && bulkEligible.length > 0 && (
           <DataListHeader>

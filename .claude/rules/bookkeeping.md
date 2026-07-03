@@ -10,7 +10,7 @@ paths:
 
 # Bookkeeping Domain Reference
 
-For Swedish accounting-law questions, use the domain skills (`swedish-vat`, `swedish-accounting-compliance`, `swedish-year-end-closing`, etc.). The accounting guard rails in the root `CLAUDE.md` always apply.
+For Swedish accounting-law questions, use the domain skills (`swedish-vat`, `swedish-accounting-compliance`, `swedish-year-end-closing`, etc.). The Hard Rules in the root `CLAUDE.md` always apply.
 
 ## Core Services (`lib/core/`)
 

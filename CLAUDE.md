@@ -1,196 +1,103 @@
 # CLAUDE.md — Accounted
 
-## Project Overview
+Swedish accounting SaaS: double-entry bookkeeping under Swedish accounting law (Bokföringslagen) for sole traders (enskild firma) and limited companies (aktiebolag). Multi-tenant: users belong to companies via `company_members`; `teams` group companies for consultants.
 
-Accounted is a Swedish-focused accounting SaaS for sole traders (enskild firma) and limited companies (aktiebolag). It implements double-entry bookkeeping compliant with Swedish accounting law (Bokföringslagen), including VAT handling, tax reporting, and 7-year document retention. Multi-tenant: each user can own or be a member of multiple companies, optionally grouped into teams (for consultants).
-
-**Tech stack**: Next.js 16.1.5 (App Router), React 19.2.3, TypeScript 5 (strict), Zod 4, Supabase (PostgreSQL + RLS + email/password + TOTP MFA auth), Tailwind CSS 4 + shadcn/ui, Vercel hosting, Docker (self-hosted).
-
-**Integrations**: Enable Banking (PSD2), TIC Identity, Anthropic SDK, AWS Bedrock, OpenAI, Resend, Sentry, Svix, web-push, Upstash Redis, Google Drive, JSZip, sharp, Framer Motion, Recharts, PDF.js, `@react-pdf/renderer`, xlsx, fuse.js, ics.
-
-**Path alias**: `@/*` maps to the project root. **Language**: All code, comments, and commit messages in English. **License**: AGPL-3.0-or-later.
+**Stack**: Next.js 16 (App Router), React 19, TypeScript 5 strict, Zod 4, Supabase (Postgres + RLS + auth), Tailwind 4 + shadcn/ui. Vercel-hosted is the primary target; Docker self-hosted must keep working but never at hosted's expense. Path alias `@/*` = repo root. All code, comments, and commits in English.
 
 ---
+
+## Hard Rules
+
+The accounting rules are Swedish law, enforced by DB triggers. Code that violates them fails at runtime; code that works around the triggers breaks legal compliance. Never do either.
+
+1. **Never edit or delete a posted journal entry.** Committed vouchers are immutable. Cancel with `reverseEntry()`; correct with `correctEntry()` (`lib/core/bookkeeping/storno-service.ts`). Storno, never edit.
+2. **All journal writes go through `lib/bookkeeping/engine.ts`.** Never insert into journal tables directly: voucher numbers are assigned atomically by the `commit_journal_entry` RPC and must stay sequential, and gaps require documented explanations (BFNAR 2013:2 — `voucher_gap_explanations`).
+3. **Every entry balances**: `sum(debits) === sum(credits)`, both `> 0`.
+4. **Respect period locks.** DB triggers block writes to closed/locked periods and behind the company lock date. Don't work around them — fix the flow that tried to write there.
+5. **Never delete documents linked to posted entries** — 7-year retention is a legal requirement.
+6. **Money math is `Math.round(x * 100) / 100`.** Never `toFixed()` — it returns strings and rounds incorrectly, causing öre-level drift that breaks entry balance.
+7. **Account numbers are strings** (`'1930'`, never `1930`). They are identifiers, not quantities; arithmetic on them is always a bug.
+
+General prohibitions:
+
+- **Never modify an existing migration** — schemas already shipped; create a new migration. Never touch the enforcement triggers (migration 017); they are legally required.
+- **Core code must never import from `@/extensions/`.** CI builds core with zero extensions enabled; a direct import breaks that build. Extensions cannot use dynamic imports (the registry generates static imports via `setup:extensions`).
+- **Don't add dependencies without asking.** This is an AGPL-3.0 project; license compatibility matters, and the dependency surface is audited.
+- **Don't "finish" the gnubok → Accounted rename.** Wire-format identifiers keep the old name on purpose: `gnubok-company-id` cookie, `gnubok_sk_`/`gnubok_inv_` prefixes, `gnubok-mcp` npm package. Renaming them breaks live sessions, API keys, and invites.
+- **Treat `.env.local` as pointing at the production database.** Never run seed/cleanup/repair scripts against it without explicit confirmation.
+- **Keep the diff scoped to the request.** No drive-by refactors of untouched code.
+- Never create a NUL/nul file: `\Accounted\NUL`.
+
+## When Uncertain
+
+- **Stop and ask; do not guess.** Especially for anything touching posted entries, the production database, money math, or Swedish tax law.
+- **Swedish domain questions are never answered from training data.** Load the matching `swedish-*` skill (vat, accounting-compliance, invoice-compliance, payroll, year-end-closing, sie-import-export, sru-filing, financial-reporting, asset-accounting, project-accounting, tax-planning, e-invoicing).
+- Scaffolding has skills — use them instead of improvising: `/erp-api-route` (API routes), `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment).
+
+## Definition of Done
+
+A change is done when all of these hold — iterate until they do:
+
+1. `npm run lint` is clean and `npm test` passes (`npx vitest run <dir>` while iterating).
+2. New or changed logic in `lib/` or `app/api/` has tests: auth 401, validation 400, 404, happy path; mock `@/lib/supabase/server`.
+3. Any change to a trigger, RPC, RLS policy, or DEFERRABLE constraint ships with a `*.pg.test.ts` (`npm run test:pg`).
+4. New UI strings exist in **both** `messages/sv.json` and `messages/en.json`.
+5. If you edited an atom `SKILL.md`, `npm run skills:generate` was run (CI's `skills:check` fails otherwise).
+6. `npm run check:guards` passes if you touched API routes.
+7. Commit is conventional (`feat:`/`fix:`/`refactor:`/`test:`/`docs:`), atomic, branched from `main`.
 
 ## Commands
 
 ```bash
-npm run dev              # Start dev server (runs setup:extensions first)
+npm run dev              # Dev server (runs setup:extensions first)
 npm run build            # Production build (runs setup:extensions first)
 npm run lint             # ESLint
-npm test                 # Run all Vitest tests
-npx vitest run <dir>     # Run tests in a specific directory
+npm test                 # All Vitest tests
+npx vitest run <dir>     # Tests in one directory
 npm run test:pg          # pg-real tests against real Postgres
+npm run check:guards     # Ratchet guard (e.g. no hand-rolled route auth)
 npm run setup:extensions # Regenerate extension registry from extensions.config.json
-npm run skills:generate  # Regenerate agent_atom_registry seed migration after editing an atom SKILL.md
-npm run skills:check     # CI guard: fail if an atom SKILL.md changed without regenerating the seed migration
+npm run skills:generate  # Regenerate agent_atom_registry seed after editing an atom SKILL.md
 ```
 
----
+## Architecture
 
-## Key Architectural Relationships
-
-- **Multi-tenant model**: `companies` owns all business data. `company_members` links users to companies (owner/admin/member/viewer). `teams` group companies. Context resolved via `gnubok-company-id` cookie in `lib/supabase/middleware.ts`.
-- **All journal entry creation** routes through `lib/bookkeeping/engine.ts`. Lifecycle: `createDraftEntry()` → `commitEntry()` (atomic voucher via `commit_journal_entry` RPC). `createJournalEntry()` does both. Reversal: `reverseEntry()`. Correction: `correctEntry()` in `lib/core/bookkeeping/storno-service.ts`.
-- **API routes** emitting events must call `ensureInitialized()` (`lib/init.ts`) at module level to load extensions and wire handlers.
-- **Event bus** (`lib/events/bus.ts`) is a module-level singleton using `Promise.allSettled`. 50+ event types in `lib/events/types.ts`. Persisted to `event_log` table (30-day TTL).
-- **Supabase clients**: browser (`client.ts`), server cookies (`createClient()`), service role (`createServiceClient()`), cookieless service role for API keys (`createServiceClientNoCookies()`). Pagination: `fetchAllRows()`.
-- **Extension system**: Opt-in via `extensions.config.json`. Core runs with zero extensions.
-- **Types**: Shared types in `types/index.ts` (~3,100 lines). Import via `import type { T } from '@/types'`. Event types in `lib/events/types.ts`. Extension types in `lib/extensions/types.ts`.
-- **Error messages**: `lib/errors/get-error-message.ts` maps to Swedish (Zod → Postgres → HTTP → fallback).
-
----
+- **Journal entry lifecycle**: `createDraftEntry()` → `commitEntry()` (atomic voucher via `commit_journal_entry` RPC); `createJournalEntry()` does both. Everything accounting-shaped routes through this engine.
+- **Tenancy**: every business table has `company_id`. Active company resolves in `lib/supabase/middleware.ts`: `gnubok-company-id` cookie → `user_preferences.active_company_id` → first membership. RLS uses `user_company_ids()`; queries still filter by `company_id` explicitly (defense in depth — service-role paths have no RLS).
+- **Auth**: Supabase email+password + TOTP MFA, enforced **application-side**, not in RLS. `NEXT_PUBLIC_REQUIRE_MFA=true` on hosted; `NEXT_PUBLIC_SELF_HOSTED=true` disables MFA. API routes wrap `withRouteContext` — it is the only path that enforces MFA, so never hand-roll `supabase.auth.getUser()` in a route.
+- **Events**: `lib/events/bus.ts` is a module-level singleton. Any route that emits events must call `ensureInitialized()` (`lib/init.ts`) at module level — otherwise extension handlers are never wired and events silently go nowhere.
+- **Supabase clients**: browser `client.ts`, server `createClient()`, service role `createServiceClient()`, cookieless service role `createServiceClientNoCookies()` (lives in `lib/auth/api-keys.ts`; for API-key/MCP paths). Paginate with `fetchAllRows()` — PostgREST silently caps at 1000 rows.
+- **Extensions**: opt-in plugins in `extensions/general/<name>/`; `extensions.config.json` is the source of truth for what's enabled. Core must run with zero extensions.
+- **MCP server**: the bookkeeping engine is exposed as 100+ MCP tools (`extensions/general/mcp-server/`), authenticated by `gnubok_sk_` API keys (SHA-256, scoped, default 100 RPM per key).
+- **Types**: import from `@/types` (`types/index.ts`); event types in `lib/events/types.ts`.
+- **User-facing errors are Swedish**: map through `lib/errors/get-error-message.ts`.
+- **Cron**: hosted cron jobs live in `vercel.json`, authenticated via `verifyCronSecret()` (`lib/auth/cron.ts`).
 
 ## Repository Map
 
-- `lib/bookkeeping/` — Engine, entry generators, mapping, templates, BAS data
-- `lib/core/` — Period, year-end, storno, tax codes, audit, documents
-- `lib/events/` — Bus singleton, event types, event log handler
-- `lib/auth/` — API keys, require-auth/write, MFA, OAuth codes, invite tokens, cron, BankID
-- `lib/supabase/` — Clients, middleware, `fetchAllRows` pagination
-- `lib/api/` — Zod validation (`validateBody`/`validateQuery`), schemas
-- `lib/reports/` — Report generators (balance sheet, income statement, trial balance, GL, AR/supplier ledger, VAT declaration, SIE, INK2, NE-bilaga, KPI, salary, vacation, …)
-- `lib/invoices/`, `lib/transactions/`, `lib/import/` (SIE/bank/opening balance), `lib/documents/` (matchers)
-- `lib/providers/` — Fortnox, Bokio, Briox, BL, Visma (OAuth, retry, consent)
-- `lib/salary/` — Payroll engine, tax tables, AGI, KU, payslips, löneväxling, personnummer
-- `lib/reconciliation/`, `lib/tax/`, `lib/vat/` (VIES, MOMS box), `lib/deadlines/`, `lib/currency/` (Riksbanken), `lib/skatteverket/`, `lib/bankgiro/` (Luhn), `lib/calendar/` (ICS)
-- `lib/utils.ts` (`cn()`, `formatCurrency()`, `formatDate()`, `formatOrgNumber()`), `lib/logger.ts`
-- `app/(dashboard)/*` — pages; `app/api/*` — API routes; `supabase/migrations/` — schema; `extensions/general/*` — opt-in extensions
-- Path-scoped detail lives in `.claude/rules/` (see **Path-scoped rules** below).
-
----
-
-## Multi-Tenant Architecture
-
-- **companies**: Business unit. All business data has a `company_id` column.
-- **company_members**: Roles `owner`/`admin`/`member`/`viewer`, source `direct`|`team`.
-- **teams**: Consultant grouping. Team members auto-sync to company_members via DB triggers.
-- **user_preferences**: Stores `active_company_id` and `locale`.
-
-**Context resolution** (`lib/supabase/middleware.ts`): cookie → `user_preferences.active_company_id` → first membership. RLS uses `user_company_ids()` helper.
-
-**Invitations**: `company_invitations`/`team_invitations` with `gnubok_inv_` tokens (SHA-256, 7-day TTL). See `lib/auth/invite-tokens.ts`.
-
----
-
-## Authentication
-
-Supabase Auth: email+password (primary), magic link (fallback), TOTP MFA. MFA enforced **application-side** (middleware + API routes), not in RLS.
-
-- `NEXT_PUBLIC_SELF_HOSTED=true` → MFA never enforced
-- `NEXT_PUBLIC_REQUIRE_MFA=true` → middleware redirects to `/mfa/enroll` or `/mfa/verify` until AAL2
-
-**API route auth** (`lib/auth/require-auth.ts`): `requireAuth()` returns `{ user, supabase, error }`, enforces MFA on hosted.
-**API keys** (`lib/auth/api-keys.ts`): SHA-256 hashed, `gnubok_sk_` prefix. Scoped via `TOOL_SCOPE_MAP`. Rate limited 100 RPM via `validate_and_increment_api_key` RPC.
-**Cron auth** (`lib/auth/cron.ts`): `verifyCronSecret()` constant-time comparison.
-
----
-
-## Core Bookkeeping Engine
-
-The engine (`lib/bookkeeping/engine.ts`) is the most critical system. All accounting flows route through it.
-
-**Lifecycle**: `createDraftEntry()` → `commitEntry()` (atomic voucher via `commit_journal_entry` RPC). `createJournalEntry()` does both. `reverseEntry()` for storno; `correctEntry()` (`lib/core/bookkeeping/storno-service.ts`) for corrections.
-
-**Engine files**: `transaction-entries.ts`, `invoice-entries.ts` (with `generatePerRateLines()` for mixed-rate), `supplier-invoice-entries.ts`, `vat-entries.ts`, `currency-revaluation.ts`, `mapping-engine.ts`, `booking-templates.ts`/`counterparty-templates.ts`, `propose-payment-lines.ts`/`propose-send-lines.ts`, `handlers/supplier-invoice-handler.ts`.
-
-**BAS data** (`lib/bookkeeping/bas-data/`): Full BAS 2026 chart by class (1–8) + SRU mapping.
-
-Key BAS accounts, VAT treatments, VAT declaration rutor, and `lib/core/` services are in `.claude/rules/bookkeeping.md`. For accounting-law questions use the Swedish domain skills.
-
----
-
-## Accounting Guard Rails
-
-These rules exist for legal compliance, enforced by database triggers. **Never violate them.**
-
-1. **Committed entries are immutable.** Once `status: 'posted'`, cannot be edited or deleted (DB trigger).
-2. **Never delete posted entries.** Use `reverseEntry()` (storno) to cancel.
-3. **Every entry must balance.** `sum(debits) === sum(credits)`, both `> 0`.
-4. **Voucher numbers are sequential.** Assigned atomically via `commit_journal_entry` DB RPC. Never set manually.
-5. **Voucher gap documentation.** BFNAR 2013:2 requires documented explanations for gaps (`voucher_gap_explanations` table, `detect_voucher_gaps` RPC).
-6. **Period lock enforcement.** DB trigger blocks writes to closed/locked periods. Company-wide lock date enforced via `enforce_company_lock_date()` trigger.
-7. **7-year document retention.** DB triggers prevent deletion of documents linked to posted entries.
-8. **Storno, never edit.** Use `correctEntry()` from `lib/core/bookkeeping/storno-service.ts`.
-9. **Use `Math.round(x * 100) / 100`** for monetary calculations. Never `toFixed()`.
-10. **Always use engine functions.** Never insert directly into journal tables.
-11. **Account numbers are strings.** `'1930'`, never `1930`.
-
----
-
-## Extension System
-
-Extensions are opt-in plugins in `extensions/general/<name>/`, controlled by `extensions.config.json`. Core runs with zero extensions. `npm run setup:extensions` generates static imports in `lib/extensions/_generated/` (auto via `predev`/`prebuild`). Extensions **cannot** use dynamic imports.
-
-**Enabled** (`extensions.config.json`): `enable-banking` (PSD2), `email` (Resend), `arcim-migration`, `tic` (org lookup), `mcp-server`, `cloud-backup` (Google Drive), `skatteverket`, `invoice-inbox`, `document-extraction`. **Present but disabled**: `calendar`, `push-notifications`, `example-logger` (plus the `_example-branding` template).
-
-- **Registration** (`lib/extensions/registry.ts`): Singleton. `register()` wires handlers. `get(id)`, `getAll()`, `getByCapability(key)`.
-- **Context** (`lib/extensions/context-factory.ts`): `ExtensionContext` = `userId`, `companyId`, `extensionId`, `supabase`, `emit()`, `settings`, `storage`, `log`, `services`.
-- **Creating**: use the `/create-extension` skill, or `npx tsx scripts/create-extension.ts --name my-ext --sector general --category operations --description "..."`.
-
----
-
-## MCP Server & API Keys
-
-Accounted exposes its bookkeeping engine as an MCP server (`extensions/general/mcp-server/`) for Claude Desktop/Code — 90+ tools, JSON-RPC 2.0, endpoint `/api/extensions/ext/mcp-server/mcp`, OAuth 2.1 for Claude connectors. npm bridge: `packages/gnubok-mcp` (`npx gnubok-mcp`).
-
-**API keys** (`lib/auth/api-keys.ts`, `api_keys` table): SHA-256, `gnubok_sk_` prefix, scoped via `TOOL_SCOPE_MAP`, 100 RPM via `validate_and_increment_api_key` RPC. `createServiceClientNoCookies()` — all queries filter by `company_id` (defense in depth).
-
-Tool authoring conventions, the staged-operation completion-signal pattern, and OAuth details are in `.claude/rules/mcp-server.md`.
-
----
+- `lib/bookkeeping/` — engine, entry generators, mapping, templates, BAS 2026 data (`bas-data/`)
+- `lib/core/` — period, year-end, storno, tax codes, audit, documents
+- `lib/events/`, `lib/auth/`, `lib/supabase/`, `lib/api/` (Zod `validateBody`/`validateQuery`)
+- `lib/reports/` — balance sheet, income statement, trial balance, GL, ledgers, VAT, SIE, INK2, NE-bilaga, salary, …
+- `lib/invoices/`, `lib/transactions/`, `lib/import/`, `lib/documents/`, `lib/salary/`, `lib/reconciliation/`, `lib/tax/`, `lib/vat/`, `lib/providers/` (Fortnox/Bokio/Briox/BL/Visma), `lib/skatteverket/`, `lib/currency/`, `lib/bankgiro/`, `lib/deadlines/`, `lib/calendar/`
+- `lib/utils.ts` — `cn()`, `formatCurrency()`, `formatDate()`, `formatOrgNumber()`; `lib/logger.ts`
+- `app/(dashboard)/*` pages; `app/api/*` routes; `supabase/migrations/` schema; `extensions/general/*` plugins
 
 ## Testing
 
-**Framework**: Vitest 4, `node` env, tests in `__tests__/`. Scope: `lib/` and `app/api/`. No component/E2E tests.
+Vitest 4, `node` env, tests in `__tests__/`, scope `lib/` + `app/api/` (no component/E2E tests). Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, …). `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Trigger/RPC/RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks.
 
-**Helpers** (`tests/helpers.ts`): `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, `createMockRouteParams()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, `makeCustomer`, `makeSupplier`, `makeSupplierInvoice`, `makeFiscalPeriod`, etc.).
+## Detail Loads On Demand
 
-**Patterns**: Always mock `@/lib/supabase/server`. `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Test auth (401), validation (400), 404, 500, happy path.
+Don't duplicate these here — they auto-load when you touch matching paths:
 
-**pg-real**: Parallel Vitest project for triggers/RPCs/RLS using real Postgres. File convention `*.pg.test.ts`. **Required**: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts`. (Details in `.claude/rules/database.md`.)
+- `.claude/rules/design.md` — design system, locked tokens (`app/**`, `components/**`)
+- `.claude/rules/i18n.md` — sv/en conventions, "stays Swedish" surfaces
+- `.claude/rules/api-routes.md` — `withRouteContext` route pattern, endpoint map (`app/api/**`)
+- `.claude/rules/database.md` — migration rules, key tables/RPCs/triggers, pg-real (`supabase/migrations/**`)
+- `.claude/rules/mcp-server.md` — MCP tool authoring, staged-operation pattern
+- `.claude/rules/bookkeeping.md` — BAS accounts, VAT treatments/rutor, `lib/core/` services
 
----
+## Decision Log
 
-## Skills, Git & CI
-
-**Skills**: Use `/frontend-design` for new UI, `vercel:deploy` for deployment, `/supabase-migration` for new migrations, `/erp-api-route` for new API routes, `/create-extension` for new extensions. Use the Swedish domain skills (`swedish-vat`, `swedish-accounting-compliance`, `swedish-invoice-compliance`, `swedish-payroll`, `swedish-year-end-closing`, `swedish-sie-import-export`, `swedish-sru-filing`, `swedish-financial-reporting`, `swedish-asset-accounting`, `swedish-project-accounting`, `swedish-tax-planning`, `swedish-e-invoicing`) for accounting domain questions. The `swedish-*`, `industry/*`, and `modifier/*` skills also ship as product atoms (see `.claude/rules/database.md`).
-
-**Git**: Conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`). Atomic commits, branch from `main`.
-
-**CI**:
-- `.github/workflows/core-build.yml` — resets extensions to empty, runs build + test, verifies no core code imports from `@/extensions/` directly.
-- `.github/workflows/swedish-compliance-review.yml` — Swedish accounting compliance review on PRs touching bookkeeping/reports/tax logic.
-- `.github/workflows/docker-publish.yml` — pushes images to GHCR (`erp-mafia/erp-base`) on main.
-
----
-
-## Deployment
-
-- **Vercel (hosted)**: Cron jobs in `vercel.json` (deadline status, invoice reminders, tax deadlines, enable-banking sync, document verify, sandbox cleanup, event log cleanup, cloud-backup auto-sync).
-- **Docker (self-hosted)**: 4-stage Node 22 Alpine `Dockerfile` (standalone output) + `docker-compose.yml` (app + supercronic cron). `docker-entrypoint.sh` validates env vars and replaces build-time placeholders in `.next/static/`. Extension presets: `docker/extensions.{self-hosted,hosted}.json`.
-
-**Environment variables**:
-- **Required**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `CRON_SECRET`
-- **Auth**: `NEXT_PUBLIC_REQUIRE_MFA` (set `true` on hosted), `NEXT_PUBLIC_SELF_HOSTED` (set `true` for Docker)
-- **Extension-specific** (only when enabled): `ENABLE_BANKING_APP_ID`/`ENABLE_BANKING_APP_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `RESEND_API_KEY`, `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`
-- **Optional**: `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`
-
----
-
-## Path-scoped rules (`.claude/rules/`)
-
-Topic detail loads automatically when Claude touches matching files:
-
-- `design.md` — design context & locked design-system tokens (`app/**`, `components/**`)
-- `i18n.md` — bilingual sv/en conventions + "stays Swedish" surfaces (UI + `lib/email|invoices|reports|salary`)
-- `api-routes.md` — API route pattern + endpoint map (`app/api/**`)
-- `database.md` — migration rules, key tables/RPCs/triggers, `agent_atom_registry` (`supabase/migrations/**`)
-- `mcp-server.md` — MCP tool authoring conventions (`extensions/general/mcp-server/**`)
-- `bookkeeping.md` — BAS accounts, VAT treatments/rutor, `lib/core/` services (`lib/bookkeeping|core|reports|vat|invoices|salary`)
-
----
-
-## Other
-
-Never create a NUL/nul file: `\Accounted\NUL`.
+When you make a non-obvious choice — picked approach A over B, declined a dependency, stopped because a rule here forbade something — append one line to `dev_docs/DECISIONS.md`: `[YYYY-MM-DD] <decision> — <why>`. Check that file before re-litigating a past decision.
