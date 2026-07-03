@@ -78,57 +78,27 @@ describe('countInboxDocuments', () => {
 })
 
 describe('countVerifikatMissingDocument', () => {
-  it('counts posted document-requiring entries with neither document nor exemption', async () => {
-    // 6 posted entries: je-1 documented+exempt, je-2 documented, je-3 exempt
-    // → je-4, je-5, je-6 missing.
-    enqueue({
-      data: [
-        { id: 'je-1' },
-        { id: 'je-2' },
-        { id: 'je-3' },
-        { id: 'je-4' },
-        { id: 'je-5' },
-        { id: 'je-6' },
-      ],
-    })
-    enqueue({
-      data: [
-        { journal_entry_id: 'je-1' },
-        { journal_entry_id: 'je-1' }, // second doc on the same entry — still one entry
-        { journal_entry_id: 'je-2' },
-      ],
-    })
-    enqueue({
-      data: [{ journal_entry_id: 'je-1' }, { journal_entry_id: 'je-3' }],
-    })
+  // Predicate semantics (needs-doc source types, current versions, waivers)
+  // now live in the verifikat_without_documents RPC and are pinned by
+  // tests/pg/document-surfaces-unification.pg.test.ts against real Postgres.
+  // These tests cover only the delegation contract.
+  it('delegates to the verifikat_without_documents RPC and returns its total', async () => {
+    enqueue({ data: { ok: true, total_count: 3, verifikat: [] }, error: null })
     await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(3)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('verifikat_without_documents', {
+      p_company_id: COMPANY,
+      p_limit: 1,
+      p_offset: 0,
+    })
   })
 
-  it('ignores documents attached to entries outside the document-requiring set', async () => {
-    // The doc on je-99 (e.g. a VAT-settlement entry) must not shrink the count.
-    enqueue({ data: [{ id: 'je-1' }] })
-    enqueue({ data: [{ journal_entry_id: 'je-99' }] })
-    enqueue({ data: [] })
-    await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(1)
-  })
-
-  it('soft-fails to 0 when a paginated read errors', async () => {
-    enqueue({ error: { message: 'boom' } })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+  it('soft-fails to 0 when the RPC errors', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
     await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(0)
   })
 
-  it('soft-fails to 0 (never a silent partial) when pagination errors mid-stream', async () => {
-    // First page of entries is full (1000 = fetchAllRows page size), so a
-    // second page is requested and errors. fetchAllRows must throw — the
-    // count drops to a logged 0 rather than computing from a truncated set.
-    enqueue({
-      data: Array.from({ length: 1000 }, (_, i) => ({ id: `je-${i}` })),
-    })
-    enqueue({ data: [] }) // document_attachments page 1
-    enqueue({ data: [] }) // exemptions page 1
-    enqueue({ error: { message: 'mid-stream failure' } }) // entries page 2
+  it('soft-fails to 0 on a not-ok envelope (tenant guard)', async () => {
+    enqueue({ data: { ok: false, code: 'VERIFIKAT_WITHOUT_DOCUMENTS_FORBIDDEN' }, error: null })
     await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(0)
   })
 })

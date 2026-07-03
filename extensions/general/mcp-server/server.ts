@@ -2663,7 +2663,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_transactions_without_documents',
     title: 'List Transactions Missing Receipts',
-    description: 'List BANK TRANSACTIONS booked without an attached underlag. For imported/manual verifikat (no bank tx row) call gnubok_list_verifikat_without_documents — this tool only covers bank-driven entries.',
+    description: 'List booked bank transactions whose verifikat lacks an underlag. Strict subset of gnubok_list_verifikat_without_documents (same document truth, waivers respected) — use that tool for full coverage incl. imported/manual verifikat.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2677,7 +2677,8 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string' },
+        id: { type: 'string', description: 'Deprecated — read transaction_id instead' },
+        transaction_id: { type: 'string' },
         date: { type: 'string' },
         description: { type: 'string' },
         amount: { type: 'number' },
@@ -2700,42 +2701,39 @@ export const tools: McpTool[] = [
       const offset = Math.max(0, Number(args.offset) || 0)
       const since = typeof args.since === 'string' ? args.since : null
 
-      let countQuery = supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .not('journal_entry_id', 'is', null)
-        .is('document_id', null)
-      if (since) countQuery = countQuery.gte('date', since)
-
-      const { count: totalCount, error: countError } = await countQuery
-      if (countError) throw new Error(`Database error: ${countError.message}`)
-
-      let dataQuery = supabase
-        .from('transactions')
-        .select(
-          'id, date, description, amount, currency, merchant_name, reference, is_business, category, journal_entry_id'
-        )
-        .eq('company_id', companyId)
-        .not('journal_entry_id', 'is', null)
-        .is('document_id', null)
-      if (since) dataQuery = dataQuery.gte('date', since)
-
-      const { data, error } = await dataQuery
-        .order('date', { ascending: false })
-        .range(offset, offset + limit - 1)
-
+      // Same document truth as the verifikat surface: the RPC keys "has
+      // underlag" on document_attachments (current version) + waivers, never
+      // transactions.document_id — the two columns diverged historically
+      // (P1-3, dev_docs/mcp_optimization_plan.md) and this surface is the
+      // bank-driven SUBSET of gnubok_list_verifikat_without_documents by
+      // construction.
+      const { data, error } = await supabase.rpc('transactions_without_documents', {
+        p_company_id: companyId,
+        p_since: since,
+        p_limit: limit,
+        p_offset: offset,
+      })
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const total = totalCount ?? 0
-      const hasMore = total > offset + (data?.length ?? 0)
+      const result = data as {
+        ok: boolean
+        code?: string
+        total_count?: number
+        transactions?: unknown[]
+      } | null
+      if (!result?.ok) {
+        throw new Error(`transactions_without_documents failed: ${result?.code ?? 'unknown error'}`)
+      }
 
+      const rows = result.transactions ?? []
+      const total = result.total_count ?? 0
+      const hasMore = offset + rows.length < total
       return {
-        transactions: data,
-        count: data?.length ?? 0,
+        transactions: rows,
+        count: rows.length,
         total_count: total,
         has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + (data?.length ?? 0) } : {}),
+        ...(hasMore ? { next_offset: offset + rows.length } : {}),
       }
     },
   },
@@ -2743,7 +2741,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_verifikat_without_documents',
     title: 'List Verifikat Missing Documents',
-    description: 'List POSTED journal entries (verifikat) that have no document_attachments row. Covers SIE-imported, manual and salary vouchers that the transactions-based tool misses. Newest first, paginated.',
+    description: 'List posted verifikat that genuinely lack an underlag: needs-doc source types only, current document versions, user waivers respected. Superset of gnubok_list_transactions_without_documents (covers imported/manual too). Newest first, paginated.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

@@ -10,7 +10,6 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SuggestedMatch } from './types'
 
 const log = createLogger('worklist')
@@ -161,55 +160,30 @@ export async function countSupplierInvoicesAwaitingApproval(
  * source types that have neither a current-version document nor a
  * journal_entry_no_doc_required exemption.
  *
- * Computed as an exact per-entry set difference (the home page previously
- * subtracted set SIZES, which both let documents on non-document-requiring
- * entries shrink the count and silently truncated at the PostgREST row cap).
- * All three reads paginate via fetchAllRows; row volume is bounded by the
- * company's posted-entry history (id-only columns).
+ * Delegates to the verifikat_without_documents RPC — the SAME predicate the
+ * MCP surfaces use (single truth in SQL; the RPC's needs-doc source-type
+ * list mirrors NEEDS_DOC_SOURCE_TYPES, pinned by
+ * tests/pg/document-surfaces-unification.pg.test.ts). Previously this
+ * fetched three full id-column tables and set-differenced client-side.
  */
 export async function countVerifikatMissingDocument(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
   try {
-    const [entries, docs, exemptions] = await Promise.all([
-      fetchAllRows<{ id: string }>(({ from, to }) =>
-        supabase
-          .from('journal_entries')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('status', 'posted')
-          .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
-          .order('id')
-          .range(from, to),
-      ),
-      fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
-        supabase
-          .from('document_attachments')
-          .select('journal_entry_id')
-          .eq('company_id', companyId)
-          .eq('is_current_version', true)
-          .not('journal_entry_id', 'is', null)
-          .order('id')
-          .range(from, to),
-      ),
-      fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
-        supabase
-          .from('journal_entry_no_doc_required')
-          .select('journal_entry_id')
-          .eq('company_id', companyId)
-          .order('journal_entry_id')
-          .range(from, to),
-      ),
-    ])
-
-    const withDoc = new Set(docs.map((d) => d.journal_entry_id))
-    const exempt = new Set(exemptions.map((e) => e.journal_entry_id))
-    let missing = 0
-    for (const entry of entries) {
-      if (!withDoc.has(entry.id) && !exempt.has(entry.id)) missing++
+    const { data, error } = await supabase.rpc('verifikat_without_documents', {
+      p_company_id: companyId,
+      p_limit: 1,
+      p_offset: 0,
+    })
+    if (error) return logAndZero('verifikat_missing_document', companyId, error)
+    const result = data as { ok?: boolean; code?: string; total_count?: number } | null
+    if (!result?.ok) {
+      return logAndZero('verifikat_missing_document', companyId, {
+        message: result?.code ?? 'rpc returned not-ok',
+      })
     }
-    return missing
+    return result.total_count ?? 0
   } catch (err) {
     return logAndZero(
       'verifikat_missing_document',
