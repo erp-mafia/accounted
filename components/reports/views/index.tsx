@@ -1121,10 +1121,11 @@ export function VatDeclarationView() {
   }
 
   // The declaration loads as soon as the period is known — no manual "Hämta"
-  // step. fetchKey is null while a prerequisite is missing; any change to it
-  // triggers a refetch and stale responses are discarded.
+  // step. fetchKey is null while a prerequisite is missing (settings pending,
+  // gated, or no redovisningsperiod configured); any change to it triggers a
+  // refetch and stale responses are discarded.
   const fetchKey =
-    periodType === null || notVatRegistered || awaitingFiscalPeriod
+    periodType === null || notVatRegistered || momsPeriodMissing || awaitingFiscalPeriod
       ? null
       : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
 
@@ -1139,13 +1140,17 @@ export function VatDeclarationView() {
     let cancelled = false
     fetch(`/api/reports/vat-declaration?${params.toString()}`)
       .then(async (res) => {
-        const json = await res.json()
+        const json = await res.json().catch(() => null)
         if (cancelled) return
-        setResult(
-          json.error
-            ? { key: fetchKey, error: json.error }
-            : { key: fetchKey, declaration: json.data },
-        )
+        if (!res.ok || json?.error) {
+          setResult({
+            key: fetchKey,
+            error:
+              typeof json?.error === 'string' ? json.error : 'Kunde inte hämta momsdeklaration',
+          })
+        } else {
+          setResult({ key: fetchKey, declaration: json.data })
+        }
       })
       .catch(() => {
         if (!cancelled) setResult({ key: fetchKey, error: 'Kunde inte hämta momsdeklaration' })
@@ -1187,6 +1192,21 @@ export function VatDeclarationView() {
     )
   }
 
+  // Registered but no redovisningsperiod picked: block instead of guessing.
+  // A declaration rendered (and submittable via panelen) for the wrong
+  // period type is a compliance hazard, not a convenience.
+  if (momsPeriodMissing) {
+    return (
+      <EmptyState
+        icon={Percent}
+        title="Redovisningsperiod för moms saknas"
+        description="Företaget är momsregistrerat men ingen redovisningsperiod (månad, kvartal eller helår) är vald. Ange den i skatteinställningarna så visas deklarationen för rätt period."
+        actionLabel="Öppna skatteinställningar"
+        actionHref="/settings/tax"
+      />
+    )
+  }
+
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-4">
@@ -1199,20 +1219,6 @@ export function VatDeclarationView() {
           contextRef={`vat:${year}-${periodType}-${period}`}
         />
       </ReportExportMenu>
-
-      {momsPeriodMissing && (
-        <Link href="/settings/tax" className="group block">
-          <div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 transition-colors hover:bg-secondary/60">
-            <p className="text-sm">
-              <span className="font-medium">Redovisningsperiod för moms saknas.</span>{' '}
-              <span className="text-muted-foreground">
-                Ange den i skatteinställningarna så visas rätt period automatiskt.
-              </span>
-            </p>
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-          </div>
-        </Link>
-      )}
 
       {/* Period selection — the declaration below follows it automatically */}
       <Card>
@@ -1505,14 +1511,18 @@ export function VatDeclarationView() {
         </div>
       )}
 
-      {/* Skatteverket integration panel */}
-      <SkatteverketPanel
-        periodType={periodType}
-        year={year}
-        period={period}
-        hasData={data !== null}
-        rutor={data?.rutor ?? null}
-      />
+      {/* Skatteverket integration panel — hidden while the räkenskapsår for
+          helårsmoms is unresolved, so its actions can never target an
+          unconfirmed period. */}
+      {!awaitingFiscalPeriod && (
+        <SkatteverketPanel
+          periodType={periodType}
+          year={year}
+          period={period}
+          hasData={data !== null}
+          rutor={data?.rutor ?? null}
+        />
+      )}
     </div>
     </VatDrillContext.Provider>
   )
