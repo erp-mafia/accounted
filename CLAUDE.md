@@ -100,4 +100,4 @@ Don't duplicate these here — they auto-load when you touch matching paths:
 
 ## Decision Log
 
-When you make a non-obvious choice — picked approach A over B, declined a dependency, stopped because a rule here forbade something — append one line to `dev_docs/DECISIONS.md`: `[YYYY-MM-DD] <decision> — <why>`. Check that file before re-litigating a past decision.
+When you make a non-obvious choice — picked approach A over B, declined a dependency, stopped because a rule here forbade something — append one line to `DECISIONS.md` (repo root): `[YYYY-MM-DD] <decision> — <why>`. Check that file before re-litigating a past decision.
