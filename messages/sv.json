@@ -303,7 +303,9 @@
     "deleted_title": "Deadline borttagen",
     "delete_failed_title": "Kunde inte ta bort deadline",
     "retry": "Försök igen.",
-    "overdue_invoices": "{count} förfallna fakturor"
+    "overdue_invoices": "{count} förfallna fakturor",
+    "no_system_deadlines_title": "Automatiska skattedeadlines saknas.",
+    "no_system_deadlines_description": "Deadlines för moms, arbetsgivardeklaration och F-skatt skapas från företagets skatteinställningar — kontrollera att de är ifyllda."
   },
   "bureau": {
     "title": "Byrå",

@@ -54,6 +54,9 @@ function FocusedReportInner({ slug }: { slug: string }) {
   const report = getReport(slug)
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
+  // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
+  // link, no shell fiscal-year selector — the view owns its period controls.
+  const isStandalone = !!report?.standalone
   const reportName = report ? t(report.labelKey) : slug
   const accountFilter = searchParams.get('account')
 
@@ -68,30 +71,34 @@ function FocusedReportInner({ slug }: { slug: string }) {
 
   return (
     <div className="space-y-8">
-      <Link
-        href="/reports"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ChevronLeft className="h-4 w-4" />
-        {t('back_to_library')}
-      </Link>
+      {!isStandalone && (
+        <Link
+          href="/reports"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          {t('back_to_library')}
+        </Link>
+      )}
 
       <PageHeader
         title={reportName}
         action={
-          <FiscalYearSelector
-            value={selectedPeriod || null}
-            onChange={(id, period) => {
-              setSelectedPeriod(id || '')
-              setSelectedPeriodBounds(
-                period ? { start: period.period_start, end: period.period_end } : null,
-              )
-              setDateRange({})
-            }}
-            includeAllOption={false}
-            hideFuturePeriods
-            onReady={() => setIsReady(true)}
-          />
+          isStandalone ? undefined : (
+            <FiscalYearSelector
+              value={selectedPeriod || null}
+              onChange={(id, period) => {
+                setSelectedPeriod(id || '')
+                setSelectedPeriodBounds(
+                  period ? { start: period.period_start, end: period.period_end } : null,
+                )
+                setDateRange({})
+              }}
+              includeAllOption={false}
+              hideFuturePeriods
+              onReady={() => setIsReady(true)}
+            />
+          )
         }
       />
 
@@ -174,7 +181,7 @@ function FocusedView({
     case 'balance-sheet':
       return <BalanceSheetView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
     case 'vat-declaration':
-      return <VatDeclarationView fiscalPeriodId={periodId} fiscalPeriodBounds={periodBounds} />
+      return <VatDeclarationView />
     case 'periodisk-sammanstallning':
       return <PeriodiskSammanstallningView />
     case 'ne-declaration':

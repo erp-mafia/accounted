@@ -69,6 +69,12 @@ export interface ReportDescriptor {
   dimensions?: boolean
   /** Only shown when company_settings.dimensions_enabled is true. */
   needsDimensions?: boolean
+  /**
+   * Nav-promoted page that happens to render in the focused-report shell.
+   * Hides the report-library back link and the shell's fiscal-year selector —
+   * the view owns all of its period controls.
+   */
+  standalone?: boolean
 }
 
 /** Categories shown in the legacy desktop rail, in order. */
@@ -206,6 +212,9 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'tax_vat',
     params: 'calendar',
     exports: ['xlsx'],
+    // Promoted to the Skatt & bokslut nav group — reached directly, not via
+    // the report library, and it manages its own period selection.
+    standalone: true,
   },
   {
     slug: 'periodisk-sammanstallning',

@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
+  AlertCircle,
   Copy,
   ExternalLink,
   FileCheck,
@@ -65,6 +66,7 @@ export default function SkattekontoPage() {
   const [syncing, setSyncing] = useState(false)
   const [bookingId, setBookingId] = useState<string | null>(null)
   const [notConnected, setNotConnected] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -74,6 +76,7 @@ export default function SkattekontoPage() {
 
   const reload = useCallback(async () => {
     setLoading(true)
+    setLoadError(false)
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
@@ -85,6 +88,14 @@ export default function SkattekontoPage() {
         return
       }
 
+      // A non-auth failure must NOT fall through to the "inget saldo hämtat
+      // ännu"-tomvy — that reads as "not configured" when the truth is "the
+      // fetch broke". Surface it as an error with a retry instead.
+      if (!saldoRes.ok) {
+        setLoadError(true)
+        return
+      }
+
       const saldoJson = (await saldoRes.json()) as SaldoEnvelope
       setSaldo(saldoJson)
 
@@ -92,6 +103,8 @@ export default function SkattekontoPage() {
         const txJson = (await txRes.json()) as TransaktionerEnvelope
         setTx(txJson.data)
       }
+    } catch {
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -239,6 +252,28 @@ export default function SkattekontoPage() {
                 <ExternalLink className="mr-2 h-4 w-4" />
                 Anslut Skatteverket
               </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="space-y-6">
+        <PageHeading />
+        <Card>
+          <CardContent className="flex flex-col items-center py-12 text-center">
+            <AlertCircle className="mb-4 h-10 w-10 text-muted-foreground/40" />
+            <p className="mb-1 font-medium">Kunde inte hämta skattekontot</p>
+            <p className="mb-4 max-w-md text-sm text-muted-foreground">
+              Något gick fel när saldo och transaktioner skulle hämtas. Försök
+              igen om en stund.
+            </p>
+            <Button variant="outline" onClick={() => void reload()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Försök igen
             </Button>
           </CardContent>
         </Card>

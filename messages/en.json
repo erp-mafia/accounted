@@ -303,7 +303,9 @@
     "deleted_title": "Deadline deleted",
     "delete_failed_title": "Could not delete deadline",
     "retry": "Please try again.",
-    "overdue_invoices": "{count} overdue invoices"
+    "overdue_invoices": "{count} overdue invoices",
+    "no_system_deadlines_title": "Automatic tax deadlines missing.",
+    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in."
   },
   "bureau": {
     "title": "Bureau",

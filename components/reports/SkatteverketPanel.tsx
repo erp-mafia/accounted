@@ -229,7 +229,12 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   }, [fetchStatus])
 
   const handleConnect = () => {
-    window.location.href = '/api/extensions/ext/skatteverket/authorize'
+    // return_to brings the user back to the momsdeklaration after the BankID
+    // round-trip; the authorize route's default otherwise lands on the report
+    // library. The callback appends skv_connected/skv_error itself.
+    window.location.href =
+      '/api/extensions/ext/skatteverket/authorize?return_to=' +
+      encodeURIComponent('/reports/vat-declaration')
   }
 
   const handleDisconnect = async () => {
