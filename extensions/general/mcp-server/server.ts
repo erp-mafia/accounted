@@ -7870,7 +7870,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_unmatched_documents',
     title: 'List Unmatched Documents',
-    description: 'List inbox documents not yet attached to any bank transaction or supplier invoice. Returns vendor/amount/currency/date hints. Amount is in the invoice currency; FX-normalise before comparing to transactions.amount.',
+    description: 'List inbox documents not yet attached to any bank transaction, supplier invoice, or journal entry. Returns vendor/amount/currency/date hints. Amount is in the invoice currency; FX-normalise before comparing to transactions.amount.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7913,8 +7913,10 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Pull recent inbox items with a document, no supplier invoice yet, then
-      // filter out those whose document is already pinned to a transaction.
+      // Pull recent inbox items with a document, no supplier invoice and no
+      // direct journal entry yet (both are terminal links per the same
+      // "processed" semantics gnubok_list_inbox_items uses), then filter out
+      // those whose document is already pinned to a transaction.
       // Two-step query because PostgREST doesn't expose anti-joins.
       const fetchSize = limit * 2
       let inboxQuery = supabase
@@ -7923,6 +7925,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .not('document_id', 'is', null)
         .is('created_supplier_invoice_id', null)
+        .is('created_journal_entry_id', null)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
         .limit(fetchSize)
