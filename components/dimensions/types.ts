@@ -19,15 +19,36 @@ export interface DimensionValueDto {
 
 export interface DimensionDto {
   id: string
-  /** SIE #DIM number (1 = Kostnadsställe, 6 = Projekt). */
+  /** SIE #DIM number (1 = Kostnadsställe, 6 = Projekt, 20+ = custom). */
   sie_dim_no: number
   name: string
   resets_annually: boolean
   is_system: boolean
   is_active: boolean
   sort_order: number
+  /** SIE #UNDERDIM parent — the sie_dim_no of the parent dimension, or null. */
+  parent_sie_dim_no: number | null
   /** Sorted by code by the API. */
   values: DimensionValueDto[]
+}
+
+export type DimensionRuleType = 'required' | 'default' | 'fixed'
+
+/**
+ * Per-account dimension rule as served by GET /api/dimensions/rules —
+ * a flattened join row (rule + dimension + optional pinned value).
+ */
+export interface AccountDimensionRuleDto {
+  account_dimension_rule_id: string
+  account_number: string
+  dimension_id: string
+  sie_dim_no: number
+  dimension_name: string
+  rule_type: DimensionRuleType
+  value_id: string | null
+  value_code: string | null
+  value_name: string | null
+  is_active: boolean
 }
 
 /** SIE dimension number whose values carry start/end dates (Projekt). */
@@ -53,4 +74,23 @@ export async function fetchDimensions(): Promise<DimensionDto[]> {
     throw json ?? new Error('Failed to load dimensions')
   }
   return (json?.dimensions ?? []) as DimensionDto[]
+}
+
+let cachedDimensionsPromise: Promise<DimensionDto[]> | null = null
+
+/**
+ * Module-level cached variant of fetchDimensions for high-mount-count
+ * consumers (one registry fetch per page load instead of one per line
+ * picker). A failed fetch clears the cache so the next mount retries.
+ * Registry mutations are rare enough that staleness within a page visit
+ * is acceptable — the register UI uses the uncached fetch.
+ */
+export function fetchDimensionsCached(): Promise<DimensionDto[]> {
+  if (!cachedDimensionsPromise) {
+    cachedDimensionsPromise = fetchDimensions().catch((err) => {
+      cachedDimensionsPromise = null
+      throw err
+    })
+  }
+  return cachedDimensionsPromise
 }

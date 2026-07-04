@@ -54,9 +54,16 @@ const SOURCE_SIE = [
   '#DIM 1 "Kostnadsställe"',
   '#DIM 6 "Projekt"',
   '#UNDERDIM 2 "Kostnadsbärare" 1',
+  // Custom dimension + custom child — exactly what PR10's "Ny dimension"
+  // (SIE 20+, optional parent) produces. Proves the round-trip covers
+  // user-created dims, not just the reserved 1/2/6 set.
+  '#DIM 20 "Avdelning"',
+  '#UNDERDIM 25 "Team" 20',
   '#OBJEKT 1 "KS01" "Butiken"',
   '#OBJEKT 2 "KB1" "Bärare ett"',
   '#OBJEKT 6 "P001" "Villa Almgren"',
+  '#OBJEKT 20 "SYD" "Avdelning Syd"',
+  '#OBJEKT 25 "T1" "Team ett"',
   '#VER A 1 20260115 "Hyra januari"',
   '{',
   '#TRANS 5010 {1 "KS01" 2 "KB1" 6 "P001"} 15000.00',
@@ -68,6 +75,11 @@ const SOURCE_SIE = [
   // it (name = code) and export must re-declare it.
   '#TRANS 5010 {6 "P002"} 500.00',
   '#TRANS 1930 {} -500.00',
+  '}',
+  '#VER A 3 20260117 "Avdelningskostnad"',
+  '{',
+  '#TRANS 5010 {20 "SYD" 25 "T1"} 800.00',
+  '#TRANS 1930 {} -800.00',
   '}',
 ].join('\n')
 

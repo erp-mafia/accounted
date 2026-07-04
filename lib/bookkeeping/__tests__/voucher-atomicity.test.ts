@@ -83,8 +83,11 @@ describe('voucher number atomicity', () => {
       p_actor_label: null,
     })
 
-    // from() was never called: the RPC handles everything atomically
-    expect(supabase.from).not.toHaveBeenCalled()
+    // No line/entry fetch happened: the RPC handles everything atomically.
+    // (PR10: commitEntry now also probes account_dimension_rules first; the
+    // bare mock makes that probe fail open, which is exactly the posture.)
+    expect(supabase.from).not.toHaveBeenCalledWith('journal_entries')
+    expect(supabase.from).not.toHaveBeenCalledWith('journal_entry_lines')
   })
 
   it('commitEntry succeeds via atomic RPC and returns posted entry', async () => {

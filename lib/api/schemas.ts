@@ -841,6 +841,62 @@ export const CreateDimensionValueSchema = z
  * open period, lock date, active registry values); this schema only shapes
  * the request. An empty bag {} untags the line.
  */
+/**
+ * POST /api/dimensions — create a custom dimension (dimensions PR10).
+ * sie_dim_no omitted → server picks the next free number >= 20 (SIE leaves
+ * 20+ unreserved). parent_sie_dim_no declares an #UNDERDIM hierarchy.
+ */
+export const CreateDimensionSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  sie_dim_no: z.coerce.number().int().min(1).max(9999).optional(),
+  resets_annually: z.boolean().optional(),
+  parent_sie_dim_no: z.coerce.number().int().min(1).max(9999).nullable().optional(),
+})
+
+const AccountDimensionRuleTypeSchema = z.enum(['required', 'default', 'fixed'])
+
+/** GET /api/dimensions/rules query — optional exact-account filter. */
+export const ListDimensionRulesQuerySchema = z.object({
+  account_number: accountNumber.optional(),
+})
+
+/**
+ * POST /api/dimensions/rules — per-account dimension policy (dimensions
+ * PR10). 'required' carries no value; 'default'/'fixed' must carry the value
+ * to apply. One rule per (account, dimension) — enforced by the DB UNIQUE.
+ */
+export const CreateAccountDimensionRuleSchema = z
+  .object({
+    account_number: accountNumber,
+    dimension_id: uuid,
+    rule_type: AccountDimensionRuleTypeSchema,
+    value_id: uuid.optional(),
+    is_active: z.boolean().optional(),
+  })
+  .superRefine((rule, ctx) => {
+    if (rule.rule_type === 'required' && rule.value_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['value_id'],
+        message: 'En obligatorisk regel har inget värde — värden hör till Förval/Låst.',
+      })
+    }
+    if (rule.rule_type !== 'required' && !rule.value_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['value_id'],
+        message: 'Välj vilket värde regeln ska använda.',
+      })
+    }
+  })
+
+/** PATCH /api/dimensions/rules/[id] — the value-presence rule re-checks in the route (partial update). */
+export const UpdateAccountDimensionRuleSchema = z.object({
+  rule_type: AccountDimensionRuleTypeSchema.optional(),
+  value_id: uuid.nullable().optional(),
+  is_active: z.boolean().optional(),
+})
+
 export const RetagLineDimensionsSchema = z.object({
   // {} passes (no entries to validate) = UNTAG. Intentional divergence from
   // the MCP staged path (RetagLineDimensionsParamsSchema), which rejects an

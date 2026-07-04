@@ -303,7 +303,9 @@
     "deleted_title": "Deadline deleted",
     "delete_failed_title": "Could not delete deadline",
     "retry": "Please try again.",
-    "overdue_invoices": "{count} overdue invoices"
+    "overdue_invoices": "{count} overdue invoices",
+    "no_system_deadlines_title": "Automatic tax deadlines missing.",
+    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in."
   },
   "bureau": {
     "title": "Bureau",
@@ -3475,7 +3477,21 @@
     "settings_imported_toast": "{count, plural, one {1 existing code was imported} other {# existing codes were imported}}",
     "settings_import_failed_title": "Could not import existing codes",
     "settings_save_failed_title": "Could not save the setting",
-    "settings_open_register": "Open cost centres & projects"
+    "settings_open_register": "Open cost centres & projects",
+    "new_dimension": "New dimension",
+    "new_dimension_title": "New dimension",
+    "dim_form_name_invalid": "Enter a name (1–60 characters).",
+    "dim_form_number_label": "Number",
+    "dim_form_number_help": "Leave empty for the next free number (20+). SIE reserves 1–19.",
+    "dim_form_number_invalid": "Enter a whole number of 20 or higher.",
+    "dim_form_resets_label": "Resets every fiscal year",
+    "dim_form_resets_help": "Balances per value start over at a new fiscal year.",
+    "dim_form_advanced": "Advanced",
+    "dim_form_parent_label": "Parent dimension",
+    "dim_form_parent_none": "None",
+    "dim_form_parent_help": "Makes the new dimension a subdimension (SIE #UNDERDIM) of the selected one.",
+    "dim_created_title": "Dimension created",
+    "subdimension_of": "Subdimension of {parent}"
   },
   "tic_workspace": {
     "toast_settings_failed": "Could not fetch settings",

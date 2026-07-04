@@ -2253,6 +2253,16 @@ export const tools: McpTool[] = [
                   sie_dim_no: { type: 'number' },
                   name: { type: 'string' },
                   active_value_count: { type: 'number' },
+                  required_on_accounts: {
+                    type: 'array',
+                    description: 'BAS accounts with an active required-rule: postings there are refused without a value for this dimension.',
+                    items: { type: 'string' },
+                  },
+                  default_on_accounts: {
+                    type: 'array',
+                    description: 'BAS accounts where a default/fixed rule auto-applies a value at draft creation.',
+                    items: { type: 'string' },
+                  },
                   top_values: {
                     type: 'array',
                     description: 'Up to 10 active values; full list via gnubok_list_dimension_values.',
@@ -2267,7 +2277,7 @@ export const tools: McpTool[] = [
                     },
                   },
                 },
-                required: ['sie_dim_no', 'name', 'active_value_count', 'top_values'],
+                required: ['sie_dim_no', 'name', 'active_value_count', 'required_on_accounts', 'default_on_accounts', 'top_values'],
               },
             },
           },
@@ -2402,6 +2412,8 @@ export const tools: McpTool[] = [
               sie_dim_no: number
               name: string
               active_value_count: number
+              required_on_accounts: string[]
+              default_on_accounts: string[]
               top_values: Array<{ code: string; name: string }>
             }>
           }
@@ -2421,6 +2433,25 @@ export const tools: McpTool[] = [
               bucket.push({ code: v.code, name: v.name })
               byDimension.set(v.dimension_id, bucket)
             }
+            // Account dimension rules (PR10): tell the agent up front which
+            // accounts refuse postings without a value (required) and which
+            // auto-apply one (default/fixed) — so gnubok_create_voucher calls
+            // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
+            const requiredByDimension = new Map<string, string[]>()
+            const defaultByDimension = new Map<string, string[]>()
+            const { data: ruleRows, error: ruleErr } = await supabase
+              .from('account_dimension_rules')
+              .select('account_number, rule_type, dimension_id')
+              .eq('company_id', companyId)
+              .eq('is_active', true)
+            if (!ruleErr) {
+              for (const r of (ruleRows ?? []) as Array<{ account_number: string; rule_type: string; dimension_id: string }>) {
+                const target = r.rule_type === 'required' ? requiredByDimension : defaultByDimension
+                const bucket = target.get(r.dimension_id) ?? []
+                bucket.push(r.account_number)
+                target.set(r.dimension_id, bucket)
+              }
+            }
             dimensionsBlock = {
               enabled: settingsRow?.dimensions_enabled === true,
               dimensions: dimensionRows.map((d) => {
@@ -2429,6 +2460,8 @@ export const tools: McpTool[] = [
                   sie_dim_no: d.sie_dim_no,
                   name: d.name,
                   active_value_count: values.length,
+                  required_on_accounts: (requiredByDimension.get(d.id) ?? []).sort(),
+                  default_on_accounts: (defaultByDimension.get(d.id) ?? []).sort(),
                   top_values: values.slice(0, 10),
                 }
               }),

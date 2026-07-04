@@ -1,14 +1,20 @@
 /**
- * Engine wiring of validateEntryDimensions (dimensions plan PR3).
+ * Engine wiring of validateEntryDimensions (dimensions plan PR3) and of the
+ * account dimension rules (dimensions PR10).
  *
  * createDraftEntry and updateDraftEntry must run the soft dimension
  * validation AFTER balance validation and BEFORE any insert/update, so a
  * rejection leaves no orphan rows. Untagged entries must not even fetch
  * company_settings; companies without the toggle keep free-text passthrough.
+ *
+ * PR10: createDraftEntry applies default/fixed rules onto the line bags
+ * before validation + insert; commitEntry asserts 'required' rules against
+ * the entry's stored lines BEFORE the commit_journal_entry RPC, and skips
+ * the line fetch entirely when no required rule exists.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createDraftEntry, updateDraftEntry } from '../engine'
-import { DimensionValidationError } from '../errors'
+import { commitEntry, createDraftEntry, updateDraftEntry } from '../engine'
+import { DimensionValidationError, MandatoryDimensionMissingError } from '../errors'
 import type { CreateJournalEntryInput } from '@/types'
 
 vi.mock('@/lib/events', () => ({
@@ -250,5 +256,197 @@ describe('updateDraftEntry: dimension validation wiring', () => {
     expect(entry.id).toBe('entry-1')
     const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
     expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
+  })
+})
+
+/**
+ * Raw account_dimension_rules row exactly as fetchActiveDimensionRules
+ * selects it: joined registry rows ride along nested (dimensions,
+ * dimension_values).
+ */
+function makeRuleRow(overrides: Record<string, unknown> = {}) {
+  return {
+    account_number: '4010',
+    rule_type: 'default',
+    dimensions: { sie_dim_no: 6, name: 'Projekt' },
+    dimension_values: { code: 'P001' },
+    ...overrides,
+  }
+}
+
+describe('createDraftEntry — account dimension rules (PR10)', () => {
+  it('applies a default rule onto the inserted line bag when the key is absent', async () => {
+    const { supabase, inserts } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: { data: [makeRuleRow()] },
+    })
+
+    const entry = await createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput())
+
+    expect(entry.id).toBe('entry-1')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    // The 4010 line got the default; the 1930 line has no rule and stays bare.
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
+    expect(lineRows[1].dimensions).toEqual({})
+    // PR9 cutover: generated mirror columns must never appear in the payload.
+    expect('cost_center' in lineRows[0]).toBe(false)
+    expect('project' in lineRows[0]).toBe(false)
+  })
+
+  it('fixed rule overwrites the caller-supplied bag value', async () => {
+    const { supabase, inserts } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: {
+        data: [makeRuleRow({ rule_type: 'fixed', dimension_values: { code: 'PLOCK' } })],
+      },
+    })
+
+    const entry = await createDraftEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      makeInput({ '6': 'CALLER' })
+    )
+
+    expect(entry.id).toBe('entry-1')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    // Rule pinned the 4010 line; the rule-less 1930 line keeps the caller tag.
+    expect(lineRows[0].dimensions).toEqual({ '6': 'PLOCK' })
+    expect(lineRows[1].dimensions).toEqual({ '6': 'CALLER' })
+  })
+})
+
+describe('commitEntry — mandatory dimension enforcement (PR10)', () => {
+  const requiredRule = makeRuleRow({ rule_type: 'required', dimension_values: null })
+
+  it('rejects an untagged line BEFORE the commit_journal_entry RPC fires', async () => {
+    const { supabase } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: { data: [requiredRule] },
+      journal_entry_lines: {
+        data: [
+          { account_number: '4010', dimensions: {} },
+          { account_number: '1930', dimensions: {} },
+        ],
+      },
+    })
+
+    await expect(
+      commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    ).rejects.toBeInstanceOf(MandatoryDimensionMissingError)
+    await expect(
+      commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    ).rejects.toThrow('Konto 4010 kräver Projekt — välj ett värde innan bokföring.')
+
+    // The verifikat must never have been posted.
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('commits when every required dimension is satisfied on the stored lines', async () => {
+    const { supabase } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: { data: [requiredRule] },
+      journal_entry_lines: {
+        data: [
+          { account_number: '4010', dimensions: { '6': 'P001' } },
+          { account_number: '1930', dimensions: {} },
+        ],
+      },
+    })
+
+    const entry = await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(entry.id).toBe('entry-1')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'commit_journal_entry',
+      expect.objectContaining({ p_company_id: 'company-1', p_entry_id: 'entry-1' })
+    )
+  })
+
+  it('skips the line fetch entirely when the company has zero rules', async () => {
+    const { supabase, queriedTables } = buildSupabase(BASE_TABLES)
+
+    const entry = await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(entry.id).toBe('entry-1')
+    // Rules were checked, but no required rule exists → no line fetch.
+    expect(queriedTables()).toContain('account_dimension_rules')
+    expect(queriedTables()).not.toContain('journal_entry_lines')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'commit_journal_entry',
+      expect.objectContaining({ p_entry_id: 'entry-1' })
+    )
+  })
+
+  it('skips the line fetch when the only rules are default/fixed', async () => {
+    const { supabase, queriedTables } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: {
+        data: [makeRuleRow(), makeRuleRow({ rule_type: 'fixed', account_number: '5010' })],
+      },
+    })
+
+    await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(queriedTables()).not.toContain('journal_entry_lines')
+  })
+
+  it('exempts system source types — an untagged SIE-import entry commits despite a required rule', async () => {
+    const { supabase } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: { data: [requiredRule] },
+      journal_entry_lines: {
+        data: [
+          // Post-cutover line fetch carries the parent source_type via join.
+          { account_number: '4010', dimensions: {}, journal_entries: { source_type: 'import' } },
+          { account_number: '1930', dimensions: {}, journal_entries: { source_type: 'import' } },
+        ],
+      },
+    })
+
+    const entry = await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(entry.id).toBe('entry-1')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'commit_journal_entry',
+      expect.objectContaining({ p_entry_id: 'entry-1' })
+    )
+  })
+
+  it('still enforces on operational source types carried by the join', async () => {
+    const { supabase } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: { data: [requiredRule] },
+      journal_entry_lines: {
+        data: [
+          { account_number: '4010', dimensions: {}, journal_entries: { source_type: 'manual' } },
+        ],
+      },
+    })
+
+    await expect(
+      commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    ).rejects.toBeInstanceOf(MandatoryDimensionMissingError)
+  })
+})
+
+describe('createDraftEntry — system-source exemption (PR10)', () => {
+  it('never applies default/fixed rules onto an opening-balance entry (no injection into derived history)', async () => {
+    const { supabase, inserts, queriedTables } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: {
+        data: [makeRuleRow({ rule_type: 'fixed', dimension_values: { code: 'PLOCK' } })],
+      },
+    })
+
+    const input = { ...makeInput(), source_type: 'opening_balance' as const }
+    const entry = await createDraftEntry(supabase as never, 'company-1', 'user-1', input)
+
+    expect(entry.id).toBe('entry-1')
+    // Exempt source: the rules table is never even consulted…
+    expect(queriedTables()).not.toContain('account_dimension_rules')
+    // …and the inserted bags stay exactly as the import provided them.
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({})
   })
 })

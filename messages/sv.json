@@ -303,7 +303,9 @@
     "deleted_title": "Deadline borttagen",
     "delete_failed_title": "Kunde inte ta bort deadline",
     "retry": "Försök igen.",
-    "overdue_invoices": "{count} förfallna fakturor"
+    "overdue_invoices": "{count} förfallna fakturor",
+    "no_system_deadlines_title": "Automatiska skattedeadlines saknas.",
+    "no_system_deadlines_description": "Deadlines för moms, arbetsgivardeklaration och F-skatt skapas från företagets skatteinställningar — kontrollera att de är ifyllda."
   },
   "bureau": {
     "title": "Byrå",
@@ -3475,7 +3477,21 @@
     "settings_imported_toast": "{count, plural, one {1 befintlig kod importerades} other {# befintliga koder importerades}}",
     "settings_import_failed_title": "Kunde inte importera befintliga koder",
     "settings_save_failed_title": "Kunde inte spara inställningen",
-    "settings_open_register": "Öppna kostnadsställen & projekt"
+    "settings_open_register": "Öppna kostnadsställen & projekt",
+    "new_dimension": "Ny dimension",
+    "new_dimension_title": "Ny dimension",
+    "dim_form_name_invalid": "Ange ett namn (1–60 tecken).",
+    "dim_form_number_label": "Nummer",
+    "dim_form_number_help": "Lämna tomt för nästa lediga (20+). SIE reserverar 1–19.",
+    "dim_form_number_invalid": "Ange ett heltal, 20 eller högre.",
+    "dim_form_resets_label": "Nollställs varje räkenskapsår",
+    "dim_form_resets_help": "Saldon per värde börjar om vid nytt räkenskapsår.",
+    "dim_form_advanced": "Avancerat",
+    "dim_form_parent_label": "Överordnad dimension",
+    "dim_form_parent_none": "Ingen",
+    "dim_form_parent_help": "Gör den nya dimensionen till en underdimension (SIE #UNDERDIM) av den valda.",
+    "dim_created_title": "Dimension skapad",
+    "subdimension_of": "Underdimension till {parent}"
   },
   "tic_workspace": {
     "toast_settings_failed": "Kunde inte hämta inställningar",

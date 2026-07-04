@@ -97,3 +97,44 @@ export class DimensionValidationError extends Error {
 export function isDimensionValidationError(err: unknown): err is DimensionValidationError {
   return err instanceof DimensionValidationError
 }
+
+// ============================================================================
+// Mandatory dimension enforcement (dimensions PR10)
+// ============================================================================
+
+export const MANDATORY_DIMENSION_MISSING = 'MANDATORY_DIMENSION_MISSING' as const
+
+export interface MandatoryDimensionViolation {
+  account_number: string
+  /** SIE dimension number the rule requires, e.g. '6'. */
+  sie_dim_no: string
+  /** Registry display name for the dimension, e.g. 'Projekt'. */
+  dimension_name: string
+}
+
+/** Swedish user-facing sentence for a single missing-dimension violation. */
+export function formatMandatoryDimensionViolation(v: MandatoryDimensionViolation): string {
+  return `Konto ${v.account_number} kräver ${v.dimension_name} — välj ett värde innan bokföring.`
+}
+
+/**
+ * Raised at COMMIT time (commitEntry / the bulk-book pre-check) when an
+ * active 'required' rule in account_dimension_rules is unsatisfied by a
+ * line's dimensions bag. Drafts may be incomplete by design — the rule bites
+ * when the verifikat is about to become immutable. Companies without rules
+ * (every company by default) never reach this error.
+ */
+export class MandatoryDimensionMissingError extends Error {
+  readonly code = MANDATORY_DIMENSION_MISSING
+
+  constructor(public readonly violations: MandatoryDimensionViolation[]) {
+    super(violations.map(formatMandatoryDimensionViolation).join(' '))
+    this.name = 'MandatoryDimensionMissingError'
+  }
+}
+
+export function isMandatoryDimensionMissingError(
+  err: unknown,
+): err is MandatoryDimensionMissingError {
+  return err instanceof MandatoryDimensionMissingError
+}

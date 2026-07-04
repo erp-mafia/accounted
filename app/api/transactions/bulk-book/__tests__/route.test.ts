@@ -139,6 +139,8 @@ describe('POST /api/transactions/bulk-book', () => {
       { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
     ])
 
+    // Account dimension rules pre-check (PR10) — none configured.
+    enqueue({ data: [], error: null })
     // RPC returns happy path.
     enqueue({
       data: {

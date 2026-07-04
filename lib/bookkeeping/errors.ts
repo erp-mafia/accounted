@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { DimensionValidationError } from './dimension-errors'
+import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
 
 // ============================================================================
 // Dimension validation error: class lives in ./dimension-errors.ts (pure
@@ -14,10 +14,15 @@ export {
   formatDimensionValidationIssue,
   formatDimensionValidationIssues,
   isDimensionValidationError,
+  MANDATORY_DIMENSION_MISSING,
+  MandatoryDimensionMissingError,
+  formatMandatoryDimensionViolation,
+  isMandatoryDimensionMissingError,
 } from './dimension-errors'
 export type {
   DimensionValidationIssue,
   DimensionValidationReason,
+  MandatoryDimensionViolation,
 } from './dimension-errors'
 
 // ============================================================================
@@ -331,7 +336,8 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof NoOpenPeriodForDateError ||
     err instanceof TargetPeriodClosedError ||
     err instanceof TargetPeriodLockedError ||
-    err instanceof DimensionValidationError
+    err instanceof DimensionValidationError ||
+    err instanceof MandatoryDimensionMissingError
   )
 }
 
@@ -568,6 +574,22 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           code: err.code,
           message: err.message,
           details: { issues: err.issues },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof MandatoryDimensionMissingError) {
+    // Policy rejection at commit (dimensions PR10): the message names every
+    // account + required dimension so a user or agent self-corrects in one
+    // pass; details.violations is the machine-readable list.
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { violations: err.violations },
         },
       },
       { status: 400 }

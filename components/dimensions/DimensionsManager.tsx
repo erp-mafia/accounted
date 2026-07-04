@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Dialog,
@@ -14,6 +16,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -34,7 +43,9 @@ import {
   Tags,
   ChevronUp,
   ChevronDown,
+  ChevronRight,
   ChevronsUpDown,
+  Loader2,
 } from 'lucide-react'
 import DimensionValueForm, {
   type DimensionValueFormInput,
@@ -81,6 +92,8 @@ export default function DimensionsManager() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [dialog, setDialog] = useState<DialogState>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [newDimDialogOpen, setNewDimDialogOpen] = useState(false)
+  const [isCreatingDimension, setIsCreatingDimension] = useState(false)
 
   const loadDimensions = useCallback(
     async (showSpinner: boolean) => {
@@ -119,6 +132,15 @@ export default function DimensionsManager() {
     [dimensions, activeDimId],
   )
   const isProjectTab = activeDim?.sie_dim_no === PROJECT_DIM_NO
+
+  // Parent (#UNDERDIM) of the active tab's dimension, when it has one.
+  const parentDimName = useMemo(() => {
+    if (!activeDim || activeDim.parent_sie_dim_no == null) return null
+    const parent = dimensions.find(
+      (d) => d.sie_dim_no === activeDim.parent_sie_dim_no,
+    )
+    return parent?.name ?? `#${activeDim.parent_sie_dim_no}`
+  }, [dimensions, activeDim])
 
   const filteredValues = useMemo(() => {
     if (!activeDim) return []
@@ -224,6 +246,45 @@ export default function DimensionsManager() {
     }
   }
 
+  async function handleCreateDimension(input: NewDimensionFormInput) {
+    setIsCreatingDimension(true)
+    try {
+      // Contract: sie_dim_no omitted → the server picks the next free ≥20;
+      // parent_sie_dim_no omitted → no #UNDERDIM hierarchy.
+      const body: Record<string, unknown> = {
+        name: input.name,
+        resets_annually: input.resets_annually,
+      }
+      if (input.sie_dim_no !== null) body.sie_dim_no = input.sie_dim_no
+      if (input.parent_sie_dim_no !== null) {
+        body.parent_sie_dim_no = input.parent_sie_dim_no
+      }
+      const res = await fetch('/api/dimensions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw json ?? new Error()
+      const createdId = (json?.data?.dimension as { id?: string } | undefined)?.id
+      toast({ title: t('dim_created_title') })
+      setNewDimDialogOpen(false)
+      await loadDimensions(false)
+      if (createdId) {
+        setActiveDimId(createdId)
+        setSearchTerm('')
+      }
+    } catch (err) {
+      toast({
+        title: t('save_failed_title'),
+        description: getErrorMessage(err, { locale: errorLocale }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsCreatingDimension(false)
+    }
+  }
+
   async function handleDeleteValue() {
     if (!activeDim || dialog?.mode !== 'edit') return
     setIsSaving(true)
@@ -318,31 +379,49 @@ export default function DimensionsManager() {
 
   return (
     <div className="space-y-8">
-      {/* Segmented tabs: one per registry dimension (1 Kostnadsställe, 6 Projekt) */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Tabs
-          value={activeDimId ?? undefined}
-          onValueChange={(id) => {
-            setActiveDimId(id)
-            setSearchTerm('')
-          }}
-        >
-          <TabsList>
-            {dimensions.map((dim) => (
-              <TabsTrigger key={dim.id} value={dim.id}>
-                {dim.name}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <Button
-          disabled={!canWrite}
-          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          onClick={() => setDialog({ mode: 'create' })}
-        >
-          {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-          {t('new_value')}
-        </Button>
+      {/* Segmented tabs: one per registry dimension (1 Kostnadsställe,
+          6 Projekt, plus any custom 20+ dims) */}
+      <div className="space-y-2">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <Tabs
+            value={activeDimId ?? undefined}
+            onValueChange={(id) => {
+              setActiveDimId(id)
+              setSearchTerm('')
+            }}
+          >
+            <TabsList>
+              {dimensions.map((dim) => (
+                <TabsTrigger key={dim.id} value={dim.id}>
+                  {dim.name}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => setNewDimDialogOpen(true)}
+            >
+              {t('new_dimension')}
+            </Button>
+            <Button
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => setDialog({ mode: 'create' })}
+            >
+              {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('new_value')}
+            </Button>
+          </div>
+        </div>
+        {parentDimName && (
+          <p className="text-xs text-muted-foreground">
+            {t('subdimension_of', { parent: parentDimName })}
+          </p>
+        )}
       </div>
 
       {/* Search */}
@@ -479,6 +558,181 @@ export default function DimensionsManager() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* New dimension dialog — the content (and thus the form state)
+          unmounts on close, so each open starts from a blank form. */}
+      <Dialog
+        open={newDimDialogOpen}
+        onOpenChange={(open) => !open && setNewDimDialogOpen(false)}
+      >
+        <DialogContent className="sm:max-w-lg max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t('new_dimension_title')}</DialogTitle>
+          </DialogHeader>
+          <NewDimensionForm
+            dimensions={dimensions}
+            isSaving={isCreatingDimension}
+            onSubmit={handleCreateDimension}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
+  )
+}
+
+interface NewDimensionFormInput {
+  name: string
+  /** null → omit from the POST; the server picks the next free number ≥20. */
+  sie_dim_no: number | null
+  resets_annually: boolean
+  /** null → omit from the POST; no #UNDERDIM hierarchy. */
+  parent_sie_dim_no: number | null
+}
+
+/**
+ * Create form for a custom registry dimension (#DIM 20+). The parent
+ * (#UNDERDIM) select is an advanced, rarely-used SIE concept — kept behind a
+ * quiet disclosure so the common path stays name + number.
+ */
+function NewDimensionForm({
+  dimensions,
+  isSaving,
+  onSubmit,
+}: {
+  /** Existing dims — active ones populate the parent select. */
+  dimensions: DimensionDto[]
+  isSaving: boolean
+  onSubmit: (input: NewDimensionFormInput) => void | Promise<void>
+}) {
+  const t = useTranslations('dimensions')
+  const [name, setName] = useState('')
+  const [numberStr, setNumberStr] = useState('')
+  const [resetsAnnually, setResetsAnnually] = useState(true)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [parent, setParent] = useState('none')
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [numberError, setNumberError] = useState<string | null>(null)
+
+  const parentOptions = dimensions.filter((d) => d.is_active)
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const trimmedName = name.trim()
+    const trimmedNumber = numberStr.trim()
+    let valid = true
+    if (!trimmedName || trimmedName.length > 60) {
+      setNameError(t('dim_form_name_invalid'))
+      valid = false
+    } else {
+      setNameError(null)
+    }
+    let sieDimNo: number | null = null
+    if (trimmedNumber) {
+      const parsed = Number(trimmedNumber)
+      if (!Number.isInteger(parsed) || parsed < 20) {
+        setNumberError(t('dim_form_number_invalid'))
+        valid = false
+      } else {
+        setNumberError(null)
+        sieDimNo = parsed
+      }
+    } else {
+      setNumberError(null)
+    }
+    if (!valid) return
+    void onSubmit({
+      name: trimmedName,
+      sie_dim_no: sieDimNo,
+      resets_annually: resetsAnnually,
+      parent_sie_dim_no: parent === 'none' ? null : Number(parent),
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="new-dimension-name">{t('form_name_label')}</Label>
+          <Input
+            id="new-dimension-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoComplete="off"
+            autoFocus
+          />
+          {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="new-dimension-number">{t('dim_form_number_label')}</Label>
+          <Input
+            id="new-dimension-number"
+            type="number"
+            inputMode="numeric"
+            min={20}
+            step={1}
+            value={numberStr}
+            onChange={(e) => setNumberStr(e.target.value)}
+            className="tabular-nums"
+          />
+          <p className="text-xs text-muted-foreground">{t('dim_form_number_help')}</p>
+          {numberError && <p className="text-xs text-destructive">{numberError}</p>}
+        </div>
+      </div>
+
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="new-dimension-resets">{t('dim_form_resets_label')}</Label>
+          <p className="text-xs text-muted-foreground max-w-md">
+            {t('dim_form_resets_help')}
+          </p>
+        </div>
+        <Switch
+          id="new-dimension-resets"
+          checked={resetsAnnually}
+          onCheckedChange={setResetsAnnually}
+        />
+      </div>
+
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((prev) => !prev)}
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+          aria-expanded={showAdvanced}
+        >
+          <ChevronRight
+            className={`h-3 w-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+            aria-hidden="true"
+          />
+          {t('dim_form_advanced')}
+        </button>
+        {showAdvanced && (
+          <div className="space-y-2">
+            <Label>{t('dim_form_parent_label')}</Label>
+            <Select value={parent} onValueChange={setParent}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">{t('dim_form_parent_none')}</SelectItem>
+                {parentOptions.map((dim) => (
+                  <SelectItem key={dim.id} value={String(dim.sie_dim_no)}>
+                    {dim.name} ({dim.sie_dim_no})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{t('dim_form_parent_help')}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="flex justify-end pt-2">
+        <Button type="submit" disabled={isSaving}>
+          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {t('form_create')}
+        </Button>
+      </div>
+    </form>
   )
 }

@@ -53,6 +53,7 @@ function mockSupabase(opts: {
   // Dimension registry (dimensions PR3). Default: empty → block omitted.
   dimensionRows?: Array<{ id: string; sie_dim_no: number; name: string }>
   dimensionValueRows?: Array<{ dimension_id: string; code: string; name: string }>
+  dimensionRuleRows?: Array<{ account_number: string; rule_type: string; dimension_id: string }>
   dimensionsEnabled?: boolean
   errors?: { profile?: string; memory?: string; atoms?: string }
 }) {
@@ -163,6 +164,10 @@ function mockSupabase(opts: {
       }
       if (table === 'dimension_values') {
         return chainResolving(opts.dimensionValueRows ?? [])
+      }
+      if (table === 'account_dimension_rules') {
+        // PR10: the briefing surfaces active rules; default none.
+        return chainResolving(opts.dimensionRuleRows ?? [])
       }
       throw new Error(`Unexpected table in test mock: ${table}`)
     }),

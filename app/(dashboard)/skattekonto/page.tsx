@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
+  AlertCircle,
   Copy,
   ExternalLink,
   FileCheck,
@@ -65,6 +66,11 @@ export default function SkattekontoPage() {
   const [syncing, setSyncing] = useState(false)
   const [bookingId, setBookingId] = useState<string | null>(null)
   const [notConnected, setNotConnected] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  // Set when a sync fails with an auth error while a connection exists
+  // (expired session, missing scope, revoked token). Rendered as a banner —
+  // the stored data below stays visible and usable.
+  const [reconnectMessage, setReconnectMessage] = useState<string | null>(null)
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -74,6 +80,7 @@ export default function SkattekontoPage() {
 
   const reload = useCallback(async () => {
     setLoading(true)
+    setLoadError(false)
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
@@ -85,6 +92,14 @@ export default function SkattekontoPage() {
         return
       }
 
+      // A non-auth failure must NOT fall through to the "inget saldo hämtat
+      // ännu"-tomvy — that reads as "not configured" when the truth is "the
+      // fetch broke". Surface it as an error with a retry instead.
+      if (!saldoRes.ok) {
+        setLoadError(true)
+        return
+      }
+
       const saldoJson = (await saldoRes.json()) as SaldoEnvelope
       setSaldo(saldoJson)
 
@@ -92,6 +107,8 @@ export default function SkattekontoPage() {
         const txJson = (await txRes.json()) as TransaktionerEnvelope
         setTx(txJson.data)
       }
+    } catch {
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -109,12 +126,28 @@ export default function SkattekontoPage() {
       })
       const json = await res.json()
       if (!res.ok) {
+        // 401 covers several distinct auth states (see handleSkvError in the
+        // skatteverket extension). Only NOT_CONNECTED means "no connection
+        // exists" — the rest (SESSION_EXPIRED, MISSING_SCOPE, TOKEN_REVOKED,
+        // …) fire while Inställningar truthfully shows the stored token as
+        // "Ansluten". Showing the full "inte anslutet"-tomvy for those
+        // contradicts the settings panel; show the server's actual reason
+        // with a reconnect CTA instead.
         if (res.status === 401) {
-          setNotConnected(true)
+          if (json.code === 'NOT_CONNECTED') {
+            setNotConnected(true)
+          } else {
+            setReconnectMessage(
+              typeof json.error === 'string' && json.error
+                ? json.error
+                : 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
+            )
+          }
           return
         }
         throw new Error(json.error || 'Synk misslyckades')
       }
+      setReconnectMessage(null)
       toast({
         title: 'Skattekonto synkroniserat',
         description: `${json.data.booked} bokförda, ${json.data.upcoming} kommande`,
@@ -246,6 +279,28 @@ export default function SkattekontoPage() {
     )
   }
 
+  if (loadError) {
+    return (
+      <div className="space-y-6">
+        <PageHeading />
+        <Card>
+          <CardContent className="flex flex-col items-center py-12 text-center">
+            <AlertCircle className="mb-4 h-10 w-10 text-muted-foreground/40" />
+            <p className="mb-1 font-medium">Kunde inte hämta skattekontot</p>
+            <p className="mb-4 max-w-md text-sm text-muted-foreground">
+              Något gick fel när saldo och transaktioner skulle hämtas. Försök
+              igen om en stund.
+            </p>
+            <Button variant="outline" onClick={() => void reload()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Försök igen
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <PageHeading
@@ -256,6 +311,21 @@ export default function SkattekontoPage() {
           </Button>
         }
       />
+
+      {reconnectMessage && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+            <p className="text-sm">{reconnectMessage}</p>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings/tax">
+              <ExternalLink className="mr-2 h-3.5 w-3.5" />
+              Anslut igen
+            </Link>
+          </Button>
+        </div>
+      )}
 
       <BalanceHero saldo={saldo} loading={loading} onCopyOcr={copyOcr} />
 

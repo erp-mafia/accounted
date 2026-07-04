@@ -5,6 +5,12 @@ import { BulkBookSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
+import {
+  applyDimensionRules,
+  assertMandatoryDimensions,
+  fetchActiveDimensionRules,
+} from '@/lib/bookkeeping/dimension-rules'
+import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
@@ -239,6 +245,28 @@ export const POST = withRouteContext(
       newEntryPayload = {
         description: body.entry_description,
         lines,
+      }
+    }
+
+    // Account dimension rules (dimensions PR10): the bulk-book RPC bypasses
+    // the TS engine, so the policy layer runs here — defaults/fixed applied
+    // to the computed lines, then 'required' asserted. Zero rules (the
+    // default) or a failed fetch changes nothing (fail-open, same posture as
+    // the engine).
+    if (newEntryPayload) {
+      const rules = await fetchActiveDimensionRules(supabase, companyId!)
+      if (rules === null) {
+        opLog.warn('dimension rule fetch failed — policy skipped (fail-open)')
+      }
+      if (rules && rules.length > 0) {
+        newEntryPayload.lines = applyDimensionRules(newEntryPayload.lines, rules)
+        try {
+          assertMandatoryDimensions(newEntryPayload.lines, rules)
+        } catch (err) {
+          const mapped = bookkeepingErrorResponse(err)
+          if (mapped) return mapped
+          throw err
+        }
       }
     }
 
