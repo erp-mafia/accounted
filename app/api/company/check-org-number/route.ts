@@ -6,7 +6,7 @@ import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
  * GET /api/company/check-org-number?org_number=XXXXXXXXXX
  *
  * Returns `{ data: { exists: boolean, companies: { id, name }[] } }` for the
- * companies the CURRENT USER already has with the given organisation number —
+ * companies the CURRENT USER already has with the given organisation number:
  * scoped to their own account only.
  *
  * Org-number reuse across the platform is intentionally allowed (see
@@ -18,7 +18,7 @@ import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
  *
  * Normalizes input with the same rule as the create action so a 12-digit form
  * still matches a stored 10-digit canonical. Returns no matches for malformed
- * input — the create action rejects that separately as `org_number_invalid`.
+ * input: the create action rejects that separately as `org_number_invalid`.
  */
 export async function GET(request: Request) {
   // requireAuth() (not a raw getUser()) so MFA AAL2 is enforced on hosted before

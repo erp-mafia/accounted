@@ -86,7 +86,7 @@ export async function GET(
   // sorts the *embedded* resource's rows, not the parent result set, so it
   // cannot give us a chronological parent order. Without a stable parent order
   // a raw `.limit()` returns an arbitrary subset that varies between identical
-  // requests — which surfaced as the trial-balance drill-down showing
+  // requests, which surfaced as the trial-balance drill-down showing
   // "different rows on every reload" for high-volume accounts. We instead page
   // on the line PK (`id`) for a stable total order (see fetch-all.ts) and do
   // the chronological sort here, mirroring `generateGeneralLedger`.
@@ -123,7 +123,7 @@ export async function GET(
       .in('journal_entries.status', ['posted', 'reversed'])
 
     if (dimFilter.dimensions) {
-      // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+      // jsonb containment (@>): served by idx_jel_dimensions_gin.
       query = query.contains('dimensions', dimFilter.dimensions)
     }
 

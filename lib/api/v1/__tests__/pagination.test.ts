@@ -85,7 +85,7 @@ describe('nextCursorFromPage', () => {
   })
 })
 
-describe('decodeDefaultCursor — strict format validation', () => {
+describe('decodeDefaultCursor: strict format validation', () => {
   const validId = '8fd5b1f4-1234-1234-1234-1234567890ab'
   const validTs = '2026-05-12T16:00:00Z'
 

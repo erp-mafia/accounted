@@ -9,7 +9,7 @@ import { getPool } from '@/tests/pg/setup'
  * pg-real coverage for 20260622121000_invoices_journal_entry_id_backfill.sql.
  *
  * invoices.journal_entry_id means "the registration verifikat that booked the
- * invoice at issuance" — payment flows route on it (set → clear 1510; NULL →
+ * invoice at issuance": payment flows route on it (set → clear 1510; NULL →
  * kontantmetoden cash entry). A wrong link silently double-books revenue +
  * VAT, so the backfill's guards are load-bearing:
  *   - only posted invoice_created entries qualify (reversed/draft excluded)
@@ -77,7 +77,7 @@ async function getLink(invoiceId: string): Promise<string | null> {
   return rows[0]?.journal_entry_id ?? null
 }
 
-describe('invoices.journal_entry_id backfill — Pass 1 (registration entries)', () => {
+describe('invoices.journal_entry_id backfill: Pass 1 (registration entries)', () => {
   it('links the posted invoice_created entry to its invoice', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const invoiceId = await insertInvoice({ userId, companyId })
@@ -144,14 +144,14 @@ describe('invoices.journal_entry_id backfill — Pass 1 (registration entries)',
 
     await runBackfill()
 
-    // A stornoed registration must not mark the invoice as booked — the
+    // A stornoed registration must not mark the invoice as booked: the
     // payment flow should recognise revenue via the cash path instead.
     expect(await getLink(invoiceId)).toBeNull()
   })
 
   it('never overwrites an existing link', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    // Existing link points at a manual entry (e.g. user-curated) — backfill
+    // Existing link points at a manual entry (e.g. user-curated): backfill
     // must leave it alone even though a registration entry also exists.
     const manual = await insertDraftJournalEntry({
       userId,
@@ -188,7 +188,7 @@ describe('invoices.journal_entry_id backfill — Pass 1 (registration entries)',
 
     await runBackfill()
 
-    // NULL is the CORRECT value here — revenue was recognised at payment.
+    // NULL is the CORRECT value here: revenue was recognised at payment.
     expect(await getLink(invoiceId)).toBeNull()
   })
 
@@ -197,7 +197,7 @@ describe('invoices.journal_entry_id backfill — Pass 1 (registration entries)',
     const b = await seedCompany()
     const invoiceA = await insertInvoice({ userId: a.userId, companyId: a.companyId })
     // Company B has a posted registration entry whose source_id happens to
-    // reference company A's invoice (corrupt/cross-tenant data) — the
+    // reference company A's invoice (corrupt/cross-tenant data): the
     // company_id guard must refuse the link.
     await insertDraftJournalEntry({
       userId: b.userId,
@@ -214,7 +214,7 @@ describe('invoices.journal_entry_id backfill — Pass 1 (registration entries)',
   })
 })
 
-describe('invoices.journal_entry_id backfill — Pass 0 (payment-link repair)', () => {
+describe('invoices.journal_entry_id backfill: Pass 0 (payment-link repair)', () => {
   it('nulls a payment-type link, then re-links the registration entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const invoiceId = await insertInvoice({ userId, companyId, status: 'paid' })
@@ -267,7 +267,7 @@ describe('invoices.journal_entry_id backfill — Pass 0 (payment-link repair)', 
   })
 })
 
-describe('invoices.journal_entry_id backfill — Pass 2 (credit notes)', () => {
+describe('invoices.journal_entry_id backfill: Pass 2 (credit notes)', () => {
   it('links the credit_note reversal entry to the credit-note row', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const original = await insertInvoice({ userId, companyId })
@@ -310,7 +310,7 @@ describe('invoices.journal_entry_id backfill — Pass 2 (credit notes)', () => {
   })
 })
 
-describe('invoices.journal_entry_id backfill — idempotency', () => {
+describe('invoices.journal_entry_id backfill: idempotency', () => {
   it('re-running the backfill changes nothing', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const invoiceId = await insertInvoice({ userId, companyId })

@@ -4,7 +4,7 @@
  * This is the twin of the MCP dispatch gate and the true external-service
  * chokepoint: it runs BEFORE the atomic claim, so a blocked op stays 'pending'
  * (re-approvable once the company subscribes) and an op staged DURING the trial
- * cannot be committed once the grant expires — regardless of caller (MCP approve
+ * cannot be committed once the grant expires: regardless of caller (MCP approve
  * tool or the UI approval path).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -50,7 +50,7 @@ beforeEach(() => {
 })
 
 describe('commitPendingOperation: capability gate', () => {
-  it('blocks send_invoice when email_send is not entitled — 403, op left pending', async () => {
+  it('blocks send_invoice when email_send is not entitled: 403, op left pending', async () => {
     mockHasCapability.mockResolvedValue(false)
     const { supabase } = createQueuedMockSupabase() // no responses enqueued: the claim must never run
 
@@ -84,7 +84,7 @@ describe('commitPendingOperation: capability gate', () => {
     const op = makePendingOp({ operation_type: 'create_customer', params: { name: 'x' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    // create_customer is not in PAID_OPERATION_CAPABILITY_MAP — the gate is skipped.
+    // create_customer is not in PAID_OPERATION_CAPABILITY_MAP: the gate is skipped.
     expect(mockHasCapability).not.toHaveBeenCalled()
     expect(result.status).toBe('failed') // claim returned no row (409); proves we got past the gate
   })

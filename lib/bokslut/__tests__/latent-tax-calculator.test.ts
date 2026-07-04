@@ -12,7 +12,7 @@ describe('computeLatentTax', () => {
     const split = computeLatentTax({ untaxedReserves: 100_000 })
     expect(split.liabilityPortion).toBe(20_600)
     expect(split.equityPortion).toBe(79_400)
-    // Invariant — the two portions reconcile to the input.
+    // Invariant: the two portions reconcile to the input.
     expect(split.equityPortion + split.liabilityPortion).toBeCloseTo(100_000, 2)
   })
 
@@ -23,7 +23,7 @@ describe('computeLatentTax', () => {
   })
 
   it('preserves the sign for negative reserves (over-reversal edge case)', () => {
-    // Unusual but the math should stay symmetric — e.g. when the
+    // Unusual but the math should stay symmetric: e.g. when the
     // dispositions builder posts more återföring than the existing reserves.
     const split = computeLatentTax({ untaxedReserves: -50_000 })
     expect(split.liabilityPortion).toBe(-10_300)

@@ -124,7 +124,7 @@ export function BookingTemplatesPanel() {
   const teamTemplates = templates.filter((tt) => tt.team_id && !tt.is_system)
   const companyTemplates = templates.filter((tt) => tt.company_id && !tt.is_system)
 
-  // Names of existing company templates — used for a soft "name already exists"
+  // Names of existing company templates: used for a soft "name already exists"
   // hint when creating or customizing (never blocks save).
   const companyTemplateNames = companyTemplates.map((tt) => tt.name)
 
@@ -492,7 +492,7 @@ function TemplateForm({
     })
   }
 
-  // Default new lines to a VAT line — the 2-line template starts with one
+  // Default new lines to a VAT line: the 2-line template starts with one
   // business + one settlement, and the natural extension is a VAT leg.
   // Defaulting to 'business' instead would silently break the converter
   // (which requires exactly one business line) and the template would
@@ -513,7 +513,7 @@ function TemplateForm({
   const showRatio = businessLineCount > 1
   // The ratio only validates against cost/revenue lines (businessRatioSum), so
   // only those get an editable input. The settlement leg is the full counter-
-  // amount (ratio 1.0) and is shown in the live preview, not as a control —
+  // amount (ratio 1.0) and is shown in the live preview, not as a control:
   // an editable settlement ratio that doesn't feed the sum check would mislead.
   const firstRatioIndex = showRatio ? lines.findIndex((l) => l.type === 'business') : -1
   const businessRatioSum = lines
@@ -533,14 +533,14 @@ function TemplateForm({
   }, [lines])
 
   // Soft, non-blocking hint when the chosen name collides with an existing
-  // company template (no DB unique constraint — duplicates are allowed).
+  // company template (no DB unique constraint: duplicates are allowed).
   const nameCollision =
     mode !== 'edit' &&
     name.trim().length > 0 &&
     duplicateNamePool.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase())
 
   // Real-time check: can this draft be picked from the transaction sheet?
-  // If not, we show a hint — save remains allowed (templates may still be
+  // If not, we show a hint: save remains allowed (templates may still be
   // useful from the journal-entry form).
   const isConvertible = (() => {
     const draft: BookingTemplateLibrary = {

@@ -1,4 +1,4 @@
-# DAC7 — plattformsoperatörers rapporteringsskyldighet
+# DAC7: plattformsoperatörers rapporteringsskyldighet
 
 ## Lagstöd
 
@@ -33,11 +33,11 @@ E-handelsrelevans: punkt 3 (varuförsäljning via marketplace).
 
 - Tradera, Blocket Marketplace, Sellpy → varuförsäljning.
 - Amazon, eBay, Etsy, CDON Marketplace, Fyndiq, Tictail-typ-aktörer.
-- TikTok Shop, Temu — om de når DAC7-anknytning.
+- TikTok Shop, Temu, om de når DAC7-anknytning.
 - Egen Shopify-butik som **endast** säljer egna varor → INTE rapporteringsskyldig (operatören är inte en plattform i DAC7:s mening).
 - Shopify som tjänsteleverantör → INTE rapporteringsskyldig på den nivån (det är butiksägaren som är säljare).
 
-## Säljarundantag — varor
+## Säljarundantag: varor
 
 Säljare av varor undantas från rapportering om **båda** villkoren är uppfyllda under kalenderåret:
 - **Färre än 30 berörda transaktioner**, OCH
@@ -71,7 +71,7 @@ Verifiering ska ske med rimliga åtgärder, t.ex. mot offentliga register, samt 
 
 ## Sanktioner
 
-- Plattformsavgift **2 500–12 500 kr** per säljare där rapportering är felaktig eller utebliven.
+- Plattformsavgift **2 500-12 500 kr** per säljare där rapportering är felaktig eller utebliven.
 - Föreläggande och vite enligt skatteförfarandelagen kan tillkomma.
 
 ## Dokumentationsbevarande
@@ -81,9 +81,9 @@ Verifiering ska ske med rimliga åtgärder, t.ex. mot offentliga register, samt 
 ## Konsekvenser för e-handelsklienter
 
 ### Säljare via marketplace
-- **Kontrolluppgifter KU90 (varuförsäljning) finns inte i DAC7-systemet** — DAC7-rapporten är ett eget format som plattformen lämnar direkt. Säljaren får inte alltid en kopia; rekommendation är att begära den årligen från plattformen för avstämning mot egen bokföring.
+- **Kontrolluppgifter KU90 (varuförsäljning) finns inte i DAC7-systemet**: DAC7-rapporten är ett eget format som plattformen lämnar direkt. Säljaren får inte alltid en kopia; rekommendation är att begära den årligen från plattformen för avstämning mot egen bokföring.
 - Skatteverket kan jämföra rapporterad omsättning med säljarens egen deklaration. Diskrepans triggar revision.
-- DAC7-omsättning är inte automatiskt momspliktig svensk omsättning — det kan vara deemed supplier-fall där plattformen är momsskyldig. Skatteverket har båda underlagen för korsavstämning.
+- DAC7-omsättning är inte automatiskt momspliktig svensk omsättning: det kan vara deemed supplier-fall där plattformen är momsskyldig. Skatteverket har båda underlagen för korsavstämning.
 
 ### Säljare som driver egen plattform
 - Marketplace-operatörer (Tradera, Blocket Marketplace) → fullständig DAC7-rapportering, kräver KYC-process och teknisk integration mot Skatteverkets API.
@@ -91,6 +91,6 @@ Verifiering ska ske med rimliga åtgärder, t.ex. mot offentliga register, samt 
 - Hybrider (egen butik + tredjepartssäljare som listar via plattformen) → typiskt rapporteringsskyldig.
 
 ### GDPR-samspel
-- Säljarens personuppgifter samlas in baserat på **rättslig förpliktelse** (art. 6.1 c GDPR) — DAC7 är lagstadgad skyldighet.
+- Säljarens personuppgifter samlas in baserat på **rättslig förpliktelse** (art. 6.1 c GDPR): DAC7 är lagstadgad skyldighet.
 - Rätt till radering enligt GDPR begränsas under 7-årsperioden.
-- Plattformen ska informera säljarna om rapporteringen (transparenskrav GDPR art. 13–14).
+- Plattformen ska informera säljarna om rapporteringen (transparenskrav GDPR art. 13-14).

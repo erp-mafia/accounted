@@ -4,14 +4,14 @@
  * Digital inlämning av årsredovisning (iXBRL → Bolagsverket).
  *
  * Three steps below the year-end ÅR editors:
- *   1. Granska — the generated iXBRL rendered in an iframe (the XHTML *is*
+ *   1. Granska: the generated iXBRL rendered in an iframe (the XHTML *is*
  *      the filed presentation) + pre-flight validation results + download
  *      for manual filing (the self-hosted/no-extension path).
- *   2. Skicka in — only when the bolagsverket extension responds: avtalstext
+ *   2. Skicka in: only when the bolagsverket extension responds: avtalstext
  *      acceptance → kontrollera-utfall → upload till eget utrymme → kvittens
  *      with "signera hos Bolagsverket"-link. The fastställelseintyg is signed
  *      with e-legitimation at Bolagsverket, never here.
- *   3. Status — submission history driven by webhooks + polling fallback.
+ *   3. Status: submission history driven by webhooks + polling fallback.
  *
  * Year-end surface: copy stays Swedish in both locales (see i18n rules).
  */
@@ -36,7 +36,7 @@ import {
 
 /** Inlämningen till Bolagsverket väntar på avtal + organisationscertifikat
  *  (M0). Tills dess visas hela digital inlämning-sektionen blurrad med en
- *  "Kommer snart"-skylt — endast PDF-nedladdningen på ÅR-sidan är användbar.
+ *  "Kommer snart"-skylt: endast PDF-nedladdningen på ÅR-sidan är användbar.
  *  Flippa till false när integrationen är godkänd. Importeras också av
  *  ÅR-sidan som blurrar sina Bolagsverket-delar med samma flagga. */
 export const INLAMNING_COMING_SOON = true
@@ -108,9 +108,9 @@ function normalizePnr(raw: string): string | null {
 const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline' }> = {
   draft: { label: 'Utkast', variant: 'outline' },
   kontrollerad: { label: 'Kontrollerad', variant: 'secondary' },
-  uploaded: { label: 'Uppladdad — väntar på signering', variant: 'warning' },
+  uploaded: { label: 'Uppladdad: väntar på signering', variant: 'warning' },
   inkommen: { label: 'Inkommen till Bolagsverket', variant: 'secondary' },
-  forelagd: { label: 'Föreläggande — åtgärd krävs', variant: 'destructive' },
+  forelagd: { label: 'Föreläggande: åtgärd krävs', variant: 'destructive' },
   komplettering: { label: 'Komplettering inlämnad', variant: 'secondary' },
   registrerad: { label: 'Registrerad', variant: 'success' },
   avslutad: { label: 'Avslutad utan registrering', variant: 'destructive' },
@@ -167,13 +167,13 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         setSubmissions((body.data ?? []) as SubmissionRow[])
         setSubmissionsError(null)
       } else {
-        setSubmissionsError('Kunde inte hämta inlämningshistoriken — försök igen.')
+        setSubmissionsError('Kunde inte hämta inlämningshistoriken: försök igen.')
       }
     } catch {
       // Non-blocking: the call sites fire-and-forget (`void loadSubmissions()`),
       // so a network failure must surface here instead of as an unhandled
       // rejection.
-      setSubmissionsError('Kunde inte hämta inlämningshistoriken — försök igen.')
+      setSubmissionsError('Kunde inte hämta inlämningshistoriken: försök igen.')
     } finally {
       setLoadingSubmissions(false)
     }
@@ -333,10 +333,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {/* Steg: Granska & validera */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Digital inlämning — granska &amp; validera (iXBRL)</CardTitle>
+          <CardTitle className="text-base">Digital inlämning: granska &amp; validera (iXBRL)</CardTitle>
           <p className="text-sm text-muted-foreground">
             Bolagsverket tar emot årsredovisningen som iXBRL (XHTML). Dokumentet nedan är
-            exakt det som lämnas in — granska det som den slutliga presentationen.
+            exakt det som lämnas in: granska det som den slutliga presentationen.
           </p>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
@@ -350,7 +350,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               onChange={(event) => setUtdelning(event.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Ingår i resultatdispositionen i dokumentet — 0 betyder att allt
+              Ingår i resultatdispositionen i dokumentet: 0 betyder att allt
               balanseras i ny räkning. Beloppet följer med förhandsgranskning,
               nedladdning och inlämning.
             </p>
@@ -421,7 +421,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           <p className="text-sm text-muted-foreground">
             Årsredovisningen laddas upp till företagets eget utrymme hos Bolagsverket.
             Undertecknaren får ett e-postmeddelande och signerar fastställelseintyget med
-            e-legitimation hos Bolagsverket — först då är årsredovisningen inlämnad.
+            e-legitimation hos Bolagsverket: först då är årsredovisningen inlämnad.
           </p>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
@@ -515,7 +515,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </div>
               <p className="text-xs text-muted-foreground">
                 Personnumren skickas till Bolagsverket för att skapa eget utrymme och bjuda
-                in undertecknaren. De sparas inte i Accounted — endast en teknisk
+                in undertecknaren. De sparas inte i Accounted: endast en teknisk
                 referens (hash) lagras.
               </p>
 
@@ -665,7 +665,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     </p>
                     {submission.status === 'forelagd' && (
                       <p className="text-xs text-destructive">
-                        Bolagsverket har skickat ett föreläggande — läs brevet, åtgärda
+                        Bolagsverket har skickat ett föreläggande: läs brevet, åtgärda
                         bristerna och lämna in en komplettering (ny inlämning ovan).
                       </p>
                     )}

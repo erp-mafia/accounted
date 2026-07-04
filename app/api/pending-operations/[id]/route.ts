@@ -11,7 +11,7 @@ import type { EntityType, Transaction, TransactionCategory, VatTreatment } from 
 // PATCH /api/pending-operations/[id]
 //
 // Edit-before-approve. Today only supports staged categorize_transaction
-// operations — the user can pick a different category (and/or VAT treatment)
+// operations: the user can pick a different category (and/or VAT treatment)
 // before clicking Godkänn. We re-derive the booking via the same mapping
 // engine the commit path uses so the preview the user approves equals the
 // preview that gets posted.
@@ -81,7 +81,7 @@ export async function PATCH(
 
   if (op.status !== 'pending') {
     return NextResponse.json(
-      { error: `Operation already ${op.status} — cannot edit.` },
+      { error: `Operation already ${op.status}: cannot edit.` },
       { status: 409 },
     )
   }
@@ -134,7 +134,7 @@ export async function PATCH(
   const isBusiness = newCategory !== 'private'
 
   // Resolve whether the (possibly defaulted) treatment carries a rate-based
-  // VAT line — only then can a vat_amount override survive. An explicit
+  // VAT line: only then can a vat_amount override survive. An explicit
   // override on a VAT-less treatment is a caller error; a preserved one from
   // before the edit is simply stale and gets dropped.
   const probe = getCategoryAccountMapping(

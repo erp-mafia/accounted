@@ -1,16 +1,16 @@
 /**
- * /api/v1/companies/{companyId}/invoices — list + create invoice endpoints.
+ * /api/v1/companies/{companyId}/invoices: list + create invoice endpoints.
  *
- * GET  — list with filters (status, customer_id, document_type, currency).
+ * GET: list with filters (status, customer_id, document_type, currency).
  *        Cursor pagination on (invoice_date DESC, id DESC).
- * POST — create draft invoice. Idempotent (mandatory Idempotency-Key).
+ * POST: create draft invoice. Idempotent (mandatory Idempotency-Key).
  *        Dry-runnable (?dry_run=true returns the validated would-be
  *        invoice + items with computed VAT totals; no DB writes).
  *        Lifecycle: drafts have invoice_number=null until the :send action
  *        verb (PR-B-2b) triggers F-series allocation atomically. Delivery
  *        notes get a number on create from a separate D-series sequence.
  *        Rationale (ML 17 kap 24§ p.2): the löpnummer series must be
- *        unbroken AND cover only issued invoices — consuming numbers for
+ *        unbroken AND cover only issued invoices: consuming numbers for
  *        drafts that get abandoned creates legal gaps.
  */
 
@@ -66,16 +66,16 @@ const InvoicesListResponse = listEnvelope(InvoiceSummary)
 
 const ALLOWED_EXPAND = ['customer', 'items'] as const
 
-// Explicit projection — excludes user_id, company_id, and SEK-conversion
+// Explicit projection: excludes user_id, company_id, and SEK-conversion
 // fields not in the summary schema. Schema migrations adding columns must
 // update this list before the field becomes visible on the public API.
 const INVOICE_SUMMARY_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
 
-// Customer projections — three tiers for different contexts:
+// Customer projections: three tiers for different contexts:
 //   - NAME_ONLY: default for the invoice list (inline customer_name only)
 //   - LIST_CONTEXT: ?expand=customer in a LIST endpoint. Contact-summary
-//     subset only — full PII like address/phone/notes/vat_number lives on
+//     subset only: full PII like address/phone/notes/vat_number lives on
 //     the dedicated customer detail endpoint. GDPR Art.5(1)(c)
 //     data-minimisation: bulk fetches should not transmit a full PII
 //     record per row.
@@ -84,7 +84,7 @@ const INVOICE_SUMMARY_COLUMNS =
 const CUSTOMER_NAME_ONLY_COLUMNS = 'id, name'
 const CUSTOMER_LIST_CONTEXT_COLUMNS = 'id, name, customer_type, email, country, archived_at'
 
-// Invoice items projection — excludes invoice_id (redundant) and internal
+// Invoice items projection: excludes invoice_id (redundant) and internal
 // linkage fields not in the documented response shape.
 const INVOICE_ITEM_COLUMNS =
   'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
@@ -97,9 +97,9 @@ registerEndpoint({
   description:
     'Returns invoices in most-recent-first order. Includes the customer name inline; pass ?expand=customer for the full customer record, ?expand=items for line items.',
   useWhen:
-    'You need to enumerate invoices for a company — for AR reporting, payment matching, or building an invoice dashboard.',
+    'You need to enumerate invoices for a company: for AR reporting, payment matching, or building an invoice dashboard.',
   doNotUseFor:
-    'Fetching a single invoice you already know the id of — use GET /api/v1/companies/{companyId}/invoices/{id}. Supplier invoices are a different resource (supplier-invoices).',
+    'Fetching a single invoice you already know the id of: use GET /api/v1/companies/{companyId}/invoices/{id}. Supplier invoices are a different resource (supplier-invoices).',
   pitfalls: [
     'Draft invoices have invoice_number=null until they are sent.',
     'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices.',
@@ -159,7 +159,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const expand = expandResult.expand
 
     // Validate query filters. Currency is strict ISO-4217 (3 uppercase
-    // letters) — accepting arbitrary 3-8 char strings would pass through
+    // letters): accepting arbitrary 3-8 char strings would pass through
     // to the DB filter without serving any documented purpose.
     const FiltersSchema = z.object({
       status: InvoiceStatus.optional(),
@@ -292,10 +292,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST — create draft invoice (or proforma / delivery_note)
+// POST: create draft invoice (or proforma / delivery_note)
 // ──────────────────────────────────────────────────────────────────
 
-// Response projection on create — same shape as the detail endpoint.
+// Response projection on create: same shape as the detail endpoint.
 // Drop user_id, company_id (internal scoping).
 const INVOICE_RESPONSE_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
@@ -303,7 +303,7 @@ const INVOICE_RESPONSE_COLUMNS =
 const INVOICE_ITEMS_RESPONSE_COLUMNS =
   'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
 
-// Loose response schema — invoices have many fields; pinning every one in
+// Loose response schema: invoices have many fields; pinning every one in
 // the registry is overkill until we have a real schema-drift test.
 const InvoiceCreated = z.object({
   id: z.string().uuid(),
@@ -327,7 +327,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices',
   summary: 'Create a draft invoice, proforma, or delivery note.',
   description:
-    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Idempotent (mandatory Idempotency-Key). Dry-runnable — the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send).',
+    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send).',
   useWhen:
     'You need to issue a new invoice, proforma, or delivery note. Use dry-run first to confirm VAT calculations and currency conversion before committing.',
   doNotUseFor:
@@ -335,7 +335,7 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory; calls without it return 400.',
     'For mixed-rate invoices, set vat_rate per item explicitly. Items where vat_rate is omitted use the customer\'s default rate from getVatRules().',
-    'Non-SEK currencies require an active Riksbanken exchange-rate fetch. Failure is non-fatal — the invoice is created with null SEK fields and the agent can recompute later.',
+    'Non-SEK currencies require an active Riksbanken exchange-rate fetch. Failure is non-fatal: the invoice is created with null SEK fields and the agent can recompute later.',
     'invoice_number is null on creation. The number is allocated atomically when the invoice transitions out of draft. Counting on a specific number at create time is a bug.',
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
   ],
@@ -380,7 +380,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     // Defensive: companyId comes from the URL and was already validated for
     // membership by the wrapper, but UUID-validate it before using as a DB
-    // predicate — mirrors the pattern in the detail-route :id check.
+    // predicate: mirrors the pattern in the detail-route :id check.
     if (!z.string().uuid().safeParse(ctx.companyId).success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -546,7 +546,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Delivery notes get their number from a dedicated sequence on insert.
     // Invoices and proformas allocate F-series numbers via
-    // ensureInvoiceNumber AFTER insert (atomic, but can fail — soft-cancel
+    // ensureInvoiceNumber AFTER insert (atomic, but can fail: soft-cancel
     // on failure to preserve sequence integrity per ML 17 kap 24§).
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
@@ -589,8 +589,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .single()
 
     if (invoiceErr) {
-      // pg_message can interpolate field values from constraint detail —
-      // log internally, never echo to the client.
+      // pg_message can interpolate field values from constraint detail:       // log internally, never echo to the client.
       ctx.log.error('invoice insert failed', invoiceErr, {
         invoiceId: undefined,
         companyId: ctx.companyId,
@@ -618,7 +617,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         .eq('company_id', ctx.companyId!)
       if (rollbackErr) {
         ctx.log.error(
-          'invoice items insert failed AND rollback delete failed — orphaned invoice header',
+          'invoice items insert failed AND rollback delete failed: orphaned invoice header',
           rollbackErr,
           { invoiceId, companyId: ctx.companyId, originalPgCode: itemsErr.code },
         )
@@ -638,7 +637,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Allocation happens atomically on the first :send action (Phase 2
     // PR-B-2b). Draft invoices keep invoice_number=null until then.
     // Rationale: ML 17 kap 24§ p.2 requires the löpnummer series to be
-    // unbroken and to cover only issued invoices — consuming numbers for
+    // unbroken and to cover only issued invoices: consuming numbers for
     // drafts that are later abandoned creates legal gaps.
     // Delivery notes use a separate D-series sequence (already allocated
     // on insert above) and are NOT subject to the F-series constraint.
@@ -663,7 +662,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Emit invoice.created only for real invoices — proformas and delivery
+    // Emit invoice.created only for real invoices: proformas and delivery
     // notes are informational and have no downstream consumer obligation.
     if (complete && documentType === 'invoice') {
       try {

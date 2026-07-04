@@ -50,8 +50,8 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
   // convert to invoice currency BEFORE deciding fully-paid / cash-vs-clearing.
   // Before the fix, comparing the raw 1 000 SEK against 140 USD made
   // newRemaining go negative → is_fully_paid=true → a cash-method unbooked
-  // invoice previewed a cash entry (Dr 1930 / Cr 30xx) while the POST — which
-  // converts first — commits the clearing entry (Dr 1930 / Cr 1510). The user
+  // invoice previewed a cash entry (Dr 1930 / Cr 30xx) while the POST: which
+  // converts first: commits the clearing entry (Dr 1930 / Cr 1510). The user
   // approved one verifikat and a different one was booked.
   it('cross-currency partial under kontantmetoden previews a clearing entry, not a cash entry', async () => {
     const tx = makeTransaction({
@@ -144,7 +144,7 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
 
   // Regression for the F-2026080 bug: the cash-entry preview double-subtracted
   // VAT (sub = line_total - vat_amount) even though line_total is ALREADY the
-  // net line amount, producing 3001=3127.5 against a 1930 debit of 5212.5 — an
+  // net line amount, producing 3001=3127.5 against a 1930 debit of 5212.5: an
   // unbalanced verifikat. The existing 'same-currency full payment' test above
   // uses an itemless invoice, so it only hits the fallback branch and never the
   // buggy per-item loop. This invoice mirrors F-2026080 exactly.

@@ -58,7 +58,7 @@ export async function GET(
     )
   }
 
-  // Resolve the period — either by fiscal_period_id or periodType/year/period.
+  // Resolve the period: either by fiscal_period_id or periodType/year/period.
   let start: string | null = null
   let end: string | null = null
   const fiscalPeriodId = searchParams.get('fiscal_period_id')

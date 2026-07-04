@@ -138,7 +138,7 @@ describe('GET /api/dimensions/tagging/lines', () => {
         }),
       ],
     })
-    // Step 2: the COMPLETE line sets — entry-1 has a line the account filter
+    // Step 2: the COMPLETE line sets; entry-1 has a line the account filter
     // would not have matched; it must still be present (whole-verifikat
     // contract, null dimensions normalized to {}).
     enqueue({
@@ -212,7 +212,7 @@ describe('GET /api/dimensions/tagging/lines', () => {
 
   it('include_annulled=1 pulls in a counter-voucher that fell outside the filters', async () => {
     // Step 1 returns only the storno leg (its original, entry-0, is outside
-    // the date range). The route must fetch entry-0 anyway — otherwise the
+    // the date range). The route must fetch entry-0 anyway: otherwise the
     // workbench's motverifikat guard cannot see the missing leg and one-sided
     // tagging slips through silently.
     enqueue({ data: [makeRawEntry({ reverses_id: 'entry-0', entry_date: '2026-05-01' })] })
@@ -257,7 +257,7 @@ describe('GET /api/dimensions/tagging/lines', () => {
         makeRawEntry({ id: 'entry-2', reverses_id: 'entry-1', voucher_number: 43 }),
       ],
     })
-    // No counter query — next enqueued result is the line fetch.
+    // No counter query: next enqueued result is the line fetch.
     enqueue({
       data: [
         makeRawLine(),

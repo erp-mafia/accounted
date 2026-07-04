@@ -65,11 +65,11 @@ registerEndpoint({
   description:
     'Runs the same ingest pipeline as the dashboard CSV importer and the PSD2 bank sync: dedup, insert, invoice match, mapping-rule auto-categorize, auto-JE for high-confidence matches. Idempotent over the whole batch via Idempotency-Key. Dry-runnable.',
   useWhen:
-    'You\'re importing transactions from a CSV, a custom bank feed, or an external accounting system. Each item must have a stable external_id — this is the primary dedup key.',
+    'You\'re importing transactions from a CSV, a custom bank feed, or an external accounting system. Each item must have a stable external_id: this is the primary dedup key.',
   doNotUseFor:
     'Single ad-hoc transactions (use the dashboard). Documents/receipts (use the documents endpoint). Manually-created journal entries (Phase 4).',
   pitfalls: [
-    'external_id is the primary dedup key — make it stable for the same physical transaction across reruns.',
+    'external_id is the primary dedup key: make it stable for the same physical transaction across reruns.',
     'Content-based dedup runs in addition: a row matching an already-booked transaction by date, amount AND description (prefix-containment, to survive PSD2 title enrichment) is skipped even if external_id differs.',
     'raw_insert_only=true skips ALL post-insert pipeline steps (matching, categorization). Use for viewer-only imports.',
     'Max 500 items per call. For larger imports, split into pages of 500.',
@@ -134,7 +134,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       //   2. content match (date + amount) against already-booked rows
       // The live pipeline narrows (2) to date range + booked-only, so we
       // mirror that here. Without this, an integrator who relies on dry-run
-      // to confirm uniqueness can ingest a duplicate affärshändelse —
+      // to confirm uniqueness can ingest a duplicate affärshändelse:
       // BFL 5 kap requires löpande bokföring to reflect actual transactions
       // and forbids double-bookings.
       const externalIds = body.transactions.map((t) => t.external_id)
@@ -161,7 +161,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // Mirror the live pipeline's content-dedup bridge (lib/transactions/ingest.ts):
       // bucket booked rows by (date, öre) and match by description prefix-containment
       // (keyed off the immutable original_description), consumed with the SAME
-      // longest-match + counting semantics — so a batch of N copies against M booked
+      // longest-match + counting semantics: so a batch of N copies against M booked
       // twins previews M skips and N−M imports, not N. Scope note: like the live
       // pipeline's booked map this previews ONLY booked rows; the unbooked
       // enable_banking overlap check is not modelled here.
@@ -174,7 +174,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         if (bucket) bucket.push(desc)
         else bookedBuckets.set(key, [desc])
       }
-      // Consume the longest bridging stored description (counting semantics) — the
+      // Consume the longest bridging stored description (counting semantics): the
       // same logic as ingest.ts consumeBridgingTwin, on this preview's mutable copy.
       const consumeBookedTwin = (date: string, amount: number, desc: string): boolean => {
         const descs = bookedBuckets.get(contentBucketKey(date, amount))

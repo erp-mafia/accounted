@@ -5,7 +5,7 @@ import type { VatDeclarationRutor } from '@/types'
  * /kontrollera or /utkast calls.
  *
  * Why we need this: Skatteverket's "validering" only confirms that the
- * payload is internally arithmetically consistent — it does NOT confirm
+ * payload is internally arithmetically consistent: it does NOT confirm
  * that the declaration reflects reality. A declaration of all zeros
  * validates fine; one with output VAT but no underlying purchases
  * validates fine too, until the gateway-level FK004 rule fires.
@@ -21,7 +21,7 @@ import type { VatDeclarationRutor } from '@/types'
  *   journal entries that bypass the supplier invoice flow.
  *
  * - Reverse charge: ruta 20-24 populated but ruta 30-32 empty. The mirror
- *   case — basis booked but fiktiv moms missing. Less common but equally
+ *   case, basis booked but fiktiv moms missing. Less common but equally
  *   broken.
  *
  * - Mismatch between output RC VAT (ruta 30-32) and offsetting input VAT
@@ -68,7 +68,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
   const rcBasis =
     rutor.ruta20 + rutor.ruta21 + rutor.ruta22 + rutor.ruta23 + rutor.ruta24
 
-  // Use a 0.5 SEK epsilon — values are rounded to öres in the calculator
+  // Use a 0.5 SEK epsilon: values are rounded to öres in the calculator
   // and we don't want a 0.01 rounding scrap to trip a sanity check.
   const eps = 0.5
 
@@ -87,7 +87,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
     })
   }
 
-  // Mirror: basis present but no output VAT — equally broken, often a
+  // Mirror: basis present but no output VAT, equally broken, often a
   // half-finished manual posting.
   if (rcBasis > eps && rcOutput <= eps) {
     findings.push({
@@ -104,7 +104,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
 
   // The fiktiv-moms-pair must net to zero in the buyer's input deduction.
   // We can't isolate the RC portion of ruta 48 without the breakdown, but
-  // we can flag when ruta 48 is smaller than rcOutput — that means the
+  // we can flag when ruta 48 is smaller than rcOutput: that means the
   // RC purchase didn't fully recover the calculated input VAT, which is
   // a strong signal that one half of the 2645/2614 pair is missing.
   if (rcOutput > eps && rutor.ruta48 + eps < rcOutput) {
@@ -120,7 +120,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
     })
   }
 
-  // SKV §4.1.1.4 rule 1 — taxable sales base requires output VAT.
+  // SKV §4.1.1.4 rule 1: taxable sales base requires output VAT.
   // If user has booked revenue (3001-3003, uttag, VMB, frivillig uthyrning)
   // without any output VAT (2611-2638), the declaration will be rejected.
   // Common cause: revenue posted but VAT line forgotten, or revenue on a
@@ -135,13 +135,13 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
         'Du har redovisat momspliktig försäljning (ruta 05-08) men ingen ' +
         'utgående moms (ruta 10-12). Skatteverket kräver att momspliktig ' +
         'försäljning kombineras med utgående moms. Kontrollera att VAT-rader ' +
-        'är bokförda på 2611/2621/2631 — eller flytta intäkterna till rätt ' +
+        'är bokförda på 2611/2621/2631, eller flytta intäkterna till rätt ' +
         'momsfri ruta (35/36/39/40) om de inte är momspliktiga.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
   }
 
-  // Mirror — output VAT without taxable sales base. Output VAT booked
+  // Mirror: output VAT without taxable sales base. Output VAT booked
   // standalone (e.g. manual correction without matching revenue posting)
   // would also fail SKV's contract.
   if (taxableSalesOutput > eps && taxableSalesBase <= eps) {
@@ -157,7 +157,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
     })
   }
 
-  // SKV §4.1.1.4 rule 5 — import base requires import output VAT.
+  // SKV §4.1.1.4 rule 5: import base requires import output VAT.
   const importOutput = rutor.ruta60 + rutor.ruta61 + rutor.ruta62
   if (rutor.ruta50 > eps && importOutput <= eps) {
     findings.push({
@@ -171,7 +171,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
     })
   }
 
-  // SKV §4.1.1.4 rule 6 — import output VAT requires import base.
+  // SKV §4.1.1.4 rule 6: import output VAT requires import base.
   // This was the canary that the Phase 1b ruta50 wiring fixed.
   if (importOutput > eps && rutor.ruta50 <= eps) {
     findings.push({
@@ -185,7 +185,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
     })
   }
 
-  // SummaMoms drift — sanity check that our local ruta49 matches what the
+  // SummaMoms drift: sanity check that our local ruta49 matches what the
   // mapper will send. If this fires, the calculator and mapper disagree
   // and we'd hit SKV's FK009.
   const expectedRuta49 =

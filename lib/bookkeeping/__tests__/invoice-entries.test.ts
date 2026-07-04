@@ -153,7 +153,7 @@ describe('getOutputVatAccount', () => {
   })
 })
 
-describe('createInvoiceJournalEntry — per-line VAT', () => {
+describe('createInvoiceJournalEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -299,7 +299,7 @@ describe('createInvoiceJournalEntry — per-line VAT', () => {
   })
 })
 
-describe('createInvoiceJournalEntry — per-article revenue account override', () => {
+describe('createInvoiceJournalEntry: per-article revenue account override', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -356,7 +356,7 @@ describe('createInvoiceJournalEntry — per-article revenue account override', (
     expect(debit).toBe(1250)
   })
 
-  it('ignores a per-line override on reverse charge — revenue stays on 3308', async () => {
+  it('ignores a per-line override on reverse charge: revenue stays on 3308', async () => {
     const invoice = makeInvoice({
       subtotal: 5000,
       vat_amount: 0,
@@ -406,7 +406,7 @@ describe('createInvoiceJournalEntry — per-article revenue account override', (
   })
 })
 
-describe('createCreditNoteJournalEntry — per-line VAT', () => {
+describe('createCreditNoteJournalEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -455,7 +455,7 @@ describe('createCreditNoteJournalEntry — per-line VAT', () => {
   })
 })
 
-describe('createInvoiceCashEntry — per-line VAT', () => {
+describe('createInvoiceCashEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -498,7 +498,7 @@ describe('createInvoiceCashEntry — per-line VAT', () => {
   })
 })
 
-describe('createInvoiceJournalEntry — EUR foreign currency', () => {
+describe('createInvoiceJournalEntry: EUR foreign currency', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -681,7 +681,7 @@ describe('BFL-compliant descriptions with counterparty names', () => {
   })
 })
 
-describe('createInvoicePaymentJournalEntry — exchange rate difference', () => {
+describe('createInvoicePaymentJournalEntry: exchange rate difference', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -766,7 +766,7 @@ describe('createInvoicePaymentJournalEntry — exchange rate difference', () => 
   })
 })
 
-describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
+describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -820,7 +820,7 @@ describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
     expect(totalDebit).toBe(12500)
   })
 
-  it('mixed invoice: ROT line + non-deduction line — per-item handling', async () => {
+  it('mixed invoice: ROT line + non-deduction line, per-item handling', async () => {
     // ROT line 10 000 (deduction 3 000) + non-deduction materials line 4 000.
     // Total 14 000 + 25% VAT = 17 500. Customer owes 14 500. Skatteverket 3 000.
     const invoice = makeInvoice({
@@ -975,7 +975,7 @@ describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
   })
 })
 
-describe('dimensions propagation (PR7) — createInvoiceJournalEntry', () => {
+describe('dimensions propagation (PR7): createInvoiceJournalEntry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -1037,7 +1037,7 @@ describe('dimensions propagation (PR7) — createInvoiceJournalEntry', () => {
   })
 
   it('per-rate rounding remainder is absorbed by the last dimension bucket (balanced against 1510)', async () => {
-    // Same account, same 25% rate — split only by the dimensions bag. The
+    // Same account, same 25% rate: split only by the dimensions bag. The
     // rate-level total (20.01) is the balance anchor; independent per-bucket
     // rounding would give 2 × 10.01 = 20.02, so the last bucket must absorb.
     const invoice = makeInvoice({
@@ -1138,7 +1138,7 @@ describe('dimensions propagation (PR7) — createInvoiceJournalEntry', () => {
     const input = mockedCreateEntry.mock.calls[0][3]
 
     const debit1510 = input.lines.find((l) => l.account_number === '1510')
-    // toEqual ignores undefined-valued keys — the line shape is unchanged.
+    // toEqual ignores undefined-valued keys: the line shape is unchanged.
     expect(debit1510).toEqual({
       account_number: '1510',
       debit_amount: 1250,
@@ -1151,7 +1151,7 @@ describe('dimensions propagation (PR7) — createInvoiceJournalEntry', () => {
   })
 })
 
-describe('dimensions propagation (PR7) — createInvoicePaymentJournalEntry', () => {
+describe('dimensions propagation (PR7): createInvoicePaymentJournalEntry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -1215,7 +1215,7 @@ describe('dimensions propagation (PR7) — createInvoicePaymentJournalEntry', ()
   })
 })
 
-describe('dimensions propagation (PR7) — createInvoiceCashEntry', () => {
+describe('dimensions propagation (PR7): createInvoiceCashEntry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -1246,7 +1246,7 @@ describe('dimensions propagation (PR7) — createInvoiceCashEntry', () => {
   })
 })
 
-describe('dimensions propagation (PR7) — createCreditNoteJournalEntry', () => {
+describe('dimensions propagation (PR7): createCreditNoteJournalEntry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -1287,7 +1287,7 @@ describe('dimensions propagation (PR7) — createCreditNoteJournalEntry', () => 
   })
 })
 
-describe('createInvoiceCashEntry — ROT/RUT-avdrag', () => {
+describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

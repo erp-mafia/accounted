@@ -90,10 +90,10 @@ function lineRow(opts: {
   }
 }
 
-describe('findMatchSuggestionsBulk — AGI period disambiguation', () => {
+describe('findMatchSuggestionsBulk: AGI period disambiguation', () => {
   it('picks the AGI-linked entry even when two amount-matches exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // Two journal entries credit 1630 with the same amount — without period
+    // Two journal entries credit 1630 with the same amount: without period
     // disambiguation, this would be ambiguous and return no suggestion.
     enqueue({
       data: [
@@ -225,7 +225,7 @@ function txRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('findMatchCandidates — AGI period boost', () => {
+describe('findMatchCandidates: AGI period boost', () => {
   it('moves the AGI-linked entry to position 0 even when a closer-by-date entry exists', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })

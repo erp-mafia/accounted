@@ -50,8 +50,8 @@ function logError(message: string, extra?: Record<string, unknown>) {
   }).catch(() => {})
 }
 
-// Parse TIC v2's `startMonthDay` ("MM-DD" — e.g. "07-01") into a month
-// number 1–12. Returns null on missing / malformed input so the caller
+// Parse TIC v2's `startMonthDay` ("MM-DD": e.g. "07-01") into a month
+// number 1-12. Returns null on missing / malformed input so the caller
 // can fall through to the manual picker default.
 function parseStartMonthDay(value: string | null | undefined): number | null {
   if (!value) return null
@@ -64,7 +64,7 @@ function parseStartMonthDay(value: string | null | undefined): number | null {
 
 // Derive the Step-3 first-year defaults from TIC's `registrationDate`.
 // A company is treated as "first year" when registered less than 12 months
-// ago — fits BFL's 6-18 month opening-period window comfortably. Returns
+// ago: fits BFL's 6-18 month opening-period window comfortably. Returns
 // both the toggle state and a seeded `first_year_start` (always the 1st of
 // the registration month, the format Step 3's date inputs expect).
 function deriveFirstYearDefaults(registrationDate: number | null | undefined): {
@@ -98,7 +98,7 @@ interface WelcomeOnboardingProps {
   /** Legal name from CompanyRoles. Pre-fills Step 2's company_name field. */
   initialLegalName?: string
   /** Set when the orgnr came from BankID CompanyRoles. Step 2 treats the
-   *  field as pre-verified — skips the client-side Lens `/lookup` since
+   *  field as pre-verified: skips the client-side Lens `/lookup` since
    *  CompanyRoles already confirms the company exists. Cleared the moment
    *  the user edits the orgnr. */
   preverifiedOrgNumber?: string
@@ -123,7 +123,7 @@ export default function WelcomeOnboarding({
   const [isSaving, setIsSaving] = useState(false)
   const [currentStep, setCurrentStep] = useState(1)
   // Seed settings with what BankID CompanyRoles already told us. address /
-  // F-skatt / VAT come later — user types address in Step 2 and confirms
+  // F-skatt / VAT come later: user types address in Step 2 and confirms
   // F-skatt/VAT in Step 4. We deliberately don't pre-fetch from Lens to
   // preserve the 3000/mo budget for the manual-orgnr path.
   const [settings, setSettings] = useState<Partial<CompanySettings>>(() => {
@@ -179,7 +179,7 @@ export default function WelcomeOnboarding({
 
     // Step 4 (final): create everything via server action.
     // Going through a server action ensures that if the Next.js server is
-    // unreachable, nothing touches Supabase — no ghost companies.
+    // unreachable, nothing touches Supabase: no ghost companies.
     const periodResult = computeFiscalPeriod(mergedSettings)
     if (periodResult.error) {
       toast({
@@ -247,7 +247,7 @@ export default function WelcomeOnboarding({
 
   const stepInfo = STEP_INFO[currentStep - 1]
 
-  // Welcome screen — show before user clicks "Lägg till ditt första företag"
+  // Welcome screen: show before user clicks "Lägg till ditt första företag"
   if (!started) {
     return (
       <div className="flex flex-col items-start justify-center min-h-[60vh] animate-fade-in">
@@ -360,7 +360,7 @@ export default function WelcomeOnboarding({
 
               {currentStep === 3 && (() => {
                 // Derive both first-year defaults from TIC's registrationDate
-                // (null-safe — returns { false, undefined } for established
+                // (null-safe: returns { false, undefined } for established
                 // companies and for missing registrationDate).
                 const firstYearDefaults = deriveFirstYearDefaults(
                   ticLookup?.registrationDate,
@@ -379,7 +379,7 @@ export default function WelcomeOnboarding({
                       ?? parseStartMonthDay(ticLookup?.fiscalYear?.startMonthDay)
                       ?? undefined,
                     // Companies registered <12 months ago land in their first
-                    // fiscal year — pre-check the toggle and seed the start
+                    // fiscal year: pre-check the toggle and seed the start
                     // date so the user only confirms the end date.
                     is_first_fiscal_year:
                       settings.is_first_fiscal_year ?? firstYearDefaults.isFirstFiscalYear,

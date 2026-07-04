@@ -11,7 +11,7 @@
 
 import type { FiscalPeriod } from '@/types'
 
-/** Minimal shape needed for the date math — `FiscalPeriod` satisfies it. */
+/** Minimal shape needed for the date math: `FiscalPeriod` satisfies it. */
 type PeriodRange = Pick<FiscalPeriod, 'period_start' | 'period_end'>
 
 /** A period plus its id, for resolving which räkenskapsår a view scopes to. */
@@ -56,7 +56,7 @@ export function computeSuggestedPeriod(
   periods: PeriodRange[],
 ): SuggestedPeriod {
   if (periods.length === 0) {
-    // No periods at all — suggest a calendar year period around the entry date.
+    // No periods at all: suggest a calendar year period around the entry date.
     const year = entryDate.split('-')[0]
     return { name: `Räkenskapsår ${year}`, period_start: `${year}-01-01`, period_end: `${year}-12-31` }
   }
@@ -132,12 +132,12 @@ export function suggestSeedDate(periods: PeriodRange[], today: string): string {
  * Verifikationsnummer run as an unbroken series *per räkenskapsår* (BFL 5 kap
  * 7§), so the same number (e.g. A42) legitimately recurs once per year. Showing
  * every year at once makes those look like duplicates and makes a bare "A42"
- * reference ambiguous — a period-oriented view should land on a single year.
+ * reference ambiguous: a period-oriented view should land on a single year.
  *
  * Resolution, given `today` (YYYY-MM-DD):
  *  1. The period that contains today.
- *  2. Else the most recent period that has already started (period_start ≤ today)
- *     — covers a gap after the last year before the next one is created.
+ *  2. Else the most recent period that has already started (period_start ≤ today):
+ *     covers a gap after the last year before the next one is created.
  *  3. Else the earliest period (a company whose only/first year is still upcoming).
  *  4. Else null (no periods at all → caller falls back to "all years").
  */

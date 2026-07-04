@@ -22,8 +22,8 @@ const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
   ob_holiday: 'OB helgdag',
   bonus: 'Bonus',
   commission: 'Provision',
-  gross_deduction_pension: 'Bruttoavdrag — pension',
-  gross_deduction_other: 'Bruttoavdrag — övrigt',
+  gross_deduction_pension: 'Bruttoavdrag: pension',
+  gross_deduction_other: 'Bruttoavdrag: övrigt',
   benefit_car: 'Bilförmån',
   benefit_housing: 'Bostadsförmån',
   benefit_meals: 'Kostförmån',
@@ -31,7 +31,7 @@ const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
   benefit_bike: 'Cykelförmån',
   benefit_other: 'Övrig förmån',
   sick_karens: 'Karensavdrag',
-  sick_day2_14: 'Sjuklön (dag 2–14, 80 %)',
+  sick_day2_14: 'Sjuklön (dag 2-14, 80 %)',
   sick_day15_plus: 'Sjuklön (dag 15+, Försäkringskassan)',
   vab: 'VAB (vård av sjukt barn)',
   parental_leave: 'Föräldraledighet',
@@ -42,10 +42,10 @@ const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
   traktamente_taxable: 'Traktamente (skattepliktigt)',
   mileage_taxfree: 'Milersättning (skattefritt)',
   mileage_taxable: 'Milersättning (skattepliktigt)',
-  net_deduction_advance: 'Nettoavdrag — förskott',
-  net_deduction_union: 'Nettoavdrag — fackavgift',
-  net_deduction_benefit_payment: 'Nettoavdrag — förmånsbetalning',
-  net_deduction_other: 'Nettoavdrag — övrigt',
+  net_deduction_advance: 'Nettoavdrag: förskott',
+  net_deduction_union: 'Nettoavdrag: fackavgift',
+  net_deduction_benefit_payment: 'Nettoavdrag: förmånsbetalning',
+  net_deduction_other: 'Nettoavdrag: övrigt',
   correction: 'Korrigering',
   other: 'Övrigt',
 }
@@ -65,7 +65,7 @@ export default function SalaryRunEmployeeDetailPage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [calculating, setCalculating] = useState(false)
-  // Live counts pushed from the calendar — overrides the stale snapshot from
+  // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
 
@@ -214,7 +214,7 @@ export default function SalaryRunEmployeeDetailPage({
         />
       </div>
 
-      {/* Advanced mode — per-employee override of tax / arbetsgivaravgift */}
+      {/* Advanced mode: per-employee override of tax / arbetsgivaravgift */}
       {run.status === 'review' && (
         <SalaryOverridePanel
           runId={runId}
@@ -231,7 +231,7 @@ export default function SalaryRunEmployeeDetailPage({
         />
       )}
 
-      {/* Unified calendar — worked time (for hourly) + absence on the same grid */}
+      {/* Unified calendar: worked time (for hourly) + absence on the same grid */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Tid och frånvaro</CardTitle>
@@ -285,7 +285,7 @@ export default function SalaryRunEmployeeDetailPage({
                   <tr key={li.id} className="border-b last:border-0">
                     <td className="px-4 py-2 text-xs text-muted-foreground">{LINE_ITEM_TYPE_LABELS[li.item_type] ?? li.item_type}</td>
                     <td className="px-4 py-2 text-sm">{li.description}</td>
-                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '—'}</td>
+                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '-'}</td>
                     <td className="px-4 py-2 text-sm text-right tabular-nums">{formatCurrency(li.amount)}</td>
                   </tr>
                 ))}

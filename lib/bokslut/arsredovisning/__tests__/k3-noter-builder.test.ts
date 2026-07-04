@@ -66,7 +66,7 @@ describe('buildUppskjutenSkattNot', () => {
       latentTaxClosing: 60_600,
     })
     // Swedish locale formats negative numbers with the Unicode minus sign
-    // (U+2212), not the ASCII hyphen-minus — match either to be robust.
+    // (U+2212), not the ASCII hyphen-minus: match either to be robust.
     expect(note.body).toMatch(/[-−]10/)
     expect(note.body).toMatch(/Ingående saldo.*70/)
     expect(note.body).toMatch(/Utgående saldo.*60/)
@@ -159,7 +159,7 @@ describe('buildEquityChangesNote', () => {
     const labels = result.rows.map((r) => r.label)
     expect(labels).not.toContain('Nyemission')
     expect(labels).not.toContain('Utdelning')
-    // Årets resultat always shown — even when zero — so the year-end
+    // Årets resultat always shown: even when zero: so the year-end
     // disposition is visible in the statement.
     expect(labels).toContain('Årets resultat')
   })

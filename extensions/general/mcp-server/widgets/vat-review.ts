@@ -1,7 +1,7 @@
 import type { UiWidget } from './types'
 
 /**
- * VAT Review Widget — MCP Apps inline HTML.
+ * VAT Review Widget: MCP Apps inline HTML.
  * Read-only review of momsdeklaration (SKV 4700) before filing to Skatteverket.
  * Triggered by the gnubok_vat_review_widget tool.
  */
@@ -11,7 +11,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Momsdeklaration — Accounted</title>
+<title>Momsdeklaration: Accounted</title>
 <style>
   :root {
     --bg: #fafafa;
@@ -195,7 +195,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
 <body>
 <div class="header">
   <h1>Momsdeklaration</h1>
-  <span class="period" id="period">—</span>
+  <span class="period" id="period">-</span>
 </div>
 <div id="content"><div class="loading">Laddar…</div></div>
 
@@ -282,7 +282,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
 
     let html = ''
 
-    // Pre-filing warnings (e.g. one-sided reverse charge) — surface before the summary.
+    // Pre-filing warnings (e.g. one-sided reverse charge): surface before the summary.
     const warnings = Array.isArray(report.warnings) ? report.warnings : []
     if (warnings.length > 0) {
       html += '<div class="warnings">'
@@ -313,7 +313,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
     html += row('11', 'Utgående moms 12 %', '2621', r.ruta11)
     html += row('12', 'Utgående moms 6 %', '2631', r.ruta12)
 
-    html += '<tr class="section"><td colspan="3">Utgående moms — omvänd betalningsskyldighet</td></tr>'
+    html += '<tr class="section"><td colspan="3">Utgående moms: omvänd betalningsskyldighet</td></tr>'
     html += row('30', 'Utgående moms 25 % (reverse charge)', '2614', r.ruta30)
     html += row('31', 'Utgående moms 12 % (reverse charge)', '2624', r.ruta31)
     html += row('32', 'Utgående moms 6 % (reverse charge)', '2634', r.ruta32)

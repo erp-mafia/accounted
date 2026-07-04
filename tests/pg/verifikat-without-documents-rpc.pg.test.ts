@@ -97,7 +97,7 @@ describe('verifikat_without_documents RPC', () => {
       seeded.set(i, { id, amount: i * 100 })
     }
 
-    // Posted entry WITH a document — must never appear
+    // Posted entry WITH a document: must never appear
     const withDoc = await insertDraftJournalEntry({
       userId,
       companyId,
@@ -110,7 +110,7 @@ describe('verifikat_without_documents RPC', () => {
     await insertBalancedLines(withDoc, 700)
     await attachDocument({ userId, companyId, journalEntryId: withDoc })
 
-    // Draft entry — must never appear
+    // Draft entry: must never appear
     const draft = await insertDraftJournalEntry({
       userId,
       companyId,

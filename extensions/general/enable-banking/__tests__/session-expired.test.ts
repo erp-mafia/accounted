@@ -62,7 +62,7 @@ describe('isSessionExpiredResponse', () => {
   })
 })
 
-describe('getAllTransactionsWithRaw — dead session', () => {
+describe('getAllTransactionsWithRaw: dead session', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -144,7 +144,7 @@ function makeRequest(): Request {
   })
 }
 
-describe('POST /sync (enable-banking) — dead session reconnect', () => {
+describe('POST /sync (enable-banking): dead session reconnect', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -190,7 +190,7 @@ if (!connectRoute) {
   throw new Error('POST /connect route not registered on enable-banking extension')
 }
 
-describe('POST /connect (enable-banking) — reconnect in place', () => {
+describe('POST /connect (enable-banking): reconnect in place', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -200,7 +200,7 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
   })
 
   it('reuses the existing row (UPDATE, no INSERT) and keeps it out of the stale-pending sweep', async () => {
-    // startAuthorization() POSTs to /auth — stub it (jwt is already mocked).
+    // startAuthorization() POSTs to /auth: stub it (jwt is already mocked).
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -243,8 +243,8 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
     // In-place: a fresh authorization on the SAME row, never a new INSERT.
     expect(insertSpy).not.toHaveBeenCalled()
 
-    // The CSRF state is staged on the row FIRST — before startAuthorization, so
-    // before authorization_id even exists — guaranteeing the callback can always
+    // The CSRF state is staged on the row FIRST: before startAuthorization, so
+    // before authorization_id even exists: guaranteeing the callback can always
     // find the row by oauth_state and the bank session can never be orphaned.
     // It stays 'expired' (not 'pending') so the cron's stale-pending cleanup
     // can't delete an established connection mid-reconnect.
@@ -263,7 +263,7 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
   })
 })
 
-describe('POST /connect (enable-banking) — psu_type persistence', () => {
+describe('POST /connect (enable-banking): psu_type persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -286,7 +286,7 @@ describe('POST /connect (enable-banking) — psu_type persistence', () => {
   }
 
   it('reuses the stored psu_type on reconnect when the client sends no override', async () => {
-    // A 'personal' connection must NOT silently flip to 'business' on renewal —
+    // A 'personal' connection must NOT silently flip to 'business' on renewal:
     // that was the Handelsbanken signing-failure trap.
     stubAuth()
     const updateSpy = vi.fn()

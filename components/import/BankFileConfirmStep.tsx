@@ -116,7 +116,7 @@ export default function BankFileConfirmStep({
                 <span className="text-xs">Period</span>
               </div>
               <p className="text-sm font-medium">
-                {date_from} – {date_to}
+                {date_from}: {date_to}
               </p>
             </div>
 
@@ -176,7 +176,7 @@ export default function BankFileConfirmStep({
         </CardContent>
       </Card>
 
-      {/* Skipped rows — surfaced here because the manual-mapping path skips the
+      {/* Skipped rows: surfaced here because the manual-mapping path skips the
           preview step where these warnings would otherwise be shown. */}
       {warnings.length > 0 && (
         <Card>

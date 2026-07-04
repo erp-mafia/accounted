@@ -79,7 +79,7 @@ export async function DELETE(
   // Authorization is company-scoped, not user-scoped: any non-viewer member
   // of the active company may revoke any exemption in that company. The flag
   // is a shared bookkeeping artefact (same model as booking_template_library,
-  // mapping_rules, etc.) — exemptions are reviewed as a team. The audit_log
+  // mapping_rules, etc.): exemptions are reviewed as a team. The audit_log
   // trigger captures the DELETE with actor_id so accountability is preserved.
   const { error } = await supabase
     .from('journal_entry_no_doc_required')

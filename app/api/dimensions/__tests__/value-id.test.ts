@@ -94,7 +94,7 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
 
     expect(status).toBe(200)
     expect(body.data.is_active).toBe(false)
-    // Code untouched — immutable in v1.
+    // Code untouched: immutable in v1.
     expect(body.data.code).toBe('BUTIK')
   })
 
@@ -116,7 +116,7 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
   })
 
   it('allows clearing dates (explicit null) without checking the dimension', async () => {
-    // start_date: null clears the field — a harmless no-op on any dimension,
+    // start_date: null clears the field, a harmless no-op on any dimension,
     // so the route must not spend a dimension fetch on it. The single queued
     // result feeds the update itself.
     enqueue({
@@ -157,7 +157,7 @@ describe('DELETE /api/dimensions/[id]/values/[valueId]', () => {
 
   it('surfaces the retention trigger as 409 with the trigger\'s Swedish message', async () => {
     const triggerMessage =
-      'Värdet "BUTIK" används på bokförda verifikat och kan inte tas bort — arkivera det istället.'
+      'Värdet "BUTIK" används på bokförda verifikat och kan inte tas bort: arkivera det istället.'
     enqueue({ error: { code: 'P0001', message: triggerMessage } })
 
     const request = createMockRequest(URL_PATH, { method: 'DELETE' })

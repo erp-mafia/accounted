@@ -1,10 +1,10 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 
-// inbox.bulk-book — "Fråga assistenten" on a multi-selection in the Underlag
+// inbox.bulk-book: "Fråga assistenten" on a multi-selection in the Underlag
 // view (Dokumentinkorgen). Unlike transaction.categorization (which keys off the
 // single previewed item), this intent receives the user's CHECKBOX selection
-// (selectedIds) so Lena acts on exactly what the user marked — not whatever
+// (selectedIds) so Lena acts on exactly what the user marked: not whatever
 // happens to be open in the preview pane.
 //
 // Booking model (Modell B): each selected item is booked against its matched
@@ -78,7 +78,7 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
 
   model: SONNET_MODEL,
 
-  // Reason before proposing — group the selection and work out category + VAT
+  // Reason before proposing: group the selection and work out category + VAT
   // treatment in the thinking channel, so the visible reply is one short
   // motivation, not a play-by-play.
   thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
@@ -186,10 +186,10 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
     lines.push('Arbetssätt:')
     lines.push('- Boka via banktransaktionen (Modell B): verktyget bokför varje underlag mot dess matchade banktransaktion, som redan bär SEK-beloppet. Du behöver inte räkna om valuta.')
     lines.push('- GRUPPERA de bokförbara underlagen efter leverantör/typ. Samma slags kostnad → samma kategori + momsbehandling. För varje homogen grupp anropar du gnubok_bulk_book_inbox_items med gruppens item_ids, en kategori (enum) och vat_treatment.')
-    lines.push('- MOMS: en utländsk tjänst (t.ex. USD/EUR-prenumeration som Cursor/Anysphere där säljaren INTE debiterat svensk moms) är omvänd skattskyldighet → vat_treatment="reverse_charge". En svensk faktura med debiterad moms → standard_25 (eller den sats kvittot visar). Gissa aldrig — utgå från valuta + om underlaget visar moms.')
+    lines.push('- MOMS: en utländsk tjänst (t.ex. USD/EUR-prenumeration som Cursor/Anysphere där säljaren INTE debiterat svensk moms) är omvänd skattskyldighet → vat_treatment="reverse_charge". En svensk faktura med debiterad moms → standard_25 (eller den sats kvittot visar). Gissa aldrig: utgå från valuta + om underlaget visar moms.')
     lines.push('- KOLLA HUR MOTPARTEN BOKFÖRTS FÖRUT med gnubok_query_journal({ text: "<leverantör>", limit: 5 }) innan du väljer kategori. Följ ett tydligt tidigare mönster om inte underlaget motsäger det.')
     lines.push('- HOPPA ÖVER ej matchade underlag: be användaren matcha dem mot en banktransaktion först ("Matcha mot transaktion" i Dokumentinkorgen), så kan de bulkbokföras i nästa runda. Bokför ALDRIG ett underlag utan matchad transaktion via det här flödet.')
-    lines.push('- Förklara kort på svenska VARFÖR du valde kategori + momsbehandling — använd kategori-namn (t.ex. "Programvara/IT-tjänster"), aldrig ett BAS-kontonummer. Godkännandekortet visar antal, konto och moms; upprepa inte de siffrorna och säg inte att operationen är "stagead".')
+    lines.push('- Förklara kort på svenska VARFÖR du valde kategori + momsbehandling: använd kategori-namn (t.ex. "Programvara/IT-tjänster"), aldrig ett BAS-kontonummer. Godkännandekortet visar antal, konto och moms; upprepa inte de siffrorna och säg inte att operationen är "stagead".')
     lines.push('')
     lines.push('Svara på svenska och var direkt.')
     return lines.join('\n')

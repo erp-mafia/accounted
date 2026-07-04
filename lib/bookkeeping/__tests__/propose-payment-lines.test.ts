@@ -211,7 +211,7 @@ describe('proposePaymentLines', () => {
   })
 })
 
-describe('proposePaymentLines — dimensions propagation (PR7)', () => {
+describe('proposePaymentLines: dimensions propagation (PR7)', () => {
   const bag = { '1': 'KS01', '6': 'P001' }
 
   it('accrual: every proposed line carries a copy of the invoice default bag', () => {
@@ -224,7 +224,7 @@ describe('proposePaymentLines — dimensions propagation (PR7)', () => {
     expect(lines).toHaveLength(2)
     for (const line of lines) {
       expect(line.dimensions).toEqual(bag)
-      // A copy, not the shared reference — editing one line must not mutate
+      // A copy, not the shared reference: editing one line must not mutate
       // the invoice bag or a sibling line.
       expect(line.dimensions).not.toBe(bag)
     }

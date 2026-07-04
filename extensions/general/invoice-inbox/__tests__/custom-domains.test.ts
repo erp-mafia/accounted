@@ -101,7 +101,7 @@ describe('validateClaimableDomain', () => {
 describe('mapResendDomainStatus', () => {
   it('maps Resend statuses to our three buckets', () => {
     expect(mapResendDomainStatus('verified')).toBe('verified')
-    // temporary_failure = previously verified, Resend still routing — keep routing.
+    // temporary_failure = previously verified, Resend still routing: keep routing.
     expect(mapResendDomainStatus('temporary_failure')).toBe('verified')
     expect(mapResendDomainStatus('failed')).toBe('failed')
     expect(mapResendDomainStatus('pending')).toBe('pending')
@@ -112,7 +112,7 @@ describe('mapResendDomainStatus', () => {
 describe('resolveClaimedDomainStatus', () => {
   it('forces an adopted orphan to pending even when Resend reports verified', () => {
     // The security-critical case: adopting a domain freed by a deleted company
-    // must NOT inherit a stale 'verified' — DNS control has to be re-proven.
+    // must NOT inherit a stale 'verified': DNS control has to be re-proven.
     expect(resolveClaimedDomainStatus(true, 'verified')).toBe('pending')
     expect(resolveClaimedDomainStatus(true, 'temporary_failure')).toBe('pending')
   })
@@ -266,7 +266,7 @@ describe('claimCustomDomain', () => {
     if (result.ok) expect(result.data.resend_domain_id).toBe('rd_9')
   })
 
-  it('refuses to adopt a sending domain — the platform outbound domain must never bind to a tenant', async () => {
+  it('refuses to adopt a sending domain: the platform outbound domain must never bind to a tenant', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'row-1', company_id: 'company-1', domain: 'hansbolag.example' } }) // insert
     enqueue({ data: null }) // rollback delete
@@ -342,12 +342,12 @@ describe('checkCustomDomainVerification', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: { id: 'row-1', company_id: 'company-1', resend_domain_id: 'rd_send', verified_at: null },
-    }) // select — no update should follow
+    }) // select: no update should follow
     domainsMock.verify.mockResolvedValue({ data: { object: 'domain', id: 'rd_send' }, error: null })
     domainsMock.get.mockResolvedValue({
       data: {
         id: 'rd_send',
-        status: 'verified', // verified for SENDING — must not count
+        status: 'verified', // verified for SENDING: must not count
         capabilities: { receiving: 'disabled', sending: 'enabled' },
         records: [],
       },
@@ -402,7 +402,7 @@ describe('removeCustomDomain', () => {
     expect(domainsMock.remove).not.toHaveBeenCalled()
   })
 
-  it('keeps the row when Resend removal fails — a verified orphan must never become adoptable', async () => {
+  it('keeps the row when Resend removal fails: a verified orphan must never become adoptable', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'row-1', company_id: 'company-1', resend_domain_id: 'rd_1' } })
     domainsMock.get.mockResolvedValue({ data: RECEIVING_ONLY_DOMAIN, error: null })

@@ -37,8 +37,8 @@ interface MatchAllocationDialogProps {
  * payload at submit time.
  *
  * `remaining` is in the invoice's own `currency` (USD, EUR, etc.).
- * `exchangeRate` is the invoice's SEK-per-foreign-unit at invoicing time
- * — used to compute the default SEK amount for cross-currency rows so the
+ * `exchangeRate` is the invoice's SEK-per-foreign-unit at invoicing time:
+ * used to compute the default SEK amount for cross-currency rows so the
  * user doesn't have to mental-math the FX (PR #607).
  */
 interface AllocationCandidate {
@@ -177,7 +177,7 @@ export default function MatchAllocationDialog({
 
   // Each draft's `amount` is the allocation in TRANSACTION currency (SEK
   // for a Swedish bank import). For cross-currency invoices the FX
-  // rounding lives inside per-row FX diff lines (Dr 7960 / Cr 3960) — NOT
+  // rounding lives inside per-row FX diff lines (Dr 7960 / Cr 3960): NOT
   // in the tolerance. So the sum must equal tx_abs exactly: anything
   // unallocated would leave the bank line on 1930 short of the actual
   // bank receipt and break reconciliation. (PR #607 round-1 review.)
@@ -219,7 +219,7 @@ export default function MatchAllocationDialog({
 
       // Same-currency: partial allowed, default to min(remaining, budget).
       // Cross-currency: full-payment-only, default to booked SEK (rate
-      // sanity-checked). NOT capped to remainingTxBudget — the cross-
+      // sanity-checked). NOT capped to remainingTxBudget: the cross-
       // currency RPC guard requires the amount to be within ±10% of
       // booked_sek, so capping a USD invoice's default at the leftover
       // budget would silently trigger BATCH_FX_DEVIATION_TOO_LARGE on
@@ -445,7 +445,7 @@ export default function MatchAllocationDialog({
                               <X className="h-4 w-4" />
                             </Button>
                           </div>
-                          {/* FX hint — appears only for cross-currency rows
+                          {/* FX hint: appears only for cross-currency rows
                               so the user can see what their tx-currency
                               input translates to in invoice currency.
                               When the rate is missing or out of range, we
@@ -511,7 +511,7 @@ export default function MatchAllocationDialog({
                 <p>{t('balanced_message')}</p>
               </div>
             ) : undershoot && Object.keys(drafts).length > 0 ? (
-              // Undershoot is now a blocking state — the JE's 1930 line
+              // Undershoot is now a blocking state: the JE's 1930 line
               // must equal the bank's actual receipt or reconciliation
               // breaks. The user must allocate the full amount or remove
               // selections. PR #607 round-1 review fix.

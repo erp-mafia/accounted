@@ -48,13 +48,13 @@ All board members + VD (if appointed) must sign. Revisionsberättelse appended i
 Form: blankett 2161, filed as part of Inkomstdeklaration 1.
 
 ### Page 1: Räkenskapsschema
-- R1–R4: Intäkter (momspliktiga, momsfria, egna uttag, övriga)
-- R5–R13: Kostnader (varuinköp, externa kostnader, löner, arbetsgivaravgifter, avskrivningar)
+- R1-R4: Intäkter (momspliktiga, momsfria, egna uttag, övriga)
+- R5-R13: Kostnader (varuinköp, externa kostnader, löner, arbetsgivaravgifter, avskrivningar)
 - R14: Bokfört resultat
-- B1–B22: Condensed balansräkning
+- B1-B22: Condensed balansräkning
 
 ### Page 2: Skattemässiga justeringar
-- R15–R46: räntefördelning, periodiseringsfond, expansionsfond, egenavgifter schablonavdrag
+- R15-R46: räntefördelning, periodiseringsfond, expansionsfond, egenavgifter schablonavdrag
 - NE surplus/deficit flows into INK1 under "Inkomst av näringsverksamhet"
 
 ---
@@ -72,7 +72,7 @@ Exceeding → must have registered revisor, revisionsberättelse becomes part of
 
 ## Filing deadlines
 
-### AB with calendar year (Jan–Dec)
+### AB with calendar year (Jan-Dec)
 
 | Milestone | Deadline | Penalty |
 |-----------|----------|---------|
@@ -132,8 +132,8 @@ SIE (Standard Import Export) is the Swedish open standard. SIE 4 provides full t
 - `#SRU` tag enables automated INK2R/INK2S generation
 
 ### File extensions
-- `.se` — complete export with balances
-- `.si` — transaction-only import
+- `.se`: complete export with balances
+- `.si`: transaction-only import
 
 ### Example SIE4 snippet
 ```

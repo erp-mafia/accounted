@@ -1,5 +1,5 @@
 /**
- * Tests for suggestColumnMapping — the auto-guess that seeds the manual CSV
+ * Tests for suggestColumnMapping: the auto-guess that seeds the manual CSV
  * column-mapping UI.
  *
  * Regression context: the previous heuristic walked each data row right-to-left
@@ -25,14 +25,14 @@ describe('suggestColumnMapping', () => {
 
     const result = suggestColumnMapping(headers, dataRows)
 
-    expect(result.amount).toBe(2) // Belopp — NOT 3 (Saldo)
+    expect(result.amount).toBe(2) // Belopp, NOT 3 (Saldo)
     expect(result.balance).toBe(3) // Saldo auto-filled
     expect(result.date).toBe(0)
     expect(result.description).toBe(1)
   })
 
   it('without a header, prefers the column with negative values as amount and the trailing column as balance', () => {
-    // date ; text ; belopp ; saldo — no header row at all.
+    // date ; text ; belopp ; saldo: no header row at all.
     const dataRows = [
       ['2024-01-15', 'Swish Anna Svensson', '-99,00', '12345,67'],
       ['2024-01-14', 'HEMKÖP', '-432,50', '12444,67'],
@@ -58,7 +58,7 @@ describe('suggestColumnMapping', () => {
 
     expect(result.date).toBe(1) // prefers transaktionsdatum over reskontradatum
     expect(result.description).toBe(2) // Text
-    expect(result.amount).toBe(3) // Belopp — NOT 4 (Saldo)
+    expect(result.amount).toBe(3) // Belopp, NOT 4 (Saldo)
     expect(result.balance).toBe(4)
   })
 
@@ -78,7 +78,7 @@ describe('suggestColumnMapping', () => {
   })
 
   it('matches the amount by label even when every amount is positive', () => {
-    // No negative values to fall back on — the label match must still win.
+    // No negative values to fall back on: the label match must still win.
     const headers = ['Bokföringsdatum', 'Referens', 'Belopp', 'Saldo']
     const dataRows = [['2024-01-15', 'Inbetalning kund', '5000,00', '12345,67']]
 

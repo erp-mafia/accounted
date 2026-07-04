@@ -415,7 +415,7 @@ export default function HelpPage() {
                 <span className="font-medium">Arkivplan</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFNAR 2013:2 — beskriver var räkenskapsinformation förvaras
+                Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
               </p>
             </a>
             <a
@@ -428,7 +428,7 @@ export default function HelpPage() {
                 <span className="font-medium">Systemdokumentation</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFL 5 kap. 11 § — beskriver bokföringssystemets uppbyggnad
+                Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
               </p>
             </a>
           </div>

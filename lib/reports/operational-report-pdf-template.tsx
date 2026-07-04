@@ -259,7 +259,7 @@ interface CommonHeaderProps {
 function HeaderBlock({ title, company, period, filterNote }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
-    ? `${formatDateSv(period.start)} – ${formatDateSv(period.end)}`
+    ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
     : ''
   return (
     <View style={styles.header} fixed>
@@ -334,7 +334,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
         </View>
 
         {report.groups.map((group) => (
-          // No wrap={false} on the outer View — large account classes (80+
+          // No wrap={false} on the outer View: large account classes (80+
           // active accounts) would otherwise be silently clipped instead of
           // flowing onto the next page.
           <View key={group.class}>

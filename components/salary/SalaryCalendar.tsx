@@ -180,7 +180,7 @@ export function SalaryCalendar({
     return m
   }, [absences])
 
-  // Live counts within the pay period — unique dates per category. Emit so
+  // Live counts within the pay period: unique dates per category. Emit so
   // the parent can render day badges without waiting for a recalculation.
   // Parental groups parental + pregnancy + care_relative to match how the
   // existing snapshot column lumps them.
@@ -246,7 +246,7 @@ export function SalaryCalendar({
   const handleCellDblClick = (date: Date) => {
     if (readOnly) return
     const key = format(date, 'yyyy-MM-dd')
-    // Only open the inspector if there's something to inspect — otherwise
+    // Only open the inspector if there's something to inspect: otherwise
     // it would just be an empty dialog.
     if (workedMap.has(key) || (absenceMap.get(key)?.length ?? 0) > 0) {
       setInspecting(key)
@@ -680,7 +680,7 @@ function BulkWorkedDialog({
           {conflicts.length > 0 && (
             <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
               <div className="font-medium text-amber-900">
-                {conflicts.length} {conflicts.length === 1 ? 'dag utelämnades' : 'dagar utelämnades'} — kombinationen med befintlig frånvaro hade överstigit 24 timmar.
+                {conflicts.length} {conflicts.length === 1 ? 'dag utelämnades' : 'dagar utelämnades'}: kombinationen med befintlig frånvaro hade överstigit 24 timmar.
               </div>
               <ul className="list-disc space-y-0.5 pl-4 text-amber-800 tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
@@ -742,7 +742,7 @@ function BulkAbsenceDialog({
       if (!isFinite(hoursNum) || hoursNum <= 0 || hoursNum > 24) {
         throw new Error('Timmar måste vara mellan 0 och 24')
       }
-      // No batch endpoint for absence — call POST per date so we can isolate
+      // No batch endpoint for absence: call POST per date so we can isolate
       // 24h-cap conflicts. Pay-period sized loops are fine.
       const localConflicts: BulkConflict[] = []
       for (const date of dates) {
@@ -832,7 +832,7 @@ function BulkAbsenceDialog({
           {conflicts.length > 0 && (
             <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
               <div className="font-medium text-amber-900">
-                {conflicts.length} {conflicts.length === 1 ? 'dag utelämnades' : 'dagar utelämnades'} — kombinationen med befintlig arbetad tid hade överstigit 24 timmar.
+                {conflicts.length} {conflicts.length === 1 ? 'dag utelämnades' : 'dagar utelämnades'}: kombinationen med befintlig arbetad tid hade överstigit 24 timmar.
               </div>
               <ul className="list-disc space-y-0.5 pl-4 text-amber-800 tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}

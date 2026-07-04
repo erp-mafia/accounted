@@ -40,7 +40,7 @@ interface DimensionValueFormProps {
 
 /**
  * Create/edit form for a dimension value (#OBJEKT), hosted in the
- * DimensionsManager dialog. Code is immutable in v1 — the field is disabled
+ * DimensionsManager dialog. Code is immutable in v1: the field is disabled
  * when editing. Start/end dates appear only for Projekt (dim 6), matching the
  * SIE model where projects span a date range while cost centres do not.
  */

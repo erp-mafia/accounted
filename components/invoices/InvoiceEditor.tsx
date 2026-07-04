@@ -66,10 +66,10 @@ const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
 export type InvoiceForEdit = Invoice & { items: InvoiceItem[] }
 
 // `create` is the original "new invoice" flow (unchanged). `edit` pre-fills the
-// form from an existing DRAFT and saves via PATCH instead of POST — no review
+// form from an existing DRAFT and saves via PATCH instead of POST: no review
 // dialog, no number allocation, no self-billed tab, no send/logo prompts.
 // `bare` renders the editor without page chrome (back button, full-size
-// heading, fixed mobile action bar) so it drops into NewInvoiceDialog — the
+// heading, fixed mobile action bar) so it drops into NewInvoiceDialog: the
 // same convention as JournalEntryForm's `bare`.
 export type InvoiceEditorProps = (
   | { mode?: 'create' }
@@ -120,7 +120,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   const schema = useMemo(() => {
     const itemSchema = z.object({
-      // 'text' rows carry only a (possibly empty) description — a free-text or
+      // 'text' rows carry only a (possibly empty) description: a free-text or
       // blank spacer line. Product rows keep the original requirements,
       // enforced in the refine below so the base shape stays uniform.
       line_type: z.enum(['product', 'text']).optional(),
@@ -129,10 +129,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       unit: z.string(),
       unit_price: z.number(),
       vat_rate: z.number().min(0).max(25),
-      // Article linkage (artikelregister). Optional — free-text lines omit them.
+      // Article linkage (artikelregister). Optional: free-text lines omit them.
       article_id: z.string().nullable().optional(),
       revenue_account: z.string().nullable().optional(),
-      // ROT/RUT-avdrag per line. Optional — null means "no deduction".
+      // ROT/RUT-avdrag per line. Optional: null means "no deduction".
       deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
       labor_hours: z.number().nonnegative().nullable().optional(),
       work_type: z.string().nullable().optional(),
@@ -195,14 +195,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       our_reference: z.string().optional(),
       notes: z.string().optional(),
       // Self-billing received (mottagen självfaktura). Present in the form for
-      // both modes; required only in self_billed mode — enforced in onSubmit.
+      // both modes; required only in self_billed mode: enforced in onSubmit.
       external_invoice_number: z.string().optional(),
       self_billing_agreement_ref: z.string().optional(),
       received_date: z.string().optional(),
       // Invoice-level ROT/RUT claim info. Personnummer is plaintext on
       // the wire; the API encrypts it before storage. The API additionally
       // accepts the bostadsrätt pair (deduction_apartment_number +
-      // deduction_brf_org_number) — no editor UI for it yet, rot i
+      // deduction_brf_org_number): no editor UI for it yet, rot i
       // bostadsrätt data enters via API/MCP until the payout-file UI ships.
       deduction_personnummer: z.string().optional(),
       deduction_housing_designation: z.string().optional(),
@@ -245,7 +245,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [revenueAccounts, setRevenueAccounts] = useState<BASAccount[]>([])
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
   // Dimension tagging (kostnadsställe/projekt, dimensions PR7). Affordances
-  // render only when company_settings.dimensions_enabled — a UI-visibility
+  // render only when company_settings.dimensions_enabled: a UI-visibility
   // gate; a draft that already carries bags still round-trips untouched when
   // the toggle is off. defaultDims is the invoice-level default; per-item
   // overrides live on the form items and open via the row ⋮ menu (same
@@ -256,13 +256,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   )
   const [dimensionOverrideRows, setDimensionOverrideRows] = useState<Set<number>>(new Set())
   // True only when the user had zero invoices when this page loaded. The
-  // post-create flow uses this to offer a one-shot "upload a logo?" prompt
-  // — issue #520. Self-limits: once count > 0 it stays false.
+  // post-create flow uses this to offer a one-shot "upload a logo?" prompt,
+  // issue #520. Self-limits: once count > 0 it stays false.
   const [hadZeroInvoices, setHadZeroInvoices] = useState<boolean | null>(null)
   const [showLogoPrompt, setShowLogoPrompt] = useState(false)
   const pendingCustomerRef = useRef<Customer | null>(null)
   // In edit mode the first time we resolve the pre-filled customer we must NOT
-  // re-derive due_date / forced VAT rates from it — those came from the saved
+  // re-derive due_date / forced VAT rates from it: those came from the saved
   // draft. Starts true for create (always derive), false for edit (skip once).
   const didInitialCustomerSync = useRef(!isEditMode)
 
@@ -282,7 +282,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     resolver: zodResolver(schema),
     // Edit mode pre-fills from the existing draft (header + every line incl.
     // line_type, article link, ROT/RUT and periodisering). The personnummer
-    // can't be restored (stored encrypted) — the user re-enters it if the
+    // can't be restored (stored encrypted): the user re-enters it if the
     // draft carries a ROT/RUT claim. Create mode keeps the original empty form.
     defaultValues: initial
       ? {
@@ -355,7 +355,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   useUnsavedChanges(isDirty)
 
   // Set date defaults on client only to avoid hydration mismatch. Skipped when
-  // editing — the draft's own dates are already loaded into the form.
+  // editing: the draft's own dates are already loaded into the form.
   useEffect(() => {
     if (isEditMode) return
     setValue('invoice_date', format(new Date(), 'yyyy-MM-dd'))
@@ -372,7 +372,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // the fully reordered array; we translate the single displacement into a
   // react-hook-form move() so the registered inputs follow. The persisted
   // sort_order is the array index at create time, so reordering here is all
-  // that's needed — no extra payload.
+  // that's needed: no extra payload.
   const handleItemsReorder = (newOrder: typeof fields) => {
     const movedAt = newOrder.findIndex((f, i) => f.id !== fields[i]?.id)
     if (movedAt === -1) return
@@ -501,7 +501,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       setDefaultNotes(data.invoice_default_notes)
       setValue('notes', data.invoice_default_notes)
     }
-    // Pre-fill "Vår referens" from the company default — only when creating a
+    // Pre-fill "Vår referens" from the company default: only when creating a
     // fresh invoice, so an edited draft's own reference is never overwritten.
     if (!isEditMode && data?.default_our_reference) {
       setValue('our_reference', data.default_our_reference)
@@ -527,7 +527,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   // First-invoice detection (issue #520): captured at page load so the
   // post-create flow can offer the logo prompt for genuinely first-time
-  // invoices only. head:true keeps it cheap — no rows pulled.
+  // invoices only. head:true keeps it cheap: no rows pulled.
   useEffect(() => {
     if (!company?.id) return
     let cancelled = false
@@ -550,7 +550,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // atomically at create time; this is read-only.
   useEffect(() => {
     if (!company?.id) return
-    // Editing an existing draft: it already has (or will keep) its own number —
+    // Editing an existing draft: it already has (or will keep) its own number,
     // never show the "next number" preview.
     if (isEditMode || watchDocumentType === 'delivery_note') {
       setNumberPreview(null)
@@ -576,7 +576,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       setSelectedCustomer(customer || null)
 
       // Skip the derived side-effects (due_date, forced VAT rate) the first time
-      // we resolve a pre-filled customer in edit mode — those values came from
+      // we resolve a pre-filled customer in edit mode: those values came from
       // the saved draft and must not be overwritten. Applied normally on every
       // subsequent (user-initiated) customer change, and always in create mode.
       if (customer) {
@@ -668,7 +668,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const isRateLocked = availableRates.length === 1
   // A non-momsregistrerad company never charges VAT: hide the Moms column and
   // book every line momsfritt. `vatRegistered` is the single switch the whole
-  // form keys off — no rate picker, no warning, no VAT in the totals/preview.
+  // form keys off: no rate picker, no warning, no VAT in the totals/preview.
   // The API enforces the same (forces 0% server-side), so a stale hidden field
   // value can't smuggle VAT onto the invoice. With VAT shown the description
   // keeps its 3/12 width; when hidden it widens to fill the freed columns.
@@ -695,7 +695,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // non-invoice document types (proformas and delivery notes don't book
   // a deduction).
   const isSelfBilled = mode === 'self_billed'
-  // ROT/RUT is an own-issued, B2C concept — never shown for a received self-bill.
+  // ROT/RUT is an own-issued, B2C concept: never shown for a received self-bill.
   const isInvoiceDoc = watchDocumentType === 'invoice' && !isSelfBilled
   const deductionByKind = { rot: 0, rut: 0 }
   if (isInvoiceDoc) {
@@ -717,7 +717,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   // Periodisering per rad: kräver faktureringsmetoden och en riktig faktura.
   // EU-/exportkunder bokas på 3308/3305 (omvänd skattskyldighet/export) och
-  // kan inte periodiseras — ruta 39/40 ska spegla hela försäljningen.
+  // kan inte periodiseras: ruta 39/40 ska spegla hela försäljningen.
   const customerBlocksAccrual =
     selectedCustomer?.customer_type === 'eu_business' ||
     selectedCustomer?.customer_type === 'non_eu_business'
@@ -781,7 +781,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       Object.keys(current).length > 0 ? current : null,
       { shouldDirty: true },
     )
-    // Keep the sub-row open after the user clears the last value — it closes
+    // Keep the sub-row open after the user clears the last value: it closes
     // only via the ⋮ menu (same lifecycle as the account override).
     setDimensionOverrideRows((prev) => (prev.has(index) ? prev : new Set(prev).add(index)))
   }
@@ -796,7 +796,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     })
   }
 
-  // Per-item bags ride the payload only when they carry values — the server
+  // Per-item bags ride the payload only when they carry values: the server
   // treats an absent bag as "inherit the invoice's default_dimensions".
   function pruneItemDimensions<T extends { dimensions?: Record<string, string> | null }>(
     items: T[],
@@ -806,7 +806,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     )
   }
 
-  // Self-billing path: no review dialog, no PDF, no send — it arrives already
+  // Self-billing path: no review dialog, no PDF, no send: it arrives already
   // booked. POST straight to the dedicated endpoint and open the verifikat.
   async function handleSelfBilledSubmit(data: FormData) {
     setIsSubmitting(true)
@@ -859,7 +859,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       return
     }
     if (isSelfBilled) {
-      // The two self-billing-only fields are optional in the shared schema —
+      // The two self-billing-only fields are optional in the shared schema:
       // enforce them here so the inline errors render under the right inputs.
       let valid = true
       if (!data.external_invoice_number?.trim()) {
@@ -945,7 +945,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const sanitizedPayload: CreateInvoiceInput & { default_dimensions: Record<string, string> } = {
       ...(pendingData as CreateInvoiceInput),
       ore_rounding: oreRounding,
-      // Invoice-level default dims — always sent so an edited draft can clear
+      // Invoice-level default dims: always sent so an edited draft can clear
       // them; {} means "no defaults".
       default_dimensions: defaultDims,
       items: sanitizedItems as CreateInvoiceInput['items'],
@@ -998,7 +998,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
-  // "Spara som utkast" — save an unnumbered draft (save_as_draft) without the
+  // "Spara som utkast": save an unnumbered draft (save_as_draft) without the
   // review dialog. The invoice gets no F-number and fires no invoice.created
   // until the user opens it and clicks "Granska & skapa" (finalize). Same
   // ROT/RUT privacy sanitization as handleConfirm.
@@ -1057,7 +1057,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
 
   // Edit mode: PATCH the existing draft (header + items). Same ROT/RUT privacy
-  // sanitization as create — personal-data fields only ride along when a
+  // sanitization as create: personal-data fields only ride along when a
   // deduction is actually claimed. No review dialog, no number allocation, no
   // send/logo prompt; on success go back to the invoice detail page.
   async function saveEdit(data: FormData) {
@@ -1215,7 +1215,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   // In bare (dialog) mode the dialog owns the accessible title (sr-only
   // DialogTitle) and the page already has its own h1, so the visible heading
-  // steps down to h2 — it still tracks document type and number preview live.
+  // steps down to h2: it still tracks document type and number preview live.
   const Heading = bare ? 'h2' : 'h1'
 
   return (
@@ -1413,7 +1413,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                 setValue(`items.${index}.apartment_number`, null)
                               } else if (watchItems[index]?.accrual_balance_account != null) {
                                 // ROT/RUT och periodisering kombineras aldrig
-                                // på samma rad — avdraget vinner.
+                                // på samma rad: avdraget vinner.
                                 setValue(`items.${index}.accrual_period_start`, null)
                                 setValue(`items.${index}.accrual_period_end`, null)
                                 setValue(`items.${index}.accrual_balance_account`, null)
@@ -1491,7 +1491,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     <div
                       className="rounded-lg border bg-card p-4 space-y-3 relative md:rounded-none md:border-0 md:bg-transparent md:p-0 md:space-y-0 md:grid md:grid-cols-12 md:gap-4 md:items-start"
                     >
-                      {/* Article picker (artikelregister). Optional — leave on
+                      {/* Article picker (artikelregister). Optional: leave on
                           "Egen rad" to type a free-text line. Selecting an
                           article pre-fills description, unit, price, VAT and any
                           revenue-account override. */}
@@ -1513,7 +1513,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   <SelectItem value="none">{t('article_free_text')}</SelectItem>
                                   {articles.map((a) => (
                                     <SelectItem key={a.id} value={a.id}>
-                                      {a.article_number ? `${a.article_number} — ${a.name}` : a.name}
+                                      {a.article_number ? `${a.article_number}: ${a.name}` : a.name}
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -1602,7 +1602,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         </div>
                       </div>
 
-                      {/* Moms — hidden entirely when the company is not
+                      {/* Moms: hidden entirely when the company is not
                           momsregistrerad (no VAT may be charged). */}
                       {vatRegistered && (
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
@@ -1634,7 +1634,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
                       {/* Desktop row actions (⋮ menu or trash). An invisible
                           label spacer mirrors the field columns (same Label +
-                          space-y-2), so the button sits on the input row — not
+                          space-y-2), so the button sits on the input row, not
                           high against the labels, nor low at the row bottom. */}
                       <div className="hidden md:col-span-1 md:block md:space-y-2">
                         <Label className="invisible text-xs md:text-sm" aria-hidden="true">&nbsp;</Label>
@@ -1643,7 +1643,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         </div>
                       </div>
 
-                      {/* ROT/RUT-avdrag strip — only when a deduction is active
+                      {/* ROT/RUT-avdrag strip: only when a deduction is active
                           on this row (chosen via the ⋮ menu). A leading tag shows
                           which reduction applies; the work-type + hours are
                           required for the Skatteverket claim. Rows with no
@@ -1707,7 +1707,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             })()}
                           </div>
                           {/* Labor-only disclosure (Skatteverket fakturamodellen).
-                              30%/50% applies to the full line total — the seller
+                              30%/50% applies to the full line total: the seller
                               must ensure the line is 100% labor; material has
                               to be invoiced separately. */}
                           <div className="mt-2 flex items-start gap-2 text-xs text-warning-foreground">
@@ -1717,7 +1717,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         </div>
                       )}
 
-                      {/* Periodisering (förutbetald intäkt) — activated via the
+                      {/* Periodisering (förutbetald intäkt): activated via the
                           row's ⋮ menu. Intäkten krediteras 29xx vid bokning och
                           löses upp månadsvis över perioden; momsen påverkas inte. */}
                       {canUseAccrual && watchItems[index]?.accrual_balance_account != null && (
@@ -1776,7 +1776,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         </div>
                       )}
 
-                      {/* Per-item dimensions override (dimensions PR7) — opened
+                      {/* Per-item dimensions override (dimensions PR7): opened
                           via the row's ⋮ menu. The bag is stored as-is; the
                           server merges it over the invoice's default_dimensions
                           for this item's revenue line at booking time. */}
@@ -1840,7 +1840,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     <Plus className="mr-2 h-4 w-4" />
                     {t('add_row')}
                   </Button>
-                  {/* Free-text / blank row — explanatory text under an item, or
+                  {/* Free-text / blank row: explanatory text under an item, or
                       an empty spacer. Carries no amounts and never books. Not
                       offered for a received självfaktura: that is a faithful
                       revenue-only transcription, and the self-billed endpoint
@@ -1884,7 +1884,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           </Card>
 
             {/* ROT/RUT-avdrag claim info. Surfaces only when any item has
-                a deduction_type set — keeps the form quiet for the 90%+
+                a deduction_type set: keeps the form quiet for the 90%+
                 of users who don't sell ROT/RUT-eligible services. */}
             {isInvoiceDoc && hasAnyDeduction && (
               <Card>
@@ -1950,7 +1950,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </Card>
           </div>
 
-          {/* Sidebar — sticky so totals + action stay visible while scrolling items */}
+          {/* Sidebar: sticky so totals + action stay visible while scrolling items */}
           <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
             {/* Invoice details */}
             <Card>
@@ -2063,7 +2063,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                   </div>
 
-                  {/* Invoice-level default dims (kostnadsställe/projekt) —
+                  {/* Invoice-level default dims (kostnadsställe/projekt):
                       written to every generated journal line; per-item bags
                       (row ⋮ menu) merge on top. Renders only when dimensions
                       are enabled for the company and the doc actually books. */}
@@ -2097,7 +2097,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <span className="text-muted-foreground">{t('subtotal_label')}</span>
                 <span>{formatCurrency(subtotal, watchCurrency)}</span>
               </div>
-              {/* VAT rows — only when momsregistrerad. A non-registered company
+              {/* VAT rows: only when momsregistrerad. A non-registered company
                   shows no moms line at all (subtotal === total). */}
               {vatRegistered && Array.from(vatByRate.entries())
                 .sort(([a], [b]) => b - a)
@@ -2140,7 +2140,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <span className="tabular-nums">{formatCurrency(total, watchCurrency)}</span>
                 </div>
               )}
-              {/* Öresavrundning — display-only rounding of the invoice total to
+              {/* Öresavrundning: display-only rounding of the invoice total to
                   whole kronor (SEK only). The exact amount stays in the books;
                   this only changes what's shown on the PDF, list and detail.
                   Defaults to the company setting (company_settings.ore_rounding). */}
@@ -2164,7 +2164,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </CardContent>
           </Card>
 
-            {/* Actions — desktop/tablet only. In bare (dialog) mode the fixed
+            {/* Actions: desktop/tablet only. In bare (dialog) mode the fixed
                 mobile bar is unusable (DialogContent's transform re-anchors
                 `fixed` children), so these buttons show at every width. */}
             <div className={bare ? 'flex flex-col gap-2' : 'hidden md:flex md:flex-col md:gap-2'}>
@@ -2197,7 +2197,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           </div>
         </div>
 
-        {/* Mobile sticky total bar — page mode only (see bare note above) */}
+        {/* Mobile sticky total bar: page mode only (see bare note above) */}
         {!bare && (
         <div className="md:hidden fixed left-0 right-0 z-40 bg-card/98 backdrop-blur-sm border-t border-border/40 px-5 py-3" style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}>
           <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">

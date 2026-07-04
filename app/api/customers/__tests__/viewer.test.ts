@@ -3,7 +3,7 @@
  *
  * Verifies that POST /api/customers returns 403 when the caller's
  * requireWritePermission check returns an error response. This is a
- * canary test — if it breaks, the wiring between mutating routes and
+ * canary test: if it breaks, the wiring between mutating routes and
  * requireWritePermission has drifted.
  *
  * The full per-role behavior of requireWritePermission itself is
@@ -40,7 +40,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { POST } from '../route'
 
-describe('POST /api/customers — viewer role gate', () => {
+describe('POST /api/customers: viewer role gate', () => {
   const mockUser = { id: 'user-1', email: 'viewer@test.se' }
 
   beforeEach(() => {

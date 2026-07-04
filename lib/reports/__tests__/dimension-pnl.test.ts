@@ -95,7 +95,7 @@ describe('generateDimensionPnl', () => {
             { id: 'l1', account_number: '3001', debit_amount: 0, credit_amount: 600, dimensions: { '6': 'P001' } },
             { id: 'l2', account_number: '3001', debit_amount: 0, credit_amount: 300, dimensions: { '6': 'P002' } },
             { id: 'l3', account_number: '4010', debit_amount: 400, credit_amount: 0, dimensions: { '6': 'P001' } },
-            // Balance-account line — outside the P&L scope, must be ignored.
+            // Balance-account line: outside the P&L scope, must be ignored.
             { id: 'l4', account_number: '1930', debit_amount: 0, credit_amount: 900, dimensions: { '6': 'P001' } },
           ],
           error: null,
@@ -104,7 +104,7 @@ describe('generateDimensionPnl', () => {
     }
     mockTrialBalance.mockResolvedValue(
       tb([
-        // 3001: 1000 total credit — only 900 of it is tagged → 100 untagged.
+        // 3001: 1000 total credit: only 900 of it is tagged → 100 untagged.
         tbRow({ account_number: '3001', account_class: 3, closing_credit: 1000 }),
         tbRow({ account_number: '4010', account_name: 'Inköp', account_class: 4, closing_debit: 400 }),
         tbRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 900 }),
@@ -138,7 +138,7 @@ describe('generateDimensionPnl', () => {
     }
 
     expect(report.net_per_column).toEqual([200, 300, 100])
-    // net_total = resultatrapport semantics over classes 3–8 excl 8999:
+    // net_total = resultatrapport semantics over classes 3-8 excl 8999:
     // +1000 (3001) − 400 (4010) = 600. 1930 (class 1) and 8999 excluded.
     expect(report.net_total).toBe(600)
     expect(report.period).toEqual({ start: '2026-01-01', end: '2026-12-31' })
@@ -213,7 +213,7 @@ describe('generateDimensionPnl', () => {
     expect(report.period).toEqual({ start: '2026-01-01', end: '2026-06-30' })
   })
 
-  it('handles fully untagged periods — one residual column carrying the whole result', async () => {
+  it('handles fully untagged periods: one residual column carrying the whole result', async () => {
     mockResults = {
       fiscal_periods: [{ data: PERIOD, error: null }],
       dimensions: [{ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }],

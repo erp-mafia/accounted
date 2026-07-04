@@ -19,7 +19,7 @@ ensureInitialized()
  * If the transaction is ALREADY booked, the propagation happens here instead
  * (mirroring commitAttachDocumentToTransaction in lib/pending-operations/commit.ts).
  *
- * Idempotent — overwrites any existing link.
+ * Idempotent: overwrites any existing link.
  */
 export async function POST(
   request: Request,
@@ -65,7 +65,7 @@ export async function POST(
   }
 
   // A document that already serves as underlag for a DIFFERENT verifikation
-  // cannot be pinned here — propagating would either corrupt that link or be
+  // cannot be pinned here: propagating would either corrupt that link or be
   // blocked by the document-metadata immutability trigger. Same verifikation
   // is fine (idempotent re-attach; propagation below becomes a no-op).
   const docJournalEntryId = (document.journal_entry_id as string | null) ?? null
@@ -125,7 +125,7 @@ export async function POST(
   }
 
   // If the transaction is already booked, propagate the link onto the
-  // verifikation immediately (BFL 5 kap 6 § — the verifikation must reference
+  // verifikation immediately (BFL 5 kap 6 §: the verifikation must reference
   // its underlag). Skipped when the doc already points at this verifikation
   // (idempotent re-attach). Mirrors commitAttachDocumentToTransaction.
   const journalEntryId = (postUpdate.journal_entry_id as string | null) ?? null
@@ -145,19 +145,19 @@ export async function POST(
         return NextResponse.json(
           {
             error:
-              'Bilagan kopplades till transaktionen men verifikationens period är låst — den kunde inte länkas till verifikationen.',
+              'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
           },
           { status: 409 },
         )
       }
-      // Surface the propagation failure rather than logging-and-continuing —
+      // Surface the propagation failure rather than logging-and-continuing:
       // a "succeeded" attach that left document_attachments.journal_entry_id
       // null would be a silent compliance gap. A retry is idempotent.
       console.error('[attach-document] Failed to propagate to journal entry:', linkErr)
       return NextResponse.json(
         {
           error:
-            'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen — operationen är idempotent.',
+            'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen: operationen är idempotent.',
         },
         { status: 500 },
       )
@@ -165,7 +165,7 @@ export async function POST(
   }
 
   // Rättelse audit trail (BFL 5 kap 5 §): record swaps where a non-null doc
-  // was replaced. Best-effort — a logging failure must not roll back the
+  // was replaced. Best-effort: a logging failure must not roll back the
   // (compliant) attach.
   if (previousDocumentId && previousDocumentId !== document_id) {
     try {
@@ -205,7 +205,7 @@ export async function POST(
  * Detach a document from a transaction.
  *
  * Blocked once the document has propagated into a journal entry (BFL 5 kap 6 §
- * räkenskapsinformation immutability) — at that point the doc is the
+ * räkenskapsinformation immutability): at that point the doc is the
  * verifikation's underlag and can only be undone by reversing the entry.
  */
 export async function DELETE(

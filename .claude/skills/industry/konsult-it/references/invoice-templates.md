@@ -1,4 +1,4 @@
-# Invoice text library — IT consulting (Sweden)
+# Invoice text library: IT consulting (Sweden)
 
 ## B2B inom EU (omvänd betalningsskyldighet)
 
@@ -7,7 +7,7 @@
 **Svensk/engelsk dubbeltext (rekommenderad):**
 
 ```
-Omvänd betalningsskyldighet — Reverse charge
+Omvänd betalningsskyldighet / Reverse charge
 Artikel 44 och 196 i rådets direktiv 2006/112/EG
 VAT to be accounted for by the recipient under Article 196 of Directive 2006/112/EC
 
@@ -40,11 +40,11 @@ Moms 25 % ingår med [belopp] SEK
 
 Försäljning **3001/3041**, utgående moms **2611**. Momsruta **05+10**.
 
-## B2C inom EU — under OSS-tröskel (10 000 EUR / 99 680 SEK)
+## B2C inom EU: under OSS-tröskel (10 000 EUR / 99 680 SEK)
 
 Behandlas som Sverige-försäljning, svensk moms 25 %. Försäljning på 3001/3041, ruta 05+10.
 
-## B2C inom EU — över OSS-tröskel (eller frivillig OSS-registrering)
+## B2C inom EU: över OSS-tröskel (eller frivillig OSS-registrering)
 
 ```
 VAT [köparlandets sats] %
@@ -55,7 +55,7 @@ Seller's OSS identification: SE[VAT-nr]
 
 Försäljning **3308**, utgående OSS-moms **2670**. OSS-deklaration kvartalsvis i EUR, separat från ordinarie momsdeklaration.
 
-Tabell över relevanta momssatser i EU (uppdateras 2025-2026 — kontrollera vid behov):
+Tabell över relevanta momssatser i EU (uppdateras 2025-2026, kontrollera vid behov):
 
 | Land | Standardsats |
 |---|---|
@@ -104,7 +104,7 @@ Mottagaren bokar på **6850 Inhyrd IT-personal**, drar ingående moms 2641.
 ## Förskottsfakturering SaaS-prenumeration
 
 ```
-Period: 2026-01-01 — 2026-12-31
+Period: 2026-01-01 till 2026-12-31
 Avgift för årsprenumeration på [tjänst].
 Tjänsten levereras löpande under avtalsperioden.
 ```
@@ -115,9 +115,9 @@ Mottagaren bokar fakturan på **2972 Förutbetalda intäkter** (kreditsida) vid 
 
 1. **C-247/21 Luxury Trust Automobil (2022).** Saknad "reverse charge"-text kan inte rättas i efterhand. Verifiera fakturamallen innan första fakturan till EU B2B-kund.
 
-2. **VAT-nr-format.** EU-länderna har olika format (DE 9 siffror, FR 11 tecken, NL 12 tecken inklusive "B01" etc.). VIES validerar formatet — om kunden ger ogiltigt nummer, fråga om uppdaterat eller behandla som B2C.
+2. **VAT-nr-format.** EU-länderna har olika format (DE 9 siffror, FR 11 tecken, NL 12 tecken inklusive "B01" etc.). VIES validerar formatet: om kunden ger ogiltigt nummer, fråga om uppdaterat eller behandla som B2C.
 
-3. **Microsoft Ireland vs Microsoft US.** Olika kundavtal får olika faktureringsentiteter. Kontrollera fakturafoten varje månad — kan bytas vid avtalsändring.
+3. **Microsoft Ireland vs Microsoft US.** Olika kundavtal får olika faktureringsentiteter. Kontrollera fakturafoten varje månad: kan bytas vid avtalsändring.
 
 4. **OSS-tröskeln gäller summan av varor + TBE-tjänster B2C inom EU.** Lätt att missa när man säljer både SaaS B2C och fysiska varor.
 
@@ -125,10 +125,10 @@ Mottagaren bokar fakturan på **2972 Förutbetalda intäkter** (kreditsida) vid 
 
 ## Lagreferenser
 
-- ML (2023:200) 17 kap — faktureringsskyldighet och fakturainnehåll
-- ML 6 kap 33§ — B2B-huvudregeln
-- ML 6 kap 56–58§§ + 62–63§§ — TBE-tjänster B2C och OSS-tröskeln
-- ML 22 kap — OSS-deklaration
-- 2006/112/EG art. 44, 196, 226 — placeringsregler och fakturainnehåll
-- EUD C-247/21 (2022) — reverse charge-text kan inte rättas
-- SKV ställningstagande dnr 202 460649-17/111 (2018-01-25) — VIES-validering bevisbörda
+- ML (2023:200) 17 kap: faktureringsskyldighet och fakturainnehåll
+- ML 6 kap 33§: B2B-huvudregeln
+- ML 6 kap 56-58§§ + 62-63§§: TBE-tjänster B2C och OSS-tröskeln
+- ML 22 kap: OSS-deklaration
+- 2006/112/EG art. 44, 196, 226: placeringsregler och fakturainnehåll
+- EUD C-247/21 (2022): reverse charge-text kan inte rättas
+- SKV ställningstagande dnr 202 460649-17/111 (2018-01-25): VIES-validering bevisbörda

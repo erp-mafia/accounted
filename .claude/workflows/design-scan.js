@@ -17,7 +17,7 @@ export const meta = {
 const area = (args && args.area) || 'dashboard'
 
 const DESIGN_CONTRACT = `Judge strictly against .claude/rules/design.md (the LOCKED Accounted design system):
-editorial monochrome; spacing tokens only (1,2,3,4,6,8,10,12 — p-5/2.5/hardcoded px are violations);
+editorial monochrome; spacing tokens only (1,2,3,4,6,8,10,12: p-5/2.5/hardcoded px are violations);
 status colors via <Badge variant> only (no bg-blue-100 / bg-emerald-500/10 as chrome); use the
 primitives PageHeader/Table/EmptyState/Skeleton/InfoTooltip (hand-rolled equivalents are violations);
 Hedvig serif display must NOT be font-medium; financial numbers need tabular-nums; motion is

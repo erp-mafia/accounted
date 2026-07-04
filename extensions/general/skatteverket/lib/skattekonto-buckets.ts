@@ -10,7 +10,7 @@ export interface SkattekontoBuckets<T extends StoredSkattekontoTransaction> {
  * Split skattekonto rows into UI buckets.
  *
  * SKV's `kommandeTransaktioner` includes rows whose due date has passed but
- * haven't settled yet — labelling them "Kommande" misleads the user. We pull
+ * haven't settled yet: labelling them "Kommande" misleads the user. We pull
  * those into a separate "Förfallna" bucket here. Stored `status` keeps
  * mirroring SKV.
  *

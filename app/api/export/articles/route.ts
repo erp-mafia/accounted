@@ -9,7 +9,7 @@ import type { Article } from '@/types'
 /**
  * GET /api/export/articles[?format=csv][&include_inactive=1]
  *
- * Downloads the article register as xlsx (default) or csv. Read-only — viewers
+ * Downloads the article register as xlsx (default) or csv. Read-only: viewers
  * may export. Column headers match the article importer's detector keywords so
  * the file round-trips (export → edit → re-import).
  */

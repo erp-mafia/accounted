@@ -1,5 +1,5 @@
 /**
- * Dimensions PR6 — gnubok_tag_journal_lines (bulk retag staging) tests.
+ * Dimensions PR6: gnubok_tag_journal_lines (bulk retag staging) tests.
  *
  * Covers registration (scope map, strict schema, staged-operation output
  * contract via deriveToolMeta), the filter gates (no filters / 0 matches /
@@ -21,7 +21,7 @@ beforeEach(() => {
 
 function makeLineRow(i: number, overrides: Record<string, unknown> = {}) {
   return {
-    // Real UUID shape — the staged params are re-validated against
+    // Real UUID shape: the staged params are re-validated against
     // RetagLineDimensionsParamsSchema (line_ids must be UUIDs) before insert.
     id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
     account_number: '4010',
@@ -52,7 +52,7 @@ describe('gnubok_tag_journal_lines registration', () => {
   })
 
   it('uses the staged-operation output schema so the _meta staging contract derives', () => {
-    // deriveToolMeta keys off reference identity with STAGED_OPERATION_SCHEMA —
+    // deriveToolMeta keys off reference identity with STAGED_OPERATION_SCHEMA:
     // a defined meta proves the tool shares THE schema, not a lookalike copy.
     const meta = deriveToolMeta(tagJournalLines)
     expect(meta).toBeDefined()
@@ -65,7 +65,7 @@ describe('gnubok_tag_journal_lines registration', () => {
 
 // ── Filter gates ─────────────────────────────────────────────────────────────
 
-describe('gnubok_tag_journal_lines — filter gates', () => {
+describe('gnubok_tag_journal_lines: filter gates', () => {
   it('rejects an empty filter block before any DB work', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
@@ -129,7 +129,7 @@ describe('gnubok_tag_journal_lines — filter gates', () => {
 
 // ── Staging ──────────────────────────────────────────────────────────────────
 
-describe('gnubok_tag_journal_lines — staging', () => {
+describe('gnubok_tag_journal_lines: staging', () => {
   it('stages a retag_line_dimensions op with matched line_ids + preview sample', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null }) // passthrough (free-text era)
@@ -164,7 +164,7 @@ describe('gnubok_tag_journal_lines — staging', () => {
     expect(result.preview.matched_lines).toBe(2)
     expect(result.preview.dimensions).toEqual({ '6': 'P01' })
     expect(result.preview.filter_summary).toMatch(/konto 4010/)
-    expect(result.preview.filter_summary).toMatch(/datum 2024-01-01–2024-12-31/)
+    expect(result.preview.filter_summary).toMatch(/datum 2024-01-01-2024-12-31/)
     expect(result.preview.filter_summary).toMatch(/text "Bygg AB"/)
     expect(result.preview.sample).toEqual([
       { account: '4010', date: '2024-03-01', debit: 250, credit: 0 },

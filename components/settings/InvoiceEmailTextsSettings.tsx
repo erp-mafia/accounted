@@ -32,7 +32,7 @@ const FIELD_CONFIG: Array<{ field: Field; labelKey: string; multiline?: boolean 
 ]
 
 // The editor always shows the EFFECTIVE text (override or standard), never an
-// empty field — users see and edit the mail that actually goes out.
+// empty field: users see and edit the mail that actually goes out.
 type DisplayTexts = Record<Lang, Record<Field, string>>
 
 function buildDisplay(stored: InvoiceEmailTexts | null | undefined): DisplayTexts {
@@ -50,7 +50,7 @@ function buildDisplay(stored: InvoiceEmailTexts | null | undefined): DisplayText
   return result
 }
 
-// Cleared fields have no meaning of their own — snap them back to standard.
+// Cleared fields have no meaning of their own: snap them back to standard.
 function normalize(display: DisplayTexts): DisplayTexts {
   const result = {} as DisplayTexts
   for (const lang of LANGS) {
@@ -87,7 +87,7 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const [texts, setTexts] = useState<DisplayTexts>(() => buildDisplay(settings.invoice_email_texts))
-  // Serialized last-persisted overrides — skips no-op PUTs on blur without
+  // Serialized last-persisted overrides: skips no-op PUTs on blur without
   // edits. toOverrides() builds keys in a fixed order, so comparison is stable.
   const lastSavedRef = useRef<string>(
     JSON.stringify(toOverrides(buildDisplay(settings.invoice_email_texts))),
@@ -195,7 +195,7 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
       </Tabs>
 
       <div className="space-y-1">
-        {/* Legend is rendered from code, not messages/*.json — ICU message
+        {/* Legend is rendered from code, not messages/*.json: ICU message
             syntax treats literal braces as interpolation. */}
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>{t('placeholders_help')}</span>

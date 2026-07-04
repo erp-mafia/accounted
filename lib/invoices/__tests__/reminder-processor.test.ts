@@ -72,7 +72,7 @@ describe('calculateDaysOverdue', () => {
   })
 })
 
-describe('processOverdueReminders — credit-note filter', () => {
+describe('processOverdueReminders: credit-note filter', () => {
   beforeEach(() => {
     chainCalls.length = 0
   })
@@ -86,7 +86,7 @@ describe('processOverdueReminders — credit-note filter', () => {
 
     expect(
       isCall,
-      'overdue-invoice query must filter out credit notes — credit notes have a negative total and must never trigger a payment reminder (e.g. KR-F2026002)',
+      'overdue-invoice query must filter out credit notes: credit notes have a negative total and must never trigger a payment reminder (e.g. KR-F2026002)',
     ).toBeDefined()
     expect(isCall?.args[1]).toBeNull()
   })

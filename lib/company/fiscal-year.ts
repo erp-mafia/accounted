@@ -5,7 +5,7 @@ import type { CompanySettings } from '@/types'
  * contains `today`, given the company's fiscal_year_start_month setting.
  *
  * Enskild firma is locked to calendar year per BFL. We assume `entity_type`
- * reflects the company's *current* tax-year status — if an enskild firma is
+ * reflects the company's *current* tax-year status: if an enskild firma is
  * mid-conversion to an AB, callers should re-resolve after the conversion
  * lands rather than backfilling from a stale anchor.
  */
@@ -21,7 +21,7 @@ export function getCurrentFiscalYearStart(
 }
 
 /**
- * Return the ISO date for the start of the PREVIOUS fiscal year — useful when
+ * Return the ISO date for the start of the PREVIOUS fiscal year: useful when
  * the user wants to backfill the year that just closed.
  */
 export function getPreviousFiscalYearStart(

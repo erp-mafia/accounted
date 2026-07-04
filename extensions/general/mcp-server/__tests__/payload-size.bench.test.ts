@@ -5,7 +5,7 @@ describe('tools/list payload size guard', () => {
   it('keeps the projected tools/list payload under the context-budget ceiling', () => {
     // Mirror the real tools/list serializer, including the derived staging
     // _meta (requires_approval / approve_tool / preflight) merged over any
-    // literal _meta — otherwise the guard under-measures the wire payload.
+    // literal _meta: otherwise the guard under-measures the wire payload.
     const projection = tools.map((t) => {
       const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
       return {
@@ -32,14 +32,14 @@ describe('tools/list payload size guard', () => {
     //   * 30K → 31K when gnubok_match_batch_allocate and
     //     gnubok_bulk_book_transactions landed (PRs #603/#606/#608/#610). Each
     //     adds the shared STAGED_OPERATION_SCHEMA + a non-trivial inputSchema
-    //     for the multi-tx flows. Descriptions already trimmed to 230–260 chars.
+    //     for the multi-tx flows. Descriptions already trimmed to 230-260 chars.
     //   * 31K → 31.5K when gnubok_link_transaction_to_journal_entry landed (PR
-    //     #614). Same family as match_batch_allocate / bulk_book_transactions —
+    //     #614). Same family as match_batch_allocate / bulk_book_transactions:
     //     closes the MCP parity gap with the existing REST endpoint so agents
     //     can attach a bank tx to an already-posted verifikat without creating
     //     duplicate bookkeeping. Description trimmed to ~180 chars.
     //   * 31.5K → 32K when gnubok_find_voucher_candidates_for_supplier_invoice +
-    //     gnubok_link_supplier_invoice_to_voucher landed — the supplier-side
+    //     gnubok_link_supplier_invoice_to_voucher landed: the supplier-side
     //     mirror of the customer find/link voucher tools. The link tool inlines
     //     the shared STAGED_OPERATION_SCHEMA. Lets agents mark a leverantörs-
     //     faktura paid against an already-posted verifikat (no new bokföring),
@@ -47,23 +47,23 @@ describe('tools/list payload size guard', () => {
     //     payables while their payment already exists in the SIE-imported GL.
     //   * 32K → 36K when top-level Tool.title (MCP spec 2025-06-18) landed on all
     //     92 tools for Connectors Directory readiness; the ~10 longest descriptions
-    //     were trimmed toward 180–200 chars to partly offset. Headroom reserved for
+    //     were trimmed toward 180-200 chars to partly offset. Headroom reserved for
     //     the upcoming Skatteverket tools.
     //   * Held at 36K when gnubok_list_accrual_schedules (add/bokslut) merged with
     //     the categorize vat_amount override (#717): the combination crossed the
     //     ceiling by ~75, offset by trimming the 8 longest descriptions to ~200 chars.
     //   * 36K → 38K with the MCP legibility pass: the machine-readable staging
     //     contract now emits `_meta { requires_approval, approve_tool, preflight }`
-    //     on every staging write (~40 tools) so an agent can tell — without reading
-    //     prose — which writes need a follow-up gnubok_approve_pending_operation and
+    //     on every staging write (~40 tools) so an agent can tell: without reading
+    //     prose: which writes need a follow-up gnubok_approve_pending_operation and
     //     which have a pre-flight; gnubok_get_agent_briefing also gained a `company`
     //     identity block in its outputSchema. This is wire data the agent depends
-    //     on, not trimmable prose — hence a bump rather than a description trim.
+    //     on, not trimmable prose: hence a bump rather than a description trim.
     //   * 38K → 40K as the catalog grew from 92 to 103 tools (gnubok_link_document_
     //     to_voucher #804, gnubok_bulk_book_inbox_items, the categorize-core additions,
     //     plus per-line supplier-invoice overrides). Each new tool carries its
     //     inputSchema + staging _meta; the growth is genuine wire data, not prose,
-    //     so descriptions are already at their trimmed floor (~180–220 chars).
+    //     so descriptions are already at their trimmed floor (~180-220 chars).
     //   * 40K → 42K with dimensions PR3: gnubok_list_dimensions +
     //     gnubok_list_dimension_values (nested registry output schemas) + staged
     //     gnubok_create_dimension_value (STAGED_OPERATION_SCHEMA + _meta), the
@@ -87,12 +87,12 @@ describe('tools/list payload size guard', () => {
     //     depends on, not trimmable prose.
     //   * 44K → 45K when the rot/rut branch merged with main: main's #877 put
     //     qualified identifiers in all tool output schemas (+~260 across 103
-    //     tools — wire contract, not prose) and the branch added
+    //     tools: wire contract, not prose) and the branch added
     //     gnubok_generate_rot_rut_file (~444: begäran-om-utbetalning file flow,
     //     eligible/blocked per-invoice output). Each side alone was under the
     //     ceiling; the combination crossed it by ~220. Descriptions are at
     //     their trimmed floor per the entries above.
-    // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
+    // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
     expect(approxTokens).toBeLessThan(45_000)

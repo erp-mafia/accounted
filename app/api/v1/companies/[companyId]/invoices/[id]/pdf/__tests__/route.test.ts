@@ -2,7 +2,7 @@
  * Integration tests for GET /api/v1/companies/:companyId/invoices/:id/pdf.
  *
  * The PDF renderer is mocked so the test is about routing, auth, error
- * mapping and filename composition — not about actual PDF bytes.
+ * mapping and filename composition: not about actual PDF bytes.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -199,7 +199,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
     expect(res.headers.get('Content-Disposition')).toBe(
       'attachment; filename="kreditfaktura-2026-0099.pdf"',
     )
-    // The template received the original number — verify via the InvoicePDF mock call.
+    // The template received the original number: verify via the InvoicePDF mock call.
     const call = (mockRender.mock.calls[0]?.[0] as unknown) as { props?: unknown } | undefined
     expect(call).toBeDefined()
   })

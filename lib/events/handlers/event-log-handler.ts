@@ -36,7 +36,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'invoice.match_confirmed',
   'supplier_invoice.match_confirmed',
   'supplier_invoice.confirmed',
-  // MCP telemetry — every tool invocation, tools/list call, and resources/read.
+  // MCP telemetry: every tool invocation, tools/list call, and resources/read.
   // Lightweight metadata only. mcp.*/agent.* rows are retained 180 days by the
   // cleanup cron (error-rate trends need more than the 30-day delivery window).
   'mcp.tool_called',
@@ -48,15 +48,15 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'mcp.workflow_started',
   'mcp.workflow_completed',
   'mcp.next_hint_followed',
-  // Every successful gnubok_load_skill, all tiers — which atoms agents
+  // Every successful gnubok_load_skill, all tiers: which atoms agents
   // actually load. Joined against mcp.tool_called error rates to measure
   // whether a loaded atom helps or hurts.
   'mcp.skill_loaded',
-  // Agent self-reported feedback — surfaces "this tool was missing", "this
+  // Agent self-reported feedback: surfaces "this tool was missing", "this
   // description was wrong", etc. Reviewed weekly (matches the gnubok_feedback
   // reply copy); triage → dev_docs/mcp_optimization_plan.md.
   'agent.feedback',
-  // Bank connection consent lifecycle — required audit trail per ASVS V16
+  // Bank connection consent lifecycle: required audit trail per ASVS V16
   // and GDPR Art.30 (records of processing) for PSD2 consent decisions.
   'bank_connection.consent_granted',
   'bank_connection.account_selection_changed',
@@ -89,7 +89,7 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
   }
 
   // Flat-string ID fields on events that don't carry a full entity object.
-  // Bank connection events fall into this category — the connection lives in
+  // Bank connection events fall into this category: the connection lives in
   // an extension table, so we record its id directly. invoice.draft_deleted
   // carries only invoiceId because the row is already gone.
   if (typeof payload.connectionId === 'string') {
@@ -177,7 +177,7 @@ export function registerEventLogHandler(): (() => void)[] {
           return
         }
 
-        // transaction.synced carries an array — batch insert
+        // transaction.synced carries an array: batch insert
         if (eventType === 'transaction.synced' && Array.isArray(rawPayload.transactions)) {
           const transactions = rawPayload.transactions as Array<Record<string, unknown>>
           if (transactions.length === 0) return

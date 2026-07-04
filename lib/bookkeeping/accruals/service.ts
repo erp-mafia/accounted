@@ -10,7 +10,7 @@
  *   expense:  Dr target (5xxx/6xxx)  / Cr balance (17xx)
  *   revenue:  Dr balance (29xx)      / Cr target (3xxx)
  *
- * All entries go through the engine (source_type 'accrual') — never direct
+ * All entries go through the engine (source_type 'accrual'): never direct
  * inserts. Posting dates are max(period_month, posting_floor_date,
  * company lock date + 1) so catch-up months book correctly and the interim
  * account never goes negative.
@@ -100,7 +100,7 @@ async function fetchLockDateFloor(
 /**
  * Earliest OPEN fiscal period starting after `date`. Used to clamp a posting
  * date forward when the computed date falls inside a closed period (bokslut
- * done) — same spirit as the company lock-date floor.
+ * done): same spirit as the company lock-date floor.
  */
 async function findNextOpenPeriodStart(
   supabase: SupabaseClient,
@@ -160,7 +160,7 @@ function dissolutionLines(
 /**
  * Create a schedule + its monthly installments for one deferred invoice
  * line, then immediately post every installment whose month has already
- * begun (catch-up). Catch-up failures do not throw — they are recorded on
+ * begun (catch-up). Catch-up failures do not throw: they are recorded on
  * the installment (last_error) and retried by the daily cron.
  */
 export async function createAccrualSchedule(
@@ -225,7 +225,7 @@ export async function createAccrualSchedule(
     )
 
   if (installmentError) {
-    // Schedule without installments is inert but confusing — clean it up.
+    // Schedule without installments is inert but confusing: clean it up.
     await supabase.from('accrual_schedules').delete().eq('id', scheduleRow.id)
     throw new Error(`Failed to create accrual installments: ${installmentError.message}`)
   }
@@ -305,12 +305,12 @@ export async function postDueInstallments(
       if (!fiscalPeriodId) {
         // The computed date can fall inside a CLOSED fiscal period (bokslut
         // done while the company lock date lags behind). Clamp forward to the
-        // start of the earliest open period — same spirit as the lockFloor —
+        // start of the earliest open period: same spirit as the lockFloor:
         // instead of retrying the same impossible date forever.
         const clamped = await findNextOpenPeriodStart(supabase, companyId, entryDate)
         if (!clamped) {
           throw new Error(
-            `Ingen öppen räkenskapsperiod för ${entryDate} eller senare — ` +
+            `Ingen öppen räkenskapsperiod för ${entryDate} eller senare: ` +
               'skapa nästa räkenskapsår för att kunna bokföra periodiseringen',
           )
         }
@@ -354,7 +354,7 @@ export async function postDueInstallments(
 
       if (claimError) {
         // The journal entry is already committed but the installment was NOT
-        // flipped to posted — without a storno the next run would book the
+        // flipped to posted: without a storno the next run would book the
         // same month twice. Mirror the dissolveScheduleNow handling: reverse
         // our own entry best-effort, then record the failure (the catch below
         // writes last_error on the installment).
@@ -525,10 +525,10 @@ export async function dissolveScheduleNow(
     .select('id')
 
   if (claimError || !claimed || claimed.length !== pendingIds.length) {
-    // Concurrent posting changed the set under us — undo our combined entry
+    // Concurrent posting changed the set under us: undo our combined entry
     // and let the caller retry against the new state. If the storno itself
     // fails, the combined entry stands while some installments point at the
-    // cron's entries — the interim account would dissolve twice. Surface
+    // cron's entries: the interim account would dissolve twice. Surface
     // both failures and pin the alert on the installments so the
     // periodiseringar UI shows the stuck state instead of nothing.
     try {
@@ -543,7 +543,7 @@ export async function dissolveScheduleNow(
       await supabase
         .from('accrual_schedule_installments')
         .update({
-          last_error: `Storno av samlad upplösning (verifikat ${entry.id}) misslyckades — kontrollera interimskontot: ${message}`.slice(0, 2_000),
+          last_error: `Storno av samlad upplösning (verifikat ${entry.id}) misslyckades: kontrollera interimskontot: ${message}`.slice(0, 2_000),
         })
         .in('id', pendingIds)
         .eq('company_id', companyId)
@@ -551,7 +551,7 @@ export async function dissolveScheduleNow(
         `Periodiseringen ändrades samtidigt och vändningen av det samlade verifikatet misslyckades: ${message}`,
       )
     }
-    throw new Error('Periodiseringen ändrades samtidigt — försök igen')
+    throw new Error('Periodiseringen ändrades samtidigt: försök igen')
   }
 
   await supabase
@@ -572,7 +572,7 @@ export async function dissolveScheduleNow(
  * amount, so the net of origin + dissolutions + stornos + credit is zero.
  *
  * A schedule is only marked cancelled when ALL its posted dissolutions
- * reversed cleanly — otherwise it stays 'active' (so the UI keeps showing
+ * reversed cleanly: otherwise it stays 'active' (so the UI keeps showing
  * the un-reversed remainder instead of remaining=0 while 17xx/29xx is still
  * unbalanced) and the stuck installments get a descriptive last_error.
  * Callers should surface `failedReversals > 0` as a warning.
@@ -646,7 +646,7 @@ export async function cancelSchedulesForSource(
         reversedEntries++
       } catch (error) {
         // A dissolution stornoed by an earlier (partially failed) cancel run
-        // is fine — idempotent re-credit, treated as success.
+        // is fine: idempotent re-credit, treated as success.
         if (
           error instanceof EntryAlreadyReversedError ||
           (error instanceof CannotReverseNonPostedError &&
@@ -663,7 +663,7 @@ export async function cancelSchedulesForSource(
           message,
         })
         // Posted installments freeze their financial fields, but last_error
-        // stays writable — surface the stuck storno in the periodiseringar UI.
+        // stays writable: surface the stuck storno in the periodiseringar UI.
         await supabase
           .from('accrual_schedule_installments')
           .update({

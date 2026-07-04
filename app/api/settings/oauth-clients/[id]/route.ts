@@ -8,11 +8,11 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('oauth-clients:delete')
 
 /**
- * DELETE /api/settings/oauth-clients/[id] — revoke a redirect URI
+ * DELETE /api/settings/oauth-clients/[id]: revoke a redirect URI
  * registration. Soft-delete via revoked_at so the audit trail survives
  * and the same URI can be re-registered later.
  *
- * Emits an audit event so revocations are visible in processing_history —
+ * Emits an audit event so revocations are visible in processing_history:
  * revoking an OAuth client is a security-relevant access-control change
  * (SOC 2 CC7.2). Returns 404 when the row is unknown or already revoked
  * so callers can surface failures rather than treating "no-op" as success.
@@ -51,7 +51,7 @@ export async function DELETE(
     )
   }
 
-  // Audit the revocation. Failure to append must not break the user flow —
+  // Audit the revocation. Failure to append must not break the user flow:
   // the revocation has already happened in the DB. We log the appendError
   // so a systematic outage is visible in operations rather than silently
   // degraded.

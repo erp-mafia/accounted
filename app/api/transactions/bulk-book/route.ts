@@ -50,10 +50,10 @@ function round2(n: number): number {
  * Bulk-book N bank transactions on the same date into one combined
  * verifikat (samlingsverifikation per BFL 5 kap 6§). Two flows:
  *
- *  1. Link to existing voucher — { tx_ids, existing_journal_entry_id }.
+ *  1. Link to existing voucher: { tx_ids, existing_journal_entry_id }.
  *     No new JE; the RPC just inserts N transaction_voucher_links rows.
  *
- *  2. Create new from template — { tx_ids, template_id, mode,
+ *  2. Create new from template: { tx_ids, template_id, mode,
  *     entry_description }. The route fetches the template, expands it
  *     per the chosen mode, and passes the resulting balanced lines to
  *     the RPC. The RPC then commits the verifikat atomically.
@@ -85,7 +85,7 @@ export const POST = withRouteContext(
       // Manual mode. The Zod schema validated the 4-digit format; the
       // RPC's balance + bank-leg + negative-amount + both-sides-nonzero
       // guards still run downstream. What's missing is verifying the
-      // account_numbers exist in this company's chart_of_accounts —
+      // account_numbers exist in this company's chart_of_accounts:
       // without it a typo or adversarial caller could post to a BAS
       // account that doesn't exist, corrupting the hauptbok and
       // breaking SIE export. Single roundtrip allowlist check.
@@ -210,7 +210,7 @@ export const POST = withRouteContext(
           })
         }
       } else {
-        // one_line_per_tx — apply template per tx, prefix description with
+        // one_line_per_tx: apply template per tx, prefix description with
         // a short tx reference so the verifikat preserves per-row audit
         // detail (BFL 5 kap 7§ motpart identification).
         for (const tx of txTyped) {
@@ -226,7 +226,7 @@ export const POST = withRouteContext(
               credit_amount: round2(credit),
               currency,
               line_description: txTag
-                ? `${formLine.line_description ?? ''} – ${txTag}`.trim()
+                ? `${formLine.line_description ?? ''}: ${txTag}`.trim()
                 : formLine.line_description || undefined,
               sort_order: sortOrder++,
               // Dimensions PR7: header default applies to all template lines.

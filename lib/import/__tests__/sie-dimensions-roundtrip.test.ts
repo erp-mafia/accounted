@@ -5,7 +5,7 @@ import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 
 // ============================================================
-// Dimensions plan PR5 — the lossless round-trip guarantee.
+// Dimensions plan PR5: the lossless round-trip guarantee.
 //
 // parse(source) → what import writes (registry rows + line dimension maps)
 // → generateSIEExport over exactly that state → parse(exported) must carry
@@ -14,7 +14,7 @@ import { generateSIEExport } from '@/lib/reports/sie-export'
 // through the same parser), so formatting/order differences don't matter.
 // ============================================================
 
-// Sequential-queue supabase mock — same consumption order as
+// Sequential-queue supabase mock: same consumption order as
 // sie-export.test.ts documents:
 //   0 fiscal_periods.single, 1 prev period, 2 accounts, 3 journal_entries,
 //   4 journal_entry_lines, 5 dimensions, 6 dimension_values, 7 OB fallback
@@ -64,7 +64,7 @@ const SOURCE_SIE = [
   '}',
   '#VER A 2 20260116 "Odeklarerat projekt"',
   '{',
-  // P002 is referenced but never declared via #OBJEKT — import synthesizes
+  // P002 is referenced but never declared via #OBJEKT: import synthesizes
   // it (name = code) and export must re-declare it.
   '#TRANS 5010 {6 "P002"} 500.00',
   '#TRANS 1930 {} -500.00',
@@ -145,7 +145,7 @@ describe('SIE dimensions round-trip', () => {
 
     const dimSet = (dims: typeof parsedSource.dimensions) =>
       new Set(dims.map((d) => `${d.sieDimNo}|${d.name}|${d.parentSieDimNo ?? ''}`))
-    // Every declaration that carries data survives — including the
+    // Every declaration that carries data survives: including the
     // #UNDERDIM child with its parent link. (A declared dimension with no
     // values and no tagged lines is metadata without data; export
     // deliberately omits it, so the fixture gives every dim a value.)

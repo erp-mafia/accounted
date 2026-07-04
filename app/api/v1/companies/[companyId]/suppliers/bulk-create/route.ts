@@ -2,14 +2,14 @@
  * POST /api/v1/companies/{companyId}/suppliers/bulk-create
  *
  * Bulk-create up to 50 suppliers in one call. Each item is validated and
- * inserted independently — per-item failures don't roll back successes.
+ * inserted independently: per-item failures don't roll back successes.
  * Mirrors the shape of /customers/bulk-create exactly so agents only need
  * to learn one bulk pattern.
  *
  * Response: `{ results: [{ ok, request_index, data?, error? }], summary }`.
  * Idempotent over the whole batch. Dry-runnable.
  *
- * Unlike customers, suppliers do not run VIES validation on create — the
+ * Unlike customers, suppliers do not run VIES validation on create: the
  * vat_number is stored as supplied without an external check.
  */
 
@@ -61,15 +61,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/suppliers/bulk-create',
   summary: 'Create up to 50 suppliers in one call (partial-success).',
   description:
-    'Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validated and inserted independently — per-item failures do not roll back items that succeeded. Returns a results array plus a summary. Idempotent over the whole batch. Dry-runnable.',
+    'Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validated and inserted independently: per-item failures do not roll back items that succeeded. Returns a results array plus a summary. Idempotent over the whole batch. Dry-runnable.',
   useWhen:
     'You\'re importing a roster of suppliers from another AP system, or seeding a fresh company with its existing vendor list. Use dry-run first to validate the batch.',
   doNotUseFor:
-    'Updating existing suppliers — PATCH /suppliers/{id} once per supplier. Bulk uploads of > 50 suppliers — split into pages of 50. Transactional all-or-nothing imports — passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
+    'Updating existing suppliers: PATCH /suppliers/{id} once per supplier. Bulk uploads of > 50 suppliers: split into pages of 50. Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
   pitfalls: [
-    'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response — it does not retry only the failed items.',
+    'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response: it does not retry only the failed items.',
     'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag or pass false.',
-    'org_number uniqueness is enforced at the DB level — items with duplicates fail individually with SUPPLIER_DUPLICATE_ORG_NUMBER.',
+    'org_number uniqueness is enforced at the DB level: items with duplicates fail individually with SUPPLIER_DUPLICATE_ORG_NUMBER.',
     'No VIES validation runs per item; vat_number is stored as supplied. Validate externally if your workflow requires it.',
   ],
   example: {

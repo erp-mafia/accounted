@@ -86,7 +86,7 @@ describe('POST /items/:id/match-transaction', () => {
   })
 
   it('does not overwrite an existing tx.document_id', async () => {
-    // tx already has a doc — match still succeeds but the tx update for
+    // tx already has a doc: match still succeeds but the tx update for
     // document_id is skipped (no enqueue beyond the inbox update).
     mock.enqueue({ data: { id: 'tx-1', document_id: 'existing-doc' } })
     mock.enqueue({ data: { id: 'item-1', document_id: 'doc-1' } })

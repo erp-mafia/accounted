@@ -1,7 +1,7 @@
 /**
  * Builds the journal-entry lines for the clearing entry that closes (fully or
  * partially) a supplier invoice against an actual bank transaction under
- * faktureringsmetoden (accrual) — Dr 2440 / Cr <payment account>.
+ * faktureringsmetoden (accrual): Dr 2440 / Cr <payment account>.
  *
  * Shared between:
  *   - GET /api/transactions/[id]/match-supplier-invoice/preview (read-only,
@@ -9,7 +9,7 @@
  *   - POST /api/transactions/[id]/match-supplier-invoice (the commit path)
  *
  * Single source of truth so the preview and the committed verifikat are
- * byte-identical — including the payment account and the per-line descriptions,
+ * byte-identical: including the payment account and the per-line descriptions,
  * which previously drifted (the preview used `last_supplier_payment_account` and
  * "Kvittning leverantörsskuld" / "Utbetalning från bank", while the commit path
  * defaulted to 1930 and "Utbetalning leverantörsfaktura …").
@@ -32,17 +32,17 @@
  *
  * `apSek`/`bankSek` are home-currency (SEK). Cross-currency settlement carries a
  * kursvinst/kursförlust (3960/7960) handled by `createSupplierInvoicePaymentEntry`,
- * not here — öresavrundning is the residual AFTER FX and only meaningful in whole
+ * not here: öresavrundning is the residual AFTER FX and only meaningful in whole
  * SEK kronor, so callers route only same-currency SEK payments through this helper.
  */
 import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 
 export interface SupplierClearingArgs {
-  /** SEK on 2440 to clear for this settlement — the full remaining when an öre
+  /** SEK on 2440 to clear for this settlement: the full remaining when an öre
    *  diff is absorbed, so the invoice reaches `paid`. */
   apSek: number
-  /** Actual SEK that left the bank — the payment-account credit. */
+  /** Actual SEK that left the bank: the payment-account credit. */
   bankSek: number
   /** Bank/clearing account credited (e.g. 1930). */
   paymentAccount: string
@@ -59,7 +59,7 @@ export interface SupplierClearingResult {
 
 /**
  * Build the verifikat lines for a supplier-invoice payment matched against a
- * SEK bank tx. Pure — no DB calls. Caller decides how to persist.
+ * SEK bank tx. Pure: no DB calls. Caller decides how to persist.
  *
  *   |apSek − bankSek| < ORE_ROUNDING_SETTLEMENT_MAX (and ≠ 0)
  *       → clear the full apSek off 2440, credit the actual bankSek, book the

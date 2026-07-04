@@ -28,7 +28,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
 
   return (
     <div className="space-y-8">
-      {/* Entity type — read-only */}
+      {/* Entity type: read-only */}
       <section className="space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('entity_form_heading')}
@@ -138,7 +138,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
         </div>
       </section>
 
-      {/* Tax contact — required for SKV-filings */}
+      {/* Tax contact: required for SKV-filings */}
       <section className="border-t border-border pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('tax_contact_heading')}

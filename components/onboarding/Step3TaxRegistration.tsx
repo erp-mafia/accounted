@@ -28,7 +28,7 @@ import type { EntityType } from '@/types'
 const schema = z.object({
   f_skatt: z.boolean(),
   is_first_fiscal_year: z.boolean(),
-  // First year fields (conditional — validated via superRefine below)
+  // First year fields (conditional, validated via superRefine below)
   first_year_start: z.string().optional(),
   first_year_end: z.string().optional(),
   // Ongoing year field (conditional)
@@ -54,7 +54,7 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>
 
-// Output type passed to onNext — includes computed fiscal_year_start_month
+// Output type passed to onNext: includes computed fiscal_year_start_month
 interface Step3Output {
   f_skatt: boolean
   fiscal_year_start_month: number
@@ -209,7 +209,7 @@ export default function Step3TaxRegistration({
     let firstEnd: string | undefined
 
     if (data.is_first_fiscal_year && data.first_year_start && data.first_year_end) {
-      // Validate the 6–18 month BFL 3 kap. window + EF calendar-year rule
+      // Validate the 6-18 month BFL 3 kap. window + EF calendar-year rule
       const validation = validateFirstPeriod(
         data.first_year_start,
         data.first_year_end,
@@ -404,7 +404,7 @@ export default function Step3TaxRegistration({
                             startDate={startField.value || ''}
                             onStartDateChange={(v) => {
                               startField.onChange(v)
-                              // Reset end when start changes — its valid options depend on start
+                              // Reset end when start changes: its valid options depend on start
                               if (endField.value) endField.onChange('')
                             }}
                             startHelpText={t('step3_start_help')}

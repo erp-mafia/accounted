@@ -25,7 +25,7 @@ export interface AccrualFormValue {
   balanceAccount: string
 }
 
-// The statutory BAS interim accounts per direction — a fixed list reads
+// The statutory BAS interim accounts per direction: a fixed list reads
 // better than a full account combobox and mirrors the DB CHECK (17xx/29xx).
 const BALANCE_ACCOUNT_OPTIONS: Record<AccrualDirection, Array<{ value: string; label: string }>> = {
   expense: [
@@ -47,7 +47,7 @@ const BALANCE_ACCOUNT_OPTIONS: Record<AccrualDirection, Array<{ value: string; l
  * Per-line periodisering panel for the invoice editors: service period +
  * interim balance account + a live "N månader × X kr" preview. The parent
  * owns the toggle; this renders only while periodisering is active on the
- * line. VAT is never affected — only the net amount is deferred.
+ * line. VAT is never affected: only the net amount is deferred.
  */
 export default function AccrualPeriodControl({
   direction,
@@ -58,7 +58,7 @@ export default function AccrualPeriodControl({
   idPrefix,
 }: {
   direction: AccrualDirection
-  /** Net line amount (ex VAT) — drives the preview and the K2 hint. */
+  /** Net line amount (ex VAT): drives the preview and the K2 hint. */
   amount: number
   value: AccrualFormValue
   onChange: (next: AccrualFormValue) => void

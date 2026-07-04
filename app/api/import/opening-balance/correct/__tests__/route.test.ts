@@ -70,7 +70,7 @@ function openPeriodWithOB(overrides: Record<string, unknown> = {}) {
     opening_balances_set: true,
     opening_balance_entry_id: 'entry-old',
     period_start: '2026-01-01',
-    // Embedded resource from the period fetch — the original IB verifikat's
+    // Embedded resource from the period fetch: the original IB verifikat's
     // voucher label, used to build the BFL 5 kap 5§ reference.
     opening_balance_entry: { voucher_series: 'A', voucher_number: 123 },
     ...overrides,
@@ -85,7 +85,7 @@ function auditLines(spy: SpyInstance): string {
     .join('\n')
 }
 
-describe('POST /api/import/opening-balance/correct — atomicity, audit, BFL reference', () => {
+describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL reference', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
   let errorSpy: SpyInstance
 
@@ -102,7 +102,7 @@ describe('POST /api/import/opening-balance/correct — atomicity, audit, BFL ref
     errorSpy.mockRestore()
   })
 
-  // FIX 3 (BFL 5 kap 5§) — the corrected entry references the original voucher.
+  // FIX 3 (BFL 5 kap 5§): the corrected entry references the original voucher.
   it('references the original verifikationsnummer in the corrected entry description', async () => {
     enqueue({ data: openPeriodWithOB({ opening_balance_entry: { voucher_series: 'B', voucher_number: 7 } }) }) // period
     enqueue({ count: 0 }) // year-end check
@@ -125,12 +125,12 @@ describe('POST /api/import/opening-balance/correct — atomicity, audit, BFL ref
         source_type: 'opening_balance',
       }),
     )
-    // Happy path stornoes ONLY the old entry — no compensating reverse.
+    // Happy path stornoes ONLY the old entry, no compensating reverse.
     expect(mockReverseEntry).toHaveBeenCalledTimes(1)
     expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-old')
   })
 
-  // FIX 1 (ASVS V2.3) — compensation when the storno of the OLD entry throws
+  // FIX 1 (ASVS V2.3): compensation when the storno of the OLD entry throws
   // after the new entry was already created.
   it('compensates by stornoing the new entry when reverseEntry throws, returning OB_CORRECT_FAILED', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
@@ -160,7 +160,7 @@ describe('POST /api/import/opening-balance/correct — atomicity, audit, BFL ref
     expect(audit).toContain('entry-old')
   })
 
-  // FIX 1 + FIX 2 — relink RPC error triggers compensation and a durable audit.
+  // FIX 1 + FIX 2: relink RPC error triggers compensation and a durable audit.
   it('compensates and emits a durable audit when the relink RPC returns an error', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
     enqueue({ count: 0 }) // year-end check
@@ -190,7 +190,7 @@ describe('POST /api/import/opening-balance/correct — atomicity, audit, BFL ref
     expect(audit).toContain('entry-old')
   })
 
-  // FIX 2 — the compensating storno may itself fail; the handler must still
+  // FIX 2: the compensating storno may itself fail; the handler must still
   // return the envelope and audit the compensation failure (never rethrow).
   it('audits a compensation failure and still returns OB_CORRECT_FAILED', async () => {
     enqueue({ data: openPeriodWithOB() }) // period

@@ -38,7 +38,7 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
     mockCreateTransactionJournalEntry(...args),
 }))
 
-// Booking-time duplicate guard — mocked to "no duplicate" by default so these
+// Booking-time duplicate guard: mocked to "no duplicate" by default so these
 // tests exercise categorization, not the guard. The detection query is
 // unit-tested in lib/transactions/__tests__/booking-duplicate-detection.test.ts.
 const mockDetectDup = vi.fn()
@@ -46,7 +46,7 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
-// Behandlingshistorik append — mocked so we can assert the dismissal is
+// Behandlingshistorik append: mocked so we can assert the dismissal is
 // persisted without reaching the service-role client.
 const mockAppendProcessingHistory = vi.fn()
 vi.mock('@/lib/processing-history/append', () => ({
@@ -231,7 +231,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('flags an inbox underlag matched to the transaction as booked', async () => {
     // A document was attached to this transaction in the inbox
     // (matched_transaction_id) but not booked from there. Booking the
-    // transaction here — no inbox_item_id in the body — must still stamp the
+    // transaction here (no inbox_item_id in the body) must still stamp the
     // matched inbox item with the new journal entry and link its document.
     const tx = makeTransaction({
       id: 'tx-1',
@@ -606,7 +606,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
   it('warns (409) and books nothing when a booked sibling shares date+amount', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
-    enqueue({ data: tx, error: null }) // fetch — guard runs right after, before any booking work
+    enqueue({ data: tx, error: null }) // fetch: guard runs right after, before any booking work
 
     mockDetectDup.mockResolvedValue({
       transaction_id: '660e8400-e29b-41d4-a716-446655440111',
@@ -631,7 +631,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.error.details.candidate.voucher_label).toBe('A142')
     // The duplicate guard fires before any verifikat is created.
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
-    // Blocking a duplicate is not a dismissal — nothing is logged.
+    // Blocking a duplicate is not a dismissal: nothing is logged.
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 
@@ -727,7 +727,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Fetch company settings
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
 
-    // Mapping built from category — but the debit account is missing/inactive
+    // Mapping built from category, but the debit account is missing/inactive
     // in this company's kontoplan. findMissingActiveAccounts is mocked at the
     // module level; flag the debit account here to simulate the same outcome
     // the engine would otherwise hit at AccountsNotInChartError.
@@ -748,7 +748,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.error.message).toMatch(/Följande konton behöver aktiveras/)
     // Engine must NOT be called once validation flagged a missing account.
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
-    // No save of mapping rule either — the categorization didn't go through.
+    // No save of mapping rule either: the categorization didn't go through.
     expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
   })
 
@@ -762,7 +762,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
 
-    // Multiple accounts missing — covers the common "imported a template with
+    // Multiple accounts missing: covers the common "imported a template with
     // accounts that this kontoplan never enabled" case.
     mockFindMissingActiveAccounts.mockResolvedValueOnce(['5410', '2641'])
 
@@ -797,7 +797,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // ensureFiscalPeriod existing-period check
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
-    // Pre-validation says everything is fine — simulates a race where an
+    // Pre-validation says everything is fine: simulates a race where an
     // account got deactivated between our chart_of_accounts read and the
     // engine's resolveAccountIds read. The engine throws and the route must
     // surface a structured 400 rather than the partial-success path that
@@ -819,7 +819,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
     expect(body.error.account_numbers).toEqual(['6200'])
-    // Transaction update must NOT have run — if it had, the test would have
+    // Transaction update must NOT have run: if it had, the test would have
     // had to enqueue a response for it. The absence of an enqueue here plus
     // the 400 status is the assertion that the route did not fall through.
   })
@@ -827,7 +827,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
   // The transactions page surfaces TX_CATEGORIZE_INVALID_ACCOUNT with an
   // inline "Aktivera och bokför" toast and reads details.accountNumber to
   // call POST /accounts/activate. This test pins the error shape that flow
-  // depends on — if the field name changes the recovery UI silently breaks.
+  // depends on: if the field name changes the recovery UI silently breaks.
   it('returns 400 TX_CATEGORIZE_INVALID_ACCOUNT with details.accountNumber when account_override is not in the chart', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
@@ -838,11 +838,11 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    // chart_of_accounts lookup for '5420' — not in the company's chart.
+    // chart_of_accounts lookup for '5420': not in the company's chart.
     // Using a plain expense account (Programvaror) avoids the implication
     // that 4535 (Inköp av varor från annat EU-land, reverse-charge) would
     // be a valid override on a domestic transaction without its paired
-    // moms legs (2614/2645) — see the Swedish compliance review note.
+    // moms legs (2614/2645): see the Swedish compliance review note.
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {

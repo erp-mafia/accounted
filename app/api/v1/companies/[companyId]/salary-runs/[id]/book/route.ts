@@ -19,7 +19,7 @@
  * Period-lock pre-check: we check `payment_date` against the company's lock
  * date and fiscal period status BEFORE invoking the engine, so the response
  * is a structured PERIOD_LOCKED rather than a generic engine error. The DB
- * trigger remains authoritative — this is ergonomics, not security.
+ * trigger remains authoritative: this is ergonomics, not security.
  *
  * Audit block: the success response includes the salary verifikation's
  * voucher number + the entry IDs of all 2-4 posted entries, so an agent
@@ -58,17 +58,17 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/book',
   summary: 'Post the verifikationer for a paid salary run.',
   description:
-    'Creates 2–4 journal entries (1: salary brutto/tax/net; 2: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip — the run stays in `paid` so the caller can fix the cause (locked period, missing BAS account, etc.) and retry.',
+    'Creates 2-4 journal entries (1: salary brutto/tax/net; 2: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip: the run stays in `paid` so the caller can fix the cause (locked period, missing BAS account, etc.) and retry.',
   useWhen:
     'You\'ve marked a salary run as paid and want to post the BFL-required verifikationer. This is the final lifecycle verb before AGI generation; after :book, the run can no longer be edited and corrections must use the (forthcoming) `:correct` verb.',
   doNotUseFor:
     'Posting salary entries outside the salary-run lifecycle (use POST /journal-entries directly). Re-booking an already-booked run (returns 400 SALARY_RUN_BOOK_NOT_PAID).',
   pitfalls: [
-    'Run must be in `paid` — non-`paid` runs return 400 SALARY_RUN_BOOK_NOT_PAID.',
-    'payment_date must fall in an open fiscal period — locked period returns 400 PERIOD_LOCKED with `fiscal_period_id` and a hint of what unlock action is needed.',
+    'Run must be in `paid`: non-`paid` runs return 400 SALARY_RUN_BOOK_NOT_PAID.',
+    'payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED with `fiscal_period_id` and a hint of what unlock action is needed.',
     'BFL 5 kap immutability: once `:book` succeeds the verifikationer cannot be edited or deleted. Corrections require `:correct` (Phase 5 PR-3) which does a storno-then-rebook.',
     'The salary verifikation is the primary one; its voucher_number appears in the response audit block. The avgifter, vacation, and pension entries get separate voucher numbers (returned as `entry_ids`).',
-    'Strict-mode: if the engine fails partway, the salary_runs row stays in `paid`. There is no "partial booking" — the engine either commits all entries or the entire booking fails.',
+    'Strict-mode: if the engine fails partway, the salary_runs row stays in `paid`. There is no "partial booking": the engine either commits all entries or the entire booking fails.',
   ],
   example: {
     response: {
@@ -188,7 +188,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             'salary (gross + tax withholding + net payment)',
             'arbetsgivaravgifter',
             ...(totalVacation > 0 || totalVacationAvgifter > 0 ? ['vacation accrual'] : []),
-            // Pension cannot be detected without the engine — we'd need
+            // Pension cannot be detected without the engine: we'd need
             // to inspect line_items for löneväxling. Omitted from preview.
           ],
           note: 'A live call posts 2-4 verifikationer atomically via createSalaryRunEntries. Voucher numbers are assigned at commit time.',
@@ -253,7 +253,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           })),
         })),
       })
-      // Narrow to just the fields the route consumes — id + voucher_number
+      // Narrow to just the fields the route consumes: id + voucher_number
       // for the primary salary entry, id for the others. The full
       // JournalEntry shape is broader than what the audit block needs.
       salaryEntry = result.salaryEntry as unknown as { id: string; voucher_number: string }
@@ -276,7 +276,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // 5. Optimistic-lock the status flip on status='paid'. Concurrent calls
-    //    would have re-posted JEs (a real bug — we'd have orphans), but
+    //    would have re-posted JEs (a real bug: we'd have orphans), but
     //    the engine's atomicity makes that a no-op race that just won't
     //    commit the second status flip.
     const entryIds = [salaryEntry.id, avgifterEntry.id]

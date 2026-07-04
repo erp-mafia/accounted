@@ -61,7 +61,7 @@ export function FiscalYearsManager() {
 
   useEffect(() => { fetchPeriods() }, [fetchPeriods])
 
-  // Newest first — matches the API's ordering and reads most-recent-at-top.
+  // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
 
   async function runLockAction(period: FiscalPeriod, action: 'lock' | 'unlock') {
@@ -72,7 +72,7 @@ export function FiscalYearsManager() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        // Surface the backend's message verbatim — e.g. "X affärstransaktion(er)
+        // Surface the backend's message verbatim: e.g. "X affärstransaktion(er)
         // saknar bokföring", which tells the user exactly what to fix first.
         throw new Error(body?.error?.message || t('fy_action_error'))
       }
@@ -149,7 +149,7 @@ export function FiscalYearsManager() {
                 <div className="min-w-0">
                   <span className="text-sm font-medium">{p.name}</span>
                   <span className="ml-2 text-sm text-muted-foreground tabular-nums">
-                    {formatDate(p.period_start)} – {formatDate(p.period_end)}
+                    {formatDate(p.period_start)} - {formatDate(p.period_end)}
                   </span>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">

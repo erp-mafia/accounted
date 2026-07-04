@@ -22,7 +22,7 @@ export interface AccountSyncResult {
   renamed: number
   /** Detail of each rename, for warnings/logging */
   renamedAccounts: Array<{ accountNumber: string; from: string; to: string }>
-  /** Renames that failed (non-fatal — the import proceeds with old names) */
+  /** Renames that failed (non-fatal: the import proceeds with old names) */
   renameFailed: number
   /** Fatal error from the create pass; null on success */
   error: string | null
@@ -93,7 +93,7 @@ function buildInsertRow(
  * the chart.
  *
  * Name resolution: the file's name applies only to IDENTITY mappings
- * (sourceAccount === targetAccount with a non-empty sourceName) — when the
+ * (sourceAccount === targetAccount with a non-empty sourceName): when the
  * user remaps a source to a different target, the file name describes the
  * source account, not the target, so the target keeps its BAS/current name.
  *
@@ -103,7 +103,7 @@ function buildInsertRow(
  *       ?? `Konto ${number}`.
  *   - Rename (flag on only): existing accounts that are identity targets and
  *     whose stored name differs from the file name get a scoped UPDATE of
- *     account_name — and nothing else. Applies to is_system_account rows too
+ *     account_name, and nothing else. Applies to is_system_account rows too
  *     (K1-seeded defaults); the flag itself is never touched. Equal names are
  *     a no-op, so replace-mode re-imports (Fortnox re-sync) are idempotent.
  *
@@ -143,7 +143,7 @@ export async function syncMappedAccounts(
     if (m.targetAccount && fallback) fallbackNames.set(m.targetAccount, fallback)
   }
 
-  // Fetch the company's chart once (paged) and filter in JS — avoids a huge
+  // Fetch the company's chart once (paged) and filter in JS: avoids a huge
   // .in() URL for full-chart imports and the silent 1000-row PostgREST cap.
   let existingByNumber: Map<string, string>
   try {
@@ -154,7 +154,7 @@ export async function syncMappedAccounts(
           .from('chart_of_accounts')
           .select('account_number, account_name')
           .eq('company_id', companyId)
-          // Stable total order on the unique account_number — paging is only
+          // Stable total order on the unique account_number: paging is only
           // correct with a deterministic order, else rows duplicate/skip across
           // pages (see fetch-all.ts ordering invariant). The result is read into
           // a Map below, so this order is invisible to callers.
@@ -186,7 +186,7 @@ export async function syncMappedAccounts(
 
     const { error: insertError } = await supabase.from('chart_of_accounts').insert(inserts)
     // A duplicate means a concurrent import (or the replace flow) created the
-    // account between our read and write — the account exists, which is all
+    // account between our read and write: the account exists, which is all
     // this pass guarantees.
     if (insertError && !insertError.message.includes('duplicate')) {
       result.error = insertError.message
@@ -197,7 +197,7 @@ export async function syncMappedAccounts(
 
   // Rename pass: carry the file's names into existing accounts. The diff set
   // is small (only names that actually changed), so the UPDATEs run
-  // concurrently in bounded batches — a full-chart re-sync must not serialize
+  // concurrently in bounded batches: a full-chart re-sync must not serialize
   // N round trips, but also must not stampede the API with 1000+ in flight.
   if (updateAccountNames) {
     const renames: Array<{ num: string; from: string; to: string }> = []

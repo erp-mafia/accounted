@@ -16,7 +16,7 @@ import { useRecentReports } from '@/components/reports/useRecentReports'
 import { getReport } from '@/lib/reports/catalog'
 
 /**
- * Reports library landing. A calm, grouped index of every report — selecting
+ * Reports library landing. A calm, grouped index of every report: selecting
  * one opens the focused /reports/[slug] route. The fiscal year picked here
  * persists (FiscalYearSelector localStorage) and is restored on the focused
  * page, so the choice carries across without URL plumbing.

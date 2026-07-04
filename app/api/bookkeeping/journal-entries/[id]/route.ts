@@ -110,10 +110,10 @@ export async function DELETE(
 }
 
 /**
- * PATCH — edit a DRAFT verifikat in place (header + lines). Only drafts are
+ * PATCH: edit a DRAFT verifikat in place (header + lines). Only drafts are
  * editable; updateDraftEntry rejects committed entries with a 409, and the DB
- * immutability trigger is the backstop. Uses withRouteContext (MFA + write gate)
- * — the GET/DELETE above predate that wrapper and are intentionally left as-is.
+ * immutability trigger is the backstop. Uses withRouteContext (MFA + write gate):
+ * the GET/DELETE above predate that wrapper and are intentionally left as-is.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.update',

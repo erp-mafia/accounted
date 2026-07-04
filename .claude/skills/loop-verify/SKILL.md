@@ -3,15 +3,15 @@ name: loop-verify
 description: The self-verification gate every automated code change must pass before a loop opens a PR. Encodes Accounted's real CI commands (check:lint, vitest, pg-real, check:guards, no-extension-imports) plus the accounting guard rails and i18n sync. Invoke from any loop-* skill after making a fix and before pushing.
 ---
 
-# loop-verify — verification gate for automated changes
+# loop-verify: verification gate for automated changes
 
 Never report a change as done, and never open a PR, based on "the edit applied" alone. Verify it
-the way our CI would. If any step fails, fix and rerun from the top — do not push partially
+the way our CI would. If any step fails, fix and rerun from the top: do not push partially
 verified work.
 
-## 0. Guard rails first (hard stops — no fix is worth breaking these)
+## 0. Guard rails first (hard stops, no fix is worth breaking these)
 Read [Hard Rules](../../../CLAUDE.md#hard-rules). A change is **rejected outright** if it:
-- edits or deletes a `posted` journal entry (use `reverseEntry`/`correctEntry` — storno, never edit),
+- edits or deletes a `posted` journal entry (use `reverseEntry`/`correctEntry`, storno, never edit),
 - makes an entry that doesn't balance, or sets a voucher number manually,
 - writes to a locked/closed period, or deletes a retained document,
 - uses `toFixed()` for money (must be `Math.round(x * 100) / 100`), or treats account numbers as numbers (they are strings: `'1930'`).
@@ -60,7 +60,7 @@ If you edited an atom `SKILL.md` run `npm run skills:check`; taxonomy inputs →
 ## 5. i18n sync
 For any new/changed user-facing string, update **both** `messages/en.json` and `messages/sv.json`
 (mirror the same keys). See [i18n rule](../../rules/i18n.md) for "stays Swedish" surfaces
-(email/invoices/reports/salary) — those stay Swedish regardless of locale.
+(email/invoices/reports/salary): those stay Swedish regardless of locale.
 
 ## 6. Verdict
 - All required steps green → safe to push the `loop/*` branch and open the PR.

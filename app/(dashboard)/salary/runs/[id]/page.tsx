@@ -68,7 +68,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [addEmployeeKey, setAddEmployeeKey] = useState(0)
   const [preferredPaymentFormat, setPreferredPaymentFormat] = useState<'bg_lb' | 'pain001'>('bg_lb')
-  // Gates the default-dimensions chips on the employee rows — same
+  // Gates the default-dimensions chips on the employee rows: same
   // company_settings.dimensions_enabled UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [taxPayment, setTaxPayment] = useState<{
@@ -113,8 +113,8 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     load()
   }, [id])
 
-  // Refetch when the tab regains focus. AGI can be generated out-of-band — via
-  // the MCP server, the public API, or another browser tab — and this page
+  // Refetch when the tab regains focus. AGI can be generated out-of-band (via
+  // the MCP server, the public API, or another browser tab) and this page
   // would otherwise keep showing a stale "AGI-fil har inte genererats ännu"
   // (and a stale "AGI-XML saknas" error in the panel below) until a full
   // reload. Reconciling agi_generated_at on visibilitychange picks up that
@@ -367,13 +367,13 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   const isCalculated = run.calculation_params != null
   const isNollkorning = isCalculated && Math.round((run.total_gross ?? 0) * 100) === 0
 
-  // Advancing a draft to review. For a nollkörning confirm first — an empty
+  // Advancing a draft to review. For a nollkörning confirm first: an empty
   // declaration is filed to Skatteverket, which should be deliberate.
   function handleToReview() {
     if (
       isNollkorning &&
       !confirm(
-        'Detta är en nollkörning — ingen lön rapporteras för perioden. ' +
+        'Detta är en nollkörning: ingen lön rapporteras för perioden. ' +
           'En nolldeklaration (huvuduppgift utan individuppgifter) lämnas till Skatteverket. Vill du fortsätta?',
       )
     ) {
@@ -404,7 +404,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         </Badge>
       </div>
 
-      {/* Summary cards — recompute from per-employee rows so manual overrides
+      {/* Summary cards: recompute from per-employee rows so manual overrides
           (avancerat läge) are reflected immediately, without relying on
           run.total_* columns which are frozen at calculate-time. */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -444,7 +444,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
             <p className="text-sm font-medium">Nollkörning</p>
             <p className="text-sm text-muted-foreground mt-1">
               Ingen lön rapporteras för {periodLabel}. En nolldeklaration (huvuduppgift utan
-              individuppgifter) lämnas till Skatteverket — en registrerad arbetsgivare måste lämna
+              individuppgifter) lämnas till Skatteverket: en registrerad arbetsgivare måste lämna
               arbetsgivardeklaration varje månad, även månader utan lön.
             </p>
           </CardContent>
@@ -656,7 +656,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
       {preview && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Förhandsgranskning — verifikationer</CardTitle>
+            <CardTitle className="text-base">Förhandsgranskning: verifikationer</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             {(() => {
@@ -669,7 +669,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
               if (entries.length === 0) {
                 return (
                   <p className="text-sm text-muted-foreground">
-                    Nollkörning — inga verifikat bokförs för den här körningen.
+                    Nollkörning: inga verifikat bokförs för den här körningen.
                     Kontrollera att övriga lönekörningar för perioden täcker
                     arbetsgivardeklarationen till Skatteverket.
                   </p>
@@ -705,7 +705,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         </Card>
       )}
 
-      {/* Payment file — available once the run is approved */}
+      {/* Payment file: available once the run is approved */}
       {['approved', 'paid', 'booked'].includes(run.status) && (
         <PaymentFilePanel
           salaryRunId={id}
@@ -718,7 +718,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         />
       )}
 
-      {/* Tax payment (skatt + arbetsgivaravgifter) — once AGI has been generated */}
+      {/* Tax payment (skatt + arbetsgivaravgifter): once AGI has been generated */}
       {run.status === 'booked' && run.agi_generated_at && (
         <TaxPaymentPanel
           period={periodLabel}
@@ -731,7 +731,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         />
       )}
 
-      {/* AGI (Arbetsgivardeklaration) — available once the run is booked */}
+      {/* AGI (Arbetsgivardeklaration): available once the run is booked */}
       {run.status === 'booked' && (
         <div className="space-y-3">
           <AGIPanel

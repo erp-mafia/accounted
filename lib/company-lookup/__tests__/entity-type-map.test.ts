@@ -32,7 +32,7 @@ describe('mapEntityType', () => {
     // provision them with K1/kontantmetoden defaults (ML/BFL risk).
     expect(mapEntityType('Enskild stiftelse')).toBeNull()
     expect(mapEntityType('Enskild näringsverksamhet utan firma')).toBeNull()
-    // Bank- and försäkringsaktiebolag follow FFFS, not K2/K3 — not a safe
+    // Bank- and försäkringsaktiebolag follow FFFS, not K2/K3: not a safe
     // one-click provision.
     expect(mapEntityType('Försäkringsaktiebolag')).toBeNull()
     expect(mapEntityType('Bankaktiebolag')).toBeNull()

@@ -20,7 +20,7 @@ const BodySchema = z.object({
   company_id: z.string().uuid().optional(),
 })
 
-// 10s — the user is on a wait-screen with visible progress, so we can afford
+// 10s: the user is on a wait-screen with visible progress, so we can afford
 // the longer budget. The prior 5s clipped legitimate fetches (TIC fans out to
 // ~13 Lens calls upstream) into the fallback bucket while still burning the
 // in-flight upstream calls against quota. See actions.ts:182-189 for the
@@ -58,17 +58,17 @@ interface ProfilePayload {
 // POST /api/agent/onboarding/stream
 //
 // Streams real-timed progress for the agent build sequence (plan §7 Phase A).
-// Each step runs on its actual latency — no artificial delays. On timeout or
+// Each step runs on its actual latency: no artificial delays. On timeout or
 // failure, the step emits `fallback` and the pipeline continues with a
 // deterministic default so the user always reaches Phase B.
 //
-// Response: application/x-ndjson — one JSON event per line.
+// Response: application/x-ndjson, one JSON event per line.
 export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Generous per-user rate limit — bounds reload-spam of the onboarding build
+  // Generous per-user rate limit: bounds reload-spam of the onboarding build
   // (each run fires 2 LLM calls). Fails open on infra error.
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) {
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Not a member of this company' }, { status: 403 })
   }
 
-  // No live composer run for sandbox companies — they ship with a pre-built
+  // No live composer run for sandbox companies: they ship with a pre-built
   // verified agent_profile so the chrome is visible without burning Bedrock.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked
@@ -119,12 +119,12 @@ export async function POST(request: Request) {
           controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'))
         } catch {
           // Stream was cancelled (user navigated away). Subsequent enqueues
-          // would throw — we just stop emitting.
+          // would throw: we just stop emitting.
         }
       }
 
       try {
-        // Step 1 — TIC: read companies.tic_snapshot; if missing or stale,
+        // Step 1: TIC: read companies.tic_snapshot; if missing or stale,
         // live-fetch from the TIC extension (cookies forwarded from the
         // incoming request) and persist. Falls through gracefully when TIC is
         // disabled, the company has no org_number, or the request times out.
@@ -146,7 +146,7 @@ export async function POST(request: Request) {
           // bounded to companies actively creating an agent, so the TIC
           // budget stays safe even when upgrading pre-v2 snapshots.
           // timeoutMs: lift the internal fetch signal to match the outer
-          // budget — otherwise the 5s default fires first and we get the
+          // budget: otherwise the 5s default fires first and we get the
           // pre-fix behavior even with the longer outer budget.
           ensureTicSnapshot({
             supabase,
@@ -163,10 +163,10 @@ export async function POST(request: Request) {
           status: ticResult.snapshot ? 'success' : 'fallback',
         })
 
-        // Gather inputs once — used by select + narrative + persistence.
+        // Gather inputs once: used by select + narrative + persistence.
         const inputs = await gatherComposerInputs(supabase, companyId)
 
-        // Step 2 — Opus atom selection with timeout + deterministic fallback.
+        // Step 2: Opus atom selection with timeout + deterministic fallback.
         send({ step: 'select', status: 'in_progress' })
         let selection: AtomSelection
         try {
@@ -181,14 +181,14 @@ export async function POST(request: Request) {
         // path produced the selection. fallbackAtomSelection generates a
         // generic template that doesn't know about KÄNDA FAKTA; the Opus
         // path is also re-filtered in case the model strayed. Cheap belt-
-        // and-braces — same function used for both.
+        // and-braces: same function used for both.
         selection.verification_questions = filterRedundantQuestions(
           selection.verification_questions,
           inputs,
           selection.modifier_atoms,
         )
 
-        // Step 3 — Sonnet narrative with timeout + plain fallback.
+        // Step 3: Sonnet narrative with timeout + plain fallback.
         send({ step: 'narrative', status: 'in_progress' })
         let narrative: string
         try {
@@ -199,7 +199,7 @@ export async function POST(request: Request) {
           send({ step: 'narrative', status: 'fallback', narrative })
         }
 
-        // Step 4 — Persist the profile so Phase B has a row to edit.
+        // Step 4: Persist the profile so Phase B has a row to edit.
         const composedAt = new Date().toISOString()
         const sourceSignals = inputsToSourceSignals(inputs)
         const { error: upsertErr } = await supabase
@@ -243,7 +243,7 @@ export async function POST(request: Request) {
           },
         })
 
-        // Step 5 — fire-and-forget cache pre-warm. The client renders the
+        // Step 5: fire-and-forget cache pre-warm. The client renders the
         // review card already; pre-warm just buys a faster first chat turn.
         send({ step: 'prewarm', status: 'in_progress' })
         const allIds = [
@@ -288,7 +288,7 @@ export async function POST(request: Request) {
 }
 
 // Run a promise against a wall-clock budget. The underlying work continues to
-// completion on the server when the budget elapses — we just stop waiting for
+// completion on the server when the budget elapses: we just stop waiting for
 // it. For Anthropic calls that's fine: a slow Opus turn finishing later still
 // warms its own cache.
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

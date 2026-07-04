@@ -21,7 +21,7 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
  * customer invoices (supplier invoices observed to follow the same scheme):
  * 0 Unpaid, 1 Overdue, 2 Fully paid, 3 Partially paid, 4 Overpaid,
  * 5 Deleted, 6 Customer loss, 7 Marked for collection, 8 Sent for collection.
- * Codes ≥40 are ROT/RUT, factoring ("Invoier") and e-invoice transport noise —
+ * Codes ≥40 are ROT/RUT, factoring ("Invoier") and e-invoice transport noise:
  * ignored here. The `paid`/`preliminary` booleans are the primary signals;
  * the codes refine terminal states the booleans can't express.
  */
@@ -270,7 +270,7 @@ const BL_ACCOUNT_TYPE_MAP: Record<string, AccountType> = {
  * Map BL Account to AccountingAccountDto.
  *
  * BL fields: entityId, id (account number), name, vatCode, sruCode, closed, type
- * BL sends an explicit `type` (asset|liability|income|cost) — prefer it, since
+ * BL sends an explicit `type` (asset|liability|income|cost): prefer it, since
  * it also covers off-plan accounts like 0099 "Konvertering"; fall back to BAS
  * number ranges when absent.
  */

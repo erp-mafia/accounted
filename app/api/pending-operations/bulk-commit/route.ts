@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       results.push({
         id,
         status: 'skipped',
-        error: 'Hög risk — kräver individuellt godkännande',
+        error: 'Hög risk: kräver individuellt godkännande',
       })
       continue
     }

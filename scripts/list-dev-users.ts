@@ -1,5 +1,5 @@
 /**
- * List recent gnubok dev users. Quick sanity-check tool — given a hosted
+ * List recent gnubok dev users. Quick sanity-check tool: given a hosted
  * Supabase project, the easiest way to see who has signed up.
  *
  * Usage: npx tsx scripts/list-dev-users.ts

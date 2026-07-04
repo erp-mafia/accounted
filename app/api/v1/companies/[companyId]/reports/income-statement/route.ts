@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/income-statement
  *
- * Returns the resultatrapport for a fiscal period — revenue / cost of
+ * Returns the resultatrapport for a fiscal period: revenue / cost of
  * goods / operating expenses / financial items, ending in the net result.
  * Same generator as the dashboard.
  */
@@ -23,12 +23,12 @@ registerEndpoint({
   description:
     'Returns the period\'s revenue and expenses grouped by BAS class with subtotals (gross margin, operating result, net result). The net result flows into the balance-sheet equity for the same period.',
   useWhen:
-    'You need the company\'s profit/loss for a period — month-end management reporting, K2/K3 årsredovisning resultaträkning, or feeding KPI dashboards.',
+    'You need the company\'s profit/loss for a period: month-end management reporting, K2/K3 årsredovisning resultaträkning, or feeding KPI dashboards.',
   doNotUseFor:
     'Per-account drill (use /reports/general-ledger). VAT figures (use /reports/vat-declaration). Balance position (use /reports/balance-sheet).',
   pitfalls: [
     '`period_id` is required.',
-    'Net result on the income statement equals the period\'s equity-line delta on the balance sheet — they\'re derived from the same posted entries.',
+    'Net result on the income statement equals the period\'s equity-line delta on the balance sheet: they\'re derived from the same posted entries.',
   ],
   example: {
     response: {

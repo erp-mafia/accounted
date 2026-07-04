@@ -125,9 +125,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE — no candidates
+    // Duplicate-payment guard: merchant_name ILIKE, no candidates
     enqueue({ data: [], error: null })
-    // Duplicate-payment guard: description ILIKE — no candidates
+    // Duplicate-payment guard: description ILIKE, no candidates
     enqueue({ data: [], error: null })
     // Fetch company settings (now before update due to journal-first ordering)
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
@@ -182,7 +182,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: two ILIKE probes — no candidates
+    // Duplicate-payment guard: two ILIKE probes, no candidates
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
     // Company settings
@@ -198,7 +198,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
-    // No silent "paid with no journal entry" — GL must not diverge from the AR ledger.
+    // No silent "paid with no journal entry": GL must not diverge from the AR ledger.
     expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
   })
 
@@ -212,9 +212,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE — no candidates
+    // Duplicate-payment guard: merchant_name ILIKE, no candidates
     enqueue({ data: [], error: null })
-    // Duplicate-payment guard: description ILIKE — no candidates
+    // Duplicate-payment guard: description ILIKE, no candidates
     enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)
@@ -265,7 +265,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
-    // Fetch company settings (before update — journal-first ordering)
+    // Fetch company settings (before update, journal-first ordering)
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)
     enqueue({ data: [{ id: 'inv-1' }], error: null })
@@ -381,7 +381,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE — no additional match (dedup keeps merchant_name result)
+    // description ILIKE, no additional match (dedup keeps merchant_name result)
     enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
@@ -435,7 +435,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       customer,
     })
 
-    // No guard query enqueued — guard is skipped for partial payments
+    // No guard query enqueued: guard is skipped for partial payments
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [{ id: 'inv-1' }], error: null })
@@ -522,7 +522,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE — no additional match
+    // description ILIKE, no additional match
     enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
@@ -570,7 +570,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE — no additional matches
+    // description ILIKE, no additional matches
     enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
@@ -596,9 +596,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE — no candidates
+    // Duplicate-payment guard: merchant_name ILIKE, no candidates
     enqueue({ data: [], error: null })
-    // Duplicate-payment guard: description ILIKE — no candidates
+    // Duplicate-payment guard: description ILIKE, no candidates
     enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)

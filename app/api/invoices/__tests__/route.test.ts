@@ -243,7 +243,7 @@ describe('POST /api/invoices (create invoice)', () => {
     enqueue({ data: customer, error: null })
     // company_settings.vat_registered gate (registered → VAT flows as before)
     enqueue({ data: { vat_registered: true }, error: null })
-    // Insert invoice (stays unnumbered — the allocation step is skipped)
+    // Insert invoice (stays unnumbered: the allocation step is skipped)
     enqueue({ data: createdInvoice, error: null })
     // Insert items
     enqueue({ data: null, error: null })

@@ -38,7 +38,7 @@ export async function GET(
   if (convErr) return NextResponse.json({ error: convErr.message }, { status: 500 })
   if (!conv) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
 
-  // Defense in depth alongside RLS — verify caller is a member of the
+  // Defense in depth alongside RLS: verify caller is a member of the
   // conversation's company AND owns the conversation row. Conversations are
   // user-scoped within a company; one team member should not see another's.
   if (conv.user_id !== user.id) {
@@ -91,7 +91,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
   }
 
-  // Defense in depth — verify ownership before update so a 404 is returned
+  // Defense in depth: verify ownership before update so a 404 is returned
   // (instead of relying solely on RLS, which would silently 0-row).
   const { data: existing } = await supabase
     .from('agent_conversations')

@@ -61,7 +61,7 @@ export const GET = withRouteContext(
     }
 
     try {
-      // Only toDate — the matrix is cumulative from period_start by design.
+      // Only toDate: the matrix is cumulative from period_start by design.
       const report: DimensionPnlReport = await generateDimensionPnl(
         supabase,
         companyId!,

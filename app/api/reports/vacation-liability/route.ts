@@ -4,7 +4,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { generateVacationLiability } from '@/lib/reports/vacation-liability'
 
 /**
- * Semesterlöneskuld report — per BFNAR 2016:10 kap 16.
+ * Semesterlöneskuld report, per BFNAR 2016:10 kap 16.
  * Per-employee vacation liability (accounts 2920 + 2940).
  * Required for year-end closing.
  */

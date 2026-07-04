@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { insertDraftJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 import { withUserContext } from '@/tests/pg/setup'
 
-describe('rls.pg — tenant isolation on journal_entries', () => {
+describe('rls.pg: tenant isolation on journal_entries', () => {
   it('returns only the authenticated user\'s company rows', async () => {
     const a = await seedCompany()
     const b = await seedCompany()

@@ -1,19 +1,19 @@
 /**
  * POST /api/v1/companies/{companyId}/imports/sie
  *
- * SIE4 file import. Multipart upload — the file is the request body. The
+ * SIE4 file import. Multipart upload: the file is the request body. The
  * route:
  *   1. Decodes the file (CP437 / Windows-1252 / UTF-8 auto-detected).
  *   2. Parses the SIE structure.
  *   3. Checks for duplicate file-hash imports (rejects if already imported).
- *   4. Runs the full import via `executeSIEImport()` — fiscal period
+ *   4. Runs the full import via `executeSIEImport()`: fiscal period
  *      creation, opening balance entry, voucher commits.
  *   5. Records the result on the `operations` table so the v1 caller
  *      receives a consistent `{ operation_id }` shape.
  *
  * Currently executes INLINE (the operation is stamped `succeeded` /
  * `failed` before the response returns). A future cron worker can take
- * over by flipping `initialStatus` from `'running'` to `'queued'` —
+ * over by flipping `initialStatus` from `'running'` to `'queued'`:
  * the API contract stays identical.
  *
  * SIE imports are expensive: a typical multi-year SIE file produces
@@ -53,9 +53,9 @@ const SieImportAccepted = z.object({
   poll_url: z.string(),
 })
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB — matches the dashboard's limit
+const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB: matches the dashboard's limit
 
-export const maxDuration = 300 // 5 minutes — large multi-year SIE files
+export const maxDuration = 300 // 5 minutes: large multi-year SIE files
 
 registerEndpoint({
   operation: 'imports.sie',
@@ -63,18 +63,18 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/imports/sie',
   summary: 'Import a SIE4 file.',
   description:
-    'Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as the request body, parses it, checks for duplicate imports by file-hash, and replays every #VER + #TRANS into the company\'s bookkeeping. Returns an `operation_id` immediately — poll `GET /api/v1/operations/{id}` for status + final result. The byte-equivalent dashboard route at /api/import/sie/execute backs the same lib helper, so a SIE imported via v1 matches what the dashboard would produce.',
+    'Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as the request body, parses it, checks for duplicate imports by file-hash, and replays every #VER + #TRANS into the company\'s bookkeeping. Returns an `operation_id` immediately: poll `GET /api/v1/operations/{id}` for status + final result. The byte-equivalent dashboard route at /api/import/sie/execute backs the same lib helper, so a SIE imported via v1 matches what the dashboard would produce.',
   useWhen:
     'Migrating bookkeeping data from another system (Fortnox, Bokio, Visma) into Accounted, restoring from a backup .se file, or recreating a period from an archive.',
   doNotUseFor:
-    'Bank transaction CSV/XML imports (use POST /imports/bank). Single-voucher creation (use POST /journal-entries). Importing into a period that already has posted entries — SIE imports run on a fresh period.',
+    'Bank transaction CSV/XML imports (use POST /imports/bank). Single-voucher creation (use POST /journal-entries). Importing into a period that already has posted entries: SIE imports run on a fresh period.',
   pitfalls: [
     'Body content-type must be multipart/form-data with a `file` field carrying the .se / .sie file (or a JSON body with `file_base64` for agents that can\'t do multipart).',
     'File size cap: 50 MB. Larger files require chunking client-side or a future streaming import endpoint.',
-    'Duplicate-file detection is by SHA-256 hash — re-importing the same file returns 409 SIE_IMPORT_DUPLICATE without re-running the import.',
-    'The operation can take 1–5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
+    'Duplicate-file detection is by SHA-256 hash: re-importing the same file returns 409 SIE_IMPORT_DUPLICATE without re-running the import.',
+    'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'BFL 7 kap räkenskapsinformation: once a SIE import completes, the resulting verifikationer are immutable. Cancellation midway is not supported.',
-    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides). By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ — pass options.updateAccountNames=false to keep BAS default names.',
+    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides). By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
     response: {
@@ -129,7 +129,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     // Optional execution flags. Defaults mirror the dashboard's "import all"
-    // behavior. The schema is permissive — agents can omit and get sane
+    // behavior. The schema is permissive: agents can omit and get sane
     // defaults.
     const optionsRaw = formData.get('options')
     let parsedOptions: unknown = {}
@@ -156,7 +156,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
       // OWASP V4.5: reject unknown keys so a future schema-extension
       // (or a careless edit) doesn't silently pass mass-assigned fields
-      // through. Zod's default is to strip unknowns — `.strict()` is
+      // through. Zod's default is to strip unknowns: `.strict()` is
       // belt-and-suspenders.
       .strict()
       .safeParse(parsedOptions)
@@ -173,7 +173,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const options = optionsParse.data
 
-    // Decode + parse + hash. These are all sync / fast — done before
+    // Decode + parse + hash. These are all sync / fast: done before
     // starting the operation row so a malformed file gets a 400 instead of
     // a permanently-failed operation row.
     const buffer = await file.arrayBuffer()
@@ -185,7 +185,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // chew on arbitrary bytes. A valid SIE4 file's first 4 KiB contains at
     // least one of #FLAGGA / #PROGRAM / #FORMAT / #SIETYP at the start
     // of a line. The regex requires line-start anchoring so an HTML
-    // payload with `<!-- #FLAGGA -->` in a comment can't bypass — the
+    // payload with `<!-- #FLAGGA -->` in a comment can't bypass: the
     // round-3 string-contains check was tighter than no-check, but the
     // regex is tighter still.
     const headerSlice = content.slice(0, 4096)
@@ -193,7 +193,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       return v1ErrorResponseFromCode('SIE_PARSE_FAILED', ctx.log, {
         requestId: ctx.requestId,
         details: {
-          reason: 'File does not appear to be SIE4 — no #FLAGGA / #PROGRAM / #FORMAT / #SIETYP header record at the start of a line in the first 4 KiB.',
+          reason: 'File does not appear to be SIE4: no #FLAGGA / #PROGRAM / #FORMAT / #SIETYP header record at the start of a line in the first 4 KiB.',
         },
       })
     }
@@ -211,7 +211,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Duplicate-file check before starting the operation. Log the
     // existing import id + timestamp server-side for operator forensics
-    // (CC7.2 audit trail), but do NOT echo them in the response body —
+    // (CC7.2 audit trail), but do NOT echo them in the response body:
     // symmetry with the bank IDOR fix. The agent learns "this file is
     // already imported" via the error code; the server log carries the
     // context for debugging.
@@ -229,7 +229,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     // Build account mappings server-side from the file's #KONTO records and
-    // any stored per-company overrides — same as the dashboard execute route.
+    // any stored per-company overrides: same as the dashboard execute route.
     // (This route used to pass [] as mappings, which executeSIEImport's
     // mapping-coverage guard rejects for any real file.)
     const { data: storedMappings } = await ctx.supabase
@@ -243,7 +243,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     )
 
     // Reject unmappable files with a clean 400 before starting the operation
-    // row, mirroring the dashboard route — the alternative is a permanently
+    // row, mirroring the dashboard route: the alternative is a permanently
     // failed operation from executeSIEImport's coverage guard.
     const unmapped = mappings.filter((m) => !m.targetAccount)
     if (unmapped.length > 0) {
@@ -260,7 +260,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Start the operation row — caller polls /operations/{id} for status.
+    // Start the operation row: caller polls /operations/{id} for status.
     const op = await startOperation(
       ctx.supabase,
       {

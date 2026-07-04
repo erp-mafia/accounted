@@ -54,7 +54,7 @@ describe('planSupplierPayment', () => {
     }
   })
 
-  describe('without öre absorption (default — preserves legacy behaviour)', () => {
+  describe('without öre absorption (default, preserves legacy behaviour)', () => {
     it('strands the sub-krona remainder as a partial', () => {
       const r = planSupplierPayment(invoice, 11231)
       expect(r.ok).toBe(true)

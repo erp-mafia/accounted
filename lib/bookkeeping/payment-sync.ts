@@ -20,11 +20,11 @@ export function isPaymentSourceType(sourceType: string | null | undefined): bool
 /**
  * Revert the business-level paid status on the invoice or supplier invoice
  * that a payment journal entry was attached to. Used by both reverseEntry()
- * (storno) and the DELETE journal entry route — both paths leave the GL in a
+ * (storno) and the DELETE journal entry route: both paths leave the GL in a
  * consistent state but the invoice's status/paid_amount/paid_at would otherwise
  * stay stuck on "paid".
  *
- * Safe to call with any entry — returns early if source_type is not a payment.
+ * Safe to call with any entry: returns early if source_type is not a payment.
  */
 export async function syncInvoiceStatusFromPaymentEntry(
   supabase: SupabaseClient,
@@ -87,7 +87,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
 
     // Remove THIS invoice's payment row tied to the reversed voucher so a
     // re-match of the same bank line doesn't double-count or trip the unique
-    // index on supplier_invoice_payments. Scoped to the source invoice — a
+    // index on supplier_invoice_payments. Scoped to the source invoice: a
     // batch voucher carries sibling rows for other invoices whose status this
     // call does not restore, so deleting them here would desync paid_amount
     // from the payment rows (PR #666 review, SOC 2 CC6.3). Capture the linked
@@ -133,8 +133,8 @@ export async function syncInvoiceStatusFromPaymentEntry(
 
     if (customerInvoice) {
       // For a partial reversal we take the exact amount from the payment row.
-      // The fallback (full paid_amount) only applies when no payment row exists
-      // — true for invoice_cash_payment, which is only ever booked on a FULL
+      // The fallback (full paid_amount) only applies when no payment row exists:
+      // true for invoice_cash_payment, which is only ever booked on a FULL
       // payment, so reverting the whole paid_amount is correct there. Guarding
       // this keeps a future partial-cash path from over-reverting.
       const paymentAmount = payment?.amount ?? customerInvoice.paid_amount
@@ -144,7 +144,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // never did, leaving it stale (= total) after a reversal so the invoice
       // showed fully unpaid yet stuck on 'paid'. Recompute from total. (The
       // .in('status', …) guard below can leave status/remaining un-updated if
-      // the invoice isn't paid/partially_paid — only reachable on a non-storno
+      // the invoice isn't paid/partially_paid: only reachable on a non-storno
       // path; the payment-row delete + tx release still run, freeing the line.)
       const newRemaining = roundOre(customerInvoice.total - safePaidAmount)
       const revertStatus = newPaidAmount > 0
@@ -169,7 +169,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
     // Remove THIS invoice's payment row tied to the reversed voucher so a
     // re-match of the same bank line doesn't trip the (transaction_id,
     // invoice_id) / (journal_entry_id, invoice_id) unique indexes on
-    // invoice_payments. Scoped to the source invoice — see the supplier
+    // invoice_payments. Scoped to the source invoice: see the supplier
     // branch comment for the batch-voucher rationale.
     const { data: ipRows } = await supabase
       .from('invoice_payments')
@@ -199,7 +199,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
  * Detach any bank transactions still pointing at a reversed payment voucher so
  * the bank line returns to the inbox and becomes re-matchable. Without this, a
  * standalone storno (the reverse route / MCP reverse tool / delete-last-voucher)
- * leaves transactions.journal_entry_id pointing at a reversed JE — the match
+ * leaves transactions.journal_entry_id pointing at a reversed JE: the match
  * POST refuses (invoice no longer matchable once we also fix its status) and the
  * line can't be re-booked or deleted. The match-invoice route already clears the
  * tx when IT stornos a conflicting auto-categorization JE; this covers every
@@ -231,8 +231,8 @@ async function releaseLinkedTransactions(
     .eq('journal_entry_id', entryId)
     .select('id')
   if (byEntryError) {
-    // Best-effort like the rest of the sync — the storno itself already
-    // committed — but a failed release leaves the bank line stuck on a
+    // Best-effort like the rest of the sync: the storno itself already
+    // committed, but a failed release leaves the bank line stuck on a
     // reversed JE, so it must be observable.
     log.error('Failed to release transactions by journal_entry_id', byEntryError, {
       companyId,

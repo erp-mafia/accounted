@@ -142,7 +142,7 @@ function NewCompanyContent() {
 
     // Step 4 (final): create everything via server action.
     // Going through a server action ensures that if the Next.js server is
-    // unreachable, nothing touches Supabase — no ghost companies.
+    // unreachable, nothing touches Supabase: no ghost companies.
     const periodResult = computeFiscalPeriod(mergedSettings)
     if (periodResult.error) {
       toast({

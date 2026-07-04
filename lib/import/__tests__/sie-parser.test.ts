@@ -282,7 +282,7 @@ describe('parseSIEFile', () => {
       const v = result.vouchers[0]
       expect(v.lines).toHaveLength(2)
       expect(v.lines[0]).toMatchObject({ account: '5010', amount: 15000 })
-      // The object list is data, not noise — lossless import (PR5).
+      // The object list is data, not noise: lossless import (PR5).
       expect(v.lines[0].dimensions).toEqual({ '1': 'Kontor' })
       expect(v.lines[1]).toMatchObject({ account: '1930', amount: -15000 })
       // Empty object list {} → no dimensions key at all.
@@ -537,9 +537,9 @@ describe('validateSIEFile', () => {
 
 // --- Fix 2: Windows-1252 encoding detection and decoding ---
 
-describe('detectEncoding — #FORMAT PC8 detection', () => {
+describe('detectEncoding: #FORMAT PC8 detection', () => {
   it('ignores #FORMAT PC8 and detects UTF-8 from byte patterns', () => {
-    // #FORMAT PC8 is unreliable — most cloud software (Fortnox, Bokio etc.)
+    // #FORMAT PC8 is unreliable: most cloud software (Fortnox, Bokio etc.)
     // exports UTF-8 but still declares #FORMAT PC8.
     // UTF-8 encoded: "Företagskonto" → 0xC3 0xB6 for ö
     const text = '#FLAGGA 0\n#FORMAT PC8\n#FNAMN "Företagskonto"\n'
@@ -570,16 +570,16 @@ describe('detectEncoding — #FORMAT PC8 detection', () => {
   })
 })
 
-describe('detectEncoding — range-based discrimination', () => {
+describe('detectEncoding: range-based discrimination', () => {
   it('detects CP437 when bytes are in 0x80-0x9F range only', () => {
-    // 0x84=ä, 0x86=å, 0x94=ö in CP437 — all in 0x80-0x9F
+    // 0x84=ä, 0x86=å, 0x94=ö in CP437: all in 0x80-0x9F
     const buf = new Uint8Array([0x23, 0x84, 0x86, 0x94, 0x84, 0x86])
     const encoding = detectEncoding(buf.buffer)
     expect(encoding).toBe('cp437')
   })
 
   it('detects Win-1252 when bytes are in 0xC0-0xFF range only', () => {
-    // 0xE4=ä, 0xE5=å, 0xF6=ö in Win-1252 — all in 0xC0-0xFF
+    // 0xE4=ä, 0xE5=å, 0xF6=ö in Win-1252: all in 0xC0-0xFF
     const buf = new Uint8Array([0x23, 0xe4, 0xe5, 0xf6, 0xe4, 0xe5])
     const encoding = detectEncoding(buf.buffer)
     expect(encoding).toBe('windows1252')
@@ -588,7 +588,7 @@ describe('detectEncoding — range-based discrimination', () => {
   it('does not double-count UTF-8 continuation bytes as CP437', () => {
     // UTF-8: ä = C3 A4, å = C3 A5, ö = C3 B6
     // Without skipping, 0xA4/0xA5/0xB6 are NOT in CP437 map so no false count,
-    // but 0x84/0x85 ARE in CP437 map — test that C3 84 (Ä in UTF-8) is not
+    // but 0x84/0x85 ARE in CP437 map: test that C3 84 (Ä in UTF-8) is not
     // counted as CP437 0x84 (ä)
     const buf = new Uint8Array([
       0x23, // #
@@ -602,7 +602,7 @@ describe('detectEncoding — range-based discrimination', () => {
     expect(encoding).toBe('utf8')
   })
 })
-describe('detectEncoding — Windows-1252', () => {
+describe('detectEncoding: Windows-1252', () => {
   it('detects Windows-1252 when Swedish chars use Win-1252 byte values', () => {
     // Build a buffer with Windows-1252 encoded Swedish text: "#FNAMN Företag"
     // å=0xE5, ä=0xE4, ö=0xF6 in Windows-1252 (NOT in CP437 map)
@@ -643,7 +643,7 @@ describe('detectEncoding — Windows-1252', () => {
   })
 })
 
-describe('decodeBuffer — Windows-1252', () => {
+describe('decodeBuffer: Windows-1252', () => {
   it('decodes Windows-1252 Swedish characters correctly', () => {
     // "åäö" in Windows-1252 = [0xE5, 0xE4, 0xF6]
     const buf = new Uint8Array([0xe5, 0xe4, 0xf6])
@@ -668,7 +668,7 @@ describe('decodeBuffer — Windows-1252', () => {
 
 // --- Defensive encoding: handle files where the detector picks the wrong encoding ---
 
-describe('detectEncoding — full-buffer scan', () => {
+describe('detectEncoding: full-buffer scan', () => {
   it('detects Win-1252 even when Swedish chars appear past the legacy 4KB sample boundary', () => {
     // Build a buffer where the first 8000 bytes are pure ASCII header + filler,
     // and the Swedish Win-1252 byte appears only at byte 8000+. The old
@@ -676,7 +676,7 @@ describe('detectEncoding — full-buffer scan', () => {
     const filler = new Uint8Array(8000).fill(0x20) // spaces
     const tail = new Uint8Array([
       0x46, 0x4f, 0x52, 0x45, 0x4e, 0x49, 0x4e, 0x47, // FORENING
-      0xd6, // Ö in Win-1252 (0xD6) — invalid lone UTF-8 byte
+      0xd6, // Ö in Win-1252 (0xD6), invalid lone UTF-8 byte
     ])
     const buf = new Uint8Array(filler.length + tail.length)
     buf.set(filler, 0)
@@ -686,9 +686,9 @@ describe('detectEncoding — full-buffer scan', () => {
   })
 })
 
-describe('decodeBuffer — fallback on U+FFFD', () => {
+describe('decodeBuffer: fallback on U+FFFD', () => {
   it('falls back from utf8 to windows1252 when the result has replacement characters', () => {
-    // "F" "Ö" "RENING" in Windows-1252 — Ö is lone byte 0xD6, not valid UTF-8
+    // "F" "Ö" "RENING" in Windows-1252: Ö is lone byte 0xD6, not valid UTF-8
     const buf = new Uint8Array([0x46, 0xd6, 0x52, 0x45, 0x4e, 0x49, 0x4e, 0x47])
     const result = decodeBuffer(buf.buffer, 'utf8')
     expect(result).toBe('FÖRENING')
@@ -701,7 +701,7 @@ describe('decodeBuffer — fallback on U+FFFD', () => {
     const buf = new Uint8Array([0x66, 0x94, 0x72]) // f + ö-cp437 + r
     const result = decodeBuffer(buf.buffer, 'utf8')
     // Either windows1252 or cp437 fallback produces a non-FFFD result; both are
-    // acceptable here since the byte 0x94 is interpretable in both — what matters
+    // acceptable here since the byte 0x94 is interpretable in both: what matters
     // is no U+FFFD leaks through.
     expect(result.includes('\uFFFD')).toBe(false)
   })
@@ -715,7 +715,7 @@ describe('decodeBuffer — fallback on U+FFFD', () => {
 
 // --- Fix 3: Invalid date rejection ---
 
-describe('parseSIEFile — invalid date handling', () => {
+describe('parseSIEFile: invalid date handling', () => {
   it('rejects Feb 30 (auto-rolled dates) in #RAR', () => {
     const content = [
       '#FLAGGA 0',
@@ -792,7 +792,7 @@ describe('parseSIEFile — invalid date handling', () => {
 
 // --- Fix 4: Missing amount handling ---
 
-describe('parseSIEFile — missing amount handling', () => {
+describe('parseSIEFile: missing amount handling', () => {
   it('skips #IB with missing amount and adds warning', () => {
     const content = [
       '#FLAGGA 0',
@@ -878,7 +878,7 @@ describe('parseSIEFile — missing amount handling', () => {
 
 // --- Fix B4: Account collection from transaction data ---
 
-describe('parseSIEFile — account collection from transaction data', () => {
+describe('parseSIEFile: account collection from transaction data', () => {
   it('adds accounts from #TRANS that are missing from #KONTO', () => {
     const content = [
       '#FLAGGA 0',
@@ -955,7 +955,7 @@ describe('parseSIEFile — account collection from transaction data', () => {
   })
 })
 
-describe('parseSIEFile — tab-separated fields (Bollbok export shape)', () => {
+describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
   // Bollbok exports tab-separated SIE files, valid per the SIE 4 spec
   // (separator may be space OR tab). Every record except #RAR uses tabs;
   // #RAR uses spaces. Both 2025 (UTF-8, unquoted #KTYP value) and 2026
@@ -1055,7 +1055,7 @@ describe('parseSIEFile — tab-separated fields (Bollbok export shape)', () => {
     expect(acc2026?.accountType).toBe('T')
   })
 
-  it('parses tab-separated opening-only file (2026 shape) — IB + UB but no vouchers', () => {
+  it('parses tab-separated opening-only file (2026 shape): IB + UB but no vouchers', () => {
     const result = parseSIEFile(BOLLBOK_TAB_2026_SHAPE)
     expect(result.openingBalances).toHaveLength(2)
     expect(result.closingBalances).toHaveLength(2)
@@ -1091,7 +1091,7 @@ describe('parseSIEFile — tab-separated fields (Bollbok export shape)', () => {
   })
 })
 
-describe('parseSIEFile — silent-failure diagnostic warnings', () => {
+describe('parseSIEFile: silent-failure diagnostic warnings', () => {
   it('emits a warning when raw #IB lines exist but none could be parsed', () => {
     // Construct a malformed file where #IB lines are present but unparseable.
     // We do this by referencing #IB records with an explicitly empty account
@@ -1106,7 +1106,7 @@ describe('parseSIEFile — silent-failure diagnostic warnings', () => {
       '#SIETYP 4',
       '#FNAMN "T"',
       '#RAR 0 20240101 20241231',
-      '#IB',  // Bare #IB with no fields — won't parse
+      '#IB',  // Bare #IB with no fields: won't parse
       '#IB',
     ].join('\n')
     const result = parseSIEFile(content)
@@ -1146,7 +1146,7 @@ describe('parseSIEFile — silent-failure diagnostic warnings', () => {
   it('suppresses the aggregate VER warning when a per-record VER error already exists', () => {
     // Bare #VER lines (no fields) emit per-record 'error'-severity issues with
     // tag='VER'. In that case the aggregate "check separator/encoding" hint is
-    // misleading — the parser already pinpointed the real problem — so we
+    // misleading: the parser already pinpointed the real problem: so we
     // suppress it.
     const content = [
       '#FLAGGA 0',
@@ -1189,8 +1189,8 @@ describe('parseSIEFile — silent-failure diagnostic warnings', () => {
   })
 })
 
-describe('getEffectiveOpeningBalances — derive IB from #UB -1 (issue #675)', () => {
-  // Issue #675 (ro66an): some systems export no #IB 0 records — the current
+describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () => {
+  // Issue #675 (ro66an): some systems export no #IB 0 records: the current
   // year's IB exists only via the continuity invariant IB(0) = UB(-1).
   const SIE_NO_IB0 = [
     '#FLAGGA 0',
@@ -1224,7 +1224,7 @@ describe('getEffectiveOpeningBalances — derive IB from #UB -1 (issue #675)', (
     expect(balances.some((b) => b.amount === 9483.08)).toBe(false)
   })
 
-  it('returns explicit #IB 0 untouched when present — #UB -1 is never merged in', () => {
+  it('returns explicit #IB 0 untouched when present: #UB -1 is never merged in', () => {
     const content = [
       SIE_NO_IB0,
       '#IB 0 1930 37400.78',
@@ -1238,7 +1238,7 @@ describe('getEffectiveOpeningBalances — derive IB from #UB -1 (issue #675)', (
     expect(balances.every((b) => b.yearIndex === 0)).toBe(true)
   })
 
-  it('yields to an opening-balance voucher candidate — no derivation (precedence 2 beats 3)', () => {
+  it('yields to an opening-balance voucher candidate: no derivation (precedence 2 beats 3)', () => {
     // The voucher serves as IB during import (tagged source_type
     // 'opening_balance'); deriving from #UB -1 as well would double-count.
     // Also the timezone regression test: the voucher date is a local-time
@@ -1361,7 +1361,7 @@ describe('getEffectiveOpeningBalances — derive IB from #UB -1 (issue #675)', (
         '#FNAMN "Obalans AB"',
         '#RAR 0 20240101 20241231',
         '#KONTO 1930 "Företagskonto"',
-        // Derived IB sums to +37400.78 — prior-year result never allocated
+        // Derived IB sums to +37400.78: prior-year result never allocated
         '#UB -1 1930 37400.78',
       ].join('\n')
       const parsed = parseSIEFile(content)

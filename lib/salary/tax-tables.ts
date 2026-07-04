@@ -6,11 +6,11 @@
  *   - Kommun rates: https://skatteverket.entryscape.net/rowstore/dataset/c67b320b-ffee-4876-b073-dd9236cd2a99
  *
  * Emergency fallback: lib/salary/tax-tables-fallback.ts (generated from
- * Skatteverket's published TXT file — used only if the API is unreachable).
+ * Skatteverket's published TXT file: used only if the API is unreachable).
  *
  * Per Skatteförfarandelagen: Tax withholding must use the correct table/column
  * for each employee based on their folkbokföringskommun. No silent percentage
- * fallback is used — if neither the API nor the local fallback can serve the
+ * fallback is used: if neither the API nor the local fallback can serve the
  * requested data, the lookup throws. This prevents silent under-withholding.
  *
  * Results are cached in-memory per salary run calculation to avoid redundant
@@ -85,7 +85,7 @@ export async function lookupTaxFromApi(
  * Look up the tax amount from pre-loaded rates (pure function, no API call).
  *
  * Throws TaxTableUnavailableError if no rates match the requested table/column.
- * Callers must ensure rates have been loaded via fetchTaxTableRates first —
+ * Callers must ensure rates have been loaded via fetchTaxTableRates first:
  * we deliberately avoid a silent percentage fallback because silent wrong
  * withholding is worse than loud failure.
  */
@@ -117,7 +117,7 @@ export function lookupTaxAmount(
     }
   }
 
-  // Above all brackets — use last bracket (matches Skatteverket's published behavior
+  // Above all brackets: use last bracket (matches Skatteverket's published behavior
   // where the top B-row applies until %-rows take over; we only load B-rows)
   const lastRate = matchingRates[matchingRates.length - 1]
   if (roundedIncome > lastRate.incomeTo) {
@@ -238,12 +238,12 @@ export async function fetchTaxTableRates(
     }
 
     if (allResults.length === 0) {
-      // API responded but has no rows for this year/table — treat like failure
+      // API responded but has no rows for this year/table: treat like failure
       // so the fallback path runs below.
       throw new Error(`Skatteverket API returned no rows for table ${tableNumber} year ${year}`)
     }
 
-    // Parse results — each row has all 6 columns, we extract the requested one
+    // Parse results: each row has all 6 columns, we extract the requested one
     const columnKey = `kolumn ${column}` as keyof typeof allResults[0]
     const rates: TaxTableRate[] = allResults.map(r => ({
       tableYear: year,
@@ -263,7 +263,7 @@ export async function fetchTaxTableRates(
 
     if (fallbackRates) {
       log.warn(
-        `Skatteverket API unavailable (${apiErr}) — using bundled fallback for table ${tableNumber} col ${column} (${year})`
+        `Skatteverket API unavailable (${apiErr}): using bundled fallback for table ${tableNumber} col ${column} (${year})`
       )
       rateCache.set(cacheKey, {
         rates: fallbackRates,

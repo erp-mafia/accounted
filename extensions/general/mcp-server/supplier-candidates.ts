@@ -6,7 +6,7 @@
  * legal-form suffixes ("… AB"), and formatted org numbers ("556677-8899" vs
  * "5566778899"). When resolution fails, the tool surfaces near-miss candidates
  * from these matchers so the agent can retry with supplier_id_override instead
- * of dead-ending — the agent (or the approving human) makes the final call,
+ * of dead-ending: the agent (or the approving human) makes the final call,
  * fuzzy scores never auto-resolve.
  */
 
@@ -62,7 +62,7 @@ function digitsOnly(s: string): string {
 /**
  * Canonical 10-digit key for a Swedish org number. Orgnr is exactly 10
  * significant digits; enskild firma uses the owner's personnummer, which
- * appears in both 10-digit (YYMMDDXXXX) and 12-digit (YYYYMMDDXXXX) forms —
+ * appears in both 10-digit (YYMMDDXXXX) and 12-digit (YYYYMMDDXXXX) forms:
  * the last 10 digits are the same identifier. Anything else is not a Swedish
  * org number and must not fuzzy-match.
  */
@@ -106,7 +106,7 @@ export function findSupplierCandidates(
   for (const s of suppliers) {
     // Canonical-key equality catches formatting variants ('556677-8899' vs
     // '5566778899') and the 10- vs 12-digit personnummer forms of enskild
-    // firma org numbers — none of which the exact .eq() lookup upstream can.
+    // firma org numbers: none of which the exact .eq() lookup upstream can.
     if (extractedOrgKey && s.org_number && orgNumberKey(s.org_number) === extractedOrgKey) {
       scored.push({
         supplier_id: s.id,

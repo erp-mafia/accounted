@@ -13,7 +13,7 @@ export const GET = withRouteContext('rot_rut.requests.list', async (request, ctx
   const { searchParams } = new URL(request.url)
   const typeFilter = searchParams.get('type')
 
-  // Explicit projections — the history list needs identifiers and amounts,
+  // Explicit projections: the history list needs identifiers and amounts,
   // not every column (and never customer ids through the invoice join).
   let query = supabase
     .from('rot_rut_payout_requests')

@@ -5,10 +5,10 @@ import { getActiveCompanyId } from '@/lib/company/context'
 // GET /api/agent/skills
 //
 // Read-only transparency surface for the in-app bookkeeping assistant's domain
-// knowledge ("atoms"). Powers /settings/agent-skills — the companion to
+// knowledge ("atoms"). Powers /settings/agent-skills: the companion to
 // /settings/agent-memory. Memory is what the assistant *learned* about this
 // company (user-editable); skills are the Swedish-accounting expertise it
-// *ships* with — authored in .claude/skills/**/SKILL.md, seeded into
+// *ships* with: authored in .claude/skills/**/SKILL.md, seeded into
 // agent_atom_registry, read-only for users, curated via mcp_exposed.
 //
 // Two shapes off one route:
@@ -19,7 +19,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 //
 // "Active for this company": horizontal atoms are regulatory and shared by
 // every Swedish company, so always active. Vertical/modifier atoms are active
-// only when the composer selected them into this company's agent_profile —
+// only when the composer selected them into this company's agent_profile:
 // others are shown dormant so the user sees both the full library and what's
 // tuned for them. The profile arrays store full ids ("vertical/konsult-it"),
 // matched directly against agent_atom_registry.id (see lib/agent/chat/system-prompt.ts).

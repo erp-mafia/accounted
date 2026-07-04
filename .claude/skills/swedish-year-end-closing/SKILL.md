@@ -18,13 +18,13 @@ This skill provides everything needed to perform or implement a complete Swedish
 
 This skill contains detailed reference material split by topic. Read the relevant file(s) based on the user's question:
 
-- **`references/legal-framework.md`** — BFL, ÅRL, K1/K2/K3 framework rules, entity obligations, större/mindre företag thresholds, 2026 K2 changes
-- **`references/closing-process.md`** — Complete 8-phase closing process with BAS account numbers: avstämningar, periodiseringar, avskrivningar, lagervärdering, obeskattade reserver, avsättningar/skatt, equity handling, result closing
-- **`references/journal-entries.md`** — All specific bokslutstransaktioner with debit/credit pairs for software implementation
-- **`references/tax-calculations.md`** — Bolagsskatt for AB, egenavgifter/räntefördelning/expansionsfond/periodiseringsfond for enskild firma, schablonintäkt, schablonavdrag
-- **`references/reporting-and-filing.md`** — Årsredovisning structure, NE-bilaga, filing deadlines, penalties, Bolagsverket/Skatteverket requirements, SIE4 export, audit thresholds
-- **`references/k2-vs-k3.md`** — Implementation differences: component depreciation, deferred tax, intangibles, leasing, format restrictions, account visibility
-- **`references/pitfalls-and-rates.md`** — Common mistakes, compliance traps, kontrollbalansräkning, and reference rate table (2025/2026)
+- **`references/legal-framework.md`**: BFL, ÅRL, K1/K2/K3 framework rules, entity obligations, större/mindre företag thresholds, 2026 K2 changes
+- **`references/closing-process.md`**: Complete 8-phase closing process with BAS account numbers: avstämningar, periodiseringar, avskrivningar, lagervärdering, obeskattade reserver, avsättningar/skatt, equity handling, result closing
+- **`references/journal-entries.md`**: All specific bokslutstransaktioner with debit/credit pairs for software implementation
+- **`references/tax-calculations.md`**: Bolagsskatt for AB, egenavgifter/räntefördelning/expansionsfond/periodiseringsfond for enskild firma, schablonintäkt, schablonavdrag
+- **`references/reporting-and-filing.md`**: Årsredovisning structure, NE-bilaga, filing deadlines, penalties, Bolagsverket/Skatteverket requirements, SIE4 export, audit thresholds
+- **`references/k2-vs-k3.md`**: Implementation differences: component depreciation, deferred tax, intangibles, leasing, format restrictions, account visibility
+- **`references/pitfalls-and-rates.md`**: Common mistakes, compliance traps, kontrollbalansräkning, and reference rate table (2025/2026)
 
 ## How to use this skill
 

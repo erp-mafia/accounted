@@ -13,7 +13,7 @@
  *      the token when one is supplied.
  *   4. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
- *      supported transparently — the URL is the source of truth.
+ *      supported transparently: the URL is the source of truth.
  *   5. Resolves `Idempotency-Key` (header) and replays cached responses.
  *   6. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
  *   7. Invokes the handler with a typed RouteContext.
@@ -46,7 +46,7 @@ import {
 // Per CLAUDE.md: any route that emits events via eventBus must call
 // ensureInitialized() at module level to wire extension event handlers
 // (email, cloud-backup, push-notifications, etc.). Calling it here in the
-// wrapper guarantees every v1 route gets the init at import time — a single
+// wrapper guarantees every v1 route gets the init at import time: a single
 // source of truth so future routes can't forget. The function itself is
 // idempotent (guarded by a module-level boolean).
 ensureInitialized()
@@ -68,7 +68,7 @@ const DRY_RUN_HEADER = 'X-Dry-Run'
 const REQUIRES_IDEMPOTENCY = new Set(['POST', 'PATCH', 'DELETE'])
 
 export interface ApiV1Context {
-  /** Stable id for this HTTP request — appears in logs, error envelope, X-Request-Id. */
+  /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id. */
   requestId: string
   /** Logger pre-bound with { requestId, userId, companyId?, operation, apiKeyId? }. */
   log: Logger
@@ -81,7 +81,7 @@ export interface ApiV1Context {
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
   /**
-   * test|live. Test keys are simulation-only — the wrapper forces `dryRun` on
+   * test|live. Test keys are simulation-only: the wrapper forces `dryRun` on
    * for every write, so handlers never need to special-case `mode`; they just
    * honor `dryRun` as usual.
    */
@@ -104,7 +104,7 @@ interface ApiV1Options {
   /** Override the required scope (e.g. for ad-hoc endpoints not in the catalogue). */
   requireScope?: ApiKeyScope
   /**
-   * When true, idempotency is enforced — POST/PATCH/DELETE without an
+   * When true, idempotency is enforced: POST/PATCH/DELETE without an
    * `Idempotency-Key` header return 400. Default false; can be flipped on
    * per-route once the integrator audience is sophisticated enough.
    */
@@ -130,7 +130,7 @@ function generateRequestId(): string {
  * enforced (no service-role privilege escalation) so even an accidental DB
  * call from a public handler is constrained to anon-accessible rows.
  *
- * Fails closed at first-call if the required env vars are missing — better
+ * Fails closed at first-call if the required env vars are missing: better
  * to surface the misconfiguration on the first request than silently 500
  * deeper in the handler.
  */
@@ -185,8 +185,8 @@ function extractForensicContext(request: Request, log: Logger): { ip: string | u
   if (raw && !ip) {
     // x-forwarded-for / x-real-ip carried a non-empty payload we couldn't parse.
     // Surface as a warn so spoofed / unexpected proxy values are visible in
-    // security monitoring instead of silently dropped. Never log the raw value
-    // — that would defeat the truncation step.
+    // security monitoring instead of silently dropped. Never log the raw value:
+    // that would defeat the truncation step.
     log.warn('unparseable forwarded-for header dropped', { headerLength: raw.length })
   }
   const userAgent = request.headers.get('user-agent') ?? undefined
@@ -202,7 +202,7 @@ function isDryRun(request: Request, url: URL): boolean {
 
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
   // We need the body to hash it, but the handler also needs it. Read from a
-  // CLONE for the hash and pass the original through to the handler — that
+  // CLONE for the hash and pass the original through to the handler: that
   // way the handler's `await request.json()` still works regardless of how
   // the runtime implements stream teeing.
   const reader = request.clone()
@@ -250,7 +250,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
       // 2. Public endpoints: invoke handler with an anon context. If a Bearer
       //    token IS supplied we opportunistically validate it so rate-limiting
-      //    and key attribution are applied — but a missing or invalid token
+      //    and key attribution are applied, but a missing or invalid token
       //    does NOT block the request (the route is, by definition, public).
       //    Falling back to the anon client when unauthenticated keeps the
       //    least-privilege guarantee: an accidental DB call from a public
@@ -283,7 +283,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               supabase: createServiceClientNoCookies(),
             }
           }
-          // Invalid token on a public route is silently downgraded to anon —
+          // Invalid token on a public route is silently downgraded to anon:
           // do not surface 401 since the route doesn't require auth at all.
         }
         const response = await handler(request, publicCtx, params)
@@ -326,7 +326,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // 5. Resolve URL companyId and verify access.
       //
       // Next.js 16 invokes a route handler with `{ params: undefined }` for a
-      // STATIC route (no `[segment]` in the path) — see app-route module.js
+      // STATIC route (no `[segment]` in the path): see app-route module.js
       // `handlerContext = { params: context.params ? ... : undefined }`. The
       // only authenticated static route on this surface is `/api/v1/companies`,
       // so awaiting `params.params` blindly null-derefs there (`undefined` has
@@ -373,7 +373,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // Test keys are simulation-only: every write is forced to dry-run so
       // nothing persists (the credential bakes in `?dry_run=true`). A mutating
       // endpoint that can't be simulated (dryRunSupported=false, or unregistered)
-      // would otherwise write for real — block it outright so a test key can
+      // would otherwise write for real: block it outright so a test key can
       // never touch real data. Reads pass through unchanged (real data, no write).
       let forceDryRun = false
       if (auth.mode === 'test' && isMutation) {
@@ -496,7 +496,7 @@ function stampHeaders(response: Response, requestId: string): Response {
   if (!response.headers.get(API_V1_VERSION_HEADER)) {
     response.headers.set(API_V1_VERSION_HEADER, API_V1_VERSION)
   }
-  // Apply security headers to every wrapped v1 response — same set as the
+  // Apply security headers to every wrapped v1 response: same set as the
   // public discovery routes PLUS X-Robots-Tag noai so authenticated payloads
   // are excluded from AI training sets (Claude, ChatGPT, Perplexity, Google
   // -Extended respect this; others won't).

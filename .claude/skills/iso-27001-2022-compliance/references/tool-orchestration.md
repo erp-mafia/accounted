@@ -1,4 +1,4 @@
-# Tool Orchestration — Checkov, Trivy, Steampipe
+# Tool Orchestration: Checkov, Trivy, Steampipe
 
 The skill must not reimplement what mature open-source security tools already do. Wrap them. The three primary engines together cover the full repository-and-runtime surface for ISO 27001:2022.
 
@@ -8,7 +8,7 @@ The skill must not reimplement what mature open-source security tools already do
 | Trivy | SCA, container, secret scanning | Filesystem, container images, dependency manifests | JSON / SARIF / table |
 | Steampipe | Live runtime querying | Cloud APIs, IdP APIs, GitHub API | SQL result sets |
 
-Checkov and Trivy answer "what does the code say?" Steampipe answers "what is actually deployed?" Both questions matter — IaC drift means the code may be compliant while production isn't.
+Checkov and Trivy answer "what does the code say?" Steampipe answers "what is actually deployed?" Both questions matter: IaC drift means the code may be compliant while production isn't.
 
 ---
 
@@ -48,7 +48,7 @@ The wrapper script:
 
 ### Custom policies for ISO-specific patterns
 
-Checkov supports custom policies in YAML for simple attribute checks and Python for graph-based checks. Example custom policy for A.8.24 — ensuring all EBS volumes are encrypted:
+Checkov supports custom policies in YAML for simple attribute checks and Python for graph-based checks. Example custom policy for A.8.24, ensuring all EBS volumes are encrypted:
 
 ```yaml
 metadata:
@@ -157,13 +157,13 @@ SBOM generation directly evidences A.5.21 (Managing information security in the 
 ## Steampipe
 
 ### Why
-Checkov and Trivy operate on what's in the repo. Steampipe queries what's actually deployed. Drift between IaC and runtime is itself a Clause 8.1 (Operational planning) finding — and runtime queries are the only way to detect it.
+Checkov and Trivy operate on what's in the repo. Steampipe queries what's actually deployed. Drift between IaC and runtime is itself a Clause 8.1 (Operational planning) finding, and runtime queries are the only way to detect it.
 
 Steampipe uses a Postgres-compatible SQL interface over plugins for AWS, Azure, GCP, GitHub, Microsoft Entra ID, Google Workspace, Okta, Slack, and dozens more.
 
 ### Key queries for ISO 27001 evidence
 
-#### A.8.2 — Privileged access rights
+#### A.8.2: Privileged access rights
 ```sql
 -- Find IAM users with admin policies attached
 SELECT u.name, p.policy_name
@@ -173,7 +173,7 @@ JOIN aws_iam_policy p ON p.arn = a.policy_arn
 WHERE p.policy_name = 'AdministratorAccess';
 ```
 
-#### A.5.18 — Access rights review
+#### A.5.18: Access rights review
 ```sql
 -- Find IAM users who haven't logged in for 90+ days
 SELECT name, password_last_used
@@ -182,7 +182,7 @@ WHERE password_last_used < now() - interval '90 days'
    OR password_last_used IS NULL;
 ```
 
-#### A.8.5 — Secure authentication
+#### A.8.5: Secure authentication
 ```sql
 -- Find IAM users without MFA
 SELECT name, mfa_enabled
@@ -191,7 +191,7 @@ WHERE mfa_enabled = false
   AND password_enabled = true;
 ```
 
-#### A.5.15 — Access control (Microsoft Entra ID)
+#### A.5.15: Access control (Microsoft Entra ID)
 ```sql
 -- Find guest users with privileged role assignments
 SELECT u.display_name, r.role_definition_name
@@ -201,7 +201,7 @@ JOIN azuread_directory_role r ON r.id = a.role_definition_id
 WHERE u.user_type = 'Guest';
 ```
 
-#### A.8.4 — Source code access
+#### A.8.4: Source code access
 ```sql
 -- Find GitHub repos without branch protection on main
 SELECT full_name, default_branch
@@ -211,7 +211,7 @@ LEFT JOIN github_branch_protection b ON b.repository_full_name = r.full_name
 WHERE b.repository_full_name IS NULL;
 ```
 
-#### A.8.15 — Logging
+#### A.8.15: Logging
 ```sql
 -- Find AWS regions where CloudTrail is not enabled
 SELECT region
@@ -223,7 +223,7 @@ WHERE region NOT IN (
 
 ### Continuous evidence generation
 
-Steampipe queries can be wrapped in [Powerpipe](https://powerpipe.io/) dashboards/benchmarks for continuous compliance evidence. Schedule them daily or hourly to maintain "operational effectiveness" evidence required for SOC 2 Type II — which goes beyond ISO 27001's point-in-time stance but is often required in dual-audit scenarios.
+Steampipe queries can be wrapped in [Powerpipe](https://powerpipe.io/) dashboards/benchmarks for continuous compliance evidence. Schedule them daily or hourly to maintain "operational effectiveness" evidence required for SOC 2 Type II, which goes beyond ISO 27001's point-in-time stance but is often required in dual-audit scenarios.
 
 ---
 

@@ -8,7 +8,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // ──────────────────────────────────────────────────────────────────────
 
 async function insertWebhook(params: {
-  // userId kept in the signature for parity with seedCompany's return — the
+  // userId kept in the signature for parity with seedCompany's return: the
   // webhooks table itself has no user_id column (see route comment in
   // app/api/v1/companies/[companyId]/webhooks/route.ts).
   userId: string
@@ -74,7 +74,7 @@ async function getDeliveryStatus(id: string): Promise<string | null> {
 // make sure the function only returns rows we created, which we do by
 // asserting on ids.
 
-describe('claim_due_webhook_deliveries.pg — atomic SKIP LOCKED claim', () => {
+describe('claim_due_webhook_deliveries.pg: atomic SKIP LOCKED claim', () => {
   it('claims a pending row that is due', async () => {
     const { userId, companyId } = await seedCompany()
     const webhookId = await insertWebhook({ userId, companyId })
@@ -92,7 +92,7 @@ describe('claim_due_webhook_deliveries.pg — atomic SKIP LOCKED claim', () => {
   it('claims a failed row that has reached its retry deadline', async () => {
     const { userId, companyId } = await seedCompany()
     const webhookId = await insertWebhook({ userId, companyId })
-    // next_attempt_at in the past — retry due.
+    // next_attempt_at in the past: retry due.
     const deliveryId = await insertDelivery({
       webhookId,
       companyId,
@@ -132,7 +132,7 @@ describe('claim_due_webhook_deliveries.pg — atomic SKIP LOCKED claim', () => {
 
   it('skips dangling rows (webhook_id IS NULL)', async () => {
     const { companyId } = await seedCompany()
-    // webhook deleted between enqueue and dispatch — FK ON DELETE SET NULL.
+    // webhook deleted between enqueue and dispatch: FK ON DELETE SET NULL.
     const deliveryId = await insertDelivery({
       webhookId: null,
       companyId,
@@ -234,7 +234,7 @@ describe('claim_due_webhook_deliveries.pg — atomic SKIP LOCKED claim', () => {
 
   // SKIP LOCKED is the entire point of this migration. Two transactions
   // calling the function at the same moment must not both see the same
-  // row — the row locked by the first caller is invisible to the second,
+  // row: the row locked by the first caller is invisible to the second,
   // closing the duplicate-delivery window the old SELECT-then-UPDATE-
   // intersect pattern documented as load-bearing.
   it('SKIP LOCKED: a concurrent caller does not see rows locked by an in-flight transaction', async () => {

@@ -18,7 +18,7 @@ export function computeSRUCode(accountNumber: string): string | null {
   const num = accountNumber
 
   // ---------------------------------------------------------------------------
-  // NE form codes (enskild firma) — fields 7310-7325
+  // NE form codes (enskild firma): fields 7310-7325
   // ---------------------------------------------------------------------------
 
   // NE: R1 - Försäljning med moms (3000-3499 excl 3100)
@@ -27,7 +27,7 @@ export function computeSRUCode(accountNumber: string): string | null {
   // NE: R2 - Momsfria intäkter (3100, 3900, 3970-3980)
   if (num === '3100' || num === '3900' || (num >= '3970' && num <= '3980')) return '7311'
 
-  // NE: R3 - Bil/bostadsförmån (3200-3299) — overlaps with R1, R1 wins
+  // NE: R3 - Bil/bostadsförmån (3200-3299): overlaps with R1, R1 wins
   if (num >= '3200' && num <= '3299') return '7312'
 
   // NE: R4 - Ränteintäkter (8310-8330)
@@ -52,7 +52,7 @@ export function computeSRUCode(accountNumber: string): string | null {
   if (num >= '7700' && num <= '7899' && num !== '7820') return '7325'
 
   // ---------------------------------------------------------------------------
-  // INK2 form codes (aktiebolag) — fields 7201-7380
+  // INK2 form codes (aktiebolag): fields 7201-7380
   // ---------------------------------------------------------------------------
 
   // INK2: Immateriella anläggningstillgångar (1000-1099)

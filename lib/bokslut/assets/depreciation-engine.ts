@@ -42,19 +42,18 @@ export interface DepreciationProposal {
  * Compute avskrivning för en enskild tillgång under en given fiscal period.
  *
  * Method dispatch:
- *   * 'linear' (planenlig raklinje) — pro-rates by day-overlap of the
+ *   * 'linear' (planenlig raklinje): pro-rates by day-overlap of the
  *     period with the asset's active life and the disposal cutoff. Annual
  *     amount = (acquisition_cost − salvage_value) × 12 / useful_life_months.
- *   * 'declining_balance_30' (räkenskapsenlig huvudregel, IL 18 kap 13§) —
- *     30% of the current book value. No annual pro-ration: K2 10.23 says
+ *   * 'declining_balance_30' (räkenskapsenlig huvudregel, IL 18 kap 13§):  *     30% of the current book value. No annual pro-ration: K2 10.23 says
  *     "full annual amount regardless of partial year" when the asset is
  *     put into use, mirrored in Swedish tax practice for IL 18 kap. Disposal
  *     in-period still zeros out: we return 0 if disposed before the period
  *     and the full 30% if disposed during, because the disposal entry itself
  *     takes care of the asset's remaining book value.
- *   * 'declining_balance_20' (kompletteringsregel, IL 18 kap 17§) — 20% of
+ *   * 'declining_balance_20' (kompletteringsregel, IL 18 kap 17§): 20% of
  *     book value. Same proration semantics as 30%.
- *   * 'restvardesavskrivning_25' (IL 18 kap 13§ st.3) — 25% of
+ *   * 'restvardesavskrivning_25' (IL 18 kap 13§ st.3): 25% of
  *     max(0, currentBookValue − restvarde_target). Floors at the target so
  *     the asset is never charged below restvärde. Same proration semantics
  *     as the other declining methods.
@@ -80,7 +79,7 @@ export function computeAnnualDepreciation(
   // depreciated linearly on its own life (with the same pro-ration logic
   // as the asset-level linear method) and the per-component amounts are
   // summed. The asset's `depreciation_method` and `salvage_value` are
-  // ignored — components carry their own salvage_value and life.
+  // ignored: components carry their own salvage_value and life.
   if (Array.isArray(asset.k3_components) && asset.k3_components.length > 0) {
     const result = computeComponentDepreciation(asset, fiscalPeriod)
     return { amount: result.amount, proRated: result.proRated }
@@ -94,14 +93,14 @@ export function computeAnnualDepreciation(
   }
 
   // Declining-balance methods (huvudregel 30%, kompletteringsregel 20%,
-  // restvärde 25%) do NOT pro-rate annually — full-year amount applies
+  // restvärde 25%) do NOT pro-rate annually: full-year amount applies
   // regardless of acquisition month. Disposal during the period is handled
   // by disposeAsset(); we still charge the full annual amount because the
   // disposal entry zeroes out the residual.
   const currentBookValue = acquisitionCost - priorAccumulated
 
   // Already fully depreciated (linear-style accumulated overshoot) or
-  // negative — defensive guard.
+  // negative: defensive guard.
   if (currentBookValue <= 0.005) {
     return { amount: 0, proRated: false }
   }
@@ -115,14 +114,14 @@ export function computeAnnualDepreciation(
     const target = Number(asset.restvarde_target ?? 0)
     const depreciable = currentBookValue - target
     if (depreciable <= 0.005) {
-      // Already at or below restvärde — never deplete past the floor.
+      // Already at or below restvärde: never deplete past the floor.
       return { amount: 0, proRated: false }
     }
     annualAmount = depreciable * RESTVARDE_RATE_25
   }
 
   // Monetary rounding per CLAUDE.md guard-rail #9. Schedules store NUMERIC
-  // values, but the journal entry rounds to whole kronor downstream — match
+  // values, but the journal entry rounds to whole kronor downstream: match
   // the linear branch which rounds to integer kronor for the entry amount.
   return {
     amount: Math.round(annualAmount),
@@ -176,10 +175,10 @@ export interface ComponentDepreciationResult {
   amount: number
   /** True if any component was pro-rated (mid-year acquisition or disposal). */
   proRated: boolean
-  /** Per-component breakdown — names mirror `asset.k3_components[*].name`.
+  /** Per-component breakdown: names mirror `asset.k3_components[*].name`.
    *  Each amount is rounded to whole kronor; the total `amount` is the sum
    *  of these rounded values (so the breakdown reconciles exactly with the
-   *  total — no hidden öre). */
+   *  total: no hidden öre). */
   perComponent: { name: string; amount: number }[]
 }
 
@@ -190,7 +189,7 @@ export interface ComponentDepreciationResult {
  * `cost − salvage_value` (salvage defaults to 0 when omitted), and the
  * annual amount is `depreciableBase × 12 / useful_life_months`. The
  * pro-ration window is the overlap between the period and the asset's
- * active life — components share the same acquisition_date and disposal
+ * active life: components share the same acquisition_date and disposal
  * date as the parent asset, because BFNAR 2012:1 treats them as a single
  * accounting unit for acquisition / disposal purposes; only the depreciation
  * schedule is split.
@@ -311,7 +310,7 @@ export async function proposeAnnualPostings(
   )
 
   // Sum of all prior posted depreciation per asset. This is the accumulated
-  // depreciation on the books before this period — does not yet count this
+  // depreciation on the books before this period: does not yet count this
   // period's proposal or any unposted current-period draft.
   const priorAccumulated = new Map<string, number>()
   for (const row of (priorSchedulesResult.data ?? []) as Array<{
@@ -362,7 +361,7 @@ export async function proposeAnnualPostings(
  * independently and so the depreciation_schedules row links one-to-one to
  * its journal entry.
  *
- * Skips assets that already have a posted schedule för this period — the
+ * Skips assets that already have a posted schedule för this period: the
  * unique constraint would block them, and silently skipping is more useful
  * than throwing. Returns the list of (asset_id, schedule, entry) tuples.
  */
@@ -447,7 +446,7 @@ export async function commitAnnualPostings(
 }
 
 // ============================================================
-// Date helpers — keep pure so the unit tests don't need to mock anything.
+// Date helpers: keep pure so the unit tests don't need to mock anything.
 // ============================================================
 
 function isoToDate(iso: string): Date {

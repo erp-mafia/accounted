@@ -25,7 +25,7 @@ const PostSchema = z.object({
   // Match the DB CHECK lengths exactly so a payload that would fail at the
   // storage layer instead returns a clean 400 here. Free-text fields are
   // rendered verbatim into the årsredovisning PDF, so we strip ASCII
-  // control bytes (NUL, ESC, etc.) at the schema layer — otherwise a
+  // control bytes (NUL, ESC, etc.) at the schema layer: otherwise a
   // tampered payload could corrupt PDF output or hide content from auditors.
   description: sanitizedText(4000).nullable().optional(),
   important_events: sanitizedText(4000).nullable().optional(),
@@ -48,7 +48,7 @@ const PostSchema = z.object({
   // Disclosure fields per ÅRL 5:13-15 § + BFNAR koncernförhållanden. All
   // optional; null clears the override and the builder falls back to
   // boilerplate ("Inga." / "Inga skulder förfaller efter mer än fem år.").
-  // Cap at 1 trillion SEK — well above any realistic Swedish company's
+  // Cap at 1 trillion SEK, well above any realistic Swedish company's
   // long-term debt (Volvo Group ~500 G SEK), prevents overflow in PDF
   // formatting and downstream numeric handling.
   long_term_debt_over_five_years: z
@@ -62,7 +62,7 @@ const PostSchema = z.object({
   parent_company_name: sanitizedText(200).nullable().optional(),
   // Swedish organisationsnummer NNNNNN-NNNN. Third digit ≥ 2 distinguishes
   // legal-entity org numbers from personnummer (whose third digit forms part
-  // of a month, 0-1). ÅRL 5:13–15 disclosure is about parent legal entities,
+  // of a month, 0-1). ÅRL 5:13-15 disclosure is about parent legal entities,
   // so personnummer-shaped values are out of scope and a GDPR Art.5(1)(c)
   // data-minimisation concern if persisted. Empty string clears the override.
   parent_company_org_number: z
@@ -112,9 +112,9 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     try {
       // Verify the fiscal period belongs to the authenticated company before
-      // writing — defense-in-depth alongside RLS, gives a cleaner 404 than
+      // writing: defense-in-depth alongside RLS, gives a cleaner 404 than
       // the RLS rejection envelope. Also refuse mutations on locked/closed
-      // periods (BFL 5 kap 5 § — räkenskapsinformation immutability).
+      // periods (BFL 5 kap 5 §, räkenskapsinformation immutability).
       const { data: period } = await supabase
         .from('fiscal_periods')
         .select('id, is_closed, locked_at, closing_entry_id')

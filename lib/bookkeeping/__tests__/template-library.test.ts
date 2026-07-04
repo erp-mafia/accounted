@@ -249,8 +249,8 @@ describe('applyTemplate on shapes the converter rejects', () => {
 describe('library mall books its literal accounts (regression)', () => {
   // A user's "Inbetalning från kund" mall is D 1930 (bank) / K 1510
   // (kundfordran). The QuickReview fast path used to reduce a library template
-  // to a category + one account_override and book D 6991 / K 1930 — or, with a
-  // VAT line, D 1930 / K 1930 / K 2611 — silently dropping the chosen accounts.
+  // to a category + one account_override and book D 6991 / K 1930: or, with a
+  // VAT line, D 1930 / K 1930 / K 2611: silently dropping the chosen accounts.
   // The transaction picker now routes EVERY library template through the
   // journal-entry editor, whose lines come from applyTemplate. These tests pin
   // the guarantee the editor path relies on: applyTemplate books exactly the
@@ -275,7 +275,7 @@ describe('library mall books its literal accounts (regression)', () => {
     expect(accounts).not.toContain('2611')
   })
 
-  it('is blind to business/settlement tagging — same accounts either way', () => {
+  it('is blind to business/settlement tagging: same accounts either way', () => {
     // The old converter keyed "direction" (and thus the whole booking) off which
     // leg was tagged business vs settlement. applyTemplate must not: swapping the
     // tags leaves the same accounts on the same sides.

@@ -82,7 +82,7 @@ export async function generateSIEExport(
       .range(from, to)
   )
 
-  // Fetch all posted journal entries — paginated to avoid truncation.
+  // Fetch all posted journal entries: paginated to avoid truncation.
   // The previous nested `select('*, lines:journal_entry_lines(*)')` hit
   // PostgREST's response-row ceiling on the embedded resource and silently
   // truncated large periods (~30 vouchers). Fetch entries and lines as two
@@ -103,7 +103,7 @@ export async function generateSIEExport(
     // Stable TOTAL order: voucher_series + voucher_number is unique per
     // company+period, so fetchAllRows paging can't duplicate or skip a voucher
     // across the 1000-row boundary on large years (voucher_number alone is not
-    // unique across series). dedupeBy is defense-in-depth — see fetch-all.ts.
+    // unique across series). dedupeBy is defense-in-depth: see fetch-all.ts.
     return q
       .order('voucher_series', { ascending: true })
       .order('voucher_number', { ascending: true })
@@ -148,7 +148,7 @@ export async function generateSIEExport(
   // Fetch the dimension registry (#DIM/#UNDERDIM + #OBJEKT source).
   // Deliberately NO is_active filter: lines referencing archived codes still
   // serialize into #TRANS object lists, and Visma rejects files whose #TRANS
-  // references an undeclared #OBJEKT (plan §5 latent bug #2 — the legacy
+  // references an undeclared #OBJEKT (plan §5 latent bug #2: the legacy
   // cost_centers/projects read filtered is_active=true and dropped them).
   const { data: registryDimensions } = await supabase
     .from('dimensions')
@@ -205,9 +205,9 @@ export async function generateSIEExport(
 
   // === Opening balances (IB) ===
   // Routes through getOpeningBalances() so we get the same fallback as trial
-  // balance / balance sheet: when opening_balance_entry_id is NULL — which is
+  // balance / balance sheet: when opening_balance_entry_id is NULL: which is
   // expected after continuation SIE imports (sie-import.ts skips creating an
-  // IB entry once prior posted activity exists) — the compute_prior_opening_
+  // IB entry once prior posted activity exists), the compute_prior_opening_
   // balances RPC derives IB from earlier journal lines instead of silently
   // emitting zero #IB records and producing wrong #UB values.
   const openingBalancesByAccount = new Map<string, number>()
@@ -247,7 +247,7 @@ export async function generateSIEExport(
         ? ` "${escapeQuotes(line.line_description)}"`
         : ''
 
-      // Build dimension object list for #TRANS from the jsonb map — the
+      // Build dimension object list for #TRANS from the jsonb map: the
       // single source of truth. The legacy cost_center/project columns are
       // derived mirrors of keys '1'/'6' and are no longer read here.
       const dimParts = lineDimensionEntries(line.dimensions).map(
@@ -339,8 +339,8 @@ interface RegistryValue {
 
 /**
  * SIE reserved dimension numbers. Used to synthesize a #DIM declaration for
- * dimension numbers referenced by exported lines but absent from the registry
- * — free-text writers can still mint arbitrary numbers until the write-path
+ * dimension numbers referenced by exported lines but absent from the registry:
+ * free-text writers can still mint arbitrary numbers until the write-path
  * PR lands, and an undeclared dimension would make importers reject the file.
  * Dim 2 (kostnadsbärare) is a reserved sub-dimension of 1 → #UNDERDIM.
  */
@@ -358,7 +358,7 @@ export const SIE_RESERVED_DIMENSIONS: Record<number, { name: string; parent?: nu
  * Normalize a line's jsonb dimensions map ({"1":"KS01","6":"P001"}) into
  * [dimNo, code] entries sorted by numeric dimension number. Defensive on
  * shape: non-numeric keys and blank codes are skipped, and duplicate keys
- * ('01' vs '1') collapse onto the canonical number with last-write-wins —
+ * ('01' vs '1') collapse onto the canonical number with last-write-wins:
  * mirroring normalizeLineDimensions in lib/bookkeeping/dimension-resolver.ts.
  */
 function lineDimensionEntries(dimensions: unknown): Array<[number, string]> {
@@ -382,7 +382,7 @@ function lineDimensionEntries(dimensions: unknown): Array<[number, string]> {
  * the exported journal lines.
  *
  * Completeness guarantee: every (dimNo, code) pair referenced by any exported
- * line gets an #OBJEKT record — registry rows contribute their name, orphan
+ * line gets an #OBJEKT record: registry rows contribute their name, orphan
  * codes (no registry row) synthesize name = code, and dimension numbers with
  * no registry row synthesize a #DIM from the SIE reserved-number seed. A file
  * whose #TRANS references an undeclared object is rejected by Visma et al.
@@ -400,7 +400,7 @@ function buildDimensionSection(
   // dimNoById is skipped by construction (the `continue` below). Both fetches
   // are scoped to the same company_id (query filter + RLS), so every
   // dimension_id in registryValues should resolve; a miss can only mean the
-  // dimension row vanished mid-export — skipping just omits its #OBJEKT,
+  // dimension row vanished mid-export: skipping just omits its #OBJEKT,
   // never leaks a foreign company's data into the file.
   const dimsByNo = new Map<number, RegistryDimension>()
   const dimNoById = new Map<string, number>()
@@ -447,7 +447,7 @@ function buildDimensionSection(
     return { name: reserved?.name ?? `Dimension ${dimNo}`, parent: reserved?.parent ?? null }
   }
 
-  // An #UNDERDIM must not reference an undeclared parent — pull parents into
+  // An #UNDERDIM must not reference an undeclared parent: pull parents into
   // the emit set transitively (the has-guard also breaks registry cycles).
   const pending = [...emitDimNos]
   while (pending.length > 0) {
@@ -469,7 +469,7 @@ function buildDimensionSection(
   // Two passes: every root #DIM first (sorted by sie_dim_no), then every
   // #UNDERDIM (sorted by sie_dim_no). SIE4 requires a parent to be declared
   // before any #UNDERDIM referencing it, and a child may carry a LOWER
-  // number than its parent — so a single numeric sort is not enough.
+  // number than its parent, so a single numeric sort is not enough.
   for (const dimNo of sortedDimNos) {
     const { name, parent } = declarationFor(dimNo)
     if (parent !== null) continue
@@ -506,7 +506,7 @@ function buildDimensionSection(
   }
 
   // Operators must know the file contains synthesized placeholder names
-  // (BFNAR 2013:2 behandlingshistorik) — one structured warning listing the
+  // (BFNAR 2013:2 behandlingshistorik): one structured warning listing the
   // pairs; silent when the registry covered everything.
   if (orphanObjects.length > 0 || synthesizedDimNos.length > 0) {
     log.warn('SIE export synthesized placeholder dimension declarations', {

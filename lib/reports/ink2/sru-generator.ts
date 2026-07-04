@@ -175,7 +175,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push(`#UPPGIFT 7011 ${declaration.ink2['7011']}`)
   lines.push(`#UPPGIFT 7012 ${declaration.ink2['7012']}`)
 
-  // All INK2R fields in canonical Skatteverket order — emit non-zero values only
+  // All INK2R fields in canonical Skatteverket order: emit non-zero values only
   const ink2rCodes: INK2RSRUCode[] = [
     ...INK2R_ASSET_CODES,
     ...INK2R_EQUITY_LIABILITY_CODES,
@@ -199,7 +199,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push(`#UPPGIFT 7011 ${declaration.ink2s['7011']}`)
   lines.push(`#UPPGIFT 7012 ${declaration.ink2s['7012']}`)
 
-  // INK2S numeric fields — emit non-zero values only
+  // INK2S numeric fields: emit non-zero values only
   const ink2sNumericFields: (keyof INK2SRutor)[] = ['7650', '7750', '7651', '8020', '8021']
   for (const code of ink2sNumericFields) {
     const value = declaration.ink2s[code]
@@ -256,7 +256,7 @@ export function validateBlanketterSru(content: string): {
   if (!hasINK2S) errors.push('Missing INK2S blankett block')
   if (!hasFilSlut) errors.push('Missing #FIL_SLUT terminator')
 
-  // Count BLANKETTSLUT — should be exactly 3
+  // Count BLANKETTSLUT: should be exactly 3
   const blankettslutCount = (content.match(/^#BLANKETTSLUT/gm) || []).length
   if (blankettslutCount !== 3) {
     errors.push(`Expected 3 BLANKETTSLUT, found ${blankettslutCount}`)

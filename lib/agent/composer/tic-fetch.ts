@@ -21,7 +21,7 @@ const log = createLogger('agent.composer.tic-fetch')
 //
 // Rate budget: the /profile endpoint fans out to ~13 TIC (Lens) calls and
 // the account has a ~3000/mo ceiling. So we DON'T eagerly re-fetch every
-// pre-v2 (v1) snapshot — that would blow the budget across the customer
+// pre-v2 (v1) snapshot: that would blow the budget across the customer
 // base. Instead, v1 snapshots upgrade to v2 lazily: only when a caller
 // that actually consumes the v2 sections passes `upgradeV1: true` (today
 // just the agent-onboarding paths, a deliberate once-per-company action).
@@ -30,7 +30,7 @@ const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 // Default fetch timeout. The agent-onboarding callers override with a longer
 // budget (10s) since the user is on a wait-screen with visible progress and
 // the prior 5s default killed every signup-time fetch in May (~530 wasted
-// upstream Lens calls — the abort fired client-side but the upstream calls
+// upstream Lens calls: the abort fired client-side but the upstream calls
 // kept running and counted against quota). Other callers (background jobs,
 // dev tooling) stay on the conservative default.
 const FETCH_TIMEOUT_MS = 5_000
@@ -54,7 +54,7 @@ export async function ensureTicSnapshot(opts: {
   // Origin to use for the internal self-fetch. The caller derives this from
   // the incoming request's host header so dev (localhost:3000), preview
   // (vercel.app), and production all reach their own instance of the TIC
-  // route. Falls back to NEXT_PUBLIC_APP_URL when not supplied — fine for
+  // route. Falls back to NEXT_PUBLIC_APP_URL when not supplied: fine for
   // background jobs but wrong for request-scoped paths because that env var
   // is the production canonical URL even in dev.
   origin?: string
@@ -65,7 +65,7 @@ export async function ensureTicSnapshot(opts: {
   upgradeV1?: boolean
   // Override the default 5s fetch timeout. Use when the caller has a UI
   // affordance for waiting (agent onboarding wait-screen) so legitimate
-  // fetches don't get aborted before the ~13-call Lens fan-out completes —
+  // fetches don't get aborted before the ~13-call Lens fan-out completes:
   // which was the root cause of the May 2026 quota-burn incident.
   timeoutMs?: number
 }): Promise<TicSnapshotResult> {
@@ -89,7 +89,7 @@ export async function ensureTicSnapshot(opts: {
   const cachedSnapshot = companyRow.tic_snapshot as Record<string, unknown> | null
   const needsV2Upgrade = upgradeV1 && isV1Snapshot(cachedSnapshot)
 
-  // Fresh cache hit — nothing to do. (Unless the caller needs v2 fields and
+  // Fresh cache hit: nothing to do. (Unless the caller needs v2 fields and
   // the cache is still v1, in which case we fall through to a refetch.)
   if (
     cachedSnapshot &&
@@ -125,7 +125,7 @@ export async function ensureTicSnapshot(opts: {
     }
   }
 
-  // Persist. Best-effort — if the update fails, we still return the profile
+  // Persist. Best-effort: if the update fails, we still return the profile
   // we just fetched so the current request can use it.
   const { error } = await supabase
     .from('companies')
@@ -135,7 +135,7 @@ export async function ensureTicSnapshot(opts: {
     })
     .eq('id', companyId)
   if (error) {
-    // Stale data is fine for the current request — but a silent write
+    // Stale data is fine for the current request, but a silent write
     // failure means the next caller re-fetches TIC unnecessarily and the
     // monthly TIC budget bleeds. Surface it via the structured logger.
     log.warn('tic snapshot persist failed', { error: error.message, companyId })
@@ -173,7 +173,7 @@ async function fetchTicProfile(
     return body.data ?? null
   } catch (err) {
     // Network error, timeout, TIC extension disabled, TIC API misconfigured.
-    // Any of these is a normal fallback — return null so the caller can
+    // Any of these is a normal fallback: return null so the caller can
     // degrade gracefully.
     log.warn('tic profile fetch failed', {
       url,

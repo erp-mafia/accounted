@@ -200,7 +200,7 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
 
     expect(response.status).toBe(200)
     // No mapping for invoice_cash_payment → engine-matching fallback of 'A'
-    // (the global default is intentionally NOT used here — no consolidation).
+    // (the global default is intentionally NOT used here, no consolidation).
     expect(body.data).toEqual({ next: 1, series: 'A', fiscal_period_id: 'period-1' })
   })
 

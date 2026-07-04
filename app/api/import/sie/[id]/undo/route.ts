@@ -11,7 +11,7 @@ export const maxDuration = 300
 /**
  * DELETE /api/import/sie/[id]/undo
  *
- * Undo a completed SIE import — hard-deletes all journal entries created
+ * Undo a completed SIE import: hard-deletes all journal entries created
  * by the import (transaction vouchers + the opening_balance entry),
  * detaches any user-attached documents, resets voucher_sequences, and
  * marks the sie_imports row as 'undone'. Period must be open and not

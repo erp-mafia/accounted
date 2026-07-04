@@ -119,7 +119,7 @@ function sumCredit(lines: CapturedLine[]): number {
   return Math.round(lines.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
 }
 
-describe('disposeAsset — VAT on proceeds', () => {
+describe('disposeAsset: VAT on proceeds', () => {
   it('standard_25 sale appends a 2611 credit and balances', async () => {
     // Acquisition 100 000, accumulated 40 000 → NBV 60 000.
     // Gross proceeds 100 000 → net 80 000 → vat 20 000 → gain 20 000.
@@ -264,7 +264,7 @@ describe('disposeAsset — VAT on proceeds', () => {
   })
 })
 
-describe('disposeAsset — jämkning (input VAT correction)', () => {
+describe('disposeAsset: jämkning (input VAT correction)', () => {
   it('credits 2641 and debits 6991 for the jämkning amount', async () => {
     const asset = makeAsset({ category: 'equipment' })
     const { lines } = await captureLines(
@@ -283,10 +283,10 @@ describe('disposeAsset — jämkning (input VAT correction)', () => {
     )
     // 2641 credit (reverses prior input VAT deduction)
     expect(lines.find((l) => l.account_number === '2641')?.credit_amount).toBe(8_000)
-    // Jämkning is a VAT correction (ML 8a kap), not a disposal loss — it must
+    // Jämkning is a VAT correction (ML 8a kap), not a disposal loss: it must
     // route to 6991 "Övriga externa kostnader, avdragsgilla", NOT to 78xx.
     expect(lines.find((l) => l.account_number === '6991')?.debit_amount).toBe(8_000)
-    // No 78xx line — proceeds 60 000 = NBV 60 000 means no gain/loss, and the
+    // No 78xx line: proceeds 60 000 = NBV 60 000 means no gain/loss, and the
     // jämkning explicitly does not contaminate the disposal-loss accounts.
     expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
     expect(sumDebit(lines)).toBe(sumCredit(lines))
@@ -312,7 +312,7 @@ describe('disposeAsset — jämkning (input VAT correction)', () => {
     expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(20_000)
     expect(lines.find((l) => l.account_number === '2641')?.credit_amount).toBe(8_000)
     // Gain 20 000 on net proceeds → 3973 credit; jämkning 8 000 → 6991 debit
-    // (NOT 7973 — see ML 8a kap, jämkning is a VAT correction not a loss).
+    // (NOT 7973: see ML 8a kap, jämkning is a VAT correction not a loss).
     expect(lines.find((l) => l.account_number === '3973')?.credit_amount).toBe(20_000)
     expect(lines.find((l) => l.account_number === '6991')?.debit_amount).toBe(8_000)
     expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
@@ -357,7 +357,7 @@ describe('disposeAsset — jämkning (input VAT correction)', () => {
         jamkning_original_input_vat: 200_000,
       },
     )
-    // Jämkning goes to 6991 regardless of asset category — it's a VAT
+    // Jämkning goes to 6991 regardless of asset category: it's a VAT
     // correction per ML 8a kap, NOT a förlust vid avyttring (78xx).
     expect(lines.find((l) => l.account_number === '6991')?.debit_amount).toBe(100_000)
     // The disposal itself is at a loss (NBV 1.8M = proceeds 1.8M? Let's check:
@@ -395,7 +395,7 @@ describe('disposeAsset — jämkning (input VAT correction)', () => {
   })
 })
 
-describe('disposeAsset — gain vs loss with VAT', () => {
+describe('disposeAsset: gain vs loss with VAT', () => {
   it('gain scenario: net proceeds > NBV → 3973 credit', async () => {
     const asset = makeAsset({ category: 'equipment' })
     const { lines } = await captureLines(

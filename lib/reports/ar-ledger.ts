@@ -50,7 +50,7 @@ export interface ARLedgerReport {
 
 /**
  * Generate AR ledger (kundreskontra) with aging analysis.
- * BFL 5 kap. 4 § — sidoordnad bokföring: outstanding customer invoices with aging.
+ * BFL 5 kap. 4 §: sidoordnad bokföring: outstanding customer invoices with aging.
  */
 export async function generateARLedger(
   supabase: SupabaseClient,
@@ -114,7 +114,7 @@ export async function generateARLedger(
     const outstanding = Math.round((total - paidAmount) * 100) / 100
 
     // Aging buckets and totals must be in SEK so they reconcile with account 1510.
-    // Foreign-currency invoices without an exchange_rate cannot be converted —
+    // Foreign-currency invoices without an exchange_rate cannot be converted:
     // adding the raw foreign amount to a SEK total is unsound, so the row is
     // counted but excluded from the buckets. The detail row is still pushed so
     // the user can see the invoice in the expandable list, with outstanding_sek
@@ -128,10 +128,10 @@ export async function generateARLedger(
 
     if (outstandingSek === null) unconvertedFxCount += 1
 
-    // Add invoice detail (always — even if unconvertible, so it's visible)
+    // Add invoice detail (always: even if unconvertible, so it's visible)
     entry.invoices.push({
       invoice_id: inv.id,
-      // Self-billing invoices we received have no own number — show the
+      // Self-billing invoices we received have no own number: show the
       // counterparty's external number instead.
       invoice_number: inv.invoice_number || inv.external_invoice_number || '',
       invoice_date: inv.invoice_date || '',

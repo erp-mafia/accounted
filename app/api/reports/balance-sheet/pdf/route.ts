@@ -66,7 +66,7 @@ export async function GET(request: Request) {
     const totalEquityLiab = report.total_equity_liabilities
 
     // ÅRL 3 kap / K2 / K3 require balansräkningen to balance. Compare rounded
-    // to whole kronor — matches SFL 22:1's truncation convention for statutory
+    // to whole kronor: matches SFL 22:1's truncation convention for statutory
     // reports and is immune to floating-point accumulation across hundreds of
     // ledger lines (öresavrundning noise under half a krona is never a real
     // accounting error). The on-screen view still surfaces a "Balanserar ej"
@@ -106,7 +106,7 @@ export async function GET(request: Request) {
     )
 
     // "-utkast" suffix keeps the draft status visible even after the file
-    // leaves the browser — complements the in-document ÅRL 2:7 disclaimer.
+    // leaves the browser: complements the in-document ÅRL 2:7 disclaimer.
     const filename = `balansrakning-${report.period.start}--${report.period.end}-utkast.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {

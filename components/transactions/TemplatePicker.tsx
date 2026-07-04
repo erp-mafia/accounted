@@ -225,14 +225,13 @@ export default function TemplatePicker({
   const [libraryRaw, setLibraryRaw] = useState<BookingTemplateLibrary[]>([])
 
   // Map direction to template direction filter (transfers show in both).
-  // Direction filtering applies only to the static "Vanliga mallar" list —
-  // user-created library templates ignore it (inferred direction is unreliable
+  // Direction filtering applies only to the static "Vanliga mallar" list:   // user-created library templates ignore it (inferred direction is unreliable
   // and users know what they made).
   const templateDirection = direction === 'income' ? 'income' : 'expense'
 
   // Fetch the user's library templates (company + team scope). We keep them
   // in their raw shape so we can render every template, even ones that don't
-  // fit convertLibraryToBookingTemplate's simple 2-account contract — those
+  // fit convertLibraryToBookingTemplate's simple 2-account contract: those
   // get routed through the manual booking dialog instead of the QuickReview
   // single-account path.
   useEffect(() => {
@@ -253,7 +252,7 @@ export default function TemplatePicker({
 
   // Lazy convertibility map. A template is "convertible" if it fits the
   // simple debit/credit pair shape the QuickReview booking path expects.
-  // Non-convertible templates are still shown — they just route to the
+  // Non-convertible templates are still shown: they just route to the
   // full journal-entry editor on click.
   const convertedById = useMemo(() => {
     const m = new Map<string, BookingTemplate | null>()
@@ -291,7 +290,7 @@ export default function TemplatePicker({
   )
 
   // Library templates filtered by entity_type only. Direction is NOT applied
-  // here — see the comment on convertedById above.
+  // here: see the comment on convertedById above.
   const relevantLibraryRaw = useMemo(() => {
     return libraryRaw.filter((tt) => {
       if (entityType && tt.entity_type && tt.entity_type !== 'all' && tt.entity_type !== entityType) {
@@ -352,12 +351,12 @@ export default function TemplatePicker({
   // QuickReview fast path, which books a single category + one account_override
   // and silently discards the template's chosen debit/credit. A kundinbetalning
   // mall (D 1930 / K 1510) came out as a generic cost (D 6991 / K 1930), or with
-  // a VAT line as D 1930 / K 1930 / K 2611 — and the result flipped with the
+  // a VAT line as D 1930 / K 1930 / K 2611, and the result flipped with the
   // direction the converter happened to infer from the business/settlement tags.
   // Routing every library template through the editor books exactly the accounts
   // the user defined, independent of those tags. See template-library.test.ts.
   //
-  // MRU is only bumped once we know the click will do something — otherwise a
+  // MRU is only bumped once we know the click will do something: otherwise a
   // consumer that omits onPickLibraryTemplate would reorder MRU for a template
   // the user never actually applied.
   const handleSelectLibraryRaw = (raw: BookingTemplateLibrary) => {
@@ -438,7 +437,7 @@ export default function TemplatePicker({
         ) : (
           <>
             {/* User-created library templates (company + team scope).
-                Direction is intentionally NOT applied here — all the user's
+                Direction is intentionally NOT applied here: all the user's
                 own templates are shown regardless of expense/income context. */}
             {sortedLibraryRaw.length > 0 && (
               <div>
@@ -460,7 +459,7 @@ export default function TemplatePicker({
               </div>
             )}
 
-            {/* Counterparty templates — learned from history */}
+            {/* Counterparty templates: learned from history */}
             {hasCounterparty && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2">{t('previous_counterparties')}</p>

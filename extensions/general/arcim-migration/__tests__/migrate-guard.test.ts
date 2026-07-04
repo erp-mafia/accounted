@@ -7,7 +7,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
  * route (POST /migrate).
  *
  * Provider API import only ever writes subledger entities (customers, suppliers,
- * invoices) — it never posts to the general ledger. The GL (kontoplan, ingående
+ * invoices): it never posts to the general ledger. The GL (kontoplan, ingående
  * balanser, verifikationer) arrives via SIE. Importing entities without the
  * SIE-derived ledger leaves an incomplete bokföring under BFL, so the route MUST
  * refuse to run for non-Fortnox providers until a completed SIE import exists.
@@ -66,7 +66,7 @@ function migrateRequest() {
   })
 }
 
-describe('POST /migrate — SIE-import-required guard', () => {
+describe('POST /migrate: SIE-import-required guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -91,7 +91,7 @@ describe('POST /migrate — SIE-import-required guard', () => {
     expect(executeMigration).toHaveBeenCalledTimes(1)
   })
 
-  it('exempts Fortnox — entity import runs even with no SIE import (SIE comes via API)', async () => {
+  it('exempts Fortnox: entity import runs even with no SIE import (SIE comes via API)', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
 
     const res = await handler(migrateRequest(), buildCtx(0))

@@ -58,7 +58,7 @@ function makeRequest(): Request {
   })
 }
 
-describe('POST /sync (enable-banking) — account filtering', () => {
+describe('POST /sync (enable-banking): account filtering', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

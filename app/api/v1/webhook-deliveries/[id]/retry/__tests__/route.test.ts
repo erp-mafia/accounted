@@ -4,7 +4,7 @@
  * The route lives outside the /companies/{companyId}/ tree (deliveries
  * already carry their company_id; nesting would force callers to
  * round-trip company resolution from the delivery id). Tenancy is still
- * enforced — the route resolves the delivery's company_id, then verifies
+ * enforced: the route resolves the delivery's company_id, then verifies
  * the caller is a member of that company via company_members.
  *
  * Closes the Phase 6 PR-1 (#496) integration-test debt for the retry

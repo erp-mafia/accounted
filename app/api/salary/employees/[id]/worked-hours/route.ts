@@ -92,7 +92,7 @@ export async function POST(
   const body = validation.data
 
   // Upsert via DELETE+INSERT on the natural key (employee, date). Worked days
-  // have one row per date — re-marking overwrites. Mirrors the absence route's
+  // have one row per date: re-marking overwrites. Mirrors the absence route's
   // pattern so behaviour stays predictable across the two calendars.
   const { error: deleteError } = await supabase
     .from('salary_worked_days')

@@ -223,7 +223,7 @@ describe('syncAccountTransactions', () => {
   })
 
   it('skips pending entries (no booking_date) and ingests only booked ones', async () => {
-    // A pending PSD2 entry has no booking_date — only a value_date. Importing it
+    // A pending PSD2 entry has no booking_date: only a value_date. Importing it
     // is what produced the production duplicates: its date (hence its dedup id)
     // differs from the same transaction's booked representation. Pending entries
     // must be skipped; booked ones import as usual, keyed on booking_date.
@@ -272,7 +272,7 @@ describe('syncAccountTransactions', () => {
     }))
     mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
 
-    // Sync 1 — booked
+    // Sync 1: booked
     mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-21', value_date: '2026-02-15' }],
       rawPages: ['{}'],
@@ -286,7 +286,7 @@ describe('syncAccountTransactions', () => {
     expect(firstBatch[0].date).toBe('2026-04-21')
     expect(firstBatch[0].external_id).toBe('eb_acc-uid-1_2026-04-21_-10000_0')
 
-    // Sync 2 — same transaction now returned pending (booking_date dropped)
+    // Sync 2: same transaction now returned pending (booking_date dropped)
     mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, value_date: '2026-02-15' }],
       rawPages: ['{}'],
@@ -309,7 +309,7 @@ describe('syncAccountTransactions', () => {
     ]
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: apiTxns, rawPages: ['{}'] })
     mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date: string }) => ({
-      id: `bank-id-${Math.random()}`, // unstable bank id — must NOT influence external_id
+      id: `bank-id-${Math.random()}`, // unstable bank id: must NOT influence external_id
       date: tx.booking_date,
       booking_date: tx.booking_date,
       amount: -parseFloat(tx.transaction_amount.amount),
@@ -378,7 +378,7 @@ describe('syncAccountTransactions', () => {
     // identical, so the re-sync collides on (company_id, external_id).
     const mk = (booking_date: string, amount: string) => ({ transaction_amount: { amount, currency: 'SEK' }, booking_date })
     const convert = (tx: { transaction_amount: { amount: string }, booking_date: string }) => ({
-      id: `bank-${Math.random()}`, // unstable bank id — irrelevant to external_id
+      id: `bank-${Math.random()}`, // unstable bank id: irrelevant to external_id
       date: tx.booking_date,
       booking_date: tx.booking_date,
       amount: -parseFloat(tx.transaction_amount.amount),
@@ -416,7 +416,7 @@ describe('syncAccountTransactions', () => {
 
   it('returns the min/max booking date the ASPSP returned for the activation UI', async () => {
     // The min/max loop reads booking_date from the *raw* transactions (sync.ts:75-82),
-    // before convertTransaction runs — so the dates need to be set here.
+    // before convertTransaction runs: so the dates need to be set here.
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [
         { transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-15' },

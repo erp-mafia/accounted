@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 interface Props {
   // When true, render the dot. The parent owns the "did this value come from
-  // AI extraction?" question — usually by comparing the current input value
+  // AI extraction?" question: usually by comparing the current input value
   // against the originally-prefilled value, and clearing the flag once the
   // user edits the field.
   active: boolean
@@ -19,7 +19,7 @@ interface Props {
 
 // Tiny indicator that a form field's value was pre-filled by the AI
 // extraction pipeline. Sits to the right of the field label or inside the
-// input's right padding. Fades when the user edits the field — see how
+// input's right padding. Fades when the user edits the field: see how
 // supplier-invoices/new wires it.
 //
 // Design: a small filled dot, success color when the extraction succeeded.

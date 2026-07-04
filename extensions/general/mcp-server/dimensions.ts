@@ -1,25 +1,25 @@
 /**
- * Dimension helpers for the MCP server (PR3 of the dimensions plan —
+ * Dimension helpers for the MCP server (PR3 of the dimensions plan:
  * dev_docs/dimensions_implementation_plan.md §6).
  *
  * Two responsibilities, shared by the dimension tools and the dims-bag write
  * tools (gnubok_create_voucher / gnubok_correct_entry):
  *
- *   1. Registry access — ensure_company_dimensions + the same two-query fetch
+ *   1. Registry access: ensure_company_dimensions + the same two-query fetch
  *      the dashboard GET /api/dimensions uses, returning the identical shape.
  *
- *   2. Resolve-don't-select — an incoming dimension value may be an object
+ *   2. Resolve-don't-select: an incoming dimension value may be an object
  *      code ("KS01") OR a natural-language name ("Villa Almgren tak"). The
  *      server resolves exact code → exact name → fuse.js fuzzy over the
  *      dimension's ACTIVE values. A single high-confidence hit resolves (and
  *      is echoed back with its confidence); multiple/low-confidence candidates
  *      reject with a ranked list so the agent retries with a code or stages
- *      gnubok_create_dimension_value. NO auto-create, ever — agents must not
+ *      gnubok_create_dimension_value. NO auto-create, ever: agents must not
  *      silently mint reporting values.
  *
  * Resolution honours the validation contract: company_settings.dimensions_enabled
  * is fetched ONCE; when false the bags pass through verbatim (free-text
- * backward compatibility — the engine skips validation too), when true every
+ * backward compatibility: the engine skips validation too), when true every
  * value must land on an active registry value. Untagged entries cost zero
  * queries.
  */
@@ -70,7 +70,7 @@ export async function ensureCompanyDimensions(
 }
 
 /**
- * Fetch the full registry incl. values — the same two queries and the same
+ * Fetch the full registry incl. values: the same two queries and the same
  * nested shape as the dashboard GET /api/dimensions, so agents and the
  * register UI see one consistent contract.
  */
@@ -119,8 +119,8 @@ export async function fetchDimensionRegistry(
  * MCP boundary schema for a dimensions bag where values may be NAMES, not just
  * codes. Looser than DimensionsBagSchema on length (names go up to 120 chars,
  * dimension_values.name CHECK) but keeps the SIE-framing charset ban. After
- * resolution the final bags are re-validated against DimensionsBagSchema — the
- * exact schema the API layer and staged commit path use — so nothing loose is
+ * resolution the final bags are re-validated against DimensionsBagSchema (the
+ * exact schema the API layer and staged commit path use) so nothing loose is
  * ever staged.
  */
 const DimensionsInputSchema = z.record(
@@ -134,7 +134,7 @@ const DimensionsInputSchema = z.record(
 
 /**
  * Parse an untyped `dimensions` / `default_dimensions` tool argument. Throws a
- * loud, actionable error on invalid shape — the MCP boundary is an input gate,
+ * loud, actionable error on invalid shape: the MCP boundary is an input gate,
  * unlike coerceDimensionsBag (which silently drops on the trusted staged path).
  */
 export function parseDimensionsArg(raw: unknown, field: string): LineDimensions | undefined {
@@ -158,7 +158,7 @@ export function parseDimensionsArg(raw: unknown, field: string): LineDimensions 
  * 0 (perfect) → 1 (no relation); 0.3 matches the app-wide precedent for
  * registry lookups (components/import/OpeningBalanceRowEditor.tsx uses
  * threshold 0.3 for BAS account search). Anything above is "plausible but not
- * safe to attach" — plan risk #5 is a confident-but-wrong project tag.
+ * safe to attach": plan risk #5 is a confident-but-wrong project tag.
  */
 export const DIMENSION_FUZZY_SCORE_MAX = 0.3
 /**
@@ -212,7 +212,7 @@ interface ResolvedValue {
 }
 
 /**
- * Resolve one input (code or name) inside one dimension. Pure — takes registry
+ * Resolve one input (code or name) inside one dimension. Pure: takes registry
  * data, so it is unit-testable without a DB. Throws DimensionResolutionError
  * on archived / unknown / ambiguous inputs; never auto-creates.
  */
@@ -223,22 +223,22 @@ export function resolveValueInDimension(
   const active = dim.values.filter((v) => v.is_active)
   const label = dimensionLabel(dim)
 
-  // 1. Exact code match among active values — the fast path, not echoed.
+  // 1. Exact code match among active values: the fast path, not echoed.
   const exactCode = active.find((v) => v.code === input)
   if (exactCode) return { code: exactCode.code, name: exactCode.name, exact: true, confidence: 1 }
 
-  // Archived guard: an exact code hit on an inactive value is a hard stop —
+  // Archived guard: an exact code hit on an inactive value is a hard stop:
   // same rule the engine enforces at draft time.
   const archived = dim.values.find((v) => !v.is_active && v.code === input)
   if (archived) {
     throw new DimensionResolutionError(
-      `"${input}" är arkiverat — återaktivera värdet för att använda det.`,
+      `"${input}" är arkiverat: återaktivera värdet för att använda det.`,
       dim.sie_dim_no,
       input,
     )
   }
 
-  // 2. Exact (case-insensitive) code or exact name match — unambiguous but
+  // 2. Exact (case-insensitive) code or exact name match: unambiguous but
   //    echoed, since the stored code differs from the raw input.
   const lowered = input.trim().toLowerCase()
   const exactish = active.filter(
@@ -268,7 +268,7 @@ export function resolveValueInDimension(
 
   if (hits.length === 0) {
     throw new DimensionResolutionError(
-      `Okänt ${label}: "${input}" (dimension ${dim.sie_dim_no}). Skapa värdet i registret först — ` +
+      `Okänt ${label}: "${input}" (dimension ${dim.sie_dim_no}). Skapa värdet i registret först: ` +
       'stage det med gnubok_create_dimension_value, eller ange en befintlig kod ' +
       '(gnubok_list_dimension_values).',
       dim.sie_dim_no,
@@ -337,7 +337,7 @@ export async function resolveDimensionBags(
 
   const finalize = (resolved: Array<LineDimensions | undefined>): void => {
     // Whatever path produced the bags, the staged result must satisfy THE bag
-    // schema (max 40-char codes, SIE-safe charset) — otherwise the commit-side
+    // schema (max 40-char codes, SIE-safe charset): otherwise the commit-side
     // coerceDimensionsBag would silently drop the whole bag at booking time.
     for (const bag of resolved) {
       if (!bag) continue
@@ -346,7 +346,7 @@ export async function resolveDimensionBags(
         const issue = check.error.issues[0]
         throw new Error(
           `Ogiltig dimensionskod: ${issue?.message ?? 'ogiltigt värde'}. ` +
-          'Koder får vara max 40 tecken — registrera värdet i registret och referera det via kod eller namn.',
+          'Koder får vara max 40 tecken: registrera värdet i registret och referera det via kod eller namn.',
         )
       }
     }
@@ -354,7 +354,7 @@ export async function resolveDimensionBags(
 
   if (!(settings as { dimensions_enabled?: boolean } | null)?.dimensions_enabled) {
     // Dimensions not enabled: free-text passthrough, exactly like the engine's
-    // validation rule 2 — existing API/MCP writers keep working unchanged.
+    // validation rule 2: existing API/MCP writers keep working unchanged.
     finalize(bags)
     return { bags, resolutions: [] }
   }

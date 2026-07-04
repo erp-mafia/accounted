@@ -48,7 +48,7 @@ export default function BankSyncSinceLastVisit() {
         if (rowCount && rowCount > 0) {
           setCount(rowCount)
         } else {
-          // Nothing new — refresh the timestamp so we don't keep checking
+          // Nothing new: refresh the timestamp so we don't keep checking
           // the same window forever.
           window.localStorage.setItem(storageKey, now)
         }

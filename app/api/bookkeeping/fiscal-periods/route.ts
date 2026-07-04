@@ -83,7 +83,7 @@ export async function POST(request: Request) {
 
     if (isPrepend) {
       // Prepend before the earliest period: new period_end must be the day before
-      // the earliest period starts. Skip the "no open prior period" constraint —
+      // the earliest period starts. Skip the "no open prior period" constraint:
       // backfilling an earlier year needs that year to stay open.
       const expectedEnd = new Date(earliest.period_start + 'T12:00:00Z')
       expectedEnd.setUTCDate(expectedEnd.getUTCDate() - 1)
@@ -97,7 +97,7 @@ export async function POST(request: Request) {
     } else {
       // Forward-like: either append a new latest year OR fill an interior gap
       // between two existing years. Both must chain onto their immediate
-      // predecessor — i.e. start the day after it ends. When appending, the
+      // predecessor, i.e. start the day after it ends. When appending, the
       // predecessor IS the latest period (original forward-chaining behaviour);
       // when filling a gap, it's the year just before the hole.
       if (predecessor) {
@@ -112,10 +112,10 @@ export async function POST(request: Request) {
         }
       }
       // No predecessor here means the new period reaches back over the earliest
-      // existing period (an overlap) — the overlap check below returns 409.
+      // existing period (an overlap): the overlap check below returns 409.
 
-      // Gap fill: the new period must also butt up against its SUCCESSOR — end
-      // exactly the day before the successor starts — so it fills the hole
+      // Gap fill: the new period must also butt up against its SUCCESSOR (end
+      // exactly the day before the successor starts) so it fills the hole
       // completely. The predecessor check above only constrains the start side.
       // Without this end check a too-short period would leave a fresh sub-gap
       // yet still get the successor's previous_period_id relinked onto it

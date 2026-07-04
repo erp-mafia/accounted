@@ -70,7 +70,7 @@ export async function generateMonthlyBreakdown(
         .eq('journal_entries.status', 'posted')
 
       if (options?.dimensions && Object.keys(options.dimensions).length > 0) {
-        // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+        // jsonb containment (@>): served by idx_jel_dimensions_gin.
         query = query.contains('dimensions', options.dimensions)
       }
 
@@ -123,7 +123,7 @@ export async function generateMonthlyBreakdown(
       bucket.expenses = Math.round((bucket.expenses + line.debit_amount - line.credit_amount) * 100) / 100
     } else if (accountClass === 8 && line.account_number !== '8999') {
       // Financial items (class 8): interest, exchange gains/losses, etc.
-      // 8999 "Årets resultat" is a year-end closing account — its debit/credit
+      // 8999 "Årets resultat" is a year-end closing account: its debit/credit
       // mirrors the computed profit, so including it here would cancel the
       // period's income-vs-expense signal on the month of closing.
       const amount = line.credit_amount - line.debit_amount

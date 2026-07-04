@@ -10,7 +10,7 @@
  *     voucher sums to zero
  *
  * Each method is probed on ONE voucher and verified with a GET before the
- * mass run. Empty vouchers (0 lines) are left alone — they pass validation.
+ * mass run. Empty vouchers (0 lines) are left alone: they pass validation.
  *
  * Run: npx tsx --env-file=.env --env-file=.env.local scripts/bl-balance-broken.ts <consentId>
  */
@@ -25,7 +25,7 @@ const DELAY_MS = 125 // ~8 req/s, under BL's 10 req/s limit
 const consentId = process.argv[2]
 if (!consentId) {
   console.error('Usage: npx tsx --env-file=.env --env-file=.env.local scripts/bl-balance-broken.ts <consentId>')
-  console.error('Refusing to run without an explicit consentId — this script writes vouchers to a live BL company.')
+  console.error('Refusing to run without an explicit consentId: this script writes vouchers to a live BL company.')
   process.exit(1)
 }
 
@@ -188,12 +188,12 @@ async function main() {
     const after = await fetchOne(at, userKey, probe)
     if (Math.abs(entrySum(after)) <= 0.01) {
       method = 'add'
-      console.log('Method A (add 0099 counter-line) works — verified balanced via GET.')
+      console.log('Method A (add 0099 counter-line) works: verified balanced via GET.')
     } else {
-      console.log(`Method A responded OK but voucher still sums to ${entrySum(after)} — trying method B.`)
+      console.log(`Method A responded OK but voucher still sums to ${entrySum(after)}: trying method B.`)
     }
   } else {
-    console.log(`Method A refused (HTTP ${addResult.status}): ${addResult.body} — trying method B.`)
+    console.log(`Method A refused (HTTP ${addResult.status}): ${addResult.body}: trying method B.`)
   }
 
   if (!method) {
@@ -211,7 +211,7 @@ async function main() {
         process.exit(1)
       }
       method = 'adjust'
-      console.log('Method B (adjust first line) works — verified balanced via GET.')
+      console.log('Method B (adjust first line) works: verified balanced via GET.')
     }
   }
 
@@ -233,7 +233,7 @@ async function main() {
   console.log(`\nDone: ${done - failures.length}/${unbalanced.length} balanced via method ${method}, ${failures.length} failed`)
   if (failures.length > 0) {
     console.log('Failures (first 20):')
-    for (const f of failures.slice(0, 20)) console.log(`  ${f.voucher} — HTTP ${f.status} ${f.body}`)
+    for (const f of failures.slice(0, 20)) console.log(`  ${f.voucher}: HTTP ${f.status} ${f.body}`)
   }
 
   console.log('\nRe-fetching SIE export to validate...')

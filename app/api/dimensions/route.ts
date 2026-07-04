@@ -1,12 +1,12 @@
 /**
- * GET /api/dimensions — the dimension registry (kostnadsställe/projekt + custom
+ * GET /api/dimensions: the dimension registry (kostnadsställe/projekt + custom
  * dims) with nested values, for the register page and pickers.
  *
  * Calls ensure_company_dimensions first so the system dims (1 = Kostnadsställe,
- * 6 = Projekt) always exist — lazy seeding keeps core zero-config for companies
+ * 6 = Projekt) always exist: lazy seeding keeps core zero-config for companies
  * that never touch dimensions (dev_docs/dimensions_implementation_plan.md §6).
  *
- * Response contract (PR2 — the register UI builds against this exactly):
+ * Response contract (PR2: the register UI builds against this exactly):
  *   200 { dimensions: [{ id, sie_dim_no, name, resets_annually, is_system,
  *         is_active, sort_order, values: [{ id, code, name, is_active,
  *         start_date, end_date }] }] }
@@ -42,7 +42,7 @@ interface DimensionRow {
 export const GET = withRouteContext(
   'dimension.list',
   async (_request, ctx) => {
-    // dimensions_enabled is deliberately NOT enforced here — it is a
+    // dimensions_enabled is deliberately NOT enforced here: it is a
     // UI-visibility flag only (dev_docs/dimensions_implementation_plan.md §2).
     // Agents/MCP and SIE import must operate on the registry regardless of the
     // toggle; the security boundary is company scoping (withRouteContext + RLS).

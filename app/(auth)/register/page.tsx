@@ -84,7 +84,7 @@ function RegisterPageContent() {
       })
       return
     }
-    // BankID verified — store sessionId and show email form
+    // BankID verified: store sessionId and show email form
     setBankIdUser({ givenName: result.givenName, surname: result.surname })
     if (result.sessionId) setBankIdSessionId(result.sessionId)
   }
@@ -242,7 +242,7 @@ function RegisterPageContent() {
           }
         }
 
-        // Auto-confirmed but no invite or invite failed — go to onboarding
+        // Auto-confirmed but no invite or invite failed: go to onboarding
         // (invite cookie is preserved so the onboarding fallback can retry)
         window.location.href = '/'
         return

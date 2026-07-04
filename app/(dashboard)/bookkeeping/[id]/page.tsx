@@ -63,7 +63,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
-  // Dimension registry, fetched once when any line carries a dimensions map —
+  // Dimension registry, fetched once when any line carries a dimensions map:
   // used to resolve display names for the line badges ('KS: Butik'); badges
   // fall back to raw codes when the fetch fails or a code is unregistered.
   const [registryDims, setRegistryDims] = useState<DimensionDto[] | null>(null)
@@ -86,7 +86,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       .then((dims) => {
         if (!cancelled) setRegistryDims(dims)
       })
-      .catch(() => {/* display-only — raw codes are fine */})
+      .catch(() => {/* display-only, raw codes are fine */})
     return () => {
       cancelled = true
     }
@@ -114,7 +114,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setEntry(data.entry)
       setChain(data.chain)
       setIsLastInSeries(data.is_last_in_series ?? false)
-      // Underlag references (linked invoices) — best-effort; the verifikat still
+      // Underlag references (linked invoices), best-effort; the verifikat still
       // renders if this fails, it just falls back to documents-only.
       if (refsRes.ok) {
         const { data: refData } = await refsRes.json()
@@ -198,7 +198,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     }
   }, [id, router, toast, t])
 
-  // Pure reversal (storno) — cancels the verifikat with a stornoverifikation and
+  // Pure reversal (storno): cancels the verifikat with a stornoverifikation and
   // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
   // a replacement entry. Routes through the engine's reverseEntry (storno +
   // reverses_id link; original → 'reversed', never deleted).
@@ -272,14 +272,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const foreignExchangeRate = hasForeignCurrency ? (Number(foreignLines[0].exchange_rate) || null) : null
 
   // A correction is itself a regular posted verifikation and can be corrected
-  // again (BFL 5 kap. 5 § — the chain just grows). Storno entries are pure
+  // again (BFL 5 kap. 5 §, the chain just grows). Storno entries are pure
   // reversals and cannot be corrected directly; the user walks to the latest
   // correction (or the original) and corrects that one.
   const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno'
 
   // An opening-balance verifikat must be corrected through the IB-aware flow
   // (storno + rebook + relink the period's opening_balance_entry_id), never the
-  // generic "Rätta rader" — that books a `correction` entry but leaves the
+  // generic "Rätta rader": that books a `correction` entry but leaves the
   // period pointing at the stornoed IB, so the Balansrapport "Ingående balans"
   // column goes stale. Only surface it on the *active* IB (posted; stornoed
   // predecessors are `reversed`, so exactly one posted IB exists per period).
@@ -291,7 +291,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // SIE dimension badge prefixes. 'KS' is the market-standard abbreviation
   // for kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma
   // show the dimension name, and 'PR' collides with prisnivå in some BAS
-  // setups — flagged in the #859 compliance review), so dim 6 falls through
+  // setups, flagged in the #859 compliance review), so dim 6 falls through
   // to the registry name below. Stays Swedish per .claude/rules/i18n.md.
   const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS' }
 
@@ -314,7 +314,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               key={dimNo}
               variant="outline"
               className="font-mono text-[11px] font-normal"
-              title={`${dim?.name ?? prefix} ${code}${hasName ? ` – ${value.name}` : ''}`}
+              title={`${dim?.name ?? prefix} ${code}${hasName ? `: ${value.name}` : ''}`}
             >
               {prefix}: {hasName ? value.name : code}
             </Badge>
@@ -486,7 +486,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </span>
               </div>
             )}
-            {/* Notes — always editable (internal metadata, not BFL verifikation content) */}
+            {/* Notes: always editable (internal metadata, not BFL verifikation content) */}
             <div className="border-t pt-2 mt-2">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-muted-foreground flex items-center gap-1">
@@ -611,7 +611,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 <span className="tabular-nums sm:block">
                   {foreignExchangeRate
                     ? `1 ${foreignCurrency} = ${foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK`
-                    : '—'}
+                    : '-'}
                 </span>
               </div>
               <div className="flex justify-between sm:block">
@@ -818,7 +818,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         </Card>
       )}
 
-      {/* Dimension retag history (dimensions plan PR6) — the immutable
+      {/* Dimension retag history (dimensions plan PR6): the immutable
           before/after trail. Stays Swedish (voucher detail surface). */}
       {dimensionsEnabled && retagLog.length > 0 && (
         <Card>
@@ -830,7 +830,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               const lineForRow = lines.find((l) => l.id === row.line_id)
               const fmt = (dims: Record<string, string>) => {
                 const entries = Object.entries(dims ?? {}).sort(([a], [b]) => Number(a) - Number(b))
-                return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '—'
+                return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '-'
               }
               return (
                 <div key={row.id} className="text-sm border-b last:border-0 pb-3 last:pb-0">
@@ -874,7 +874,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         />
       )}
 
-      {/* Opening-balance correction dialog — IB-aware (storno + rebook + relink) */}
+      {/* Opening-balance correction dialog: IB-aware (storno + rebook + relink) */}
       {showCorrectIB && entry && (
         <CorrectOpeningBalanceDialog
           entry={entry}
@@ -900,7 +900,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         />
       )}
 
-      {/* Edit draft dialog — drafts only; PATCHes the entry in place */}
+      {/* Edit draft dialog: drafts only; PATCHes the entry in place */}
       {showEdit && entry && entry.status === 'draft' && (
         <EditDraftEntryDialog
           entry={entry}

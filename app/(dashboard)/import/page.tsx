@@ -124,7 +124,7 @@ function BankFileImportWizard() {
   // Import result
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null)
 
-  // Active PSD2 connections — drives an overlap warning so users don't
+  // Active PSD2 connections: drives an overlap warning so users don't
   // accidentally upload a CSV covering periods we already sync nightly.
   const [activePsd2Banks, setActivePsd2Banks] = useState<string[]>([])
   useEffect(() => {
@@ -205,7 +205,7 @@ function BankFileImportWizard() {
 
       const txCount = data.data.parse_result.transactions.length
       if (data.data.parse_result.format === 'generic_csv') {
-        // Auto-detect failed or user picked "Annan CSV" — always route to manual column mapping.
+        // Auto-detect failed or user picked "Annan CSV": always route to manual column mapping.
         // Default mapping rarely matches, so advance regardless of tx count.
         setBankStep('column_mapping')
       } else if (txCount > 0) {
@@ -215,7 +215,7 @@ function BankFileImportWizard() {
           description: `${txCount} transaktioner hittades`,
         })
       } else {
-        // Format detected but no transactions parsed — parser couldn't extract rows
+        // Format detected but no transactions parsed: parser couldn't extract rows
         setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
       }
     } catch (err) {
@@ -291,7 +291,7 @@ function BankFileImportWizard() {
       {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
       <BankSyncStatusChip />
 
-      {/* Overlap warning — active PSD2 means file import will likely create
+      {/* Overlap warning: active PSD2 means file import will likely create
           duplicates of transactions the nightly sync already covers. */}
       {activePsd2Banks.length > 0 && (
         <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4">
@@ -828,7 +828,7 @@ function OpeningBalanceFlow() {
   }[]>([])
   const [executeResult, setExecuteResult] = useState<OpeningBalanceExecuteResult | null>(null)
 
-  // Determine steps — skip column mapping if confidence >= 0.8
+  // Determine steps: skip column mapping if confidence >= 0.8
   const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
   const steps: OpeningBalanceStep[] = needsMapping
     ? ['upload', 'column_mapping', 'edit', 'period', 'result']
@@ -1834,7 +1834,7 @@ function ArticlesFlow() {
 }
 
 // ============================================================
-// CSV/Excel Data Import Wizard — entity selector + sub-flow
+// CSV/Excel Data Import Wizard, entity selector + sub-flow
 // ============================================================
 
 type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
@@ -2172,7 +2172,7 @@ export default function ImportPage() {
     const qs = params.toString()
     router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
   }
-  // Extensions are active if compiled in — no runtime toggle check needed
+  // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
 
@@ -2284,7 +2284,7 @@ export default function ImportPage() {
               </div>
             )}
 
-            {/* 3. Banktransaktioner — manual file imports (bank file, CSV/Excel,
+            {/* 3. Banktransaktioner: manual file imports (bank file, CSV/Excel,
                 SIE) run entirely on uploaded data with no external service, so
                 they stay available in the sandbox, unlike the API-backed options
                 above (bank connection, provider migration) which need live

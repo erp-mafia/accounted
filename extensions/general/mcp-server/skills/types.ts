@@ -1,5 +1,5 @@
 /**
- * Skills over MCP — domain-knowledge bodies the server ships alongside tools.
+ * Skills over MCP: domain-knowledge bodies the server ships alongside tools.
  *
  * Two flavors live behind the same interface:
  *
@@ -8,7 +8,7 @@
  *    payroll). They document *how* to compose Accounted tools for a real-world
  *    workflow.
  *  - **horizontal / vertical / modifier** atoms are loaded dynamically from
- *    `agent_atom_registry` — the same atoms the in-app composer assembles for
+ *    `agent_atom_registry`: the same atoms the in-app composer assembles for
  *    a company. Exposing them here gives Claude.ai parity with the in-app
  *    surface (plan §13 MCP parity).
  *
@@ -25,7 +25,7 @@ export type SkillTier = 'workflow' | 'horizontal' | 'vertical' | 'modifier'
 /**
  * Pre-conditions a skill needs to be relevant to a company. `gnubok_list_skills`
  * filters out skills whose applicability doesn't match the current company by
- * default — agents get a focused list. Pass `include_all: true` on the tool
+ * default: agents get a focused list. Pass `include_all: true` on the tool
  * call to bypass the filter when needed.
  *
  * Each condition is optional and ANDed:
@@ -55,7 +55,7 @@ export interface Skill {
   tags: string[]
   /** Full skill body as Markdown. */
   body: string
-  /** Where the skill comes from — static workflow or a registry-loaded atom. */
+  /** Where the skill comes from: static workflow or a registry-loaded atom. */
   tier: SkillTier
   /** Optional company-context filter applied by gnubok_list_skills. */
   applicability?: SkillApplicability

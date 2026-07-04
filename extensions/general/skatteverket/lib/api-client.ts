@@ -124,7 +124,7 @@ async function getValidToken(
     return tokens.access_token
   }
 
-  // Need refresh — coalesce concurrent attempts.
+  // Need refresh: coalesce concurrent attempts.
   const inFlight = refreshInFlight.get(userId)
   if (inFlight) return inFlight
 
@@ -140,7 +140,7 @@ async function refreshTokenForUser(
 ): Promise<string> {
   // Re-read after entering the critical section. Another process may have
   // refreshed while we were waiting; if so, the row now has a new
-  // refresh_token and a future expiry — just hand it back.
+  // refresh_token and a future expiry: just hand it back.
   const tokens = await getTokens(supabase, userId)
   if (!tokens) {
     throw new SkatteverketAuthError(
@@ -208,7 +208,7 @@ export async function skvRequest(
   }
 
   // contentType defaults to application/json, which is right for moms +
-  // skattekonto. AGI's POST /underlag takes application/xml — callers pass
+  // skattekonto. AGI's POST /underlag takes application/xml: callers pass
   // the XML as a string body and override contentType.
   let serializedBody: string | undefined
   if (body !== undefined) {
@@ -229,8 +229,8 @@ export async function skvRequest(
   if (response.status === 401) {
     // SKV returns 401 for two distinct reasons that need different remedies:
     //   1. Genuine token expiry / invalid bearer (user must re-auth)
-    //   2. APIGW client lacks subscription for this API (developer portal fix)
-    //      — the bearer is valid but the gateway rejects the call.
+    //   2. APIGW client lacks subscription for this API (developer portal fix):
+    //      the bearer is valid but the gateway rejects the call.
     // Read the body and gateway-side headers so we can distinguish and
     // surface a useful message.
     const text = await response.text().catch(() => '')
@@ -238,7 +238,7 @@ export async function skvRequest(
     // WWW-Authenticate carries OAuth's machine-readable failure reason
     // (insufficient_scope / invalid_token). The x-skv-* / x-amzn-* / x-api-*
     // families are gateway-side hints SKV's APIGW emits when it rejects the
-    // call before reaching the application — the body is often empty in
+    // call before reaching the application: the body is often empty in
     // that case so the headers are the only signal.
     const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
     const skvHeaders: Record<string, string> = {}
@@ -253,7 +253,7 @@ export async function skvRequest(
         skvHeaders[k] = v
       }
     })
-    // Diagnostic detail (headers, body) belongs in server-side logs only —
+    // Diagnostic detail (headers, body) belongs in server-side logs only,
     // not in user-facing error messages. The structured logger redacts
     // sensitive keys and we further cap body length and strip Bearer tokens
     // so the diagnostic is bounded.
@@ -286,7 +286,7 @@ export async function skvRequest(
     // SKV explicitly declares the token revoked. Body shape observed in
     // production: { "error": "Token has been revoked." } with a generic
     // `Bearer realm="OAuth2 Client Realm"` challenge header. This is a
-    // terminal state — the bearer will never come back to life, regardless
+    // terminal state: the bearer will never come back to life, regardless
     // of refresh attempts (refresh_token from the same family is also dead).
     // Auto-clear the local row so /status stops claiming we're connected
     // and the next interaction forces a clean reconnect. We swallow any
@@ -308,7 +308,7 @@ export async function skvRequest(
 
     // APIGW subscription / client-credential problems: the gateway responds
     // before the bearer is ever evaluated. The user reconnecting won't help
-    // here — it's an Utvecklarportalen / APIGW configuration issue.
+    // here: it's an Utvecklarportalen / APIGW configuration issue.
     const looksLikeApigwIssue =
       lower.includes('client_id') ||
       lower.includes('client id') ||
@@ -330,7 +330,7 @@ export async function skvRequest(
     // subscription issue rather than a real session expiry. We refreshed
     // the local bearer immediately above, so an empty body with no
     // WWW-Authenticate means SKV's APIGW rejected the call before it
-    // reached the application — typically because the APIGW client isn't
+    // reached the application: typically because the APIGW client isn't
     // subscribed to the API at the URL we just hit. Telling the user to
     // "log in again" sends them down a dead end; be explicit about the
     // likely fix instead.
@@ -342,7 +342,7 @@ export async function skvRequest(
       try {
         const u = new URL(url)
         const parts = u.pathname.split('/').filter(Boolean)
-        // Take the first 3 segments — e.g. arbetsgivardeklaration/inlamning/v1
+        // Take the first 3 segments, e.g. arbetsgivardeklaration/inlamning/v1
         if (parts.length >= 1) apiHint = parts.slice(0, 3).join('/')
       } catch {
         // keep raw url
@@ -373,7 +373,7 @@ export async function skvRequest(
       statusCode: 403,
       body: safeBodyForLog(text),
     })
-    // Missing scope on the access token — fires when an existing connection
+    // Missing scope on the access token: fires when an existing connection
     // pre-dates an extension that needed a new scope (the AGI/`agd` rollout
     // is the canonical example). The user has to disconnect + reconnect to
     // re-issue a token with the broader scope set; we want to say so
@@ -389,7 +389,7 @@ export async function skvRequest(
         'MISSING_SCOPE'
       )
     }
-    // Behörighet saknas — user is authenticated but not authorized for this company
+    // Behörighet saknas: user is authenticated but not authorized for this company
     if (text.includes('Behörighet') || text.includes('behörighet')) {
       throw new SkatteverketAuthError(
         'Du har inte behörighet att agera för detta företag hos Skatteverket. ' +
@@ -405,7 +405,7 @@ export async function skvRequest(
 
   if (response.status === 429) {
     // Skatteverket may include a Retry-After header. We surface a generic
-    // Swedish message — callers can inspect the header on the thrown error
+    // Swedish message: callers can inspect the header on the thrown error
     // if they need to schedule a retry. The 4 req/sec local rate limiter
     // should normally prevent this; a 429 here implies the per-consumer
     // gateway quota was exceeded.
@@ -423,21 +423,21 @@ export async function skvRequest(
  * The `code` field helps the frontend show appropriate UI.
  *
  * Codes:
- *   NOT_CONNECTED      — no tokens stored; user needs to run BankID flow
- *   SESSION_EXPIRED    — 401 from SKV; refresh exhausted or token rejected
- *   REFRESH_EXHAUSTED  — refresh count hit cap (10) before user re-auth
- *   TOKEN_REVOKED      — 401 with "Token has been revoked." body; SKV killed
+ *   NOT_CONNECTED      : no tokens stored; user needs to run BankID flow
+ *   SESSION_EXPIRED    : 401 from SKV; refresh exhausted or token rejected
+ *   REFRESH_EXHAUSTED  : refresh count hit cap (10) before user re-auth
+ *   TOKEN_REVOKED      : 401 with "Token has been revoked." body; SKV killed
  *                        the bearer (BankID session ended, parallel connect
  *                        from another device, or auth-code reuse). Local row
  *                        is auto-cleared; user must reconnect with BankID.
- *   BEHORIGHET_SAKNAS  — 403 with "Behörighet" body; user not authorized
+ *   BEHORIGHET_SAKNAS  : 403 with "Behörighet" body; user not authorized
  *                        for this company at SKV (firmatecknare / ombud)
- *   MISSING_SCOPE      — 403 with "invalid_scope" body; the stored token
+ *   MISSING_SCOPE      : 403 with "invalid_scope" body; the stored token
  *                        was issued before the required scope existed.
  *                        User must disconnect + reconnect.
- *   ACCESS_DENIED      — generic 403
- *   RATE_LIMITED       — 429 from SKV API gateway
- *   TOKEN_CORRUPTED    — stored tokens cannot be decrypted (key rotated
+ *   ACCESS_DENIED      : generic 403
+ *   RATE_LIMITED       : 429 from SKV API gateway
+ *   TOKEN_CORRUPTED    : stored tokens cannot be decrypted (key rotated
  *                        or row tampered with); user must reconnect
  */
 export class SkatteverketAuthError extends Error {

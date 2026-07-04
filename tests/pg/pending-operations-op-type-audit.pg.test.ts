@@ -10,7 +10,7 @@ import { seedCompany } from './fixtures'
  * pending_operations_operation_type_check constraint.
  *
  * Guards against the bug class where an MCP tool ships with its executor and
- * risk tier but without the constraint-expansion migration — the staging
+ * risk tier but without the constraint-expansion migration: the staging
  * INSERT then fails with check_violation on every real call while dry_run
  * (which skips the INSERT) previews clean. That exact gap shipped with
  * gnubok_link_document_to_voucher and went unnoticed until agent feedback
@@ -27,7 +27,7 @@ const SERVER_TS = resolve(__dirname, '../../extensions/general/mcp-server/server
 
 // Matches `stagePendingOperation(<client>, <companyId>, <userId>, '<op_type>'`
 // across line breaks. If the staging signature changes, the call-site count
-// assertion below fails loudly — update this regex together with the signature.
+// assertion below fails loudly: update this regex together with the signature.
 const STAGE_CALL_RE = /stagePendingOperation\(\s*[\w.]+,\s*[\w.]+,\s*[\w.]+,\s*'([a-z_]+)'/g
 
 function extractStagedOpTypes(): { types: Set<string>; callSites: number } {
@@ -87,7 +87,7 @@ describe('pending_operations operation_type CHECK audit', () => {
 
     expect(
       rejected,
-      `op types staged in code but rejected by pending_operations constraints — ` +
+      `op types staged in code but rejected by pending_operations constraints: ` +
         `add them to pending_operations_operation_type_check in a new migration:\n${rejected.join('\n')}`,
     ).toEqual([])
   })

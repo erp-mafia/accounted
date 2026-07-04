@@ -28,10 +28,10 @@ For each issue lacking a type label:
 - If resolved: comment with the PR/commit link, verify the fix exists in `main`, then close.
 - Conversely, if a merged PR said `Closes #N` but #N is still open, close it with a pointer.
 
-## 3. Auto-fix small issues (propose-don't-merge) — cap 2 PRs/run
+## 3. Auto-fix small issues (propose-don't-merge): cap 2 PRs/run
 Pick issues that are **small, localized, and low-risk** (a clear bug in one file, a copy/label fix, a
 missing empty/loading state, a validation gap). **Never** auto-fix anything touching the bookkeeping
-engine, money math, migrations/triggers, auth, or compliance logic — those get `loop:needs-human`.
+engine, money math, migrations/triggers, auth, or compliance logic: those get `loop:needs-human`.
 - Branch `loop/issue-<n>`, minimal fix, run the **[`loop-verify`](../loop-verify/SKILL.md)** gate.
 - Open PR with body `Closes #<n>` + a one-line summary. Label `loop:auto`, `loop:triage`.
 - If the fix turns out larger/riskier than expected mid-way, abandon the branch and instead add a

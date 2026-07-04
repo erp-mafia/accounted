@@ -111,13 +111,13 @@ export default function JournalEntryForm({
   const [notes, setNotes] = useState(initialNotes ?? '')
   const [showNotes, setShowNotes] = useState(false)
   // Dimension tagging (kostnadsställe/projekt). The affordances render only
-  // when company_settings.dimensions_enabled — a UI-visibility gate; lines
+  // when company_settings.dimensions_enabled: a UI-visibility gate; lines
   // that already carry dimensions (e.g. a draft being edited) still round-trip
   // untouched when the toggle is off.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [showDims, setShowDims] = useState(false)
   // Header-level default dims ("gäller alla rader"). The per-row maps on
-  // `lines` are the ONE source of truth — this state only drives the header
+  // `lines` are the ONE source of truth: this state only drives the header
   // comboboxes; setHeaderDimension writes the default through to the rows.
   const [headerDims, setHeaderDims] = useState<Record<string, string>>({})
   // Which row's dimension popover is open (desktop table), and its container
@@ -133,7 +133,7 @@ export default function JournalEntryForm({
   // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): the
   // /book endpoint flags an already-booked sibling sharing date+amount+account.
   // Surface it and let the user book anyway. The override is bound to the
-  // reviewed candidate via a ref the next submit reads — force is sent ONLY on
+  // reviewed candidate via a ref the next submit reads: force is sent ONLY on
   // that retry, never on a normal submit or to the manual journal-entry endpoint.
   const [duplicateCandidate, setDuplicateCandidate] = useState<BookedDuplicateCandidate | null>(null)
   const forceDuplicateRef = useRef<{ force: true; expected_duplicate_journal_entry_id: string } | null>(null)
@@ -156,7 +156,7 @@ export default function JournalEntryForm({
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   // Month (YYYY-MM) of the most recently posted voucher this session. Used to
   // flag, at the review step, when the user is about to book into a different
-  // month — guards against accidentally posting to the wrong month.
+  // month: guards against accidentally posting to the wrong month.
   const [lastPostedMonth, setLastPostedMonth] = useState<string | null>(null)
   // Per-account saldo as of entryDate, keyed by account_number.
   // undefined = not fetched, null = fetch in flight.
@@ -218,10 +218,10 @@ export default function JournalEntryForm({
     loadBasCatalog().then(setCatalog).catch(() => {/* search degrades to the active chart */})
     // Company settings power two things here: dimensions_enabled gates the
     // tagging affordances (all modes, incl. the TransactionBookingDialog
-    // embed), and the default voucher series seeds the standalone form —
+    // embed), and the default voucher series seeds the standalone form:
     // prefer the per-source-type mapping when present; fall back to the legacy
     // default_voucher_series, then to 'A'. In edit mode the draft's own series
-    // is pre-filled — never override it from the company defaults.
+    // is pre-filled: never override it from the company defaults.
     fetch('/api/settings').then(r => r.json()).then(({ data }) => {
       if (!data) return
       setDimensionsEnabled(data.dimensions_enabled === true)
@@ -289,7 +289,7 @@ export default function JournalEntryForm({
         }
       }
     } catch {
-      // Non-critical — user can enter rate manually
+      // Non-critical: user can enter rate manually
     } finally {
       setIsFetchingRate(false)
     }
@@ -314,7 +314,7 @@ export default function JournalEntryForm({
   )
 
   // Fetch per-account saldo as of entryDate for the accounts currently on the
-  // form. Balances are reference-only ("saldo before this entry") — they ignore
+  // form. Balances are reference-only ("saldo before this entry"): they ignore
   // the draft lines the user is typing, by design.
   useEffect(() => {
     if (!accountsKey) {
@@ -339,7 +339,7 @@ export default function JournalEntryForm({
         if (!res.ok) {
           // 4xx (e.g. future entryDate rejected by Zod) or 5xx: collapse the
           // loading skeleton so the column doesn't get stuck. Saldo is a
-          // reference value, not authoritative — showing 0 here is preferable
+          // reference value, not authoritative: showing 0 here is preferable
           // to an indefinite spinner.
           if (cancelled) return
           setAccountBalances((prev) => {
@@ -361,7 +361,7 @@ export default function JournalEntryForm({
           return next
         })
       } catch {
-        // Reference value — failure is non-fatal, just leave previous state.
+        // Reference value: failure is non-fatal, just leave previous state.
       }
     }, 150)
 
@@ -372,7 +372,7 @@ export default function JournalEntryForm({
   }, [accountsKey, entryDate])
 
   // New rows inherit the current header default (a row without a per-row
-  // override follows the header — see setHeaderDimension).
+  // override follows the header (see setHeaderDimension).
   const makeBlankLine = useCallback(
     (): FormLine =>
       Object.keys(headerDims).length > 0
@@ -399,7 +399,7 @@ export default function JournalEntryForm({
    * (including clearing); rows whose value differs are per-row overrides and
    * are left untouched. A row explicitly set to the same code as the header is
    * indistinguishable from an inherited one and follows later header changes
-   * by design — the per-row maps stay the single source of truth.
+   * by design: the per-row maps stay the single source of truth.
    */
   const setHeaderDimension = (dimNo: string, code: string | null) => {
     const prev = headerDims[dimNo]
@@ -412,7 +412,7 @@ export default function JournalEntryForm({
     })
     setLines((ls) =>
       ls.map((l) => {
-        if (l.dimensions?.[dimNo] !== prev) return l // per-row override — keep
+        if (l.dimensions?.[dimNo] !== prev) return l // per-row override: keep
         const dims = { ...(l.dimensions ?? {}) }
         if (next) dims[dimNo] = next
         else delete dims[dimNo]
@@ -472,7 +472,7 @@ export default function JournalEntryForm({
     }
 
     // Auto-fill line description from account name when selecting an account.
-    // NOTE: we intentionally do NOT auto-fill a balancing amount here — that was
+    // NOTE: we intentionally do NOT auto-fill a balancing amount here: that was
     // surprising when splitting across several lines. The balancing amount is
     // now opt-in via double-clicking a debit/credit field (handleFillBalance).
     if (field === 'account_number' && value) {
@@ -484,7 +484,7 @@ export default function JournalEntryForm({
       if (account) {
         updated[index].line_description = account.account_name
         // Fortnox-style: seed the verifikationstext from the first row's account
-        // when the user hasn't typed one yet. Non-destructive — never overwrites.
+        // when the user hasn't typed one yet. Non-destructive: never overwrites.
         if (index === 0 && !description.trim()) {
           setDescription(account.account_name)
         }
@@ -553,7 +553,7 @@ export default function JournalEntryForm({
   // till rad": once the last row is started (account or amount), append a fresh
   // blank below it. Applies uniformly to typed, templated and copied lines.
   // The guard lives inside the functional updater so chained updates see each
-  // other's result — making it idempotent and safe under StrictMode's dev-only
+  // other's result, making it idempotent and safe under StrictMode's dev-only
   // double-invoke (no runaway append, no double blank row).
   useEffect(() => {
     setLines((prev) => {
@@ -566,7 +566,7 @@ export default function JournalEntryForm({
   }, [lines, makeBlankLine])
 
   // Inline (bare) review: move focus to the confirm button when it opens so
-  // Enter posts — parity with the ConfirmationDialog's autoFocusConfirm.
+  // Enter posts: parity with the ConfirmationDialog's autoFocusConfirm.
   useEffect(() => {
     if (bare && showReview) {
       requestAnimationFrame(() => bareConfirmRef.current?.focus())
@@ -611,7 +611,7 @@ export default function JournalEntryForm({
     : 0
 
   // Month/period safety signals surfaced at the review step (not as a blocking
-  // dialog on every date change — that would add friction to routine entry).
+  // dialog on every date change (that would add friction to routine entry).
   const monthLabel = useCallback(
     (ym: string) => {
       const [y, m] = ym.split('-').map(Number)
@@ -655,7 +655,7 @@ export default function JournalEntryForm({
 
   // After a new account is created, refresh the chart, auto-select it on the
   // line that initiated the create, and close the dialog. All other form
-  // state is preserved — we never navigate away from the form.
+  // state is preserved: we never navigate away from the form.
   const handleAccountCreated = async (account: BASAccount) => {
     await fetchAccounts()
     if (creatingAccountForLine != null) {
@@ -675,7 +675,7 @@ export default function JournalEntryForm({
     setShowReview(true)
   }
 
-  // Whether an Enter should open the review — mirrors the review button's
+  // Whether an Enter should open the review: mirrors the review button's
   // enable gate exactly, so Enter never submits something the button wouldn't.
   const canSubmitReview = () =>
     isBalanced &&
@@ -690,7 +690,7 @@ export default function JournalEntryForm({
   // Enter anywhere in the form = "Granska & skapa": opens the review exactly as
   // the button does, from any field. Navigation is Tab's job. Two Enter
   // exceptions stay intact: the account combobox (it calls preventDefault to
-  // select the highlighted account — we skip when defaultPrevented) and the
+  // select the highlighted account (we skip when defaultPrevented) and the
   // internal-note textarea (newlines). The inline review owns its own Enter.
   const handleFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter') return
@@ -702,7 +702,7 @@ export default function JournalEntryForm({
 
   // Enter-to-advance inside the konteringsrader: konto → debet → kredit →
   // nästa rads konto. Navigation only fires while the entry is NOT
-  // submittable — once the voucher balances, Enter falls through to the
+  // submittable: once the voucher balances, Enter falls through to the
   // form-level handler above and opens the review instead, so a single Enter
   // never both moves focus and submits.
   const handleAmountKeyDown =
@@ -855,7 +855,7 @@ export default function JournalEntryForm({
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // User dismissed the activation dialog — no toast needed
+        // User dismissed the activation dialog: no toast needed
       } else {
         const anyErr = err as {
           body?: { error?: { code?: string; details?: { candidate?: BookedDuplicateCandidate } } }
@@ -863,7 +863,7 @@ export default function JournalEntryForm({
         }
         const candidate = anyErr.body?.error?.details?.candidate
         if (anyErr.body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
-          // Soft duplicate guard fired — don't dead-end on a toast that merely
+          // Soft duplicate guard fired: don't dead-end on a toast that merely
           // says "book anyway". Open the dialog so the user can review the
           // existing verifikat or confirm. handleBookAnyway re-submits with
           // force bound to this candidate.
@@ -890,7 +890,7 @@ export default function JournalEntryForm({
     if (!candidate) return
     forceDuplicateRef.current = {
       force: true,
-      // Bind on the voucher id — present on both a sibling-transaction candidate
+      // Bind on the voucher id: present on both a sibling-transaction candidate
       // and a ledger-only voucher candidate (which has no transaction_id).
       expected_duplicate_journal_entry_id: candidate.journal_entry_id,
     }
@@ -943,7 +943,7 @@ export default function JournalEntryForm({
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // Activation dialog dismissed — silent
+        // Activation dialog dismissed: silent
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
@@ -959,7 +959,7 @@ export default function JournalEntryForm({
   }
 
   // Edit an existing draft: PATCH in place (postJournalEntry routes to the
-  // editEntryId URL) and keep it a draft. No field reset — the host dialog
+  // editEntryId URL) and keep it a draft. No field reset: the host dialog
   // closes on success via onUpdated.
   const handleSaveEdit = async () => {
     if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
@@ -973,7 +973,7 @@ export default function JournalEntryForm({
       onUpdated?.()
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // Activation dialog dismissed — silent
+        // Activation dialog dismissed: silent
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
@@ -994,7 +994,7 @@ export default function JournalEntryForm({
     <div
       className="space-y-4"
       // The host dialog swallows Escape (accidental-close guard), so Escape
-      // here is free to mean "back to the form" — keyboard mirror of ←.
+      // here is free to mean "back to the form": keyboard mirror of ←.
       onKeyDown={(e) => {
         if (e.key === 'Escape' && !isSubmitting) {
           e.stopPropagation()
@@ -1073,7 +1073,7 @@ export default function JournalEntryForm({
     <div className="space-y-4" onKeyDown={handleFormKeyDown}>
       {bare && showReview ? reviewPanel : (
       <>
-      {/* Verifikat metadata — compact bar on top (Fortnox-style). Date, series
+      {/* Verifikat metadata: compact bar on top (Fortnox-style). Date, series
           and period are pre-filled; the period derives from the date. The
           konteringsrader below are the focus. */}
       <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
@@ -1249,7 +1249,7 @@ export default function JournalEntryForm({
           </div>
         )}
 
-        {/* Header default dims — writes through to all rows without a per-row
+        {/* Header default dims: writes through to all rows without a per-row
             override (see setHeaderDimension for the inheritance rule). */}
         {dimensionsEnabled && showDims && (
           <div className="max-w-md space-y-1">
@@ -1282,7 +1282,7 @@ export default function JournalEntryForm({
         )}
       </div>
 
-      {/* Entry lines — mobile cards */}
+      {/* Entry lines: mobile cards */}
       <div className="sm:hidden space-y-3">
         {lines.map((line, index) => (
           <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
@@ -1401,7 +1401,7 @@ export default function JournalEntryForm({
         </div>
       </div>
 
-      {/* Entry lines — desktop table */}
+      {/* Entry lines: desktop table */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -1515,7 +1515,7 @@ export default function JournalEntryForm({
                             className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border bg-card p-3 shadow-md"
                             onKeyDown={(e) => {
                               // The comboboxes preventDefault their own Escape
-                              // (closing their dropdown) — only an unhandled
+                              // (closing their dropdown): only an unhandled
                               // Escape closes the popover.
                               if (e.key === 'Escape' && !e.defaultPrevented) {
                                 e.preventDefault()
@@ -1592,7 +1592,7 @@ export default function JournalEntryForm({
         </p>
       </div>
 
-      {/* Document attachments — hidden when editing a draft; underlag is
+      {/* Document attachments: hidden when editing a draft; underlag is
           managed from the verifikat detail page (JournalEntryAttachments). */}
       {!embedded && !editEntryId && (
         <div>

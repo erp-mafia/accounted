@@ -143,7 +143,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       {expanded && (
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Justera skatteavdrag eller arbetsgivaravgift för den här anställde — t.ex. för FoU-avdrag eller
+            Justera skatteavdrag eller arbetsgivaravgift för den här anställde, t.ex. för FoU-avdrag eller
             jämkning. Justerade värden används vid bokföring och AGI-rapportering. Endast tillåtet i
             granskningsläge.
           </p>

@@ -39,7 +39,7 @@ This is a skattemässig justering ONLY. NEVER booked in accounting. Reported on 
 
 ### Transition rule for pre-2019 periodiseringsfonder
 
-Funds created before 2019 (when rate was 22%) require **gross-up of 103–106%** on reversal to compensate for rate reduction. Handled only in tax calculation.
+Funds created before 2019 (when rate was 22%) require **gross-up of 103-106%** on reversal to compensate for rate reduction. Handled only in tax calculation.
 
 ---
 
@@ -60,7 +60,7 @@ Replace arbetsgivaravgifter for employees.
 - Net effect: estimated deduction, reconciled following year
 
 **Reduced rates:**
-- Pensioners born 1938–1958: 10.21% rate, 10% schablonavdrag
+- Pensioners born 1938-1958: 10.21% rate, 10% schablonavdrag
 - Passive businesses: SLP 24.26% instead, 20% schablonavdrag
 
 **Additional nedsättning:** 7.5% (max 15,000 SEK/year) for active businesses with överskott > 40,000 SEK. Calculated automatically by Skatteverket.

@@ -5,7 +5,7 @@
 // Translation happens at the render layer via these slug → key helpers.
 //
 // For known slugs, return the translation key under the `extensions` namespace.
-// For unknown slugs, return null — callers fall back to the manifest values.
+// For unknown slugs, return null: callers fall back to the manifest values.
 
 export function extensionNameKey(slug: string): string | null {
   switch (slug) {

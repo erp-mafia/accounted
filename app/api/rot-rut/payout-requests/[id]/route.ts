@@ -8,7 +8,7 @@ import type { RotRutPayoutRequestStatus } from '@/types'
 /**
  * Forward-only lifecycle. Reactivation of cancelled/rejected begäran is
  * deliberately impossible from the API (and double-guarded by the DB
- * trigger enforce_rot_rut_request_reactivation) — retry after avslag means
+ * trigger enforce_rot_rut_request_reactivation): retry after avslag means
  * generating a NEW file, mirroring how Skatteverkets e-tjänst works.
  */
 const ALLOWED_TRANSITIONS: Record<RotRutPayoutRequestStatus, RotRutPayoutRequestStatus[]> = {
@@ -94,7 +94,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponse(updateError, log, { requestId })
     }
 
-    // Status transitions record Skatteverkets beslut — the audit trail must
+    // Status transitions record Skatteverkets beslut: the audit trail must
     // show who recorded them.
     log.info('rot/rut payout request status changed', {
       userId: user.id,
@@ -105,7 +105,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
 
     // Full approval: mirror the per-invoice godkänt belopp onto the items.
-    // Partial approval leaves item amounts null — the split is only known
+    // Partial approval leaves item amounts null: the split is only known
     // from Skatteverkets beslut, never guessed.
     if (input.status === 'paid' && input.decided_total === undefined) {
       const { data: items, error: itemsFetchError } = await supabase

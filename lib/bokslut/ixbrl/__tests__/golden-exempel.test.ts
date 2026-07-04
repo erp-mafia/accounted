@@ -41,7 +41,7 @@ describe('golden: official K2 exempel-1', () => {
     // list): the equity-change total now reuses EgetKapital, and the
     // underskrift-ort concept was dropped with BFN's updated signing rules.
     // Our generator accounts for both. Anything beyond these two means the
-    // registry lost coverage — investigate before widening this list.
+    // registry lost coverage: investigate before widening this list.
     expect(missing.sort()).toEqual([
       'se-gen-base:ForandringEgetKapitalTotalt',
       'se-gen-base:UndertecknandeArsredovisningOrt',
@@ -112,7 +112,7 @@ describe('golden: official K2 exempel-1', () => {
       expect(generatedNetto).toContain(attr)
     }
     // The official RR shows costs with the minus OUTSIDE the fact element and
-    // no sign attribute — verify we do the same for Personalkostnader.
+    // no sign attribute: verify we do the same for Personalkostnader.
     expect(official).toMatch(/-<ix:nonFraction[^>]*name="se-gen-base:Personalkostnader"/)
     expect(generated).toMatch(/−<ix:nonFraction[^>]*name="se-gen-base:Personalkostnader"/)
     expect(generated).not.toMatch(/name="se-gen-base:Personalkostnader"[^>]*sign=/)

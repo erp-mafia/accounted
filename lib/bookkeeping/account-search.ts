@@ -3,20 +3,20 @@
  *
  * Two problems this solves over a plain `account_name.includes(query)`:
  *
- *  1. Coverage — the combobox is fed two sources: the company's *active* chart
+ *  1. Coverage: the combobox is fed two sources: the company's *active* chart
  *     and (optionally) the full BAS 2026 catalog. A user who types "IT" should
  *     find 6540 "IT-tjänster" even if it was never added to their chart yet.
  *     Active accounts always rank first; selecting a catalog-only account is
  *     handled by the existing activate-on-commit rail.
  *
- *  2. Matching — names are terse and statutory, so the everyday word the user
+ *  2. Matching: names are terse and statutory, so the everyday word the user
  *     reaches for is often in the description, mid-name, or typed without
  *     diacritics. We fold diacritics (so "lon" matches "Lön"), search
  *     number + name + description, and require every token to match (so word
  *     order and the hyphen in "IT-tjänster" stop mattering).
  *
  * Build the index once per (active, catalog) pair with buildAccountIndex, then
- * call searchAccounts per keystroke — the per-keystroke work is just substring
+ * call searchAccounts per keystroke: the per-keystroke work is just substring
  * checks over pre-folded haystacks.
  */
 
@@ -39,9 +39,9 @@ export interface AccountSearchItem {
 
 export interface AccountIndexEntry {
   item: AccountSearchItem
-  /** Folded "number name description" — the text every token is matched against. */
+  /** Folded "number name description": the text every token is matched against. */
   haystack: string
-  /** Folded name only — used for "starts with" / name-hit ranking. */
+  /** Folded name only: used for "starts with" / name-hit ranking. */
   nameFolded: string
 }
 

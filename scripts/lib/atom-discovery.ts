@@ -8,11 +8,11 @@
  * Keeping discovery in one place means the two paths can never drift on which
  * skills count as atoms, how titles/tokens are derived, or how frontmatter is read.
  *
- * Tiers discovered (the curated set — swarm-* and other Claude-Code-only skills
+ * Tiers discovered (the curated set: swarm-* and other Claude-Code-only skills
  * are intentionally NOT matched here, so they never become atoms):
- *   horizontal — `.claude/skills/swedish-*\/SKILL.md`        (regulatory)
- *   vertical   — `.claude/skills/industry/<slug>\/SKILL.md`  (industry)
- *   modifier   — `.claude/skills/modifier/<slug>\/SKILL.md`  (cross-cutting)
+ *   horizontal: `.claude/skills/swedish-*\/SKILL.md`        (regulatory)
+ *   vertical  : `.claude/skills/industry/<slug>\/SKILL.md`  (industry)
+ *   modifier  : `.claude/skills/modifier/<slug>\/SKILL.md`  (cross-cutting)
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises'
@@ -30,13 +30,13 @@ export interface DiscoveredAtom {
   sni_prefixes: string[]
   trigger_signals: Record<string, unknown>
   /**
-   * Token estimate over the SKILL.md content ONLY — the unit actually loaded
+   * Token estimate over the SKILL.md content ONLY: the unit actually loaded
    * into the system prompt / returned by gnubok_load_skill. (We deliberately do
    * NOT count references/*.md, which are not read at runtime.)
    */
   estimated_tokens: number
   /**
-   * Repo-relative path to the body source — SKILL.md for top-level skills,
+   * Repo-relative path to the body source: SKILL.md for top-level skills,
    * the references/*.md file for reference children (provenance + dev-fallback).
    */
   body_path: string
@@ -50,7 +50,7 @@ export interface DiscoveredAtom {
    * NULL for a top-level skill; the parent skill's id for a reference child.
    * Reference rows are hidden from every catalog (the metadata index, the MCP
    * skill list, the composer atom index, the settings panel) by a
-   * `parent_atom_id IS NULL` filter — they reach the model only via an explicit
+   * `parent_atom_id IS NULL` filter: they reach the model only via an explicit
    * gnubok_load_skill(<child id>) call after the parent SKILL.md is loaded.
    */
   parent_atom_id: string | null
@@ -69,7 +69,7 @@ function normalizeLineEndings(text: string): string {
 // ── Frontmatter parsing ────────────────────────────────────────────────
 // SKILL.md files use YAML frontmatter with `name`, `description`, and optionally
 // `tier`, `sni_prefixes`, `trigger_signals`, `estimated_tokens`, `version`. We
-// parse only the keys we care about — js-yaml is not in deps.
+// parse only the keys we care about: js-yaml is not in deps.
 
 interface Frontmatter {
   raw: string
@@ -161,7 +161,7 @@ function unquote(s: string): string {
 
 // ── Token estimation ──────────────────────────────────────────────────
 // Chars/4 baseline (Anthropic guidance for English). Swedish text inflates on
-// Opus 4.7's tokenizer — re-measure post-POC.
+// Opus 4.7's tokenizer: re-measure post-POC.
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
@@ -237,11 +237,11 @@ async function readAtom(
   const content = normalizeLineEndings(await readFile(skillPath, 'utf8'))
   const fm = extractFrontmatter(content)
   if (!fm) {
-    console.warn(`  skipped ${relative(rootDir, skillPath)} — no frontmatter`)
+    console.warn(`  skipped ${relative(rootDir, skillPath)}: no frontmatter`)
     return []
   }
   if (!fm.description) {
-    console.warn(`  skipped ${relative(rootDir, skillPath)} — missing description`)
+    console.warn(`  skipped ${relative(rootDir, skillPath)}: missing description`)
     return []
   }
 
@@ -264,7 +264,7 @@ async function readAtom(
     sni_prefixes: fm.sniPrefixes ?? [],
     trigger_signals: fm.triggerSignals ?? {},
     // Estimate over the loaded unit (SKILL.md + footer), not the whole
-    // directory — references are loaded separately and budgeted on their own row.
+    // directory: references are loaded separately and budgeted on their own row.
     estimated_tokens: fm.estimatedTokens ?? estimateTokens(body),
     body_path: relative(rootDir, skillPath),
     body,
@@ -279,7 +279,7 @@ async function readAtom(
     slug: `${slug}/${r.slug}`,
     title: r.descriptor || deriveTitle(r.slug),
     description: r.descriptor
-      ? `${r.descriptor} — reference for ${parent.title}`
+      ? `${r.descriptor}: reference for ${parent.title}`
       : `Reference for ${parent.title}`,
     sni_prefixes: [],
     trigger_signals: {},
@@ -306,7 +306,7 @@ interface ReferenceFile {
   relPath: string
   /** Child-id suffix derived from the path, e.g. "bfl-bfnar". */
   slug: string
-  /** Raw file content — the child's DB-inlined body. */
+  /** Raw file content: the child's DB-inlined body. */
   body: string
   /** First ATX heading (or first line), used as a human-readable label. */
   descriptor: string
@@ -367,11 +367,11 @@ function buildReferencesFooter(parentId: string, refs: ReferenceFile[]): string 
     '',
     '## Loadable references',
     '',
-    'The reference files named above are NOT included in this body. When a question genuinely needs that depth, load the specific one on demand with `gnubok_load_skill` — and only then:',
+    'The reference files named above are NOT included in this body. When a question genuinely needs that depth, load the specific one on demand with `gnubok_load_skill`, and only then:',
     '',
   ]
   for (const r of refs) {
-    const label = r.descriptor ? ` — ${r.descriptor}` : ''
+    const label = r.descriptor ? `: ${r.descriptor}` : ''
     lines.push(`- \`${r.relPath}\` → \`gnubok_load_skill("${parentId}/${r.slug}")\`${label}`)
   }
   return '\n' + lines.join('\n') + '\n'

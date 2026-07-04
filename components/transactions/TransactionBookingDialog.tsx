@@ -151,7 +151,7 @@ export default function TransactionBookingDialog({
     // Link any attached documents to the new journal entry: freshly uploaded
     // files, and existing inbox documents picked via InboxDocumentPicker. For
     // picked docs, inbox_item_id stamps the inbox item as consumed so it drops
-    // out of the active inbox — see app/api/documents/[id]/link/route.ts.
+    // out of the active inbox: see app/api/documents/[id]/link/route.ts.
     // transaction_id additionally pins the doc to the transaction row so the
     // /transactions list shows the underlag indicator (first linked doc wins).
     const filesToLink = uploadedFiles.filter((f) => f.status === 'uploaded' && f.id)
@@ -199,11 +199,11 @@ export default function TransactionBookingDialog({
     }
 
     // The server pins only when the tx has no document_id yet (first linked
-    // doc wins) — mirror that here so the optimistic state never claims a
+    // doc wins): mirror that here so the optimistic state never claims a
     // pin the server refused to swap.
     const pinnedDocId = transaction.document_id ? null : firstLinkedDocId
     if (pinnedDocId) {
-      // Same event AgentChat dispatches after uploads — flips the inbox card's
+      // Same event AgentChat dispatches after uploads: flips the inbox card's
       // paperclip optimistically without a refetch.
       window.dispatchEvent(
         new CustomEvent('Accounted:transaction-document-linked', {
@@ -273,7 +273,7 @@ export default function TransactionBookingDialog({
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
-          {/* Document column — sticky on desktop so the receipt stays visible
+          {/* Document column: sticky on desktop so the receipt stays visible
               while the form scrolls; stacks above the form on smaller screens. */}
           <div className="flex h-[45vh] flex-col gap-3 lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
             {currentDocId ? (
@@ -292,7 +292,7 @@ export default function TransactionBookingDialog({
               </div>
             )}
 
-            {/* Attach controls — only when the transaction has no pre-linked
+            {/* Attach controls: only when the transaction has no pre-linked
                 document (a pre-linked one is already the verifikat's underlag). */}
             {!preexistingDocId && (
               <div className="shrink-0 space-y-2">

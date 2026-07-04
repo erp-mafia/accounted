@@ -70,12 +70,12 @@ export function InvoicingSettingsContent() {
         </div>
       </SettingsFormWrapper>
 
-      {/* PDF settings — saves individually via toggle switches */}
+      {/* PDF settings: saves individually via toggle switches */}
       <div className="border-t border-border pt-8">
         <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
       </div>
 
-      {/* Invoice email texts — autosaves on blur */}
+      {/* Invoice email texts: autosaves on blur */}
       <div className="border-t border-border pt-8">
         <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
       </div>

@@ -9,7 +9,7 @@ ensureInitialized()
 /**
  * Mark the AGI period's tax payment (skatt + avgifter) as paid.
  *
- * This is a manual confirmation by the user — bank reconciliation against
+ * This is a manual confirmation by the user: bank reconciliation against
  * Skattekontot transactions can also flip this flag automatically (handled
  * elsewhere via the Skattekonto sync).
  */

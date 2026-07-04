@@ -13,7 +13,7 @@ describe('company_settings.default_voucher_series_per_source_type', () => {
     )
 
     expect(result.rows).toHaveLength(1)
-    // The default is a JSONB literal cast — we don't pin the exact whitespace,
+    // The default is a JSONB literal cast: we don't pin the exact whitespace,
     // just verify the migration installed a default that includes the expected
     // source_type keys.
     const defaultValue = result.rows[0]?.column_default ?? ''

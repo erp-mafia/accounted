@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock dependencies — factory must not reference outer variables
+// Mock dependencies: factory must not reference outer variables
 const mockCreateSession = vi.fn()
 const mockGetAccountBalance = vi.fn()
 vi.mock('@/extensions/general/enable-banking/lib/api-client', () => ({
@@ -70,7 +70,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
         // Find pending connection by oauth_state
         return mockChain({ data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1' }, error: null })
       }
-      // Update connection — capture the payload, then chain returns the
+      // Update connection: capture the payload, then chain returns the
       // updated row via .select().single() for the audit event emission.
       const chain: Record<string, unknown> = {}
       chain.update = vi.fn((payload: Record<string, unknown>) => {

@@ -10,11 +10,11 @@ export interface OwnAccountTransfer {
   counterCashAccountId: string
   /** BAS ledger account of the counter account (debit/credit target). */
   counterLedgerAccount: string
-  /** Currency of the counter account (informational — pairing key was IBAN). */
+  /** Currency of the counter account (informational: pairing key was IBAN). */
   counterCurrency: string
   /**
    * Paired transaction id when the other leg has already been ingested.
-   * Null when only this leg is present so far — the categorizer still books
+   * Null when only this leg is present so far: the categorizer still books
    * the correct transfer entry on this side; the other leg will match when
    * it arrives.
    */
@@ -50,7 +50,7 @@ export async function detectOwnAccountTransfer(
   // Defense-in-depth: refuse to route to a non-cash BAS account. cash_accounts
   // is constrained to BAS class 19 today but a future migration could relax it.
   if (!/^19[0-9]{2}$/.test(counterAccount.ledger_account)) {
-    log.warn('counter account has non-cash ledger code — refusing to pair', {
+    log.warn('counter account has non-cash ledger code: refusing to pair', {
       companyId,
       counterLedger: counterAccount.ledger_account,
     })
@@ -65,8 +65,8 @@ export async function detectOwnAccountTransfer(
   // of the opposite sign (a supplier payment, a payroll batch, ...). Without
   // an amount constraint the first one wins, and pairTransactionId can point
   // at a completely unrelated row. For same-currency transfers we tighten the
-  // filter to the exact opposite amount. For cross-currency we can't — FX
-  // converts the figure — so we fall back to the loose window and then pick
+  // filter to the exact opposite amount. For cross-currency we can't: FX
+  // converts the figure: so we fall back to the loose window and then pick
   // the candidate whose magnitude is closest to the original.
   const dateFrom = addDays(transaction.date, -2)
   const dateTo = addDays(transaction.date, 2)

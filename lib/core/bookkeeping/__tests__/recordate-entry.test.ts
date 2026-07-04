@@ -8,7 +8,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 
 // ============================================================
-// Mock — sequential results, separate client/builder (see storno-service.test)
+// Mock: sequential results, separate client/builder (see storno-service.test)
 // ============================================================
 
 let resultIdx: number
@@ -42,13 +42,13 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   getNextVoucherNumber: vi.fn(async () => 1),
 }))
 
-// On-demand BAS backfill — never triggered here (accounts resolve on the
+// On-demand BAS backfill: never triggered here (accounts resolve on the
 // first read in every scenario below).
 vi.mock('@/lib/bookkeeping/account-backfill', () => ({
   backfillStandardBASAccounts: vi.fn(async () => []),
 }))
 
-// resolvePeriodStatusForDate is the classification gate — mock it directly so
+// resolvePeriodStatusForDate is the classification gate: mock it directly so
 // each test controls whether the target date is open/locked/closed/uncovered.
 const mockResolve = vi.fn()
 vi.mock('@/lib/core/bookkeeping/period-service', () => ({

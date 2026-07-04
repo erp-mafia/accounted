@@ -78,7 +78,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Inga konton att skapa.' }, { status: 400 })
     }
 
-    // Prepare accounts for upsert (idempotent — safe to retry)
+    // Prepare accounts for upsert (idempotent, safe to retry)
     const accountsToUpsert = accounts.map(account => {
       const accountClass = parseInt(account.number.charAt(0), 10) || 1
       const accountGroup = account.number.substring(0, 2)

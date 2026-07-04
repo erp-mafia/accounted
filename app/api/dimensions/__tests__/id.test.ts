@@ -2,7 +2,7 @@
  * Tests for PATCH /api/dimensions/[id] (update dimension).
  *
  * Covers: 401, empty-body validation (400), 404, the is_system name-lock
- * ("Systemdimensioner kan inte döpas om" — 400 DIMENSION_SYSTEM_RENAME),
+ * ("Systemdimensioner kan inte döpas om", 400 DIMENSION_SYSTEM_RENAME),
  * archiving a system dimension (allowed), and the happy rename of a custom
  * dimension.
  */

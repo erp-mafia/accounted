@@ -4,7 +4,7 @@ import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 // The custom-domain routes are gated off by default (product decision
-// 2026-07-02) — enable the flag for the behavior tests, and prove the gate
+// 2026-07-02): enable the flag for the behavior tests, and prove the gate
 // itself in the last describe.
 beforeEach(() => {
   process.env.INBOX_CUSTOM_DOMAINS_ENABLED = 'true'

@@ -84,7 +84,7 @@ export default function ArticleDetailPage({
 
   // Update runs through useSubmitWithAccountActivation so an
   // ACCOUNTS_NOT_IN_CHART response (revenue account not yet activated) opens
-  // the standard activate-and-retry dialog — same UX as the journal entry form.
+  // the standard activate-and-retry dialog: same UX as the journal entry form.
   const pendingUpdateRef = useRef<CreateArticleInput | null>(null)
   const submitUpdate = useCallback(async () => {
     const response = await fetch(`/api/articles/${id}`, {

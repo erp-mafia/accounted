@@ -11,7 +11,7 @@ import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates
 import type { CategorizationTemplate } from '@/types'
 
 function formatDate(iso: string | null) {
-  if (!iso) return '—'
+  if (!iso) return '-'
   return new Date(iso).toLocaleDateString('sv-SE', {
     year: 'numeric',
     month: 'short',

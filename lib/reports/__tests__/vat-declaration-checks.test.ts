@@ -69,7 +69,7 @@ describe('runVatDeclarationChecks', () => {
       ...emptyRutor,
       ruta21: 10000,
       ruta30: 2500,
-      ruta48: 100, // Calculated input VAT missing — should be ~2500
+      ruta48: 100, // Calculated input VAT missing: should be ~2500
       ruta49: 2400,
     }
     const findings = runVatDeclarationChecks(rutor)
@@ -84,7 +84,7 @@ describe('runVatDeclarationChecks', () => {
       ...emptyRutor,
       ruta10: 100,
       ruta48: 20,
-      ruta49: 99, // wrong — should be 80
+      ruta49: 99, // wrong: should be 80
     }
     const findings = runVatDeclarationChecks(rutor)
     const drift = findings.find((f) => f.code === 'SUMMA_MOMS_DRIFT')
@@ -102,12 +102,12 @@ describe('runVatDeclarationChecks', () => {
     expect(findings.find((f) => f.code === 'SUMMA_MOMS_DRIFT')).toBeUndefined()
   })
 
-  // SKV §4.1.1.4 rule 1 — taxable sales base without output VAT.
+  // SKV §4.1.1.4 rule 1: taxable sales base without output VAT.
   it('flags ERROR when taxable sales (ruta 05) booked without output VAT', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,
       ruta05: 10000,
-      // ruta 10/11/12 all zero — SKV rule 1 violation
+      // ruta 10/11/12 all zero: SKV rule 1 violation
       ruta49: 0,
     }
     const findings = runVatDeclarationChecks(rutor)
@@ -150,7 +150,7 @@ describe('runVatDeclarationChecks', () => {
     expect(findings.find((f) => f.code === 'OUTPUT_VAT_WITHOUT_SALES_BASE')?.status).toBe('ERROR')
   })
 
-  // SKV §4.1.1.4 rule 5 — import base without import output VAT.
+  // SKV §4.1.1.4 rule 5: import base without import output VAT.
   it('flags ERROR when import base (ruta 50) without import output VAT', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,
@@ -163,7 +163,7 @@ describe('runVatDeclarationChecks', () => {
     expect(findings.find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')?.status).toBe('ERROR')
   })
 
-  // SKV §4.1.1.4 rule 6 — import output VAT without import base.
+  // SKV §4.1.1.4 rule 6: import output VAT without import base.
   it('flags ERROR when import output VAT (ruta 60) without ruta 50', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,

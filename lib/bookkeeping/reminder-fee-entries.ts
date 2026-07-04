@@ -14,7 +14,7 @@
  *   - 3990 (Övriga ersättningar, bidrag och intäkter) is the BAS 2026
  *     "miscellaneous operating revenue" bucket. Skatteverket guidance:
  *     reminder fees are not interest income (8313) but administrative
- *     compensation — so they sit in the 39xx group, not 83xx.
+ *     compensation, so they sit in the 39xx group, not 83xx.
  *
  * Notes:
  *   - We deliberately do NOT book the dröjsmålsränta (late-payment interest)
@@ -68,7 +68,7 @@ export async function createReminderFeeEntry(
   const { invoiceId, invoiceNumber, companyId, userId, feeAmount, asOfDate } = input
 
   if (feeAmount <= 0) {
-    log.info('skipping reminder fee booking — feeAmount is zero', {
+    log.info('skipping reminder fee booking: feeAmount is zero', {
       invoiceId,
       companyId,
     })

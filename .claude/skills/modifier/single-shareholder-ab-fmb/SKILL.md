@@ -7,7 +7,7 @@ description: >
   tillsammans äger > 50%) klassas som fåmansbolag och omfattas av 3:12-reglerna.
   Den enskilda ägaren är samtidigt anställd ("verksam i betydande omfattning") och
   styr själv balansen mellan lön och utdelning. Avgörande för ekonomin men trivialt
-  i löpande bokföring — modifern flaggar för agenten att 3:12, gränsbelopp, K10
+  i löpande bokföring: modifern flaggar för agenten att 3:12, gränsbelopp, K10
   och löneunderlagsregeln måste vara med i rådgivningen.
 trigger_signals:
   ownership: "single_shareholder"
@@ -25,19 +25,19 @@ version: 1
 The active company is an aktiebolag where one natural person owns > 50% of
 the shares. This is the most common form among Accounted's AB users. The owner
 is typically also a full-time anställd in the company and "verksam i betydande
-omfattning" — which triggers 3:12-reglerna (53 kap. IL).
+omfattning", which triggers 3:12-reglerna (53 kap. IL).
 
 This modifier composes with:
-- [[horizontal/swedish-tax-planning]] — for 3:12, gränsbelopp, löneunderlag detail
-- [[horizontal/swedish-payroll]] — for owner-as-employee salary mechanics
-- [[horizontal/swedish-year-end-closing]] — for resultatdisposition (lön vs. utdelning)
-- [[horizontal/swedish-financial-reporting]] — för K2/K3-årsredovisning
+- [[horizontal/swedish-tax-planning]]: for 3:12, gränsbelopp, löneunderlag detail
+- [[horizontal/swedish-payroll]]: for owner-as-employee salary mechanics
+- [[horizontal/swedish-year-end-closing]]: for resultatdisposition (lön vs. utdelning)
+- [[horizontal/swedish-financial-reporting]]: för K2/K3-årsredovisning
 
 ## Implications
 
 1. **Lön vs. utdelning**: ägaren styr själv. Under gränsbeloppet beskattas
    utdelning som kapital (20%). Över gränsbeloppet beskattas det överskjutande
-   som tjänsteinkomst (kommunal + statlig + arbetsgivaravgifter — högsta marginalskatt).
+   som tjänsteinkomst (kommunal + statlig + arbetsgivaravgifter, högsta marginalskatt).
    Lön ger socialförsäkringsrätt och pension; utdelning gör det inte.
 2. **Löneunderlagsregeln** (3:12-reglernas favorit): genom att ägaren tar ut
    minst en viss årslön (cirka 6 IBB + 5% av total löneunderlag, max 9,6 IBB)

@@ -127,14 +127,14 @@ export default function ArticlesEditStep({
           </div>
         )}
 
-        {/* VAT-adjustment notice — rows whose rate was snapped/defaulted */}
+        {/* VAT-adjustment notice: rows whose rate was snapped/defaulted */}
         {adjustedVatCount > 0 && (
           <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
             <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <p className="text-sm">
               <span className="font-medium">{adjustedVatCount} rad{adjustedVatCount === 1 ? '' : 'er'}</span> fick
               momssatsen omtolkad (avrundad till närmaste giltiga, eller satt till 25 %).
-              Kontrollera de markerade raderna innan du importerar — fel momssats ger fel moms på fakturan.
+              Kontrollera de markerade raderna innan du importerar: fel momssats ger fel moms på fakturan.
             </p>
           </div>
         )}
@@ -218,7 +218,7 @@ export default function ArticlesEditStep({
                       {row.vat_rate_adjusted && (
                         <span
                           className="text-warning shrink-0"
-                          title="Momssatsen tolkades om från filen — kontrollera att den stämmer."
+                          title="Momssatsen tolkades om från filen: kontrollera att den stämmer."
                         >
                           <AlertTriangle className="h-3.5 w-3.5" />
                         </span>

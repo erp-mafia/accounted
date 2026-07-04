@@ -6,7 +6,7 @@ import { verifikationDraft } from '../verifikation-draft'
 // and a draft verifikat's own page). These tests lock in the two things that
 // make it actually useful:
 //   1. it carries the underlag-reading tools its ground rules already reference
-//      (the intent shipped without them — instructions for tools it couldn't
+//      (the intent shipped without them: instructions for tools it couldn't
 //      call), and
 //   2. the prompt drives "read the underlag → suggest accounts → stage a
 //      voucher", while guarding against duplicating an existing draft (there's
@@ -66,7 +66,7 @@ describe('verifikation.draft prompt template', () => {
   it('stages a new voucher and links the inbox underlag to it', () => {
     const out = renderPrompt()
     expect(out).toContain('gnubok_create_voucher')
-    // The kvitto must follow the booking — create_voucher takes inbox_item_id
+    // The kvitto must follow the booking: create_voucher takes inbox_item_id
     // and attaches the OCR document on commit.
     expect(out).toContain('inbox_item_id')
   })
@@ -74,7 +74,7 @@ describe('verifikation.draft prompt template', () => {
   it('guards against duplicating an existing draft', () => {
     // No MCP tool edits a draft in place, so for an existing draft the agent
     // must advise (suggest accounts / check balance) rather than stage a
-    // second verifikat — otherwise "help me finish this draft" creates a dupe.
+    // second verifikat, otherwise "help me finish this draft" creates a dupe.
     const out = renderPrompt({
       entry: { id: 'e1', entry_date: '2026-05-01', description: 'Utkast', status: 'draft' },
     })
@@ -125,7 +125,7 @@ describe('verifikation.draft prompt template', () => {
 describe('verifikation.draft capture', () => {
   it('returns an empty draft (with an underlag array) when no entry id is given', async () => {
     // The fresh-start path (Bokföring → "Skapa med assistent") passes no
-    // journal_entry_id and must not touch the database — the agent discovers
+    // journal_entry_id and must not touch the database: the agent discovers
     // underlag itself via the inbox tools.
     const captured = await verifikationDraft.capture(
       { description: 'Köp av router' },

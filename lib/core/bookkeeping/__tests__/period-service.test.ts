@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events/bus'
 import { makeFiscalPeriod } from '@/tests/helpers'
 
 // ============================================================
-// Mock — separate client (no .then) from query builder (thenable)
+// Mock: separate client (no .then) from query builder (thenable)
 // ============================================================
 
 let resultIdx: number
@@ -22,7 +22,7 @@ function makeBuilder() {
 }
 
 function makeClient() {
-  // Client has NO .then — won't be consumed by `await createClient()`
+  // Client has NO .then: won't be consumed by `await createClient()`
   return {
     from: vi.fn().mockImplementation(() => makeBuilder()),
     rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),

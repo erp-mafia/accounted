@@ -104,7 +104,7 @@ export async function PATCH(
         const s = parseDateParts(newStart)
         if (s.month !== 1 || s.day !== 1) {
           return NextResponse.json(
-            { error: 'Enskild firma måste använda kalenderår (1 januari – 31 december) enligt BFL 3 kap.' },
+            { error: 'Enskild firma måste använda kalenderår (1 januari till 31 december) enligt BFL 3 kap.' },
             { status: 400 }
           )
         }

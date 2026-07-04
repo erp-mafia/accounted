@@ -15,14 +15,14 @@ import type { TrialBalanceRow } from '@/types'
  * period. The function rolls the IB forward from `period_start` to
  * `fromDate − 1` (so "opening" reflects the state at `fromDate`) and limits
  * period activity to `[fromDate, toDate]`. Defaults equal `period_start` and
- * `period_end` — identical to the no-options behaviour.
+ * `period_end`: identical to the no-options behaviour.
  *
  * When `dimensions` is passed (map of SIE dim number → object code, e.g.
  * `{"6":"P001"}`, AND across keys), both line queries filter with jsonb
  * containment (`dimensions @> …`, served by idx_jel_dimensions_gin). The
  * result is then a PARTIAL view: opening balances from year-end closing are
  * company-wide, so callers must only use the filter for P&L-style reports
- * (classes 3–8) where IB is immaterial — never for balance/statutory reports.
+ * (classes 3-8) where IB is immaterial: never for balance/statutory reports.
  * The catalog whitelist + statutory-guard test pin this.
  *
  * Uses joined queries with pagination to handle any number of entries.
@@ -64,7 +64,7 @@ export async function generateTrialBalance(
   )
   // A dimension-filtered view cannot use company-wide opening balances (the
   // OB entry and the prior-period RPC are not dimension-aware). Drop them so
-  // every reported amount is dimension-scoped activity — correct for the P&L
+  // every reported amount is dimension-scoped activity: correct for the P&L
   // reports the filter is whitelisted for, and never fabricates balances if
   // misapplied. obEntryId is still needed to exclude the OB entry from lines.
   const openingBalances = dimensionFilter
@@ -97,7 +97,7 @@ export async function generateTrialBalance(
         .lt('journal_entries.entry_date', options.fromDate)
 
       if (dimensionFilter) {
-        // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+        // jsonb containment (@>): served by idx_jel_dimensions_gin.
         query = query.contains('dimensions', dimensionFilter)
       }
 
@@ -127,7 +127,7 @@ export async function generateTrialBalance(
   // Race condition note: if year-end closing runs concurrently and sets
   // obEntryId between the period query and this query, the OB entry could
   // be missed from both IB and period. The window is sub-second and the
-  // consequence is a single stale report — acceptable.
+  // consequence is a single stale report: acceptable.
   const lines = await fetchAllRows<{
     id: string
     account_number: string
@@ -155,7 +155,7 @@ export async function generateTrialBalance(
     }
 
     if (dimensionFilter) {
-      // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+      // jsonb containment (@>): served by idx_jel_dimensions_gin.
       query = query.contains('dimensions', dimensionFilter)
     }
 

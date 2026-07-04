@@ -267,7 +267,7 @@ describe('GET /reconciliation/bank/status', () => {
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    // Passthrough of the lib's ReconciliationStatus — assert the real field
+    // Passthrough of the lib's ReconciliationStatus: assert the real field
     // names so a registry/actual drift can never hide behind the mock again.
     expect(body.data.matched_count).toBe(100)
     expect(body.data.unmatched_transaction_count).toBe(5)

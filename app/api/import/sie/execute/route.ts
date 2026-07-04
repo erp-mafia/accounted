@@ -10,7 +10,7 @@ import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types
 // SIE imports with many vouchers need extended execution time
 export const maxDuration = 300
 
-/** POST /api/import/sie/execute — execute the SIE import. */
+/** POST /api/import/sie/execute: execute the SIE import. */
 export const POST = withRouteContext(
   'sie_import.execute',
   async (request, ctx) => {
@@ -93,7 +93,7 @@ export const POST = withRouteContext(
       }
 
       // Account creation (and #KONTO renames) happen inside executeSIEImport
-      // via syncMappedAccounts — the pre-create block that used to live here
+      // via syncMappedAccounts: the pre-create block that used to live here
       // was a duplicate of that logic.
       const result = await executeSIEImport(
         supabase,

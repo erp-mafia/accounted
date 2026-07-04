@@ -37,8 +37,8 @@ export default function RecurringInvoicesPage() {
   const t = useTranslations('invoice_recurring')
 
   // The "Nytt schema" modal is driven by the URL (?new=1) so every entry
-  // point — the header button, the empty state, and the legacy
-  // /invoices/recurring/new redirect — opens the same dialog, and the
+  // point (the header button, the empty state, and the legacy
+  // /invoices/recurring/new redirect) opens the same dialog, and the
   // browser back button closes it. Same pattern as /invoices.
   const showNewSchedule = searchParams.has('new')
   const closeNewSchedule = () => router.replace('/invoices/recurring', { scroll: false })
@@ -169,7 +169,7 @@ export default function RecurringInvoicesPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {s.customer?.name ?? '—'}
+                      {s.customer?.name ?? '-'}
                     </TableCell>
                     <TableCell className="tabular-nums">{s.day_of_month}</TableCell>
                     <TableCell className="tabular-nums">{formatDate(s.next_run_date)}</TableCell>

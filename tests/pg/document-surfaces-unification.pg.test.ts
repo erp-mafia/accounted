@@ -11,8 +11,8 @@ import {
 
 /**
  * P1-3 (mcp_optimization_plan): both missing-document surfaces implement ONE
- * predicate — posted, needs-doc source type, no CURRENT-version
- * document_attachments row, no journal_entry_no_doc_required waiver — and the
+ * predicate: posted, needs-doc source type, no CURRENT-version
+ * document_attachments row, no journal_entry_no_doc_required waiver: and the
  * transactions surface is a strict subset of the verifikat surface.
  *
  * Also pins the SQL needs-doc source-type list to the TS constant
@@ -76,7 +76,7 @@ async function attachDocument(params: {
 async function waive(params: { userId: string; companyId: string; journalEntryId: string }) {
   await getPool().query(
     `INSERT INTO public.journal_entry_no_doc_required (journal_entry_id, company_id, user_id, reason)
-     VALUES ($1, $2, $3, 'internal transfer — no underlag required')`,
+     VALUES ($1, $2, $3, 'internal transfer: no underlag required')`,
     [params.journalEntryId, params.companyId, params.userId],
   )
 }
@@ -159,7 +159,7 @@ describe('document surfaces unification', () => {
     const res = await transactionsSurface(companyId)
     expect(res.ok).toBe(true)
     const jeIds = (res.transactions ?? []).map((t) => t.journal_entry_id).sort()
-    // jeBankWithDoc excluded even though its tx.document_id is NULL — the
+    // jeBankWithDoc excluded even though its tx.document_id is NULL: the
     // doc truth is document_attachments. jeImportNoDoc has no tx row.
     expect(jeIds).toEqual([jeBankNoDoc, jeBankStaleDoc].sort())
     // P1-2 forward-compat: rows expose the qualified id.

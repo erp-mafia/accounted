@@ -15,7 +15,7 @@ export interface FlerarsoversiktRow {
 
 export interface EgenKapitalRow {
   label: string
-  /** Single SEK number — positive = credit balance (typical for equity). */
+  /** Single SEK number: positive = credit balance (typical for equity). */
   amount: number
 }
 
@@ -24,7 +24,7 @@ export interface NoteEntry {
   number: number
   /** Short Swedish title. */
   title: string
-  /** Note body — supports newlines. Generated from data when possible
+  /** Note body: supports newlines. Generated from data when possible
    *  (avskrivningstider from asset register, medelantal from salary),
    *  manual otherwise. */
   body: string
@@ -78,7 +78,7 @@ export interface ArsredovisningData {
     resultatdisposition: string
     /** ISO date of the årsstämma where the årsredovisning was adopted.
      *  Populates the fastställelseintyg date blank. Null means "not yet
-     *  recorded" — PDF then leaves the blank. */
+     *  recorded": PDF then leaves the blank. */
     agm_date: string | null
   }
   resultatrakning: IncomeStatementLine[]
@@ -100,7 +100,7 @@ export interface ArsredovisningData {
     rows: EgenKapitalRow[]
     closing_total: number
   }
-  /** Underskrifter — names of board members + VD. Filled by signature flow. */
+  /** Underskrifter: names of board members + VD. Filled by signature flow. */
   signatures: {
     role: string
     name: string
@@ -108,7 +108,7 @@ export interface ArsredovisningData {
   }[]
   /** Pre-download blockers / warnings the UI surfaces so the user knows the
    *  PDF is not yet Bolagsverket-fileable as-is. Examples: aktiekapital
-   *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error — the
+   *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error: the
    *  user can still download to iterate. */
   warnings: string[]
   /** Manual disclosure overrides persisted on arsredovisning_narratives.

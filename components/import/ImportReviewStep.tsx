@@ -149,7 +149,7 @@ export default function ImportReviewStep({
   const hasOpeningBalances = preview.openingBalanceTotal > 0
   const hasTransactions = preview.voucherCount > 0
   // An import whose fiscal year already ended in a prior calendar year is a
-  // historical/migration import — the underlag live in the old system, so the
+  // historical/migration import: the underlag live in the old system, so the
   // exemption is especially apt. Nudges (does not force) the toggle.
   const isHistoricalImport = (() => {
     if (!preview.fiscalYearEnd) return false
@@ -157,7 +157,7 @@ export default function ImportReviewStep({
     const startOfThisYear = new Date(new Date().getFullYear(), 0, 1)
     return !isNaN(end.getTime()) && end < startOfThisYear
   })()
-  // Identity-mapped accounts whose #KONTO name differs from the BAS default —
+  // Identity-mapped accounts whose #KONTO name differs from the BAS default:
   // mirrors the filter in syncMappedAccounts, so the count matches what the
   // import would actually rename/create with a custom name.
   const customNameCount = mappings.filter(
@@ -347,9 +347,9 @@ export default function ImportReviewStep({
                     const isDefault = defaultSeries === letter
                     const isExisting = existingSeries.has(letter)
                     const suffix = isDefault
-                      ? ' — standard'
+                      ? ', standard'
                       : isExisting
-                        ? ' — används redan'
+                        ? ', används redan'
                         : ''
                     return (
                       <SelectItem key={letter} value={letter}>
@@ -365,7 +365,7 @@ export default function ImportReviewStep({
             </div>
           )}
 
-          {/* No-underlag exemption — keeps a multi-year migration from flooding
+          {/* No-underlag exemption: keeps a multi-year migration from flooding
               "Att hantera: saknade underlag" with thousands of items. */}
           <div className="flex items-start justify-between border-t pt-6">
             <div className="space-y-0.5 pr-4">
@@ -379,7 +379,7 @@ export default function ImportReviewStep({
               </Label>
               <p className="text-sm text-muted-foreground">
                 Märker alla importerade verifikationer som att de inte behöver något
-                separat underlag — underlagen finns kvar i ditt tidigare system. Annars
+                separat underlag: underlagen finns kvar i ditt tidigare system. Annars
                 hamnar de under &quot;Att hantera: saknade underlag&quot;. Kan ändras per
                 verifikation efteråt.
               </p>

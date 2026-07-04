@@ -63,7 +63,7 @@ export default function BankFilePreviewStep({
               <span className="text-sm">Period</span>
             </div>
             <p className="text-sm font-medium">
-              {date_from || '–'} till {date_to || '–'}
+              {date_from || '-'} till {date_to || '-'}
             </p>
           </CardContent>
         </Card>
@@ -155,12 +155,12 @@ export default function BankFilePreviewStep({
                     </TableCell>
                     {transactions.some((t) => t.balance != null) && (
                       <TableCell className="text-right font-mono text-sm text-muted-foreground">
-                        {tx.balance != null ? formatCurrency(tx.balance) : '–'}
+                        {tx.balance != null ? formatCurrency(tx.balance) : '-'}
                       </TableCell>
                     )}
                     {transactions.some((t) => t.reference) && (
                       <TableCell className="font-mono text-sm text-muted-foreground">
-                        {tx.reference ? tx.reference : '–'}
+                        {tx.reference ? tx.reference : '-'}
                       </TableCell>
                     )}
                   </TableRow>

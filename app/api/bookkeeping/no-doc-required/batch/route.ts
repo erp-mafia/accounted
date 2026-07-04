@@ -16,7 +16,7 @@ const BatchNoDocSchema = z.object({
  * underlag" in one action instead of toggling each one.
  *
  * The exemption is shared bookkeeping metadata (company-scoped, like mapping
- * rules) — the audit_log trigger records the actor.
+ * rules): the audit_log trigger records the actor.
  */
 export const POST = withRouteContext(
   'journal_entry.batch_no_document_required',

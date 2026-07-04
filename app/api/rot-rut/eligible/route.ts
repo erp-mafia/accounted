@@ -10,7 +10,7 @@ import { listRotRutCandidates } from '@/lib/invoices/rot-rut-service'
  * active begäran om utbetalning, split into:
  *   - eligible: ready for file generation (with the amounts the file will use)
  *   - blocked:  excluded, with the exact blocker (same evaluation as the
- *               generator — what this endpoint approves, the file accepts)
+ *               generator: what this endpoint approves, the file accepts)
  */
 export const GET = withRouteContext('rot_rut.eligible', async (request, ctx) => {
   const { supabase, companyId, log, requestId } = ctx

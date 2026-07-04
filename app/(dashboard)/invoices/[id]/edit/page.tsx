@@ -48,7 +48,7 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
       }
 
       // Only drafts (no committed verifikat, not sent, not a received
-      // self-billing document) may be edited — shared predicate, the same one
+      // self-billing document) may be edited: shared predicate, the same one
       // the PATCH route enforces server-side.
       const editable = isEditableInvoiceDraft(data)
       if (!editable) {

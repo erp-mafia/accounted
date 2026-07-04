@@ -1,21 +1,21 @@
-# Agentic Loops — Playbook
+# Agentic Loops: Playbook
 
 Proactive loops that scan the codebase and our external systems (GitHub, Vercel), then
 **propose** fixes and file well-formed tickets. This file is the shared contract every loop obeys.
 Skills under `.claude/skills/loop-*` implement the loops; cloud routines and local `/loop` invocations
 run them on a schedule.
 
-> These are **proactive loops** — triggered by a schedule, no human in real time, each item exits when
+> These are **proactive loops**: triggered by a schedule, no human in real time, each item exits when
 > its goal is met. Quality comes from the *system around the loop* (verification skills, clean
 > conventions, second-agent review), not from a clever prompt.
 
 > **This file lives at `.claude/loops.md` (committed).** `dev_docs/*` is gitignored ("internal
-> reference, not published"), so the playbook cannot live there — the cloud routines clone `main` and
+> reference, not published"), so the playbook cannot live there: the cloud routines clone `main` and
 > need this file present.
 
 ---
 
-## Autonomy policy — "Propose, don't merge"
+## Autonomy policy: "Propose, don't merge"
 
 This is a Swedish accounting/compliance codebase. Loops never touch `main` or production.
 
@@ -39,13 +39,13 @@ the PR is opened.** No exceptions.
 **Labels:** `loop:auto` (always, on anything a loop creates), `loop:vercel`, `loop:triage`,
 `loop:design`, `loop:needs-human` (a loop tried and could not safely proceed).
 
-**Idempotency / anti-spam — MANDATORY.** Before filing anything:
-1. Compute a stable **fingerprint** (error signature, file:line, rule id — never a timestamp).
+**Idempotency / anti-spam: MANDATORY.** Before filing anything:
+1. Compute a stable **fingerprint** (error signature, file:line, rule id, never a timestamp).
 2. `gh issue list --search "<fingerprint> in:body state:all"` (include closed). Match → comment instead
    of filing a duplicate; closed + recurring → reopen with a note.
 3. Embed `<!-- loop-fingerprint: <hash> -->` in the body so future runs find it.
 
-**Branch naming:** `loop/<loop>-<ref>` — e.g. `loop/ci-pr848`, `loop/issue-843`, `loop/vercel-<hash>`.
+**Branch naming:** `loop/<loop>-<ref>`, e.g. `loop/ci-pr848`, `loop/issue-843`, `loop/vercel-<hash>`.
 
 **Anti-thrash:** if the same fix (same fingerprint) already failed, **stop**, label `loop:needs-human`,
 comment what was tried. Never retry the same failing action in a cycle.
@@ -63,9 +63,9 @@ comment what was tried. Never retry the same failing action in a cycle.
 | 3 | Issue triage + easy-fix | `loop-issue-triage` | **Cloud** `trig_017hB94ieGVwreJqHpGRDVoM` | `0 7,15 * * *` UTC | triage all; ≤2 PRs |
 | 4 | UI/UX + design scan | `loop-design-scan` | **Local** (`/loop`) | on-demand | ≤1 area, ≤6 findings |
 
-Loops 1 & 3 are cloud routines (only need `gh`). Loop 2 (Vercel errors) is **local** — the Vercel MCP is
+Loops 1 & 3 are cloud routines (only need `gh`). Loop 2 (Vercel errors) is **local**: the Vercel MCP is
 only available locally, and there's no error-aggregation service (Sentry is not used). Loop 4 is
-**local** — it needs `npm run dev` + Chrome to render/screenshot the UI.
+**local**: it needs `npm run dev` + Chrome to render/screenshot the UI.
 
 ---
 
@@ -77,7 +77,7 @@ grep → build if config/types changed. Plus: never violate an
 
 ---
 
-## Cloud-environment requirements (verify these — they are the usual failure points)
+## Cloud-environment requirements (verify these: they are the usual failure points)
 
 Cloud routines run in a **fresh session** in the anthropic_cloud env (`env_01R1K99XTZCEptnQ7k955qfN`),
 cloning `main`. For them to work:
@@ -86,11 +86,11 @@ cloning `main`. For them to work:
    *"environment not provisioned"* if not. Verify via the completion notification of the first fire.
 2. **Cloud routines cannot reach interactively-authenticated MCPs** (Vercel/Supabase plugins are not in
    the routine tool allowlist). Loops rely on `gh` (via Bash) + HTTP APIs.
-3. **The Vercel-errors loop runs locally** (Vercel MCP). Sentry is **not** used in this codebase — the
+3. **The Vercel-errors loop runs locally** (Vercel MCP). Sentry is **not** used in this codebase: the
    `SENTRY_*` names in `.env.local`/CLAUDE.md are leftovers. To run this loop in the cloud instead, set a
    `VERCEL_TOKEN` secret on the env and accept that Vercel runtime-log retention is short (recent window
    only). `GH_TOKEN` is the one secret loops 1 & 3 actually require (private-repo access;
-   OAuth-only integration does not work for private repos — anthropics/claude-code#64130).
+   OAuth-only integration does not work for private repos, anthropics/claude-code#64130).
 
 ---
 
@@ -103,4 +103,4 @@ cloning `main`. For them to work:
 
 ## Extending
 When a loop produces a bad result, encode the lesson back into the skill / a CLAUDE.md rule / a verifier
-so every future run improves — don't just fix the one output.
+so every future run improves: don't just fix the one output.

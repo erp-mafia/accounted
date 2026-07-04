@@ -14,7 +14,7 @@ export interface TaxColumnOption {
 }
 
 export const TAX_COLUMN_OPTIONS: TaxColumnOption[] = [
-  { value: 1, label: 'Anställd under 66 år', description: 'Standard — det vanligaste valet' },
+  { value: 1, label: 'Anställd under 66 år', description: 'Standard: det vanligaste valet' },
   { value: 2, label: 'Pensionär 66+ år', description: 'Pension till den som fyllt 66 år vid årets ingång' },
   { value: 3, label: 'Anställd 66+ år', description: 'Lön med förhöjt jobbskatteavdrag' },
   { value: 4, label: 'Sjuk- eller aktivitetsersättning, under 66 år', description: 'Ersättning från Försäkringskassan' },
@@ -34,12 +34,12 @@ export function getTaxColumnOption(value: number): TaxColumnOption | undefined {
  * line by birth year ("född 1960 eller senare" = kolumn 1 för inkomståret 2026),
  * so we compare birth year, not exact date.
  *
- * For 66+ the column is genuinely ambiguous from age alone — column 2 (pension)
+ * For 66+ the column is genuinely ambiguous from age alone: column 2 (pension)
  * vs column 3 (working senior with förhöjt jobbskatteavdrag) depends on the
  * income type, which the system can't infer. In that case this returns null and
  * the UI asks the user to pick from the named column list.
  *
- * @param personnummer Full (YYYYMMDDNNNN) or masked (YYYYMMDD-XXXX) — only the
+ * @param personnummer Full (YYYYMMDDNNNN) or masked (YYYYMMDD-XXXX): only the
  *                      leading 8 birthdate digits are used.
  * @param year         The income/payment year the column applies to.
  * @returns 1 for a confidently-under-66 employee, otherwise null.

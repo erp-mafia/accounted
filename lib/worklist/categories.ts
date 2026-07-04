@@ -1,5 +1,5 @@
 /**
- * Per-category worklist queries — the single owner of every pending-work
+ * Per-category worklist queries: the single owner of every pending-work
  * predicate. Surfaces (dashboard, sidebar badges, /api/worklist, MCP tools)
  * must call these instead of inlining their own Supabase queries; see
  * lib/worklist/types.ts for each category's pending/done definition.
@@ -53,7 +53,7 @@ function logAndZero(
 }
 
 /**
- * Unbooked bank transactions — the canonical "att bokföra" predicate.
+ * Unbooked bank transactions: the canonical "att bokföra" predicate.
  * All booking flows (incl. the bulk-book RPCs) set is_business = true, so
  * is_business IS NULL is sufficient; is_ignored excludes the user's
  * explicitly-suppressed rows. Served by the partial index
@@ -76,7 +76,7 @@ export async function countUnbookedTransactions(
 /**
  * Unconsumed inbox documents. Mirrors /api/documents/inbox-available:
  * items with a file that have not become a supplier invoice, a journal
- * entry, or a transaction match — and whose document is still unlinked
+ * entry, or a transaction match, and whose document is still unlinked
  * (the stale-column backstop).
  */
 export async function countInboxDocuments(
@@ -103,7 +103,7 @@ export async function countInboxDocuments(
   ]
   if (docIds.length === 0) return 0
 
-  // PostgREST serialises .in() into the GET query string — chunk the id list
+  // PostgREST serialises .in() into the GET query string: chunk the id list
   // so a large inbox can't push the URL past proxy limits (HTTP 414, which
   // would silently zero the badge via the error branch).
   let total = 0
@@ -160,7 +160,7 @@ export async function countSupplierInvoicesAwaitingApproval(
  * source types that have neither a current-version document nor a
  * journal_entry_no_doc_required exemption.
  *
- * Delegates to the verifikat_without_documents RPC — the SAME predicate the
+ * Delegates to the verifikat_without_documents RPC: the SAME predicate the
  * MCP surfaces use (single truth in SQL; the RPC's needs-doc source-type
  * list mirrors NEEDS_DOC_SOURCE_TYPES, pinned by
  * tests/pg/document-surfaces-unification.pg.test.ts). Previously this
@@ -171,7 +171,7 @@ export async function countVerifikatMissingDocument(
   companyId: string,
 ): Promise<number> {
   try {
-    // p_limit only sizes the page — total_count is computed over the FULL
+    // p_limit only sizes the page: total_count is computed over the FULL
     // filtered set inside the RPC (independent CTE), so 1 is the cheapest
     // valid page size for a count-only call.
     const { data, error } = await supabase.rpc('verifikat_without_documents', {
@@ -212,7 +212,7 @@ export async function countOverdueInvoices(
 }
 
 /**
- * Deadlines needing attention — same predicate as
+ * Deadlines needing attention: same predicate as
  * lib/deadlines/status-engine.ts getDeadlinesNeedingAttention(), as a
  * head-count so badges don't fetch rows.
  */

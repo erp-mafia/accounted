@@ -17,7 +17,7 @@ export const maxDuration = 60
 /**
  * GET /api/extensions/skatteverket/skattekonto/sync/cron
  *
- * Daily skattekonto sync (cron 0 4 * * * — 04:00 UTC, 06:00 Swedish time).
+ * Daily skattekonto sync (cron 0 4 * * *: 04:00 UTC, 06:00 Swedish time).
  * Pulls saldo + transactions for every company that has a connected
  * Skatteverket token, and persists the results to skattekonto_transactions.
  *
@@ -26,7 +26,7 @@ export const maxDuration = 60
  *
  * Time budget: 50s (Vercel default 60s function timeout, 10s margin).
  *
- * Per-company errors are logged but do not abort the run — one expired
+ * Per-company errors are logged but do not abort the run: one expired
  * token shouldn't block 49 other working syncs.
  */
 export async function GET(request: Request) {
@@ -91,13 +91,13 @@ export async function GET(request: Request) {
     const companyId = token.company_id as string | null
 
     if (!companyId) {
-      // Pre-multi-tenant tokens may lack company_id. Skip — cannot scope.
+      // Pre-multi-tenant tokens may lack company_id. Skip: cannot scope.
       results.push({ userId, companyId: '(missing)', status: 'error', error: 'No company_id on token' })
       continue
     }
 
     if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) {
-      console.info('[skattekonto-sync-cron] skip — capability not entitled', { companyId })
+      console.info('[skattekonto-sync-cron] skip: capability not entitled', { companyId })
       continue
     }
 
@@ -146,7 +146,7 @@ export async function GET(request: Request) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
 
-      // Expired token / refresh exhausted is a known outcome — surface it
+      // Expired token / refresh exhausted is a known outcome: surface it
       // distinctly so ops can dashboard "X companies need to reconnect".
       if (
         err instanceof SkatteverketAuthError &&

@@ -23,7 +23,7 @@ interface Props {
 // page-header button across the dashboard (invoice form, supplier invoice,
 // bookkeeping, year-end, VAT report, KPI, …) routes through this component
 // so they share the same icon size, label format, spacing, and resolved
-// agent name. The transaction-row icon button stays separate — it's a
+// agent name. The transaction-row icon button stays separate: it's a
 // different UX (icon-only, ghost) embedded inside a row's action group.
 export default function AgentSparkleButton({
   intentId,
@@ -35,7 +35,7 @@ export default function AgentSparkleButton({
   className,
 }: Props) {
   const { openAgentSheet, identity } = useAgentSheet()
-  // Same gate as AgentTrigger — hide all "Fråga …" affordances until the
+  // Same gate as AgentTrigger: hide all "Fråga …" affordances until the
   // user has finished /onboarding/agent.
   if (!identity.isVerified) return null
   const name = identity.displayName?.trim() || 'min assistent'

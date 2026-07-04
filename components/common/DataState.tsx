@@ -12,7 +12,7 @@ interface DataStateProps {
   error: string | null
   /** When true (and not loading/error), render `empty` instead of `children`. */
   isEmpty?: boolean
-  /** Retry handler — typically `useFetch().refetch`. Shows a retry button. */
+  /** Retry handler: typically `useFetch().refetch`. Shows a retry button. */
   onRetry?: () => void
   /** Loading placeholder. Defaults to three skeleton rows. */
   skeleton?: React.ReactNode

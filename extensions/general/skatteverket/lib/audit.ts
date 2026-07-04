@@ -3,14 +3,14 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 /**
  * Append an immutable row to skatteverket_api_audit_log. Errors are
  * swallowed (logged only) so an audit-table outage does not break the
- * regulator flow — but a successful primary call without an audit row
+ * regulator flow, but a successful primary call without an audit row
  * shows up as a noisy console.error for ops to investigate.
  *
  * Lives in its own module so the route handlers (which pass a real
  * ExtensionContext), the commit-side services, and the MCP read tools can all
  * share one audit writer. Callers that only hold (supabase, userId, companyId)
  * build a context with `createExtensionContext(supabase, userId, companyId,
- * 'skatteverket')` — cheap, no I/O — and pass it here. The `(ctx, fields)`
+ * 'skatteverket')`: cheap, no I/O, and pass it here. The `(ctx, fields)`
  * signature is preserved verbatim so the existing handlers stay byte-identical.
  */
 export async function writeSkatteverketAudit(

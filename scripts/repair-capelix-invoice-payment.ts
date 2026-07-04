@@ -5,22 +5,22 @@
  * Incident: v1 mark-paid read invoiceAlreadyBooked from a column its select
  * never fetched (fixed in PR #713). Capelix (kontantmetoden) had invoice 001
  * registered at send (voucher A6: Dr 1510 / Cr 3001 1500 / Cr 2611 375), so
- * mark-paid should have CLEARED 1510 — instead it booked a cash entry
+ * mark-paid should have CLEARED 1510: instead it booked a cash entry
  * (voucher A41: Dr 1930 / Cr 3001 1500 / Cr 2611 375). Net damage: revenue
  * 3001 and VAT 2611 double-counted, 1510 carries an orphaned 1 875 kr debit.
  *
- * Fix (engine-faithful, storno-only per BFL/BFNAR 2013:2 — period is open,
+ * Fix (engine-faithful, storno-only per BFL/BFNAR 2013:2, period is open,
  * moms_period=yearly with no declaration filed, so no rättelse needed):
- *   1. reverseEntry(A41) — storno the wrong cash entry per 2026-05-29.
- *   2. createInvoicePaymentJournalEntry(...) — the correct clearing entry
+ *   1. reverseEntry(A41): storno the wrong cash entry per 2026-05-29.
+ *   2. createInvoicePaymentJournalEntry(...): the correct clearing entry
  *      (Dr 1930 / Cr 1510, 1 875 kr) per 2026-05-29.
  *   3. Relink the bank transaction and invoice_payments row from A41 to the
- *      new clearing entry (same economics — keeps reconciliation intact).
+ *      new clearing entry (same economics, keeps reconciliation intact).
  *
  * Net account effect: 3001 −1500, 2611 −375, 1510 −1875 (cleared), 1930
  * unchanged (matches the real bank inflow).
  *
- * Every step checks preconditions and skips completed work — safe to re-run.
+ * Every step checks preconditions and skips completed work: safe to re-run.
  *
  * Usage:
  *   npx tsx scripts/repair-capelix-invoice-payment.ts            # dry run
@@ -64,14 +64,14 @@ async function entryStatus(id: string): Promise<{ status: string; voucher: strin
 
 async function main() {
   console.log('─────────────────────────────────────────────────────────')
-  console.log(`Capelix invoice-001 repair — ${COMMIT ? 'COMMIT' : 'DRY RUN'}`)
+  console.log(`Capelix invoice-001 repair: ${COMMIT ? 'COMMIT' : 'DRY RUN'}`)
   console.log('─────────────────────────────────────────────────────────')
 
   // ── Preconditions ──────────────────────────────────────────────
   const registration = await entryStatus(REGISTRATION_ENTRY_ID)
   const wrongCash = await entryStatus(WRONG_CASH_ENTRY_ID)
   if (!registration || registration.status !== 'posted') {
-    throw new Error(`Registration entry A6 not found/posted (got ${registration?.status}) — aborting`)
+    throw new Error(`Registration entry A6 not found/posted (got ${registration?.status}), aborting`)
   }
   console.log(`✓ Registration ${registration.voucher}: posted`)
 
@@ -81,10 +81,10 @@ async function main() {
     .eq('company_id', COMPANY_ID)
     .eq('id', INVOICE_ID)
     .maybeSingle()
-  if (!invoiceRow) throw new Error('Invoice not found — aborting')
+  if (!invoiceRow) throw new Error('Invoice not found, aborting')
   if (invoiceRow.journal_entry_id !== REGISTRATION_ENTRY_ID) {
     throw new Error(
-      `invoice.journal_entry_id is ${invoiceRow.journal_entry_id}, expected the A6 registration entry — aborting`,
+      `invoice.journal_entry_id is ${invoiceRow.journal_entry_id}, expected the A6 registration entry, aborting`,
     )
   }
   console.log(`✓ Invoice ${invoiceRow.invoice_number}: status=${invoiceRow.status}, total=${invoiceRow.total}, linked to A6`)
@@ -101,7 +101,7 @@ async function main() {
 
   // ── Step 1: storno A41 ─────────────────────────────────────────
   let stornoDone = false
-  if (!wrongCash) throw new Error('Wrong cash entry A41 not found — aborting')
+  if (!wrongCash) throw new Error('Wrong cash entry A41 not found, aborting')
   if (wrongCash.status === 'reversed') {
     console.log(`✓ Step 1 already done: ${wrongCash.voucher} is reversed`)
     stornoDone = true
@@ -114,7 +114,7 @@ async function main() {
       console.log(`→ Step 1 (dry run): would storno ${wrongCash.voucher} (Dr 1930 / Cr 3001 / Cr 2611) per ${PAYMENT_DATE}`)
     }
   } else {
-    throw new Error(`Unexpected A41 status: ${wrongCash.status} — aborting`)
+    throw new Error(`Unexpected A41 status: ${wrongCash.status}, aborting`)
   }
 
   // ── Step 2: correct clearing entry ─────────────────────────────
@@ -122,7 +122,7 @@ async function main() {
   if (existingClearing) {
     console.log(`✓ Step 2 already done: clearing entry ${existingClearing.voucher_series}${existingClearing.voucher_number} exists`)
   } else if (COMMIT) {
-    if (!stornoDone) throw new Error('Refusing to book clearing before storno — aborting')
+    if (!stornoDone) throw new Error('Refusing to book clearing before storno, aborting')
     const clearing = await createInvoicePaymentJournalEntry(
       supabase,
       COMPANY_ID,
@@ -135,7 +135,7 @@ async function main() {
       // which is 0 on this already-paid row.
       Number(invoiceRow.total),
     )
-    if (!clearing) throw new Error('Clearing entry was not created (no open fiscal period?) — aborting')
+    if (!clearing) throw new Error('Clearing entry was not created (no open fiscal period?), aborting')
     clearingId = clearing.id
     console.log(`✓ Step 2: booked clearing Dr 1930 / Cr 1510 ${invoiceRow.total} kr → voucher ${clearing.voucher_series}${clearing.voucher_number}`)
   } else {
@@ -170,7 +170,7 @@ async function main() {
 
   // ── Verify ─────────────────────────────────────────────────────
   if (COMMIT) {
-    // True ledger net: include 'reversed' entries too — a reversed entry's
+    // True ledger net: include 'reversed' entries too, a reversed entry's
     // lines stay in the GL and its storno (which carries the same source_id)
     // cancels them. Filtering to 'posted' only would count the storno without
     // its counterpart and report a false imbalance.
@@ -194,12 +194,12 @@ async function main() {
       Math.round(Math.abs(net.get('3001') ?? 0)) === 1500 &&
       Math.round(Math.abs(net.get('2611') ?? 0)) === 375 &&
       Math.round(net.get('1930') ?? 0) === 1875
-    console.log(ok ? '✓ VERIFIED: 1510 cleared, revenue/VAT single-counted, 1930 matches bank inflow' : '✗ VERIFY FAILED — inspect manually')
+    console.log(ok ? '✓ VERIFIED: 1510 cleared, revenue/VAT single-counted, 1930 matches bank inflow' : '✗ VERIFY FAILED: inspect manually')
     if (!ok) process.exit(1)
   }
 
   console.log('─────────────────────────────────────────────────────────')
-  console.log(COMMIT ? 'Repair complete.' : 'Dry run complete — re-run with --commit to apply.')
+  console.log(COMMIT ? 'Repair complete.' : 'Dry run complete: re-run with --commit to apply.')
 }
 
 main().catch((err) => {

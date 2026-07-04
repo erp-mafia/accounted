@@ -5,7 +5,7 @@ This guide walks you through deploying Accounted on your own infrastructure usin
 ## Prerequisites
 
 - Docker and Docker Compose v2+
-- A Supabase project (free tier works — create one at [supabase.com](https://supabase.com))
+- A Supabase project (free tier works: create one at [supabase.com](https://supabase.com))
 
 ## 1. Create a Supabase Project
 
@@ -24,13 +24,13 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 
 Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
 
-MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments — the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish.
+MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments: the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish.
 
 ## 3. Apply Database Migrations
 
 The `supabase/migrations/` directory contains the ordered SQL files that set up the full schema, including tables, RLS policies, triggers, and functions.
 
-**Option A — Supabase CLI (recommended):**
+**Option A: Supabase CLI (recommended):**
 
 ```bash
 # Install the Supabase CLI
@@ -43,9 +43,9 @@ supabase link --project-ref <your-project-ref>
 supabase db push
 ```
 
-**Option B — SQL Editor:**
+**Option B: SQL Editor:**
 
-Run each file in `supabase/migrations/` in order in the Supabase SQL Editor. They must be applied sequentially — later migrations depend on earlier ones.
+Run each file in `supabase/migrations/` in order in the Supabase SQL Editor. They must be applied sequentially: later migrations depend on earlier ones.
 
 ### PostgreSQL Extensions
 
@@ -58,11 +58,11 @@ The migrations automatically enable these extensions:
 | `btree_gist` | 042 | Fiscal period overlap prevention |
 | `pg_cron` | 048 | In-database scheduled jobs |
 
-These are all available on Supabase hosted. `pg_cron` requires a paid plan — if you are on the free tier, migration 048 will fail. You can safely skip it; the cron sidecar container handles the equivalent job via HTTP instead.
+These are all available on Supabase hosted. `pg_cron` requires a paid plan: if you are on the free tier, migration 048 will fail. You can safely skip it; the cron sidecar container handles the equivalent job via HTTP instead.
 
 ## 4. Configure Environment
 
-**Option A — Setup script (recommended):**
+**Option A: Setup script (recommended):**
 
 ```bash
 git clone https://github.com/erp-mafia/gnubok.git
@@ -72,7 +72,7 @@ cd Accounted
 
 The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET`, and writes everything to `.env`.
 
-**Option B — Manual:**
+**Option B: Manual:**
 
 ```bash
 git clone https://github.com/erp-mafia/gnubok.git
@@ -151,7 +151,7 @@ PORT=8080 docker compose up -d
    - **Step 4**: Preliminary tax amount (optional, skip if unsure)
    - **Step 5**: Bank details for invoices (optional)
 
-There is no admin account or invite system — any email address can sign up. You can also use the magic link option on the login page if preferred.
+There is no admin account or invite system: any email address can sign up. You can also use the magic link option on the login page if preferred.
 
 ## Scheduled Jobs
 
@@ -224,7 +224,7 @@ Sentry is disabled if these are not set. No errors are thrown.
 
 ## Storage Buckets
 
-Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM — no update/delete).
+Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM, no update/delete).
 
 If you enable the **receipt-ocr** extension, you must manually create a `receipts` storage bucket in the Supabase dashboard:
 
@@ -269,11 +269,11 @@ Check the [release notes](https://github.com/erp-mafia/gnubok/releases) for migr
 └─────────────────────┘
 ```
 
-The Next.js app is stateless — all data lives in Supabase. The Docker entrypoint injects your `NEXT_PUBLIC_*` environment variables into the pre-built JS bundles at container startup, so a single image works with any Supabase project.
+The Next.js app is stateless: all data lives in Supabase. The Docker entrypoint injects your `NEXT_PUBLIC_*` environment variables into the pre-built JS bundles at container startup, so a single image works with any Supabase project.
 
 ## Fully Self-Hosted (No Supabase Cloud)
 
-The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself — to keep all data on-premises, avoid the SaaS dependency, or run air-gapped — you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead.
+The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead.
 
 This is a more involved path. You take responsibility for backups, TLS certificates, image upgrades, and Postgres operations. It is intended for operators already running Docker services who are comfortable with PostgreSQL.
 
@@ -316,11 +316,11 @@ flowchart LR
 
 1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` / `API_EXTERNAL_URL` at it.
 
-2. **Apply the Accounted migrations** directly via `psql` — the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
+2. **Apply the Accounted migrations** directly via `psql`: the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
 
    ```bash
    # From the repo root, stream each migration straight into the supabase-db
-   # container — glob order is already sorted, and nothing is left behind on the
+   # container: glob order is already sorted, and nothing is left behind on the
    # host or in the container.
    for f in supabase/migrations/*.sql; do
      echo "Applying $f..."
@@ -352,7 +352,7 @@ flowchart LR
 
 ### What you give up vs. cloud Supabase
 
-- **Backups** are entirely your responsibility — set up `pg_dump` (or a tool like restic) to off-host storage. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it — any Swedish bookkeeping system can re-import it:
+- **Backups** are entirely your responsibility: set up `pg_dump` (or a tool like restic) to off-host storage. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
 
   ```bash
   curl -fsS -H "Authorization: Bearer <reports:read API key>" \
@@ -361,11 +361,11 @@ flowchart LR
   ```
 - **Storage**: the included `storage-api` defaults to the local-filesystem backend. For production durability, use the `docker-compose.s3.yml` overlay and point it at S3 / MinIO.
 - **SMTP**: no built-in mailer. Either set `ENABLE_EMAIL_AUTOCONFIRM=true` for dev/staging, or wire `SMTP_*` env vars in the Supabase stack to a provider (Resend, Postmark, etc.).
-- **Upgrades**: you sync the `supabase/postgres` image yourself — your data lives in the DB volume, so a Postgres image bump needs no migration re-run. When you pull a newer Accounted release, apply only the **new** migration files added since your last deploy (the SQL is not idempotent, so re-running already-applied migrations will error). Track which migrations you've applied, e.g. with a checksum/version table.
+- **Upgrades**: you sync the `supabase/postgres` image yourself; your data lives in the DB volume, so a Postgres image bump needs no migration re-run. When you pull a newer Accounted release, apply only the **new** migration files added since your last deploy (the SQL is not idempotent, so re-running already-applied migrations will error). Track which migrations you've applied, e.g. with a checksum/version table.
 
 ### Notes
 
-- **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migration succeeds (unlike on the Supabase free tier — see the standard self-hosting flow above).
+- **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migration succeeds (unlike on the Supabase free tier, see the standard self-hosting flow above).
 - **MFA**: as on the standard path, `NEXT_PUBLIC_SELF_HOSTED=true` disables enforcement; users may still enable TOTP voluntarily.
 
 ## Troubleshooting
@@ -380,7 +380,7 @@ Check the Supabase dashboard under **Authentication > Users** to verify the sign
 Ensure `https://your-domain.com/auth/callback` is in the Supabase **Redirect URLs** allowlist and that **Site URL** matches your `NEXT_PUBLIC_APP_URL`.
 
 **`pg_cron` migration fails:**
-`pg_cron` requires a paid Supabase plan. On the free tier, you can safely comment out migration 048 or let it fail — the overdue supplier invoice check is non-critical and can be triggered manually.
+`pg_cron` requires a paid Supabase plan. On the free tier, you can safely comment out migration 048 or let it fail: the overdue supplier invoice check is non-critical and can be triggered manually.
 
 **Container restarts in a loop:**
 Check logs with `docker compose logs app`. The app requires all five core env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `CRON_SECRET`) and will crash on startup if any are missing.

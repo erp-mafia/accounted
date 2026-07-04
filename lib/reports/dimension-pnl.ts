@@ -10,7 +10,7 @@ import type {
   TrialBalanceRow,
 } from '@/types'
 
-// Same class labels as resultatrapport — the report is its per-dimension
+// Same class labels as resultatrapport: the report is its per-dimension
 // sibling and must read identically. Stays-Swedish surface (report labels).
 const CLASS_LABELS: Record<number, string> = {
   3: '3 Rörelsens inkomster/intäkter',
@@ -31,7 +31,7 @@ const CLASS_LABELS: Record<number, string> = {
  * comes from the SAME unfiltered generateTrialBalance pass resultatrapport
  * uses (same options, same filterPnl scope, same sign convention), and the
  * untagged bucket is the residual Totalt − tagged columns. Columns therefore
- * always sum exactly to the unfiltered resultatrapport — including edge cases
+ * always sum exactly to the unfiltered resultatrapport: including edge cases
  * the line pass cannot see (e.g. P&L opening remnants when a prior year was
  * never closed), which land in "(Utan dimension)" where they belong.
  */
@@ -42,13 +42,13 @@ export async function generateDimensionPnl(
   sieDimNo: string,
   // No fromDate: the matrix uses closing-balance semantics (cumulative from
   // period_start) to reconcile with resultatrapport, so a lower bound cannot
-  // be honoured — accepting one and labelling the report with it would be a
+  // be honoured: accepting one and labelling the report with it would be a
   // lie (#862 review). toDate caps the window on both sides identically.
   options?: { toDate?: string }
 ): Promise<DimensionPnlReport> {
   // The dim number is interpolated into a PostgREST jsonb path expression
   // below (`dimensions->>N`). Both entry points (route, MCP tool) validate,
-  // but the generator is exported — guard here too so no future caller can
+  // but the generator is exported: guard here too so no future caller can
   // smuggle filter syntax through.
   if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
     throw new Error('sieDimNo must be a positive SIE dimension number')
@@ -73,7 +73,7 @@ export async function generateDimensionPnl(
   const totalByAccount = new Map<string, TrialBalanceRow>()
   for (const r of pnlRows) totalByAccount.set(r.account_number, r)
 
-  // ── Registry names for column headers (read-only — never seeds) ─
+  // ── Registry names for column headers (read-only: never seeds) ─
   const { data: dimRow } = await supabase
     .from('dimensions')
     .select('id, sie_dim_no, name')
@@ -97,7 +97,7 @@ export async function generateDimensionPnl(
 
   // ── Tagged lines: one pass over lines carrying this dimension ──
   // Mirrors trial-balance closing semantics: the fiscal_period_id join scopes
-  // to the period and toDate caps the window — both sides of the matrix
+  // to the period and toDate caps the window: both sides of the matrix
   // cover period_start..toDate, so the buckets sum to the Totalt column.
   const taggedLines = await fetchAllRows<{
     id: string
@@ -114,7 +114,7 @@ export async function generateDimensionPnl(
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
       .in('journal_entries.status', ['posted', 'reversed'])
-      // Key-existence via the extracted text field — dims 1/6 ride the partial
+      // Key-existence via the extracted text field: dims 1/6 ride the partial
       // expression indexes (idx_jel_dimensions_dim1/dim6).
       .not(`dimensions->>${sieDimNo}`, 'is', null)
 
@@ -127,7 +127,7 @@ export async function generateDimensionPnl(
   }, { dedupeBy: (r) => r.id })
 
   // Bucket raw amounts per (account, code). Only accounts present in the P&L
-  // trial-balance scope count — anything else (balance accounts, 8999) is out.
+  // trial-balance scope count: anything else (balance accounts, 8999) is out.
   const buckets = new Map<string, Map<string, { debit: number; credit: number }>>()
   const codesSeen = new Set<string>()
   for (const line of taggedLines) {
@@ -237,7 +237,7 @@ function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
   )
 }
 
-// credit − debit: revenue positive, expenses negative — resultatrapport's
+// credit − debit: revenue positive, expenses negative: resultatrapport's
 // exact sign convention, so cells compare 1:1 with that report.
 function signedAmount(row: TrialBalanceRow): number {
   return row.closing_credit - row.closing_debit

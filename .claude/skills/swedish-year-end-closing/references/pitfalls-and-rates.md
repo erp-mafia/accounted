@@ -8,7 +8,7 @@ Interimsposter booked at year-end must be reversed on day 1 of new fiscal year. 
 ### 2. Incorrect periodiseringsfond calculations
 - Wrong percentage: 25% for AB, 30% for EF
 - Missing mandatory 6-year reversal
-- Forgetting **gross-up rule** for funds created before 2019 (at old 22% rate, requiring 103–106% uppräkning on reversal)
+- Forgetting **gross-up rule** for funds created before 2019 (at old 22% rate, requiring 103-106% uppräkning on reversal)
 
 ### 3. Missing schablonintäkt on periodiseringsfonder
 Affects AB companies. SLR × total funds at year-start. Is a skattemässig justering, NEVER booked. Many systems incorrectly try to record it as journal entry.

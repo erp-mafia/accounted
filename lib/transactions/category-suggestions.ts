@@ -70,7 +70,7 @@ export function merchantHistoryFor(
  * Combines mapping rules, pattern matching, and counterparty history.
  *
  * merchantHistory is the category history FOR THIS TRANSACTION'S counterparty
- * (see buildMerchantHistory/merchantHistoryFor) — never a company-wide
+ * (see buildMerchantHistory/merchantHistoryFor): never a company-wide
  * frequency map. Global padding produced identical ~0.5 four-way spreads on
  * every transaction, which agents correctly read as no signal
  * (mcp_optimization_plan P2-1); an empty result is the honest answer.
@@ -142,7 +142,7 @@ export function getSuggestedCategories(
     })
   }
 
-  // 3. Counterparty history — categories this merchant was booked as before.
+  // 3. Counterparty history: categories this merchant was booked as before.
   // Confidence scales with occurrences and the reason carries provenance.
   const historyEntries = Object.entries(merchantHistory)
     .sort(([, a], [, b]) => b - a)

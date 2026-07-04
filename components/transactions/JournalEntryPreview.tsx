@@ -17,7 +17,7 @@ interface JournalEntryPreviewProps {
   amount: number
   /**
    * SEK-equivalent of `amount` for foreign-currency transactions. When set,
-   * all line calculations and the displayed totals use this value — the
+   * all line calculations and the displayed totals use this value: the
    * verifikation must always be in SEK regardless of the source currency.
    * Falls back to `amount` when omitted (i.e. SEK transactions).
    */
@@ -26,7 +26,7 @@ interface JournalEntryPreviewProps {
   vatTreatment?: VatTreatment | 'none'
   accountOverride?: string
   entityType?: EntityType
-  /** For template-based bookings — overrides category mapping */
+  /** For template-based bookings: overrides category mapping */
   templateDebitAccount?: string
   templateCreditAccount?: string
   templateVatRate?: number
@@ -130,7 +130,7 @@ export default function JournalEntryPreview({
         result.push({ side: 'debet', account: isDomestic ? '2647' : '2645', amount: rcVatAmt })
         result.push({ side: 'kredit', account: '2614', amount: rcVatAmt })
 
-        // Basbelopp pair: 44xx|45xx / 4598 — populates rutor 20–24.
+        // Basbelopp pair: 44xx|45xx / 4598, populates rutor 20-24.
         // Skip if the debit account is already a basis account.
         if (!/^4[45]\d{2}$/.test(templateDebitAccount)) {
           const basisAccount =

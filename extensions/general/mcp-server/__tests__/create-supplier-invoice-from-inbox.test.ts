@@ -14,7 +14,7 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   convertToSEK: vi.fn(),
 }))
 
-describe('gnubok_create_supplier_invoice_from_inbox — registration', () => {
+describe('gnubok_create_supplier_invoice_from_inbox: registration', () => {
   it('is registered with idempotent + non-read-only annotations', () => {
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')
     expect(tool).toBeDefined()
@@ -57,7 +57,7 @@ function makeMock(opts: {
   }
   /** When provided, every pending_operations .insert(payload) is recorded here. */
   inserts?: Array<Record<string, unknown>>
-  /** Served by the awaited (non-maybeSingle) suppliers list query — candidate search. */
+  /** Served by the awaited (non-maybeSingle) suppliers list query: candidate search. */
   supplierList?: Array<Record<string, unknown>>
   /** Served by the .single() defaults/tenancy fetch. Pass explicit null to simulate a supplier missing from the company. */
   supplierRecord?: Record<string, unknown> | null
@@ -172,7 +172,7 @@ const baseExtracted = {
   ],
 }
 
-describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
+describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -338,7 +338,7 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
       score: 1,
       matched_on: 'name',
     })
-    // Next hint is the retry with the best candidate as override — the agent
+    // Next hint is the retry with the best candidate as override: the agent
     // confirms against the underlag; fuzzy never auto-resolves.
     expect(result.next.tool).toBe('gnubok_create_supplier_invoice_from_inbox')
     expect(result.next.args).toEqual({ inbox_item_id: 'inbox-8', supplier_id_override: 'sup-polarn' })
@@ -365,7 +365,7 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     ).rejects.toThrow(/supplier_id_override sup-foreign does not match any supplier in this company/)
   })
 
-  it('applies line_overrides — overridden account wins over extracted accountSuggestion', async () => {
+  it('applies line_overrides: overridden account wins over extracted accountSuggestion', async () => {
     const extractedWithSuggestion = {
       ...baseExtracted,
       lineItems: [
@@ -394,7 +394,7 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     )) as { preview: { items_preview: Array<{ line_number: number; account_number: string }> } }
 
     const items = result.preview.items_preview
-    expect(items[0].account_number).toBe('6550')  // untouched — extracted suggestion wins
+    expect(items[0].account_number).toBe('6550')  // untouched, extracted suggestion wins
     expect(items[1].account_number).toBe('6420')  // override wins over extracted suggestion
   })
 
@@ -445,7 +445,7 @@ describe('gnubok_create_supplier_invoice_from_inbox — execute', () => {
     expect(result.staged).toBe(true)
 
     // Contract: staged params carry `default_dimensions` top-level (resolved to
-    // codes) and each item its OWN resolved bag — the executor merges.
+    // codes) and each item its OWN resolved bag: the executor merges.
     expect(inserts).toHaveLength(1)
     const params = inserts[0].params as {
       default_dimensions?: Record<string, string>

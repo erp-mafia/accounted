@@ -11,10 +11,10 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  *   Debit  19xx bank account (default 1930)  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
- * One voucher per payout request — that mirrors the actual bank transaction.
+ * One voucher per payout request: that mirrors the actual bank transaction.
  * At partial approval (delvis beviljad) the paid amount clears here and the
  * remainder stays on 1513 until the user corrects it (kundfordran/kundförlust
- * depending on the outcome with the buyer) — deliberately manual, never
+ * depending on the outcome with the buyer): deliberately manual, never
  * guessed.
  */
 export async function createRotRutPayoutEntry(

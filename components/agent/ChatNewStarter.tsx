@@ -33,7 +33,7 @@ export default function ChatNewStarter({
         <div className="min-w-0">
           <h1 className="font-display text-lg tracking-tight truncate">{agentName}</h1>
           <p className="text-xs text-muted-foreground truncate">
-            {isSandbox ? 'Förhandsvisning — avstängd i sandlådan' : 'Ny konversation'}
+            {isSandbox ? 'Förhandsvisning: avstängd i sandlådan' : 'Ny konversation'}
           </p>
         </div>
       </header>
@@ -48,7 +48,7 @@ export default function ChatNewStarter({
             initialMessages={[]}
             initialConversationId={null}
             onFirstTurnComplete={(id) => {
-              // Wait for the first turn to finish before swapping the URL —
+              // Wait for the first turn to finish before swapping the URL:
               // otherwise the unmount aborts the in-flight stream and
               // /chat/[id] hydrates with only the user message.
               if (swapped) return

@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No active company' }, { status: 400 })
   }
 
-  // Defense in depth alongside RLS — confirm membership before composing.
+  // Defense in depth alongside RLS: confirm membership before composing.
   const { data: membership } = await supabase
     .from('company_members')
     .select('role')

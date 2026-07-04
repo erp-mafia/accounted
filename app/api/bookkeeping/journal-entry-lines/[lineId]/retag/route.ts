@@ -8,8 +8,8 @@ import { RetagLineDimensionsSchema } from '@/lib/api/schemas'
  *
  * Tier-2 retro-tagging (dimensions plan PR6): change ONLY the dimension tags
  * on a posted line, through the audited retag_line_dimensions RPC. The RPC
- * enforces everything — posted status, open period, company lock date,
- * active registry values, writer role — and writes the immutable
+ * enforces everything (posted status, open period, company lock date,
+ * active registry values, writer role) and writes the immutable
  * dimension_retag_log row before the carve-out UPDATE. Affects
  * internredovisning only, never the verifikat itself.
  */
@@ -34,7 +34,7 @@ export const POST = withRouteContext<{ params: Promise<{ lineId: string }> }>(
     if (error) {
       // Classify by SQLSTATE, not message text (#867 review): every rule
       // violation in the RPC is a plain RAISE EXCEPTION (P0001) with a
-      // human-readable Swedish message — surface those verbatim as 409 so
+      // human-readable Swedish message: surface those verbatim as 409 so
       // the dialog shows the specific rule. The tenant guard raises 42501.
       // Anything else is unexpected infrastructure failure → 500 + log.
       const message = error.message ?? 'Kunde inte ändra dimensioner'

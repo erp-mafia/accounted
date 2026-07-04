@@ -2,7 +2,7 @@
  * Pure function to compute proposed journal entry lines for an invoice payment.
  * Used by the PaymentBookingDialog to pre-fill the editable line grid.
  *
- * No DB or Supabase dependency — all inputs are plain data.
+ * No DB or Supabase dependency: all inputs are plain data.
  */
 import { resolveSekAmount } from './currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
@@ -25,7 +25,7 @@ export interface ProposePaymentLinesInput {
     items?: InvoiceItem[]
     /**
      * Dimensions PR7: the invoice's default bag. Stamped on every proposed
-     * line — the payment dialog always submits its (editable) lines, so the
+     * line: the payment dialog always submits its (editable) lines, so the
      * preview IS the booked entry and must re-propagate the tag like the
      * no-override generator path does. Per-item bags are not split out here
      * (the preview groups per rate); users can retag lines in the grid.
@@ -52,7 +52,7 @@ function toFormAmount(n: number): string {
  * Otherwise the payment clears the receivable (invoice_paid).
  *
  * Shared so the dialog's voucher preview and the route's actual booking always
- * resolve the same series — they must not drift.
+ * resolve the same series: they must not drift.
  */
 export function resolveInvoicePaymentSourceType(opts: {
   invoiceAlreadyBooked: boolean
@@ -169,7 +169,7 @@ function proposeCashLines(
   }
 
   // Build credit lines per VAT rate group. Free-text / blank rows carry no
-  // amounts and never book — drop them first.
+  // amounts and never book: drop them first.
   const creditLines: FormLine[] = []
   const billableItems = (invoice.items ?? []).filter((item) => item.line_type !== 'text')
 

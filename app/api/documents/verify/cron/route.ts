@@ -4,7 +4,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/documents/verify/cron — weekly Sunday 03:00 UTC.
+ * GET /api/documents/verify/cron: weekly Sunday 03:00 UTC.
  * Spot-checks WORM archive integrity by recomputing SHA-256 for the next
  * batch of documents and writing INTEGRITY_FAILURE rows to the audit log
  * for any mismatches.

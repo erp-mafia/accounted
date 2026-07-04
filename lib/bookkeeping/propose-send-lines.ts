@@ -2,7 +2,7 @@
  * Pure function to compute proposed journal entry lines for sending an invoice.
  * Used by the SendInvoiceDialog to preview the journal entry before committing.
  *
- * No DB or Supabase dependency — all inputs are plain data.
+ * No DB or Supabase dependency: all inputs are plain data.
  */
 import { resolveSekAmount } from './currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
@@ -26,7 +26,7 @@ export interface ProposeSendLinesInput {
     /**
      * Dimensions PR7: the invoice's default bag, stamped on every proposed
      * line so the preview matches what createInvoiceJournalEntry books
-     * (display-only — the send routes book via the generator).
+     * (display-only, the send routes book via the generator).
      */
     default_dimensions?: Record<string, string> | null
   }
@@ -164,7 +164,7 @@ function buildSendLines(
     }
   }
 
-  // Debit: 1510 Kundfordringar — balance guarantee
+  // Debit: 1510 Kundfordringar, balance guarantee
   const totalCredits = creditLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100

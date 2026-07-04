@@ -12,9 +12,9 @@ const CLASS_LABELS: Record<number, string> = {
 }
 
 /**
- * Balansrapport — operational balance report.
+ * Balansrapport: operational balance report.
  *
- * Lists every account in classes 1–2 with IB, period change, and UB.
+ * Lists every account in classes 1-2 with IB, period change, and UB.
  * Unlike Balansräkning (formal, ÅRL Bilaga 1), this keeps account numbers
  * and is meant for ongoing reconciliation, not for årsbokslut/årsredovisning.
  *

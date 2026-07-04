@@ -1,6 +1,6 @@
 ---
 name: loop-pr-ci-triage
-description: Proactive loop that watches open PRs in erp-mafia/accounted, fixes failing CI, and addresses actionable review-bot / reviewer comments — on the PR branch, never merging. Use on a schedule (cloud routine) or on-demand via /loop-pr-ci-triage. Follows dev_docs/loops.md (propose-don't-merge, dedupe, loop-verify gate).
+description: Proactive loop that watches open PRs in erp-mafia/accounted, fixes failing CI, and addresses actionable review-bot / reviewer comments, on the PR branch, never merging. Use on a schedule (cloud routine) or on-demand via /loop-pr-ci-triage. Follows dev_docs/loops.md (propose-don't-merge, dedupe, loop-verify gate).
 ---
 
 # loop-pr-ci-triage
@@ -19,7 +19,7 @@ gh pr list --state open --json number,title,isDraft,headRefName,author,reviewDec
 Skip: drafts; PRs by `contributor:flagged`/`pr:flagged` authors; PRs already labeled `loop:needs-human`.
 Prioritize (cap **5 PRs/run**, log the rest):
 1. Failing CI that's a mechanical fix (lint, type error, snapshot, a flaky/needs-rerun check).
-2. Dependabot bumps failing `core-only` / `pg-real` (there is a live backlog — #730, #639, #638, #637).
+2. Dependabot bumps failing `core-only` / `pg-real` (there is a live backlog: #730, #639, #638, #637).
 3. Unresolved actionable review comments (from "The PR Agent", Superagent, or a human).
 
 ## 2. Diagnose each PR
@@ -38,7 +38,7 @@ Prioritize (cap **5 PRs/run**, log the rest):
 
 ## 4. Dependabot specifics
 If a bump breaks the build/tests, the fix is usually a small code adaptation to the new API or a
-peer-dep pin. If the bump is a **major** version with wide breakage, don't force it — comment with the
+peer-dep pin. If the bump is a **major** version with wide breakage, don't force it: comment with the
 breaking changes found and label `loop:needs-human` instead of a risky rewrite.
 
 ## 5. Escalate / anti-thrash

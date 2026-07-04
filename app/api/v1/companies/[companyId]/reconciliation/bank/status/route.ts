@@ -12,7 +12,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 
-// Mirrors ReconciliationStatus from lib/reconciliation/bank-reconciliation.ts —
+// Mirrors ReconciliationStatus from lib/reconciliation/bank-reconciliation.ts:
 // the handler passes that object straight through. This schema previously
 // documented a different, invented shape (matched_transactions, bank_balance,
 // total_unmatched_amount, …) that the endpoint never returned; any client coded
@@ -20,9 +20,9 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 const StatusResponse = z.object({
   /** Sum of bank-feed transactions in the window (the bank side). */
   bank_transaction_total: z.number(),
-  /** Full ledger balance on the account incl. opening balance — matches the balance sheet. */
+  /** Full ledger balance on the account incl. opening balance: matches the balance sheet. */
   gl_1930_balance: z.number(),
-  /** Ledger movement excluding opening balance — what `difference` compares against. */
+  /** Ledger movement excluding opening balance: what `difference` compares against. */
   gl_1930_period_movement: z.number(),
   gl_1930_opening_balance: z.number(),
   /** Net storno/correction activity in the window. Informational; included in the movement. */
@@ -45,11 +45,11 @@ registerEndpoint({
   useWhen:
     'You\'re building a dashboard widget, an audit report, or a pre-close check that needs to know how many bank transactions are still unbooked.',
   doNotUseFor:
-    'Running the matcher — that\'s POST `/reconciliation/bank/run`. Per-transaction detail — use the transaction list with `?status=unbooked`.',
+    'Running the matcher: that\'s POST `/reconciliation/bank/run`. Per-transaction detail: use the transaction list with `?status=unbooked`.',
   pitfalls: [
     'A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.',
     'difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.',
-    'is_reconciled means |difference| < 0.01 for the window — an aggregate check, not a per-transaction guarantee.',
+    'is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.',
   ],
   example: {
     response: {

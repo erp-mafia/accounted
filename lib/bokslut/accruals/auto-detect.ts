@@ -9,7 +9,7 @@ export interface PeriodiseringSuggestion {
   /** Underlying source invoice id (invoices.id or supplier_invoices.id). */
   source_invoice_id: string
   source_type: PeriodiseringSource
-  /** Net amount of the invoice (subtotal — excludes VAT, since VAT is
+  /** Net amount of the invoice (subtotal: excludes VAT, since VAT is
    *  reported in its own period and not periodiserad). */
   original_amount: number
   /** Portion of `original_amount` that falls AFTER period_end and should be
@@ -70,14 +70,14 @@ function nextDayIso(iso: string): string {
 
 /**
  * Build a suggestion if the parsed window extends beyond `periodEnd`. The
- * portion AFTER period_end is the periodiseringsbelopp — pro-rated over
+ * portion AFTER period_end is the periodiseringsbelopp: pro-rated over
  * total days in the parsed window.
  *
  * Returns null when:
  *   - no parseable range in the description / line items
  *   - parsed range ends on or before period_end (nothing to periodisera)
  *   - parsed range starts on or after the day after period_end (entire
- *     window is in the next year — that's a true prepaid for the next year,
+ *     window is in the next year: that's a true prepaid for the next year,
  *     but it was booked in THIS year; pro-rate is 100%)
  */
 function buildSuggestion(args: {
@@ -97,7 +97,7 @@ function buildSuggestion(args: {
   const { sourceId, sourceType, netAmount, description, itemDescriptions, sourceLabel, periodEnd } = args
   if (!Number.isFinite(netAmount) || netAmount <= 0) return null
 
-  // Try the head text first, then each item — first hit wins.
+  // Try the head text first, then each item: first hit wins.
   let parsed = parseInvoiceDateRange(description)
   let parsedFromItem = false
   if (!parsed) {
@@ -135,8 +135,8 @@ function buildSuggestion(args: {
 
   const isSupplier = sourceType === 'supplier_invoice'
   const reason = isSupplier
-    ? `Leverantörsfakturan löper ${parsed.startDate} – ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
-    : `Kundfakturan löper ${parsed.startDate} – ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
+    ? `Leverantörsfakturan löper ${parsed.startDate}: ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
+    : `Kundfakturan löper ${parsed.startDate}: ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
 
   return {
     source_invoice_id: sourceId,
@@ -160,7 +160,7 @@ function buildSuggestion(args: {
  *   - supplier invoices (approved or paid) registered within the period,
  *     same parsing
  *
- * The returned suggestions are NEVER posted automatically — the wizard
+ * The returned suggestions are NEVER posted automatically: the wizard
  * surfaces them with a confidence badge and the user accepts/rejects each.
  */
 export async function detectPeriodisering(
@@ -169,7 +169,7 @@ export async function detectPeriodisering(
   fiscalPeriodId: string,
 ): Promise<PeriodiseringSuggestion[]> {
   // Resolve the fiscal period window. We scope candidate invoices to those
-  // dated within the period — anything outside is either an opening-balance
+  // dated within the period: anything outside is either an opening-balance
   // carryover (its own concern) or a future invoice (no period to detect).
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
@@ -184,7 +184,7 @@ export async function detectPeriodisering(
 
   // Invoices already covered by a löpande accrual schedule (periodisering
   // skapad på fakturaraden) are handled month by month and must never be
-  // suggested again at year-end — that would periodisera the same belopp
+  // suggested again at year-end: that would periodisera the same belopp
   // twice. Cancelled schedules don't exclude: their invoice was credited and
   // the status filters below drop it anyway.
   const { data: scheduleRows } = await supabase
@@ -203,7 +203,7 @@ export async function detectPeriodisering(
       .filter(Boolean),
   )
 
-  // Customer invoices — only "real" ones (sent/paid). Drafts and overdue
+  // Customer invoices: only "real" ones (sent/paid). Drafts and overdue
   // get skipped: drafts haven't moved through the engine, overdue is just a
   // status label that overlaps with sent here.
   const { data: invoiceRows } = await supabase
@@ -214,7 +214,7 @@ export async function detectPeriodisering(
     .lte('invoice_date', periodEnd)
     .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])
 
-  // Supplier invoices — approved or paid (registration journal entry exists).
+  // Supplier invoices: approved or paid (registration journal entry exists).
   const { data: supplierRows } = await supabase
     .from('supplier_invoices')
     .select(

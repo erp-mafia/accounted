@@ -1,8 +1,8 @@
-export const COOKBOOK_PAYROLL_AGI_MD = `# Cookbook — run payroll and generate the AGI XML
+export const COOKBOOK_PAYROLL_AGI_MD = `# Cookbook: run payroll and generate the AGI XML
 
 > Drive a Swedish salary run from draft to booked, then generate the arbetsgivardeklaration på individnivå (AGI) XML for manual submission to Skatteverket. Five-step lifecycle, every transition idempotent and dry-runnable.
 
-This is the operational companion to the [Salary-runs reference](/docs/api/reference/salary-runs). The route surface mirrors the dashboard exactly — anything you can do in the UI is callable from the API.
+This is the operational companion to the [Salary-runs reference](/docs/api/reference/salary-runs). The route surface mirrors the dashboard exactly: anything you can do in the UI is callable from the API.
 
 ## What you'll need
 
@@ -12,7 +12,7 @@ This is the operational companion to the [Salary-runs reference](/docs/api/refer
 
 ## 1. Create a salary run (draft)
 
-\`POST /salary-runs\` opens a run in \`draft\` status. Personnummer in the response is masked to \`ÅÅÅÅMMDDXXXX\` per GDPR Art.5(1)(c) — the full value only appears on \`GET /employees/{id}\` (deliberate drill-in).
+\`POST /salary-runs\` opens a run in \`draft\` status. Personnummer in the response is masked to \`ÅÅÅÅMMDDXXXX\` per GDPR Art.5(1)(c): the full value only appears on \`GET /employees/{id}\` (deliberate drill-in).
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
@@ -52,7 +52,7 @@ Totals are null until you calculate.
 
 ## 2. Calculate (math + draft → review)
 
-\`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026), age-adjusted reductions per Prop. 2025/26:66 (the youth-reduction band is **18–22 years old at the start of 2026** — i.e. employees **born 2003–2007** for the 2026 income year, NOT a blanket "under-25"; the elder reduction applies at **67+ from 2026**, not 66+), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
+\`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026), age-adjusted reductions per Prop. 2025/26:66 (the youth-reduction band is **18-22 years old at the start of 2026**: i.e. employees **born 2003-2007** for the 2026 income year, NOT a blanket "under-25"; the elder reduction applies at **67+ from 2026**, not 66+), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
 
 \`\`\`bash
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
@@ -87,11 +87,11 @@ Response transitions \`draft → review\`:
 }
 \`\`\`
 
-The \`review\` status is a soft hold — the math is done but no journal entries are posted yet. Treat this as the human-review step.
+The \`review\` status is a soft hold: the math is done but no journal entries are posted yet. Treat this as the human-review step.
 
 ## 3. Approve (review → approved)
 
-\`POST /salary-runs/{id}/approve\` validates and locks the math. After this point you can't \`PATCH\` per-employee \`grundlön\` etc. — corrections require reverting to draft (only possible if no payment is recorded).
+\`POST /salary-runs/{id}/approve\` validates and locks the math. After this point you can't \`PATCH\` per-employee \`grundlön\` etc.: corrections require reverting to draft (only possible if no payment is recorded).
 
 \`\`\`bash
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
@@ -119,17 +119,17 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR
   -d '{ "payment_date": "2026-05-25", "settlement_account": "1930" }'
 \`\`\`
 
-This step records the payment event but does NOT post the journal entry yet — that's step 5. The split is deliberate: the \`mark-paid\` step gives integrators a hook to confirm the bank-side leg landed before locking the GL side.
+This step records the payment event but does NOT post the journal entry yet: that's step 5. The split is deliberate: the \`mark-paid\` step gives integrators a hook to confirm the bank-side leg landed before locking the GL side.
 
 ## 5. Book (paid → booked)
 
-\`POST /salary-runs/{id}/book\` is the engine-touching step. It generates 2–4 verifikationer atomically (the count depends on whether OB/övertid/traktamente have separate journals):
+\`POST /salary-runs/{id}/book\` is the engine-touching step. It generates 2-4 verifikationer atomically (the count depends on whether OB/övertid/traktamente have separate journals):
 
 - Verifikation A: Bruttolön debit → 7010 (or per-employee subkonto), credit → 2710 (preliminärskatt) + 1930 (utbetalning)
-- Verifikation B: Arbetsgivaravgifter debit → 7510 (lagstadgade sociala avgifter), credit → 2731 (Avräkning sociala avgifter — payable to Skatteverket, cleared when arbetsgivardeklaration is paid)
+- Verifikation B: Arbetsgivaravgifter debit → 7510 (lagstadgade sociala avgifter), credit → 2731 (Avräkning sociala avgifter: payable to Skatteverket, cleared when arbetsgivardeklaration is paid)
 - Optional: separate verifikationer for förmånsbeskattning (förmånsvärde → 7385 cost + 2731 avräkning), traktamente (7321 inrikes / 7322 utrikes), löneväxling (1.058 factor on 7390)
 
-The 2731 series is the **employer-contributions-payable** liability per BAS 2026 — not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.
+The 2731 series is the **employer-contributions-payable** liability per BAS 2026: not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.
 
 \`\`\`bash
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
@@ -159,11 +159,11 @@ Response:
 }
 \`\`\`
 
-If \`book\` fails partway (e.g. period locked while waiting for the bank-side confirmation), the route is strict-mode v1 — no partial commits. The state stays at \`paid\` and the response carries the \`PERIOD_LOCKED\` error code with the offending period.
+If \`book\` fails partway (e.g. period locked while waiting for the bank-side confirmation), the route is strict-mode v1: no partial commits. The state stays at \`paid\` and the response carries the \`PERIOD_LOCKED\` error code with the offending period.
 
 ## 6. Generate the AGI XML
 
-\`POST /salary-runs/{id}/generate-agi\` produces the arbetsgivardeklaration på individnivå XML for the period. Skatteverket requires AGI monthly; the XML is embedded in the JSON response — no separate file endpoint.
+\`POST /salary-runs/{id}/generate-agi\` produces the arbetsgivardeklaration på individnivå XML for the period. Skatteverket requires AGI monthly; the XML is embedded in the JSON response: no separate file endpoint.
 
 \`\`\`bash
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
@@ -204,7 +204,7 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$S
 draft ──calculate──► review ──approve──► approved ──mark-paid──► paid ──book──► booked ──generate-agi──► (AGI XML)
 \`\`\`
 
-Each transition is idempotent on \`Idempotency-Key\`. Retrying a transition that has already completed returns the same response with \`Idempotent-Replayed: true\`. Failed transitions don't advance the state — fix and retry.
+Each transition is idempotent on \`Idempotency-Key\`. Retrying a transition that has already completed returns the same response with \`Idempotent-Replayed: true\`. Failed transitions don't advance the state: fix and retry.
 
 ## Förmånsbeskattning
 
@@ -221,19 +221,19 @@ When an employee has bilförmån / fri kost / friskvård, declare the förmånsv
 }
 \`\`\`
 
-The engine adds the förmånsvärde to bruttolön for the avgifts-basis (2731) and produces a separate \`förmåner\` line on the AGI. \`bilförmån_värde\` follows Skatteverkets schablon for 2026; pass the figure directly — the API does not compute it from car make/model/year.
+The engine adds the förmånsvärde to bruttolön for the avgifts-basis (2731) and produces a separate \`förmåner\` line on the AGI. \`bilförmån_värde\` follows Skatteverkets schablon for 2026; pass the figure directly: the API does not compute it from car make/model/year.
 
 ## Common pitfalls
 
 - **Don't \`PATCH\` after approve.** PATCH is draft-only. To correct an approved run, revert to draft (only possible before payment) or void the run and create a new one.
-- **AGI period vs run period.** The AGI declaration covers \`(period_year, period_month)\` — the same period as the run, not the payment date. A run paid on 2026-06-02 for May still files as the May AGI.
+- **AGI period vs run period.** The AGI declaration covers \`(period_year, period_month)\`: the same period as the run, not the payment date. A run paid on 2026-06-02 for May still files as the May AGI.
 - **F-skatt verification is the integrator's job.** The API trusts \`employee.payroll_config.F_skatt\` to be in sync with the employee's live Skatteverket registration. A wrong flag produces a non-compliant AGI; check the F-skattsedel before payroll runs.
-- **Sociala avgifter age reduction.** Per Prop. 2025/26:66, employees who are **18–22 years old at the start of the 2026 income year (born 2003–2007)** AND employees who **have turned 67 at the start of the income year (1 January 2026)** get reduced satser. The "at the start of" boundary matters — a 66-year-old whose 67th birthday falls in February 2026 does NOT qualify for the elder reduction in 2026. The engine reads \`employee.birthdate\` and applies the correct sats automatically — don't override unless you've consulted [Skatteverkets table](https://www.skatteverket.se/foretagochorganisationer/skatter/arbetsgivareochinkomstuppgifter/arbetsgivaravgifteroch_skatteavdrag.4.18e1b10334ebe8bc80003392.html). The old "under 26" rule from 2024 does NOT apply for 2026 and later.
+- **Sociala avgifter age reduction.** Per Prop. 2025/26:66, employees who are **18-22 years old at the start of the 2026 income year (born 2003-2007)** AND employees who **have turned 67 at the start of the income year (1 January 2026)** get reduced satser. The "at the start of" boundary matters: a 66-year-old whose 67th birthday falls in February 2026 does NOT qualify for the elder reduction in 2026. The engine reads \`employee.birthdate\` and applies the correct sats automatically: don't override unless you've consulted [Skatteverkets table](https://www.skatteverket.se/foretagochorganisationer/skatter/arbetsgivareochinkomstuppgifter/arbetsgivaravgifteroch_skatteavdrag.4.18e1b10334ebe8bc80003392.html). The old "under 26" rule from 2024 does NOT apply for 2026 and later.
 - **Bruttolöneavdrag vs nettolöneavdrag order.** Bruttolöneavdrag reduces both lön och avgifter; nettolöneavdrag only affects the employee's payout. Pass either explicitly in the run; don't mix them.
 
 ## Next steps
 
-- **[Set up webhooks](/docs/api/cookbook/webhooks)** — subscribe to \`salary_run.booked\` and \`agi.generated\` events to drive downstream payroll integrations.
-- **[Year-end closing](/docs/api/cookbook/year-end-closing)** — payroll's annual cap is the kontrolluppgift season (january of the following year).
-- **[Salary-runs reference](/docs/api/reference/salary-runs)** — every parameter, every error code.
+- **[Set up webhooks](/docs/api/cookbook/webhooks)**: subscribe to \`salary_run.booked\` and \`agi.generated\` events to drive downstream payroll integrations.
+- **[Year-end closing](/docs/api/cookbook/year-end-closing)**: payroll's annual cap is the kontrolluppgift season (january of the following year).
+- **[Salary-runs reference](/docs/api/reference/salary-runs)**: every parameter, every error code.
 `

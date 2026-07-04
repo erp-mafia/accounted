@@ -4,7 +4,7 @@ import { getStripe } from '@/lib/stripe/client'
 import { createServiceClient } from '@/lib/supabase/server'
 import { handleStripeEvent } from '@/lib/stripe/subscription-sync'
 
-// Unauthenticated by design — authenticity comes from the Stripe signature, not
+// Unauthenticated by design: authenticity comes from the Stripe signature, not
 // a session. The route reads the RAW body (req.text()); parsing as JSON first
 // would change the byte representation and break signature verification.
 export async function POST(request: Request) {

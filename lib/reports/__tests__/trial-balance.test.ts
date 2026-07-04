@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — table-keyed result queues
+// Mock: table-keyed result queues
 // Each table has its own FIFO queue. Calls to the same table
 // consume results in order, regardless of global query ordering.
 // ============================================================
@@ -74,7 +74,7 @@ describe('generateTrialBalance', () => {
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null }, error: null },
       ],
       journal_entry_lines: [
-        // period lines (prior lines now come from RPC — defaults to empty)
+        // period lines (prior lines now come from RPC: defaults to empty)
         {
           data: [
             { account_number: '3001', debit_amount: 0, credit_amount: 500 },
@@ -103,7 +103,7 @@ describe('generateTrialBalance', () => {
     expect(result.rows[0].account_number).toBe('1930')
     expect(result.rows[1].account_number).toBe('3001')
 
-    // Aggregated correctly — opening is 0 (first year)
+    // Aggregated correctly: opening is 0 (first year)
     expect(result.rows[0].opening_debit).toBe(0)
     expect(result.rows[0].opening_credit).toBe(0)
     expect(result.rows[0].period_debit).toBe(750)
@@ -427,7 +427,7 @@ describe('generateTrialBalance', () => {
 
     const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
 
-    // Same as the existing "balanced two-account" case — no roll-forward query
+    // Same as the existing "balanced two-account" case: no roll-forward query
     // is consumed because no range is requested.
     expect(result.rows).toHaveLength(2)
     expect(result.totalDebit).toBe(1000)
@@ -444,7 +444,7 @@ describe('generateTrialBalance', () => {
         },
       ],
       journal_entry_lines: [
-        // Only the period query — no roll-forward fetch should be triggered.
+        // Only the period query: no roll-forward fetch should be triggered.
         {
           data: [
             { account_number: '1930', debit_amount: 500, credit_amount: 0 },
@@ -482,7 +482,7 @@ describe('generateTrialBalance', () => {
         },
       ],
       journal_entry_lines: [
-        // 1st consumption — roll-forward query for [2024-01-01, 2024-04-01).
+        // 1st consumption: roll-forward query for [2024-01-01, 2024-04-01).
         {
           data: [
             { account_number: '1930', debit_amount: 2000, credit_amount: 0 },
@@ -490,7 +490,7 @@ describe('generateTrialBalance', () => {
           ],
           error: null,
         },
-        // 2nd consumption — period activity for [2024-04-01, 2024-06-30].
+        // 2nd consumption: period activity for [2024-04-01, 2024-06-30].
         {
           data: [
             { account_number: '1930', debit_amount: 500, credit_amount: 0 },
@@ -539,7 +539,7 @@ describe('generateTrialBalance', () => {
         },
       ],
       journal_entry_lines: [
-        // Roll-forward query — has prior activity
+        // Roll-forward query: has prior activity
         {
           data: [
             { account_number: '1930', debit_amount: 750, credit_amount: 0 },
@@ -547,7 +547,7 @@ describe('generateTrialBalance', () => {
           ],
           error: null,
         },
-        // Period query — no lines inside [2024-11-01, 2024-11-30]
+        // Period query: no lines inside [2024-11-01, 2024-11-30]
         { data: [], error: null },
       ],
       chart_of_accounts: [

@@ -3,12 +3,12 @@
  *
  * Records a payment against a supplier invoice. Books the payment journal
  * entry via createSupplierInvoicePaymentEntry (accrual) or
- * createSupplierInvoiceCashEntry (cash basis — recognizes the expense here),
+ * createSupplierInvoiceCashEntry (cash basis: recognizes the expense here),
  * then flips status to `paid` or `partially_paid` with an optimistic-lock
  * UPDATE that prevents double-booking under concurrent calls.
  *
  * Strict-mode v1 (per Phase 3 lessons): if JE creation fails, the route
- * ABORTS before any SI state mutation — no payment row is written, status
+ * ABORTS before any SI state mutation: no payment row is written, status
  * is unchanged. The caller can retry cleanly.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
@@ -54,14 +54,14 @@ registerEndpoint({
   description:
     'Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debit expense + Debit 2641 / Credit 1930 under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.',
   useWhen:
-    'You paid a registered or approved leverantörsfaktura through a channel other than the synced bank flow. For bank-matched payments use POST /transactions/{id}/match-supplier-invoice instead — that path also reconciles the bank line.',
+    'You paid a registered or approved leverantörsfaktura through a channel other than the synced bank flow. For bank-matched payments use POST /transactions/{id}/match-supplier-invoice instead: that path also reconciles the bank line.',
   doNotUseFor:
     'Refunding a payment (the public API does not expose unmark-paid; credit the SI instead). Paying a credited or already-paid SI (returns 409 SI_PAID_ALREADY).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'payment_date must fall in an open fiscal period — locked period returns 400 PERIOD_LOCKED.',
+    'payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED.',
     'exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.',
-    'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner — retry the call.',
+    'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
   ],
   example: {
@@ -101,7 +101,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const invoiceId = idParse.data
 
-    // Body is optional — empty POST = pay the full remaining_amount today.
+    // Body is optional: empty POST = pay the full remaining_amount today.
     let rawBody: unknown = null
     try {
       const text = await request.text()
@@ -244,7 +244,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Reject overpayment up front. Without this, the silent `Math.max(0, ...)`
     // clamp below would book the full payment_amount in the JE but only
-    // reduce the SI balance to 0 — the difference would be an unaccounted
+    // reduce the SI balance to 0: the difference would be an unaccounted
     // overpayment on the 2440 ledger. If a refund is genuinely due, the
     // caller credits the SI (which reverses the obligation) and books the
     // refund as a separate bank transaction. Half-öre tolerance allows
@@ -266,7 +266,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       0,
       Math.round((typed.remaining_amount - paymentAmount) * 100) / 100,
     )
-    // Half-öre epsilon — same convention as v1 invoices.mark-paid.
+    // Half-öre epsilon: same convention as v1 invoices.mark-paid.
     const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
     const newPaidAmount = Math.round((typed.paid_amount + paymentAmount) * 100) / 100
 
@@ -280,7 +280,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
     const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
 
-    // Route on the supplier invoice's actual booking state — if 2440 was
+    // Route on the supplier invoice's actual booking state: if 2440 was
     // posted at receipt, payment must clear 2440 regardless of the current
     // accounting_method.
     const siAlreadyBooked = !!(typed as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
@@ -432,13 +432,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
 
     if (updateErr) {
-      ctx.log.error('supplier-invoice mark-paid update failed — attempting storno of orphaned JE', updateErr, {
+      ctx.log.error('supplier-invoice mark-paid update failed: attempting storno of orphaned JE', updateErr, {
         invoiceId,
         companyId: ctx.companyId,
         userId: ctx.userId,
         journalEntryId,
       })
-      // The payment JE is already posted but the SI update failed — without a
+      // The payment JE is already posted but the SI update failed: without a
       // storno, the AP ledger would carry a 2440/1930 entry with no matching
       // SI status change (BFL 5 kap 5 § integrity violation). reverseEntry()
       // takes the entry id directly (no pre-fetch needed), matching the CAS-
@@ -446,7 +446,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
       } catch (revErr) {
-        ctx.log.error('orphan JE storno failed after SI update error — manual reconciliation required', revErr as Error, {
+        ctx.log.error('orphan JE storno failed after SI update error: manual reconciliation required', revErr as Error, {
           invoiceId,
           companyId: ctx.companyId,
           userId: ctx.userId,
@@ -461,7 +461,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!updated) {
       // CAS race: the SI moved out of a payable state between pre-flight and
       // write. The JE we just posted is now orphaned. Storno it.
-      ctx.log.warn('supplier-invoice mark-paid race — JE was orphaned, attempting storno', {
+      ctx.log.warn('supplier-invoice mark-paid race: JE was orphaned, attempting storno', {
         invoiceId,
         companyId: ctx.companyId,
         userId: ctx.userId,
@@ -470,7 +470,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
       } catch (revErr) {
-        ctx.log.error('orphan JE storno failed — manual reconciliation required', revErr as Error, {
+        ctx.log.error('orphan JE storno failed: manual reconciliation required', revErr as Error, {
           invoiceId,
           companyId: ctx.companyId,
           userId: ctx.userId,
@@ -483,7 +483,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 3: record the payment row (non-blocking — its only consumer is the
+    // Step 3: record the payment row (non-blocking: its only consumer is the
     // dashboard's "payment history" tab, and the JE is the source of truth).
     const { error: paymentErr } = await ctx.supabase
       .from('supplier_invoice_payments')

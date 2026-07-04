@@ -8,7 +8,7 @@ ensureInitialized()
 /**
  * POST /api/bookkeeping/accruals/post-due
  *
- * Manual "Bokför förfallna periodiseringar" for the active company —
+ * Manual "Bokför förfallna periodiseringar" for the active company:
  * complements the daily cron (same service, same CAS idempotency), so the
  * user never has to wait for the nightly run after creating a schedule with
  * elapsed months or after fixing a blocked installment.

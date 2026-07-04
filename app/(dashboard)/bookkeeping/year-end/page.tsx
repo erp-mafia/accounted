@@ -87,7 +87,7 @@ export default function YearEndPage() {
         const eligible = (data ?? []).filter(
           (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
         )
-        // Oldest first — accountants close in order.
+        // Oldest first: accountants close in order.
         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
         if (cancelled) return
         setPeriods(eligible)
@@ -174,7 +174,7 @@ export default function YearEndPage() {
       if (!res.ok) {
         // body.error.message is the localized Swedish message picked by
         // the structured-error registry. Do NOT interpolate raw details
-        // here — they can contain DB-sourced strings (V2.3 finding).
+        // here: they can contain DB-sourced strings (V2.3 finding).
         setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
         return
       }
@@ -262,7 +262,7 @@ export default function YearEndPage() {
               <SelectContent>
                 {periods.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} ({p.period_start} – {p.period_end})
+                    {p.name} ({p.period_start} till {p.period_end})
                   </SelectItem>
                 ))}
               </SelectContent>

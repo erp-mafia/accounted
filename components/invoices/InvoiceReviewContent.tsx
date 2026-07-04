@@ -15,7 +15,7 @@ interface ReviewItem {
   unit: string
   unit_price: number
   vat_rate?: number
-  /** 'text' rows are free-text/blank lines — description only, no amounts. */
+  /** 'text' rows are free-text/blank lines: description only, no amounts. */
   line_type?: 'product' | 'text'
   // Periodisering: when both dates are set, the revenue books to the 29xx
   // interim account and dissolves monthly over the period.
@@ -116,7 +116,7 @@ export function InvoiceReviewContent({
         </div>
       </div>
 
-      {/* Line items — table on desktop, cards on mobile */}
+      {/* Line items: table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">

@@ -7,13 +7,13 @@ import { buildIdentityBlock } from '../system-prompt'
 // the per-intent ground rules (which sit only in the first user message and
 // fall out of salience deep in a conversation), this block is re-sent on every
 // turn. These guards lock in the epistemics rules added after the agent
-// confidently answered "matvaror är 12 %" from stale training memory — it
-// dropped to 6 % in April 2026 — and invented a "ränteintäkter från ALMI"
+// confidently answered "matvaror är 12 %" from stale training memory: it
+// dropped to 6 % in April 2026, and invented a "ränteintäkter från ALMI"
 // concern by inferring a lending business from an SNI code.
 
 type VatStatus = Parameters<typeof buildIdentityBlock>[0]['vatStatus']
 
-// Minimal base-typed intent — buildIdentityBlock only reads id, sheetTitle and
+// Minimal base-typed intent: buildIdentityBlock only reads id, sheetTitle and
 // atoms.mode. (The concrete intents have narrow capture/template generics that
 // don't unify with the base AgentIntent the builder expects; the real call site
 // resolves intents through the registry as base-typed.)
@@ -49,11 +49,11 @@ const VAT_STATES: VatStatus[] = [
   { vat_registered: false, vat_number: null },
 ]
 
-describe('chat system prompt — always-on epistemics rules', () => {
+describe('chat system prompt: always-on epistemics rules', () => {
   it('forces load-before-answer for regulatory figures, on every VAT status', () => {
     for (const vs of VAT_STATES) {
       const out = block(vs)
-      expect(out).toContain('# Säkerhet i sak — ladda reglerna, gissa aldrig från minnet')
+      expect(out).toContain('# Säkerhet i sak: ladda reglerna, gissa aldrig från minnet')
       // Must point at the load tool and demand reading before answering.
       expect(out).toContain('gnubok_load_skill')
       // The canonical staleness trap must be named so the rule is concrete,
@@ -74,7 +74,7 @@ describe('chat system prompt — always-on epistemics rules', () => {
     const out = block(null)
     expect(out).toContain('# Påstå inget om bolaget du inte grundat i data')
     expect(out).toContain('SNI-kod')
-    // Resolve real uncertainty by reading data or asking — not by speculating.
+    // Resolve real uncertainty by reading data or asking: not by speculating.
     expect(out).toMatch(/läsverktyg|fråga/i)
   })
 

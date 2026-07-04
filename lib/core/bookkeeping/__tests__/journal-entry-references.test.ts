@@ -8,11 +8,11 @@ import { getJournalEntryUnderlagReferences } from '../journal-entry-references'
  * mock consumes one enqueued result per `.from()` call:
  *   1. invoices                  (direct journal_entry_id link)
  *   2. invoice_payments          (payment rows → invoice_id)
- *   3. invoices                  (by id — only when step 2 found new ids)
+ *   3. invoices                  (by id: only when step 2 found new ids)
  *   4. supplier_invoices         (registration_journal_entry_id)
  *   5. supplier_invoices         (payment_journal_entry_id)
  *   6. supplier_invoice_payments (payment rows → supplier_invoice_id)
- *   7. supplier_invoices         (by id — only when step 6 found new ids)
+ *   7. supplier_invoices         (by id: only when step 6 found new ids)
  */
 describe('getJournalEntryUnderlagReferences', () => {
   const run = (results: { data: unknown }[]) => {
@@ -29,7 +29,7 @@ describe('getJournalEntryUnderlagReferences', () => {
     // The reported gap: debit 1930 / credit 3001, invoice linked through
     // invoice_payments, no document attached and no direct invoice link.
     const refs = await run([
-      { data: [] }, // 1. invoices direct — none
+      { data: [] }, // 1. invoices direct: none
       { data: [{ invoice_id: 'inv-x' }] }, // 2. invoice_payments
       { data: [{ id: 'inv-x', invoice_number: '003' }] }, // 3. invoices by id
       { data: [] }, // 4. supplier registration

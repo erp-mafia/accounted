@@ -4,7 +4,7 @@
  * Reuses the same sources as the PDF builder (buildArsredovisningData) for
  * narrative texts, noter and flerårsöversikt, and adds what iXBRL needs on
  * top: trial balances for BOTH years mapped to risbs concepts
- * (jämförelsesiffror — kontrollera 3006/3007), per-signer dates from the
+ * (jämförelsesiffror: kontrollera 3006/3007), per-signer dates from the
  * signature flow, and the fastställelseintyg undertecknare.
  */
 
@@ -23,7 +23,7 @@ import type {
   Resultatdisposition,
 } from './types'
 
-/** TA §4.3.4–4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>". */
+/** TA §4.3.4-4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>". */
 export const PROGRAMVARA_NAMN = 'Accounted - Accounted'
 export const PROGRAMVARA_VERSION = '2026.1'
 
@@ -52,8 +52,8 @@ export async function buildIxbrlInput(
   const warnings: string[] = []
 
   // Two TB variants per year (see TrialBalancePair): the FULL trial balance
-  // (year-end closing included → 2099 booked, class 3–8 zeroed) drives the
-  // BR; the PRE-CLOSING trial balance (excludeYearEndClosing — the same split
+  // (year-end closing included → 2099 booked, class 3-8 zeroed) drives the
+  // BR; the PRE-CLOSING trial balance (excludeYearEndClosing: the same split
   // lib/reports' generateIncomeStatement uses) drives the RR. A single TB can
   // never serve both: with bokslut booked every RR concept would map to 0,
   // without it the BR would not tie.
@@ -76,7 +76,7 @@ export async function buildIxbrlInput(
 
   if (pdfData.accounting_framework !== 'k2') {
     throw new Error(
-      'Digital inlämning stöds ännu inte för K3 — generera PDF eller vänta på K3-stödet.',
+      'Digital inlämning stöds ännu inte för K3: generera PDF eller vänta på K3-stödet.',
     )
   }
   const entryPoint = resolveEntryPoint('k2')
@@ -102,7 +102,7 @@ export async function buildIxbrlInput(
         previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
       } catch {
         warnings.push(
-          'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår — balans- och resultaträkning visas utan jämförelseår (kontrollera-kod 3006/3007 kan utlösas).',
+          'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår: balans- och resultaträkning visas utan jämförelseår (kontrollera-kod 3006/3007 kan utlösas).',
         )
         previousPeriod = null
       }
@@ -142,7 +142,7 @@ export async function buildIxbrlInput(
     })
     flerarsPerioder.push({ start: match.period_start, end: match.period_end })
   }
-  // Column 0 must be the current period and column 1 the previous one —
+  // Column 0 must be the current period and column 1 the previous one:
   // the document reuses period0/period1 contexts for them. Anything else
   // (e.g. a missed periodByName lookup shifting the rows) means the period
   // chain is inconsistent; drop the table rather than tag amounts against
@@ -154,7 +154,7 @@ export async function buildIxbrlInput(
       flerarsPerioder[1].start !== previousPeriod.start)
   if (flerarsMisaligned) {
     warnings.push(
-      'Flerårsöversikten kunde inte knytas till räkenskapsperioderna — tabellen utelämnas ur iXBRL-dokumentet.',
+      'Flerårsöversikten kunde inte knytas till räkenskapsperioderna: tabellen utelämnas ur iXBRL-dokumentet.',
     )
     flerarsoversikt.length = 0
     flerarsPerioder.length = 0
@@ -164,7 +164,7 @@ export async function buildIxbrlInput(
   // (period0/period1) as the RR, and repeated facts must be value-identical
   // or Bolagsverket rejects the filing. The PDF rows are computed from the
   // income statement (ALL class-3 revenue), while nettoomsättning per ÅRL is
-  // strictly 3000–3799 — so the current and previous year columns are
+  // strictly 3000-3799: so the current and previous year columns are
   // overridden with the mapper outputs. Older years have no RR facts and
   // keep the PDF values.
   if (flerarsoversikt.length > 0) {
@@ -223,7 +223,7 @@ export async function buildIxbrlInput(
 
   // ---- resultatdisposition --------------------------------------------------
   // BalanseratResultat is tagged in BR and the eget kapital-table for the
-  // same context — the disposition row must carry the identical value
+  // same context: the disposition row must carry the identical value
   // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
   // separate Overkursfond concept instead of being folded into balanserat.
   const proposedDividend = Math.max(0, Math.round(options.proposedDividend ?? 0))
@@ -248,7 +248,7 @@ export async function buildIxbrlInput(
 
   // ---- underskrifter ---------------------------------------------------------
   // Every signature request becomes a signer row (the board must appear in
-  // the document), but ONLY actually-signed requests get a date — an unsigned
+  // the document), but ONLY actually-signed requests get a date: an unsigned
   // request keeps signedDate null. Legal dates are never fabricated: the
   // missing date renders as an omitted fact in the preview and preflight 1214
   // blocks the submission path until everyone has signed.
@@ -265,7 +265,7 @@ export async function buildIxbrlInput(
   })
   if (signers.length === 0) {
     warnings.push(
-      'Inga underskrifter är registrerade — årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).',
+      'Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).',
     )
   }
   if (signedRequests.length !== signatureRequests.length) {
@@ -281,13 +281,13 @@ export async function buildIxbrlInput(
   )
 
   // ---- fastställelseintyg ----------------------------------------------------
-  // A missing AGM date is NEVER replaced with today's date — it stays null,
+  // A missing AGM date is NEVER replaced with today's date: it stays null,
   // the document renders a placeholder and preflight 1103 blocks filing
   // (mirrors Bolagsverket kontrollera 1103).
   const agmDate = pdfData.forvaltningsberattelse.agm_date
   if (!agmDate) {
     warnings.push(
-      'Datum för årsstämma saknas — fastställelseintyget kan inte fyllas i (kontrollera-kod 1103).',
+      'Datum för årsstämma saknas: fastställelseintyget kan inte fyllas i (kontrollera-kod 1103).',
     )
   }
   const fallbackSigner = signers[0] ?? { firstName: '', lastName: '', role: null }

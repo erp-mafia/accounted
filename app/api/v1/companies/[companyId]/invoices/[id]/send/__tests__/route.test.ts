@@ -49,7 +49,7 @@ vi.mock('@react-pdf/renderer', () => ({
   renderToBuffer: vi.fn().mockResolvedValue(Buffer.from('pdf-content')),
 }))
 
-// Email service mock — configurable per test
+// Email service mock: configurable per test
 const mockSendEmail = vi.fn()
 const mockIsConfigured = vi.fn().mockReturnValue(true)
 vi.mock('@/lib/email/service', async (importOriginal) => {
@@ -406,9 +406,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
     // DRAFT_INVOICE has invoice_number: null, so isFreshAllocation is true and
     // a preflight render runs first with the F-PREVIEW placeholder. The final
-    // render is the second call — its invoice must carry status: 'sent' and
+    // render is the second call: its invoice must carry status: 'sent' and
     // the freshly-assigned invoice_number, otherwise the customer's PDF is
-    // stamped "UTKAST – inte en giltig faktura".
+    // stamped "UTKAST: inte en giltig faktura".
     const calls = vi.mocked(InvoicePDF).mock.calls
     expect(calls.length).toBeGreaterThanOrEqual(2)
     const finalRenderArgs = calls[calls.length - 1][0]

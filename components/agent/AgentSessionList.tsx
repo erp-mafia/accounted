@@ -16,7 +16,7 @@ interface Props {
   // Highlight the row for the conversation currently open in the sheet.
   activeConversationId?: string | null
   // Fired when the user picks a conversation to resume. The sheet fetches its
-  // messages and swaps back to the chat view — the list itself stays dumb.
+  // messages and swaps back to the chat view: the list itself stays dumb.
   onSelect: (id: string) => void
 }
 

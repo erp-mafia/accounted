@@ -30,7 +30,7 @@ interface CreateAssetDialogProps {
   onCreated: () => void
 }
 
-/** Editor row state — strings so the user can clear inputs without zeroing
+/** Editor row state: strings so the user can clear inputs without zeroing
  *  out the component immediately. Converted to numbers at submit time. */
 interface ComponentRow {
   id: string
@@ -53,7 +53,7 @@ function newComponentRow(): ComponentRow {
 }
 
 // Defaults are K2-redovisning (BFNAR 2016:10) schablon, NOT skattemässig
-// avskrivning. Building / markanläggning values are conservative — IL 19/20
+// avskrivning. Building / markanläggning values are conservative: IL 19/20
 // kap may allow longer (50 yr) or shorter (10 yr) depending on byggnadstyp.
 const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: number }[] = [
   { value: 'computer', label: 'Dator / IT-utrustning', defaultYears: 3 },
@@ -75,17 +75,17 @@ const DEPRECIATION_METHOD_OPTIONS: { value: DepreciationMethod; label: string; h
   {
     value: 'declining_balance_30',
     label: 'Räkenskapsenlig 30 %',
-    hint: 'Huvudregeln (IL 18 kap 13§) — 30 % degressivt på avskrivningsunderlaget.',
+    hint: 'Huvudregeln (IL 18 kap 13§): 30 % degressivt på avskrivningsunderlaget.',
   },
   {
     value: 'declining_balance_20',
     label: 'Räkenskapsenlig 20 %',
-    hint: 'Kompletteringsregeln (IL 18 kap 17§) — 20 % degressivt. Vanlig för byggnader.',
+    hint: 'Kompletteringsregeln (IL 18 kap 17§): 20 % degressivt. Vanlig för byggnader.',
   },
   {
     value: 'restvardesavskrivning_25',
     label: 'Restvärdeavskrivning 25 %',
-    hint: 'IL 18 kap 13§ st.3 — 25 % degressivt ner till angivet restvärde.',
+    hint: 'IL 18 kap 13§ st.3: 25 % degressivt ner till angivet restvärde.',
   },
 ]
 
@@ -173,7 +173,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       }
       restvardeTargetNumber = parsed
     }
-    // K3 components — only when both the framework permits (gate at API)
+    // K3 components: only when both the framework permits (gate at API)
     // and the user opted into the section. Empty array is invalid (the
     // validator rejects it) so the dialog also flips back to "off" when
     // every row is removed.
@@ -336,7 +336,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
             />
             <p className="text-xs text-muted-foreground">
               K2-schablon för redovisning: datorer 3 år, inventarier 5 år, byggnader 25 år.
-              För skattemässig avskrivning kan annan livslängd gälla (IL 18–20 kap).
+              För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).
             </p>
           </div>
           <div className="space-y-1.5">
@@ -382,10 +382,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <Label className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                    Avancerat — komponentuppdelning
+                    Avancerat: komponentuppdelning
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    K3 (BFNAR 2012:1 17.4) — när väsentliga komponenter har olika nyttjandeperiod
+                    K3 (BFNAR 2012:1 17.4): när väsentliga komponenter har olika nyttjandeperiod
                     skrivs varje komponent av för sig. Typisk för fastigheter (tak, fasad, stomme,
                     installationer).
                   </p>
@@ -531,7 +531,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           )}
           <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
             <strong className="text-foreground">Tips:</strong> Anskaffningen måste redan vara
-            bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440) — registret bokför inte
+            bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440): registret bokför inte
             själva köpet. Det här registret styr enbart de planenliga avskrivningarna under
             bokslutet.
           </div>

@@ -1,5 +1,5 @@
 /**
- * Direct provider client — replaces arcim-client.ts.
+ * Direct provider client: replaces arcim-client.ts.
  *
  * Instead of making HTTP calls to the Arcim Sync gateway, this module
  * performs consent/OTC operations directly against Supabase and delegates
@@ -18,7 +18,7 @@ import { exchangeBrioxCode } from '@/lib/providers/briox/oauth'
 import { BrioxApiError } from '@/lib/providers/briox/client'
 import type { ConsentRecord, OtcResponse } from '../types'
 
-// Singleton (holds the rate limiter) — used to validate BL User-Keys at submit
+// Singleton (holds the rate limiter): used to validate BL User-Keys at submit
 const bjornLundenClient = new BjornLundenClient()
 
 /**
@@ -264,7 +264,7 @@ export async function submitProviderToken(
   const supabase = createServiceClient()
 
   // Ownership guard (IDOR): the consent must belong to the caller's company
-  // before ANY write — this module runs on the service client, which bypasses
+  // before ANY write: this module runs on the service client, which bypasses
   // RLS, so this check is the only tenant boundary. Mirrors resolveConsent()
   // in lib/providers/resolve-consent.ts. A consent that exists but belongs to
   // another company throws the same not-found error as a nonexistent one.
@@ -283,7 +283,7 @@ export async function submitProviderToken(
   let refreshToken: string | null = null
   let tokenExpiresAt: string | null = null
 
-  // BL uses app-level client credentials — get a real token, then prove the
+  // BL uses app-level client credentials: get a real token, then prove the
   // pasted User-Key actually opens a company before storing anything.
   if (provider === 'bjornlunden') {
     if (!providerCompanyId) {
@@ -317,7 +317,7 @@ export async function submitProviderToken(
     } catch (error) {
       if (error instanceof BjornLundenApiError) {
         // 429 and gateway-style 5xx (502/503/504) are transient provider
-        // failures, not a verdict on the key — rethrow so the route reports a
+        // failures, not a verdict on the key: rethrow so the route reports a
         // generic submit failure instead of "your key is wrong". 500 stays
         // mapped to invalid credentials: per the sandbox finding above, 500
         // IS the bad-key signal at BL. Tradeoff: a genuine BL 500 outage also
@@ -347,7 +347,7 @@ export async function submitProviderToken(
       tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
     } catch (error) {
       // /token answers 400/401/404 for a wrong account ID or application
-      // token — surface as invalid credentials, not a server error.
+      // token: surface as invalid credentials, not a server error.
       if (error instanceof BrioxApiError && error.statusCode < 500 && error.statusCode !== 429) {
         throw new ProviderTokenInvalidError(
           `Briox rejected the credentials (HTTP ${error.statusCode})`,
@@ -357,7 +357,7 @@ export async function submitProviderToken(
     }
   }
 
-  // Store tokens — consent stays at status 0 until migration/SIE import completes
+  // Store tokens: consent stays at status 0 until migration/SIE import completes
   await supabase
     .from('provider_consent_tokens')
     .upsert({
@@ -372,7 +372,7 @@ export async function submitProviderToken(
   return { success: true, consentId }
 }
 
-/** Mark a consent as accepted (status 1) — call after migration or SIE import succeeds */
+/** Mark a consent as accepted (status 1): call after migration or SIE import succeeds */
 export async function acceptConsent(consentId: string): Promise<void> {
   const supabase = createServiceClient()
   await supabase

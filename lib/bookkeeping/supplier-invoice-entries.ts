@@ -40,7 +40,7 @@ function buildSupplierDescription(
 }
 
 /**
- * Aggregate item amounts per (booking account, merged dimensions bag) —
+ * Aggregate item amounts per (booking account, merged dimensions bag):
  * dimensions PR7. The merged bag (item.dimensions over the invoice's
  * default_dimensions) is part of the aggregation identity so two items on the
  * same account but different tags stay on separate journal lines instead of
@@ -85,7 +85,7 @@ function groupExpenseBuckets(
  *   Credit 2440 Leverantörsskulder                  [total]
  *
  * Note: Goods imports via Tullverket (customs) use a different accounting path
- * (2615/2645) and are not handled here — only services use reverse charge.
+ * (2615/2645) and are not handled here: only services use reverse charge.
  */
 export async function createSupplierInvoiceRegistrationEntry(
   supabase: SupabaseClient,
@@ -111,7 +111,7 @@ export async function createSupplierInvoiceRegistrationEntry(
 
   // Aggregate expense amounts by (account, dimensions) and convert to SEK.
   // Periodiserade lines book their net to the 17xx interim account instead
-  // of the cost account (resolveBookingAccount); VAT and 2440 are untouched —
+  // of the cost account (resolveBookingAccount); VAT and 2440 are untouched:
   // moms is never deferred (redovisas på fakturadatum).
   const expenseBuckets = groupExpenseBuckets(
     items,
@@ -148,14 +148,14 @@ export async function createSupplierInvoiceRegistrationEntry(
     //
     // The basis-account check is done per (rate, account) bucket: if the user
     // booked an item directly to a 44xx/45xx basis account at a given rate,
-    // that item's belopp already populates ruta 20-24 via the expense line —
+    // that item's belopp already populates ruta 20-24 via the expense line:
     // we only emit basbeloppsrader for the portion of that rate's base that
     // went to NON-basis accounts. Mixed invoices (4535 + 6540 at 25%) used to
     // skip basis lines entirely under a per-invoice flag, leaving ruta 30
-    // larger than ruta 21 by the 6540 portion — the exact FK004 pattern.
+    // larger than ruta 21 by the 6540 portion, the exact FK004 pattern.
     //
     // Drive iteration off the basis (line_total per rate), not stored
-    // vat_amount — fiktiv moms is always statutory base × rate. This keeps
+    // vat_amount: fiktiv moms is always statutory base × rate. This keeps
     // RC immune to per-line manual VAT overrides (which only make sense for
     // domestic deductible-VAT adjustments).
     const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
@@ -188,7 +188,7 @@ export async function createSupplierInvoiceRegistrationEntry(
     }
   }
 
-  // Credit: Leverantörsskulder — balance guarantee: ensures sum(debits) === sum(credits)
+  // Credit: Leverantörsskulder, balance guarantee: ensures sum(debits) === sum(credits)
   // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
@@ -245,7 +245,7 @@ export async function createSupplierInvoicePaymentEntry(
   const desc = buildSupplierDescription('Utbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
   // Dimensions PR7: the payment voucher re-propagates the linked invoice's
-  // default bag onto every leg (incl. FX result lines) — see the stamp below.
+  // default bag onto every leg (incl. FX result lines), see the stamp below.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
   if (exchangeRateDifference && exchangeRateDifference !== 0) {
@@ -305,7 +305,7 @@ export async function createSupplierInvoicePaymentEntry(
   }
 
   if (defaultDimensions) {
-    // Copy per line — a shared bag object would let one line's mutation
+    // Copy per line: a shared bag object would let one line's mutation
     // leak into every other line (same contract as proposal stamping).
     for (const line of lines) line.dimensions = { ...defaultDimensions }
   }
@@ -342,7 +342,7 @@ export async function createSupplierInvoiceCashEntry(
   paymentAccount?: string,
   // SEK that actually settled the invoice (the amount that left the bank). For
   // a foreign-currency invoice this pins the whole entry to the PAYMENT-date
-  // rate — see the kontantmetoden note below. Omit for SEK invoices and the
+  // rate, see the kontantmetoden note below. Omit for SEK invoices and the
   // behaviour is byte-identical to before.
   settledBankSek?: number
 ): Promise<JournalEntry | null> {
@@ -353,10 +353,10 @@ export async function createSupplierInvoiceCashEntry(
     return null
   }
 
-  // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap —
+  // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap:
   // "bokföring vid betalningstillfället"), so the entire verifikat is translated
   // at the PAYMENT-date rate (ÅRL 4 kap 6 §). There is no kursvinst/kursförlust
-  // because no leverantörsskuld was ever carried at a historical rate — that
+  // because no leverantörsskuld was ever carried at a historical rate: that
   // only happens under faktureringsmetoden (handled by the 2440-clearing path
   // with 7960/3960). When the caller passes the SEK that actually settled the
   // invoice, we derive the implied payment-date rate from it so the payment-
@@ -371,7 +371,7 @@ export async function createSupplierInvoiceCashEntry(
 
   const desc = buildSupplierDescription('Kontantbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName)
   const lines: CreateJournalEntryLineInput[] = []
-  // Dimensions PR7: kontantmetoden books the expense at payment — same merge
+  // Dimensions PR7: kontantmetoden books the expense at payment, same merge
   // rules as the registration entry.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
   // Expense debit lines tracked separately so a sub-öre translation residual
@@ -412,7 +412,7 @@ export async function createSupplierInvoiceCashEntry(
     // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
     // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
     // Per-rate bucketing: see registration entry above for the FK004 rationale.
-    // Drive iteration off the basis (line_total per rate) — fiktiv moms is
+    // Drive iteration off the basis (line_total per rate): fiktiv moms is
     // always statutory base × rate; manual vat_amount overrides don't apply.
     // effectiveRate (payment-date rate under kontantmetoden) keeps the fiktiv
     // moms base consistent with the expense lines above.
@@ -432,7 +432,7 @@ export async function createSupplierInvoiceCashEntry(
     }
   } else if (invoice.vat_amount > 0) {
     // Domestic standard: Debit ingående moms per rate group (at the payment-
-    // date rate when settling a foreign invoice — see effectiveRate above).
+    // date rate when settling a foreign invoice, see effectiveRate above).
     const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
@@ -451,7 +451,7 @@ export async function createSupplierInvoiceCashEntry(
   // rate, per-line rounding can drift the implied bank total by an öre or two.
   // Fold that residual into the largest expense line so the payment-account
   // credit lands exactly on the SEK that left the bank (1930 reconciles to the
-  // bank transaction). Immaterial to the momsdeklaration — rutor are whole
+  // bank transaction). Immaterial to the momsdeklaration: rutor are whole
   // kronor. The |residual| ≤ 1 guard ensures we only absorb rounding noise,
   // never a real shortfall (a partial settlement is blocked upstream).
   if (useSettlementRate && expenseLines.length > 0) {
@@ -465,7 +465,7 @@ export async function createSupplierInvoiceCashEntry(
     }
   }
 
-  // Credit: payment account — balance guarantee: ensures sum(debits) === sum(credits)
+  // Credit: payment account, balance guarantee: ensures sum(debits) === sum(credits)
   // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
@@ -491,7 +491,7 @@ export async function createSupplierInvoiceCashEntry(
 
 /**
  * Create journal entry for an invoice paid with the owner's private funds
- * (eget utlägg). The AP leg is bypassed entirely — instead of crediting 2440
+ * (eget utlägg). The AP leg is bypassed entirely: instead of crediting 2440
  * and later debiting it on mark-paid, the expense lines book straight against
  * the owner's payable/equity account:
  *
@@ -500,7 +500,7 @@ export async function createSupplierInvoiceCashEntry(
  *   Credit 2893 / 2018               [total incl VAT]
  *
  * Reverse charge is intentionally not supported here. RC invoices are
- * never "I paid this cash at a kiosk" cases — they're EU/byggtjänster from
+ * never "I paid this cash at a kiosk" cases: they're EU/byggtjänster from
  * registered businesses with formal invoices, which always go through AP.
  * The API route guards against this combo before calling us.
  */
@@ -522,7 +522,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   const ownerAccount = entityType === 'aktiebolag' ? '2893' : '2018'
   const desc = buildSupplierDescription('Eget utlägg', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
-  // Dimensions PR7: this IS the utlägg path — billable-expense-to-project
+  // Dimensions PR7: this IS the utlägg path, billable-expense-to-project
   // tagging rides the same merge rules as the registration entry.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
@@ -559,7 +559,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
     }
   }
 
-  // Credit: Owner payable/equity — balance guarantee
+  // Credit: Owner payable/equity, balance guarantee
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   lines.push({
     account_number: ownerAccount,
@@ -638,13 +638,13 @@ export async function createSupplierCreditNoteEntry(
   if (isReverseCharge) {
     // Reverse the fiktiv moms per rate group (swap debit/credit from registration)
     // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
-    // Drive iteration off the basis — fiktiv moms is always statutory base × rate.
+    // Drive iteration off the basis: fiktiv moms is always statutory base × rate.
     const inputAccount = isDomesticRC ? '2647' : '2645'
     const baseByRate = groupBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
     const nonBasisBaseByRate = groupNonBasisBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     // Only reverse basbeloppsraderna for the portion the registration would
-    // have emitted them — namely the non-basis-account base per rate. Items
+    // have emitted them, namely the non-basis-account base per rate. Items
     // booked directly to 44xx/45xx had no parallel basis lines in registration
     // and so are reversed only via the expense credit line above.
     for (const [rate, baseAmount] of baseByRate) {
@@ -676,7 +676,7 @@ export async function createSupplierCreditNoteEntry(
           // Reverse the basbeloppsrader (44xx/45xx debit & 4598 credit on the
           // registration entry become credits & debits here). Without this the
           // credit note would only undo the VAT amounts (ruta 30-32 + 48) but
-          // leave ruta 20-24 still showing the original basbelopp — exactly
+          // leave ruta 20-24 still showing the original basbelopp, exactly
           // the same FK004-style mismatch the registration fix prevents.
           const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
           // Swap debit/credit on every basis line so the credit note nets
@@ -711,7 +711,7 @@ export async function createSupplierCreditNoteEntry(
 
   lines.push(...creditLines)
 
-  // Debit: Leverantörsskulder — balance guarantee: debit = sum of credits minus other debits
+  // Debit: Leverantörsskulder, balance guarantee: debit = sum of credits minus other debits
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   lines.unshift({
@@ -738,17 +738,17 @@ export async function createSupplierCreditNoteEntry(
  * Group items by VAT rate and sum the stored VAT amount per rate.
  * Returns a Map<rate, totalVatAmount> in SEK for per-rate 2641 journal lines.
  *
- * Reads `item.vat_amount` directly — set by the API from the line's manual
+ * Reads `item.vat_amount` directly: set by the API from the line's manual
  * override when present, else computed line_total × rate. This is the path
  * for partial-deductible cases (bilförmån 50%, representation 300 kr-tak),
  * foreign-currency rounding, and supplier POS rounding.
  *
- * Fallback to line_total × rate when vat_amount is null/0 but rate > 0 —
+ * Fallback to line_total × rate when vat_amount is null/0 but rate > 0:
  * legacy import paths (SIE, CSV, demo seed) sometimes leave vat_amount at
  * the column DEFAULT of 0. Silently dropping input VAT to 2641 would
  * understate ruta 48 in the momsdeklaration.
  *
- * Reverse-charge fiktiv moms doesn't use this — see groupBaseByRate, which
+ * Reverse-charge fiktiv moms doesn't use this: see groupBaseByRate, which
  * derives the basis directly so fiktiv VAT is always base × statutory rate.
  */
 function groupVatByRate(

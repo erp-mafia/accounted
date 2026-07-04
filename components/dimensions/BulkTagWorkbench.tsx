@@ -116,17 +116,17 @@ function voucherTagState(v: TaggingVoucher): {
  * Bulk retro-tagging workbench (dimensions plan PR6 §3, voucher-level
  * rework): browse posted VERIFIKAT, select whole vouchers (shift-click
  * ranges), pick KS/Projekt values and apply them to every line through the
- * audited retag RPC — retroactive tagging produces exactly what tagging at
+ * audited retag RPC: retroactive tagging produces exactly what tagging at
  * creation would have (the producers stamp all lines too). Rows expand to
  * their lines for the mixed case (a voucher split across projects).
  *
  * Reversal pairs are hidden by default (they net to zero in every dimension
- * bucket when kept symmetric — tagging them is a no-op, and tagging one side
+ * bucket when kept symmetric: tagging them is a no-op, and tagging one side
  * only is the one way to skew project P&L). "Visa annullerade" opts them in;
  * the blocking motverifikat confirmation survives only there.
  *
  * Merge mode (default) layers picked values onto each line's existing map;
- * "Ersätt tagg" replaces the whole map — used to consolidate typo/phantom
+ * "Ersätt tagg" replaces the whole map: used to consolidate typo/phantom
  * codes. Strings hardcoded Swedish per the dimensions-surface convention.
  */
 export default function BulkTagWorkbench() {
@@ -147,7 +147,7 @@ export default function BulkTagWorkbench() {
   const [totalCapped, setTotalCapped] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
-  // Selection (line-id based — the retag RPC is per line), expansion + apply
+  // Selection (line-id based: the retag RPC is per line), expansion + apply
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const anchorIndexRef = useRef<number | null>(null)
@@ -280,7 +280,7 @@ export default function BulkTagWorkbench() {
     return vouchers.filter((v) => v.lines.some((l) => selected.has(l.id))).length
   }, [vouchers, selected])
 
-  // Reversal-pair guard — only reachable when annullerade are shown: a
+  // Reversal-pair guard: only reachable when annullerade are shown: a
   // selected voucher whose counter-entry is loaded but not fully selected.
   const missingPairLineIds = useMemo(() => {
     if (!vouchers || selected.size === 0) return [] as string[]
@@ -297,7 +297,7 @@ export default function BulkTagWorkbench() {
       .filter((id) => !selected.has(id))
   }, [vouchers, selected])
 
-  // Voucher labels of the unselected counter-vouchers — the blocking
+  // Voucher labels of the unselected counter-vouchers: the blocking
   // confirmation names them so the skew risk is concrete (#867 review:
   // Srf U 14 gross reporting; an asymmetric storno pair silently skews
   // project P&L, so the advisory alone is not enough).
@@ -344,7 +344,7 @@ export default function BulkTagWorkbench() {
 
     // Storno-pair guard: tagging one leg of a reversal pair without the
     // other skews project P&L. Blocking confirmation, not just the banner.
-    // Only reachable when "Visa annullerade" is on — the default view
+    // Only reachable when "Visa annullerade" is on: the default view
     // excludes pairs entirely.
     if (missingPairLineIds.length > 0) {
       const ok = await confirm({
@@ -592,7 +592,7 @@ export default function BulkTagWorkbench() {
             </span>
             {totalCapped && (
               <span className="ml-auto text-xs text-muted-foreground">
-                Visar de första {vouchers?.length ?? 0} verifikaten — förfina filtren för
+                Visar de första {vouchers?.length ?? 0} verifikaten: förfina filtren för
                 att se fler.
               </span>
             )}
@@ -702,7 +702,7 @@ export default function BulkTagWorkbench() {
                     </DataListMeta>
                     {hasError && !isExpanded && (
                       <p className="mt-1 text-xs text-destructive">
-                        Vissa rader kunde inte taggas — visa raderna för detaljer.
+                        Vissa rader kunde inte taggas: visa raderna för detaljer.
                       </p>
                     )}
                   </DataListRow>
@@ -772,7 +772,7 @@ export default function BulkTagWorkbench() {
       {/* Spacer so the fixed apply panel never covers the last rows */}
       {selected.size > 0 && <div aria-hidden="true" className="h-64 sm:h-48" />}
 
-      {/* Apply panel — fixed footer bar while a selection is active */}
+      {/* Apply panel: fixed footer bar while a selection is active */}
       {selected.size > 0 && (
         <div className="fixed bottom-20 left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-lg md:bottom-6">
           {missingPairLineIds.length > 0 && (
@@ -783,7 +783,7 @@ export default function BulkTagWorkbench() {
                   aria-hidden="true"
                 />
                 <p className="text-sm">
-                  Du taggar ett verifikat men inte dess motverifikat —
+                  Du taggar ett verifikat men inte dess motverifikat:
                   projektresultatet kan bli skevt.
                 </p>
               </div>

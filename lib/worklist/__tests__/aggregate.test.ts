@@ -37,7 +37,7 @@ describe('getWorklistCounts', () => {
 
   it('excludes suggested_match from the total (subset of book_transaction)', async () => {
     const { total } = await getWorklistCounts(supabase, 'company-1')
-    // 4 + 6 + 1 + 3 + 5 + 1 + 2 — without the 2 suggested matches.
+    // 4 + 6 + 1 + 3 + 5 + 1 + 2, without the 2 suggested matches.
     expect(total).toBe(22)
   })
 })

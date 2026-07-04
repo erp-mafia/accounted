@@ -6,7 +6,7 @@
  *   - ROT: 30% of labor cost, max 50 000 kr per person per year.
  *   - RUT: 50% of labor cost, max 75 000 kr per person per year.
  *
- * The deduction applies to labor only — material costs and travel time are
+ * The deduction applies to labor only: material costs and travel time are
  * NOT eligible. In this v1 we treat the entire invoice item amount as labor
  * when the user flags it ROT/RUT; the user is expected to either invoice
  * labor on its own row or split materials onto a non-flagged row. A future
@@ -14,10 +14,10 @@
  *
  * We CAN'T verify that the customer has remaining yearly headroom (they may
  * have claimed elsewhere). We surface a warning when the per-invoice total
- * already exceeds the statutory max — the customer must then handle the
+ * already exceeds the statutory max: the customer must then handle the
  * excess outside of fakturamodellen.
  *
- * All functions are pure and deterministic. No I/O, no DB calls — easy to
+ * All functions are pure and deterministic. No I/O, no DB calls: easy to
  * unit-test and easy to embed in the API validator and the live total
  * preview in the invoice editor.
  */
@@ -39,7 +39,7 @@ export type DeductionType = 'rot' | 'rut'
 /** Skatteverket work codes used by Husavdragstjänsten. Maps a free-text */
 /** "what the worker did" label to the official code. The code drives which */
 /** element the begäran-om-utbetalning file (Begaran.xsd V6) reports the */
-/** hours under — see WORK_TYPE_ELEMENTS in lib/invoices/rot-rut-file.ts. */
+/** hours under: see WORK_TYPE_ELEMENTS in lib/invoices/rot-rut-file.ts. */
 /** The lists mirror the XSD exactly: rot work types are the seven */
 /** ArendeUtfortArbeteRotTYPE elements (IT-tjänster is a RUT service and was */
 /** removed from the rot list 2026-07); rut covers all thirteen */
@@ -99,7 +99,7 @@ export function computeDeduction(item: ItemForDeduction): number {
   if (lineTotal <= 0) return 0
   const percent = item.deduction_type === 'rot' ? ROT_PERCENT : RUT_PERCENT
   const raw = lineTotal * percent
-  // Cap at line total — defensive against future rule changes that would
+  // Cap at line total: defensive against future rule changes that would
   // push percent past 1.0.
   const capped = Math.min(raw, lineTotal)
   return Math.round(capped * 100) / 100

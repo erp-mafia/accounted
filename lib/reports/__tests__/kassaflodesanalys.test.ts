@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock trial-balance and income-statement so we can plant deterministic
 // inputs into the cash-flow generator. The generator is pure logic over
-// (TB rows, IS totals) — testing it in isolation avoids re-creating the
+// (TB rows, IS totals): testing it in isolation avoids re-creating the
 // Supabase mock surface for two layered generators.
 vi.mock('../trial-balance', () => ({
   generateTrialBalance: vi.fn(),
@@ -21,7 +21,7 @@ const mockTrialBalance = vi.mocked(generateTrialBalance)
 const mockIncomeStatement = vi.mocked(generateIncomeStatement)
 
 function makeSupabase(period: { period_start: string; period_end: string } | null) {
-  // Lightweight chainable mock — kassaflodesanalys only calls
+  // Lightweight chainable mock: kassaflodesanalys only calls
   // supabase.from('fiscal_periods').select().eq().eq().single()
   const builder: Record<string, unknown> = {}
   for (const m of ['select', 'eq']) {
@@ -298,7 +298,7 @@ describe('generateKassaflodesanalys', () => {
 
   it('records erhållna aktieägartillskott (2093) as financing inflow and reconciles (#716)', async () => {
     // Repro from issue #716: debit 1930, credit 2093 (10 000 kr shareholder
-    // contribution). Before the fix, 2093 was unmapped — financing showed 0
+    // contribution). Before the fix, 2093 was unmapped: financing showed 0
     // and the reconciliation failed by exactly the contributed amount.
     mockTrialBalance.mockResolvedValue({
       rows: [
@@ -338,7 +338,7 @@ describe('generateKassaflodesanalys', () => {
   it('records nyemission premium on överkursfond (2097) as financing inflow and reconciles', async () => {
     // A 100 000 kr emission: 25 000 to 2081 (aktiekapital), 75 000 premium to
     // 2097 (fri överkursfond). 2097 was previously outside the nyemission
-    // prefixes — same reconciliation-failure class as #716.
+    // prefixes: same reconciliation-failure class as #716.
     mockTrialBalance.mockResolvedValue({
       rows: [
         makeRow({
@@ -465,7 +465,7 @@ describe('generateKassaflodesanalys', () => {
     // resultat = revenue - expenses + non-tax-financial = 0 - 33.337 + 0 = -33.34
     expect(report.lopande.resultat_efter_finansiella_poster).toBe(-33.34)
     expect(report.lopande.avskrivningar).toBe(33.34)
-    // No bare toFixed return values — these must be numbers, not strings.
+    // No bare toFixed return values: these must be numbers, not strings.
     expect(typeof report.lopande.total).toBe('number')
   })
 })

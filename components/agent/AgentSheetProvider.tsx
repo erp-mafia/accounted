@@ -23,7 +23,7 @@ export interface AgentIdentity {
 
 export interface OpenAgentSheetArgs {
   intentId: string
-  // Intent-specific args passed to the server's intent.capture() — e.g.
+  // Intent-specific args passed to the server's intent.capture(), e.g.
   // { transaction_id: '...' } for transaction.categorization.
   intentArgs?: Record<string, unknown>
   // Optional ref persisted on agent_conversations.context_ref so the UI can
@@ -39,7 +39,7 @@ interface AgentSheetContextValue {
   openAgentSheet: (args: OpenAgentSheetArgs) => void
   closeAgentSheet: () => void
   // Collapse hides the sheet WITHOUT unmounting it, so the in-memory
-  // conversation (messages, streaming, pending approval cards) survives — the
+  // conversation (messages, streaming, pending approval cards) survives: the
   // floating trigger re-expands the same session. Distinct from close, which
   // ends the session entirely.
   collapseAgentSheet: () => void
@@ -52,7 +52,7 @@ interface AgentSheetContextValue {
   isOpen: boolean
   // True while a session exists but is minimized off-screen.
   collapsed: boolean
-  // Agent name + avatar — set once from the server-loaded agent_profile
+  // Agent name + avatar: set once from the server-loaded agent_profile
   // and exposed through context so the trigger / chat headers can render
   // them without their own fetches. Null when the user hasn't verified a
   // profile yet (free tier or pre-onboarding).

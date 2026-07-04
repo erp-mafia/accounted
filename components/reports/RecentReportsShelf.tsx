@@ -5,7 +5,7 @@ import { getReport } from '@/lib/reports/catalog'
 import type { EntityType } from '@/types'
 
 /**
- * "Senast öppnade" — compact beige chips for the reports the user opened most
+ * "Senast öppnade": compact beige chips for the reports the user opened most
  * recently. One tap reopens a report straight from the library landing.
  * Renders nothing when there is no history (first visit).
  */

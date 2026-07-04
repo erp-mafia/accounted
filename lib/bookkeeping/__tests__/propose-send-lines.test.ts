@@ -89,7 +89,7 @@ describe('proposeSendLines', () => {
       expect(lines).toHaveLength(3)
       for (const line of lines) {
         expect(line.dimensions).toEqual(bag)
-        // A copy, not the shared reference — editing one line must not mutate
+        // A copy, not the shared reference: editing one line must not mutate
         // the invoice bag or a sibling line.
         expect(line.dimensions).not.toBe(bag)
       }

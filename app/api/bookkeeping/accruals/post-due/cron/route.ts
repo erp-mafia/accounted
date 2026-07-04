@@ -9,13 +9,13 @@ import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 ensureInitialized()
 
 /**
- * GET /api/bookkeeping/accruals/post-due/cron — daily 05:15 UTC.
+ * GET /api/bookkeeping/accruals/post-due/cron, daily 05:15 UTC.
  *
  * Posts the monthly periodiseringsverifikat (source_type 'accrual') for every
  * pending installment whose calendar month has begun. Companies run in
  * isolated try/catch; one company's failure never blocks the rest. Per-
  * installment failures are recorded on the row (last_error) by the service
- * and retried on the next run — the periodiseringar page surfaces them.
+ * and retried on the next run: the periodiseringar page surfaces them.
  *
  * Idempotency: posting flips the installment pending→posted with a CAS
  * claim, so a cron retry (or a concurrent manual "Bokför förfallna") can
@@ -25,7 +25,7 @@ export const GET = withCronContext('cron.accrual_postings', async (_request, ctx
   const supabase = createServiceClient()
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  // fetchAllRows pages past PostgREST's 1000-row cap — a single unpaginated
+  // fetchAllRows pages past PostgREST's 1000-row cap: a single unpaginated
   // select would silently drop companies once total due installments exceed
   // the cap, permanently starving the ones sorted last.
   let rows: Array<{ company_id: string }>

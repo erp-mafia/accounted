@@ -8,7 +8,7 @@ import type { DocumentUploadSource } from '@/types'
 ensureInitialized()
 
 /**
- * POST /api/documents — upload a document to the WORM archive.
+ * POST /api/documents: upload a document to the WORM archive.
  *
  * multipart/form-data:
  *   file: the document file
@@ -72,7 +72,7 @@ export const POST = withRouteContext(
         })
       }
       // Magic-byte validation rejections (validateDocumentMagicBytes) are a
-      // client problem, not a storage failure — surface as 400 with an
+      // client problem, not a storage failure: surface as 400 with an
       // accurate message instead of the misleading "kunde inte sparas".
       if (/kunde inte verifieras|matchar inte den angivna filtypen/i.test(message)) {
         opLog.warn('document upload rejected by content validation', { reason: message })
@@ -91,7 +91,7 @@ export const POST = withRouteContext(
 )
 
 /**
- * GET /api/documents — list documents.
+ * GET /api/documents: list documents.
  *
  * Query params:
  *   journal_entry_id: filter by JE

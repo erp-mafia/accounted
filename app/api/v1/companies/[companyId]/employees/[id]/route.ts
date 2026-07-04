@@ -1,17 +1,17 @@
 /**
  * /api/v1/companies/{companyId}/employees/{id}
  *
- * GET    — return the full employee record. Personnummer is NOT masked here
+ * GET   : return the full employee record. Personnummer is NOT masked here
  *          (deliberate drill-in; caller already knows the id, has read scope,
  *          and has membership in the company).
- * PATCH  — update a subset of fields. Idempotent (Idempotency-Key recommended,
+ * PATCH : update a subset of fields. Idempotent (Idempotency-Key recommended,
  *          not enforced). Dry-runnable.
- * DELETE — soft-delete via is_active=false. The employees table has no
+ * DELETE: soft-delete via is_active=false. The employees table has no
  *          archived_at column; the row is preserved because past salary
  *          runs reference it via salary_run_employees and those
  *          verifikationer are räkenskapsinformation under BFL 7 kap.
  *          (BFL retention attaches to the verifikationer, not to the
- *          personnummer attribute on the master row — a future GDPR
+ *          personnummer attribute on the master row: a future GDPR
  *          Art.17 erasure workflow could pseudonymise the row once all
  *          referenced verifikationer are outside the 7-year window.)
  *          Hard delete is never exposed from v1.
@@ -34,7 +34,7 @@ const EmployeeDetail = z.object({
   id: z.string().uuid(),
   first_name: z.string(),
   last_name: z.string(),
-  /** Full personnummer (12 digits). Detail endpoint only — never echoed on list. */
+  /** Full personnummer (12 digits). Detail endpoint only: never echoed on list. */
   personnummer: z.string(),
   employment_type: EmploymentType,
   employment_start: z.string(),
@@ -74,7 +74,7 @@ const EMPLOYEE_DETAIL_COLUMNS =
 /**
  * Shape returned by PATCH (success + dry-run preview) and by no-change PATCH.
  * Replaces the GET-only `personnummer` field with `personnummer_masked` so
- * write responses never echo back the natural-person identifier — symmetric
+ * write responses never echo back the natural-person identifier: symmetric
  * with the POST response shape (GDPR Art.5(1)(c)).
  */
 const EmployeeWriteResponse = EmployeeDetail
@@ -104,13 +104,13 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id',
   summary: 'Get a single employee.',
   description:
-    'Returns the full employee record including the 12-digit personnummer, bank details, tax configuration, and contact info. This is the deliberate drill-in for an id you already know — list calls mask personnummer.',
+    'Returns the full employee record including the 12-digit personnummer, bank details, tax configuration, and contact info. This is the deliberate drill-in for an id you already know: list calls mask personnummer.',
   useWhen:
-    'You have an employee id and need every field (tax table, bank account, vacation rule) — typically to render an edit form or to construct a payroll calculation input.',
+    'You have an employee id and need every field (tax table, bank account, vacation rule): typically to render an edit form or to construct a payroll calculation input.',
   doNotUseFor:
-    'Rosters or pickers (use the list endpoint — personnummer is masked there).',
+    'Rosters or pickers (use the list endpoint: personnummer is masked there).',
   pitfalls: [
-    'The response includes the full personnummer. Treat it as a national identifier (GDPR Art.5(1)(c)) — do not propagate it to logs or external systems beyond what your integration strictly requires.',
+    'The response includes the full personnummer. Treat it as a national identifier (GDPR Art.5(1)(c)): do not propagate it to logs or external systems beyond what your integration strictly requires.',
     'Inactive (soft-deleted) employees are returned by the detail endpoint; check `is_active` if your flow should skip them.',
   ],
   example: {
@@ -119,7 +119,7 @@ registerEndpoint({
         id: 'a8f1…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        // Format placeholder (ÅÅÅÅMMDDNNNN) rather than a numeric value —
+        // Format placeholder (ÅÅÅÅMMDDNNNN) rather than a numeric value:
         // ISO A.5.34: do not embed production-format PII in OpenAPI docs.
         personnummer: 'YYYYMMDDNNNN',
         employment_type: 'employee',
@@ -172,7 +172,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — update employee
+// PATCH: update employee
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -181,14 +181,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id',
   summary: 'Update an employee.',
   description:
-    'Partial update of an employee. Only the fields supplied in the body are changed. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint — the natural-person identity is immutable post-creation.',
+    'Partial update of an employee. Only the fields supplied in the body are changed. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
   useWhen:
     'You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.',
   doNotUseFor:
-    'Changing personnummer (not supported — create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).',
+    'Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).',
   pitfalls: [
     'personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.',
-    'salary_type changes require the matching salary field in the same request — switching to monthly without monthly_salary returns 400.',
+    'salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.',
     'tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.',
   ],
   example: {
@@ -201,7 +201,7 @@ registerEndpoint({
   reversible: false,
   dryRunSupported: true,
   request: { body: UpdateEmployeeSchema },
-  // Write responses mask personnummer (GDPR Art.5(1)(c)) — only the GET
+  // Write responses mask personnummer (GDPR Art.5(1)(c)): only the GET
   // drill-in returns the full value. Symmetric with the POST response.
   response: { success: dataEnvelope(EmployeeWriteResponse) },
 })
@@ -230,7 +230,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // OWASP V4.5: require a plain JSON object. Zod would catch a non-object
     // body downstream, but the rawKeys filter below uses Object.keys on
-    // rawBody directly — guarding here makes the contract explicit and the
+    // rawBody directly: guarding here makes the contract explicit and the
     // Object.keys call unambiguously safe (e.g. an array body would pass
     // `typeof === 'object'` but yield numeric-string keys).
     if (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody)) {
@@ -240,7 +240,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    // Reject personnummer in the body explicitly — natural-person identity
+    // Reject personnummer in the body explicitly: natural-person identity
     // is immutable post-create. SOC 2 PI1.3 / processing integrity: surface
     // the intent error rather than silently dropping the field. The Zod
     // schema accepts personnummer as optional (inherited from the base
@@ -256,7 +256,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         details: {
           field: 'personnummer',
           message:
-            'personnummer cannot be modified — identity is immutable post-create. DELETE and recreate if the natural-person identity has genuinely changed.',
+            'personnummer cannot be modified: identity is immutable post-create. DELETE and recreate if the natural-person identity has genuinely changed.',
         },
       })
     }
@@ -298,7 +298,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     //
     // OWASP V4.5 defense-in-depth: strip prototype-polluting own-properties
     // from the key list. JSON.parse can produce `{ "__proto__": ..., }` as
-    // an own (data) property — our Zod-parsed `body` would never include
+    // an own (data) property: our Zod-parsed `body` would never include
     // those keys and the subsequent intersection with rawKeys already
     // prevents them reaching the DB, but the explicit filter makes the
     // intent unambiguous for future readers.
@@ -367,7 +367,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 
-    // GDPR Art.5(1)(c) — mask the natural-person identifier in the write
+    // GDPR Art.5(1)(c): mask the natural-person identifier in the write
     // response. The detail GET endpoint still returns the full value for
     // callers who deliberately drill in.
     return ok(maskExistingForResponse(data as ExistingRow), {
@@ -377,7 +377,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 )
 
 // ──────────────────────────────────────────────────────────────────
-// DELETE — soft-delete (is_active=false)
+// DELETE: soft-delete (is_active=false)
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -390,10 +390,10 @@ registerEndpoint({
   useWhen:
     'An employee has left the company and should no longer appear in active rosters or default to new salary runs.',
   doNotUseFor:
-    'Reactivating later (PATCH `is_active=true` instead). Hard-deleting (not supported — retention).',
+    'Reactivating later (PATCH `is_active=true` instead). Hard-deleting (not supported: retention).',
   pitfalls: [
     'Idempotent: deleting an already-inactive employee returns 204 No Content (the same as the first call).',
-    'The row is NOT removed from the database — re-creating with the same personnummer returns 409 EMPLOYEE_DUPLICATE_PERSONNUMMER even after soft-delete.',
+    'The row is NOT removed from the database: re-creating with the same personnummer returns 409 EMPLOYEE_DUPLICATE_PERSONNUMMER even after soft-delete.',
     'Past salary runs still reference this employee; their data continues to surface in GET /salary-runs/{id} and SIE exports.',
   ],
   example: {

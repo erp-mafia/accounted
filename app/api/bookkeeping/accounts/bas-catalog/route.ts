@@ -8,7 +8,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
  * The full BAS 2026 catalogue (~1,276 accounts), projected to the fields the
  * AccountCombobox needs to search and render. This lets the manual bookkeeping
  * flow surface accounts by name even when they aren't in the company's chart
- * yet — selecting one routes through the existing activate-on-commit rail
+ * yet: selecting one routes through the existing activate-on-commit rail
  * (ACCOUNTS_NOT_IN_CHART → ActivateAccountsDialog → /accounts/activate).
  *
  * The payload is static reference data for the deploy and identical for every

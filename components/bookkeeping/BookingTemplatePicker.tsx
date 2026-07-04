@@ -41,7 +41,7 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   // Prefill the amount from the caller's known total each time the picker
-  // opens. Only when provided — callers without a known amount (e.g. the
+  // opens. Only when provided: callers without a known amount (e.g. the
   // journal-entry form) keep the blank-then-type behaviour.
   useEffect(() => {
     if (open && defaultAmount != null && defaultAmount > 0) {

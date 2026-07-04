@@ -21,7 +21,7 @@ interface Props {
 }
 
 /**
- * "Ny lönekörning" as a modal — mirrors NewJournalEntryDialog. A successful
+ * "Ny lönekörning" as a modal: mirrors NewJournalEntryDialog. A successful
  * create navigates straight to the run detail page (the real workspace),
  * unmounting the host list page and this dialog with it.
  */
@@ -111,7 +111,7 @@ function NewSalaryRunForm({ onCancel }: { onCancel: () => void }) {
         <div className="space-y-2">
           <Label htmlFor="voucher_series">Verifikationsserie</Label>
           <Input id="voucher_series" name="voucher_series" defaultValue="A" maxLength={1} className="max-w-20" />
-          <p className="text-xs text-muted-foreground">En bokstav A–Z. Standard: A</p>
+          <p className="text-xs text-muted-foreground">En bokstav A-Z. Standard: A</p>
         </div>
       </div>
 

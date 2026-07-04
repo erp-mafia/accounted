@@ -33,7 +33,7 @@ interface EmptyStateProps {
 }
 
 /**
- * EmptyState — friendly placeholder shown when there is no data.
+ * EmptyState: friendly placeholder shown when there is no data.
  */
 export function EmptyState({
   icon: Icon,

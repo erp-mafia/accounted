@@ -51,7 +51,7 @@ export function applyTemplate(
     } else if (line.type === 'settlement') {
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     } else {
-      // Business lines — use ratio (default 1.0)
+      // Business lines: use ratio (default 1.0)
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     }
 
@@ -97,7 +97,7 @@ function vatRateToTreatment(rate: number): VatTreatment | null {
  * transaction TemplatePicker consumes.
  *
  * Only simple shapes (one business line + one settlement line, optionally
- * one VAT line) are returned — complex multi-account templates cannot be
+ * one VAT line) are returned: complex multi-account templates cannot be
  * expressed as a single debit/credit pair and must be applied via the full
  * journal entry form instead.
  *

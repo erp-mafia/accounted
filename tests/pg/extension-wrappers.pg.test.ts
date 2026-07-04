@@ -15,7 +15,7 @@ import { getPool } from '@/tests/pg/setup'
  *     exactly n bytes (n >= 1; OpenSSL-backed pgcrypto rejects size 0).
  *
  *   - Function properties: VOLATILE, PARALLEL SAFE, SET search_path = '',
- *     LANGUAGE sql — consistent with the rest of the codebase.
+ *     LANGUAGE sql: consistent with the rest of the codebase.
  */
 
 describe('extension function wrappers', () => {
@@ -164,7 +164,7 @@ describe('extension function wrappers', () => {
     }
   })
 
-  it('wrappers are idempotent — CREATE OR REPLACE succeeds on re-run', async () => {
+  it('wrappers are idempotent: CREATE OR REPLACE succeeds on re-run', async () => {
     const pool = getPool()
     // Simulate re-applying the migration: re-running the same CREATE OR REPLACE
     // should succeed without errors and the functions should still work.

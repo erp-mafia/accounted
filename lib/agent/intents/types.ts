@@ -15,9 +15,9 @@ export interface AgentIntent<Args = Record<string, unknown>, Captured = unknown>
   sheetTitle: string
 
   // Atom-loading mode.
-  //   declarative — load the listed horizontal atoms + the company's
+  //   declarative: load the listed horizontal atoms + the company's
   //                 vertical + modifier atoms upfront.
-  //   progressive — load metadata only; the agent calls gnubok_load_skill
+  //   progressive: load metadata only; the agent calls gnubok_load_skill
   //                 to pull a full body on demand.
   // See plan §10 (caching) and §16 ("Atom routing").
   atoms: {
@@ -46,8 +46,7 @@ export interface AgentIntent<Args = Record<string, unknown>, Captured = unknown>
   // side after the user clicks the button. Failures bubble up to the route.
   capture: (args: Args, ctx: CaptureContext) => Promise<Captured>
 
-  // Builds the first-turn user message. The user does NOT see the prompt —
-  // only the agent's response to it.
+  // Builds the first-turn user message. The user does NOT see the prompt:   // only the agent's response to it.
   promptTemplate: (input: PromptTemplateInput<Captured>) => string
 }
 

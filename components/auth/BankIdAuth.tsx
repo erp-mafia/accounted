@@ -43,7 +43,7 @@ function isMobile(): boolean {
 /**
  * sessionStorage key holding an in-flight BankID session across the mobile
  * return-redirect. On iOS the BankID app returns to the SAME Safari tab by
- * reloading it (see launchBankIdApp), which wipes React state — so we stash the
+ * reloading it (see launchBankIdApp), which wipes React state, so we stash the
  * session here and resume polling on the next mount.
  */
 const PENDING_KEY = 'bankid:pending'
@@ -63,7 +63,7 @@ function persistPending(session: BankIdSession, mode: string): void {
       JSON.stringify({ session, mode, ts: Date.now() } satisfies PendingBankId)
     )
   } catch {
-    // sessionStorage unavailable (private mode / quota) — auto-resume just won't
+    // sessionStorage unavailable (private mode / quota): auto-resume just won't
     // fire; the user can still switch back to the tab manually as before.
   }
 }
@@ -93,7 +93,7 @@ function clearPending(): void {
 /**
  * Launch the BankID app on the same (mobile) device.
  *
- * Uses the universal link https://app.bankid.com/ — NOT the bankid:/// custom
+ * Uses the universal link https://app.bankid.com/: NOT the bankid:/// custom
  * scheme. A custom-scheme launch has no association with the originating Safari
  * tab, so on iOS the post-auth redirect opens in a NEW tab (git history: commit
  * 3bc652cc reverted a redirect for exactly that reason). The universal link is

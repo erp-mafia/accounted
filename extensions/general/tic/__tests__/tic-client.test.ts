@@ -135,7 +135,7 @@ describe('tic-client', () => {
       expect(calledUrl).toContain('q%3D198602245618')
     })
 
-    // An organisationsnummer (3rd digit >= 2) must NOT be century-prefixed —
+    // An organisationsnummer (3rd digit >= 2) must NOT be century-prefixed:
     // Lens resolves an AB from its bare 10-digit number.
     it('does not expand an organisationsnummer', async () => {
       const mockFetch = vi.mocked(fetch)
@@ -158,7 +158,7 @@ describe('tic-client', () => {
 
     // TIC v2 is a Typesense fuzzy search: an unindexed number (e.g. an
     // enskild firma's personnummer that Bolagsverket never registered as a
-    // company) comes back as the closest lookalike — a different, unrelated
+    // company) comes back as the closest lookalike: a different, unrelated
     // entity. We must reject it rather than return a stranger's company.
     it('rejects a fuzzy near-miss whose registrationNumber differs from the query', async () => {
       const lookalike = {
@@ -323,7 +323,7 @@ describe('tic-client', () => {
   // cache, that's 3x Lens spend per signup; with it, 1x. Test pins the
   // behavior so it can't regress silently.
   describe('in-process cache', () => {
-    it('returns cached result for identical endpoint within TTL — fetch fires once', async () => {
+    it('returns cached result for identical endpoint within TTL: fetch fires once', async () => {
       const mockFetch = vi.mocked(fetch)
       const body = { facet_counts: [], found: 1, hits: [{ document: { id: 1 } }] }
       mockFetch.mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))

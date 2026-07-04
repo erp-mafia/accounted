@@ -40,7 +40,7 @@ function getPrivateKey(): string {
     return decoded
   }
 
-  // Otherwise treat as raw base64 DER key material — wrap in PEM headers
+  // Otherwise treat as raw base64 DER key material: wrap in PEM headers
   const lines = PRIVATE_KEY_RAW.match(/.{1,64}/g) || []
   return `-----BEGIN PRIVATE KEY-----\n${lines.join('\n')}\n-----END PRIVATE KEY-----`
 }
@@ -110,7 +110,7 @@ export function getAuthorizationHeader(): string {
   return `Bearer ${token}`
 }
 
-/** @internal Reset token cache — for testing only */
+/** @internal Reset token cache: for testing only */
 export function _resetTokenCache(): void {
   cachedToken = null
   cachedTokenExpiry = 0

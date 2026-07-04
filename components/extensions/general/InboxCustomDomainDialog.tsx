@@ -36,7 +36,7 @@ interface Props {
 // Settings dialog for a company's own inbound domain. Claims the domain via
 // the extension API, renders the DNS records the user must publish, and
 // re-checks verification on demand. Everything mail-routing happens
-// server-side — this surface only manages the claim lifecycle.
+// server-side: this surface only manages the claim lifecycle.
 export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(true)
@@ -152,7 +152,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
           <DialogTitle>Egen domän för inkorgen</DialogTitle>
           <DialogDescription>
             Ta emot leverantörsfakturor direkt på bolagets egen adress, t.ex.
-            faktura@dittbolag.se — utan vidarebefordran.
+            faktura@dittbolag.se: utan vidarebefordran.
           </DialogDescription>
         </DialogHeader>
 
@@ -170,7 +170,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
                 <p className="text-muted-foreground">
                   Domänens MX-poster pekas om till Accounted. Om domänen redan används för
                   e-post (Google Workspace, Microsoft 365) slutar din vanliga e-post att
-                  fungera — använd då en underdomän, t.ex.{' '}
+                  fungera: använd då en underdomän, t.ex.{' '}
                   <code className="font-mono text-xs">faktura.dittbolag.se</code>, eller
                   fortsätt vidarebefordra till din vanliga inkorgsadress.
                 </p>
@@ -233,7 +233,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
                 <Check className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
                 <div className="space-y-1">
                   <p className="font-medium">
-                    Klart — ge dina leverantörer{' '}
+                    Klart: ge dina leverantörer{' '}
                     <code className="font-mono text-xs">faktura@{domain.domain}</code>
                   </p>
                   <p className="text-muted-foreground">
@@ -268,7 +268,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
                             <td className="px-3 py-2 font-mono text-xs break-all">{r.name}</td>
                             <td className="px-3 py-2 font-mono text-xs break-all">{r.value}</td>
                             <td className="px-3 py-2 font-mono text-xs text-right tabular-nums">
-                              {r.priority ?? '—'}
+                              {r.priority ?? '-'}
                             </td>
                             <td className="px-3 py-2 text-right">
                               <button
@@ -287,7 +287,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Inga DNS-poster tillgängliga — klicka på Kontrollera igen.
+                    Inga DNS-poster tillgängliga: klicka på Kontrollera igen.
                   </p>
                 )}
               </div>

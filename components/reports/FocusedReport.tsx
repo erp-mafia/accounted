@@ -37,7 +37,7 @@ import {
  * a back link to the library, the shared fiscal-year selector (restored from
  * localStorage so it matches the year picked on the landing), the report's
  * optional date-range control, and the report body. Drilling into an account
- * navigates to /reports/huvudbok?account=… — drill state lives in the URL.
+ * navigates to /reports/huvudbok?account=…: drill state lives in the URL.
  */
 function FocusedReportInner({ slug }: { slug: string }) {
   const router = useRouter()

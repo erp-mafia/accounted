@@ -11,7 +11,7 @@ Every balance sheet account must be reconciled against external documentation.
 | Bank | **1920** Plusgiro, **1930** Företagskonto | Bank statements |
 | Cash | **1910** Kassa | Physical count |
 | Skattekonto | **1630** Avräkning för skatter och avgifter | Skatteverket kontoutdrag |
-| Moms | **2610–2650** | Declared and transferred amounts to 1630 |
+| Moms | **2610-2650** | Declared and transferred amounts to 1630 |
 | Kundfordringar | **1510** | Kundreskontra (open invoices) |
 | Leverantörsskulder | **2440** | Leverantörsreskontra |
 | Doubtful receivables | **1519** Nedskrivning / **6352** Befarade förluster | Assessment of collectability |
@@ -51,7 +51,7 @@ Individual recurring costs below **5,000 SEK** that don't fluctuate >20% year-ov
 
 | Asset type | Cost account | Accumulated depreciation |
 |------------|-------------|------------------------|
-| Immateriella tillgångar | **7810–7819** | **1019, 1029** etc. |
+| Immateriella tillgångar | **7810-7819** | **1019, 1029** etc. |
 | Byggnader | **7821** | **1119** |
 | Markanläggningar | **7824** | **1129** |
 | Maskiner | **7831** | **1219** |
@@ -82,13 +82,13 @@ K3: indirect manufacturing overhead must be included when material. K2: optional
 
 ## Phase 5: Untaxed reserves (obeskattade reserver)
 
-### Periodiseringsfonder (AB only — booked)
+### Periodiseringsfonder (AB only, booked)
 
 AB can defer up to **25%** of skattemässigt resultat for up to 6 years.
 
 | Account | Description |
 |---------|-------------|
-| **2110–2129** | Periodiseringsfond per year (e.g. 2125 = tax year 2025) |
+| **2110-2129** | Periodiseringsfond per year (e.g. 2125 = tax year 2025) |
 | **8811** | Avsättning till periodiseringsfond |
 | **8819** | Återföring från periodiseringsfond |
 
@@ -102,8 +102,8 @@ Excess of tax-allowed depreciation over planned depreciation.
 
 | Account | Description |
 |---------|-------------|
-| **8850** (or 8851–8853) | Förändring av överavskrivningar |
-| **2150** (or 2151–2153) | Ackumulerade överavskrivningar |
+| **8850** (or 8851-8853) | Förändring av överavskrivningar |
+| **2150** (or 2151-2153) | Ackumulerade överavskrivningar |
 
 Two methods: **30-rule** (declining balance on pool) and **20-rule** (straight-line per asset over 5 years). Use whichever produces lowest allowable residual value.
 
@@ -129,7 +129,7 @@ SLP rate: **24.26%** on pension costs. Entry: Debit 7533 / Credit 2514.
 
 Entry: Debit 8910 / Credit 2512. Net 2518 against 2510/2512 at year-end.
 
-**Enskild firma does NOT book any tax** — owner taxed personally via NE-bilaga.
+**Enskild firma does NOT book any tax**: owner taxed personally via NE-bilaga.
 
 ### Deferred tax (K3 only)
 | Account | Description |
@@ -140,9 +140,9 @@ Entry: Debit 8910 / Credit 2512. Net 2518 against 2510/2512 at year-end.
 
 All marked **[Ej K2]** in BAS kontoplan. K2 must NEVER recognize deferred tax.
 
-## Phase 7–8: Equity handling and result closing
+## Phase 7-8: Equity handling and result closing
 
-All P&L accounts (classes 3–8) net to **8999** (Årets resultat).
+All P&L accounts (classes 3-8) net to **8999** (Årets resultat).
 
 ### AB equity flow
 1. Year-end: Debit 8999 / Credit **2099** (Årets resultat) for profit

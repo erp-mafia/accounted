@@ -195,7 +195,7 @@ export default function JournalEntryList() {
       )
       setAttachmentCounts(Object.assign({}, ...results))
     } catch {
-      // Non-critical — silently ignore
+      // Non-critical: silently ignore
     }
   }, [])
 
@@ -210,7 +210,7 @@ export default function JournalEntryList() {
       }
       setNoDocRequired(map)
     } catch {
-      // Non-critical — silently ignore
+      // Non-critical: silently ignore
     }
   }, [])
 
@@ -221,7 +221,7 @@ export default function JournalEntryList() {
   // Restore the persisted sort order (per company). Read in an effect rather
   // than the useState initializer to avoid an SSR/client hydration mismatch.
   // sortHydrated gates the first fetch so the list is fetched once, already in
-  // the saved order — no flash of the default sort.
+  // the saved order, no flash of the default sort.
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const stored = window.localStorage.getItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'))
@@ -231,7 +231,7 @@ export default function JournalEntryList() {
   }, [company?.id])
 
   // Restore the persisted page-size choice (per company). Same hydration pattern
-  // as the sort order — read in an effect to avoid an SSR mismatch, and gate the
+  // as the sort order, read in an effect to avoid an SSR mismatch, and gate the
   // first fetch so the list is fetched once at the saved size.
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -245,11 +245,11 @@ export default function JournalEntryList() {
   // The list is period-oriented (BFL): verifikationsnummer run as an unbroken
   // series *per räkenskapsår*, so the same number (e.g. A42) recurs once per
   // year. Showing every year at once makes those look like duplicates and makes
-  // a bare "A42" reference ambiguous — so we default to the räkenskapsår the
+  // a bare "A42" reference ambiguous, so we default to the räkenskapsår the
   // user is currently in rather than "all years". An explicit "Alla
   // räkenskapsår" choice (persisted as ALL_YEARS_VALUE) is still honoured.
-  // Resolving the scope here — not in the dialog's FiscalYearSelector, which
-  // only mounts when opened — keeps the first fetch correct. periodHydrated
+  // Resolving the scope here, not in the dialog's FiscalYearSelector, which
+  // only mounts when opened, keeps the first fetch correct. periodHydrated
   // gates that first fetch so the list loads already scoped to the resolved year.
   useEffect(() => {
     if (!company?.id) {
@@ -267,7 +267,7 @@ export default function JournalEntryList() {
           fetched = (data || []) as FiscalPeriod[]
         }
       } catch {
-        // Non-critical — fall through with an empty list (scope stays "all years").
+        // Non-critical: fall through with an empty list (scope stays "all years").
       }
       if (cancelled) return
 
@@ -276,7 +276,7 @@ export default function JournalEntryList() {
           ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
           : null
       if (stored === FISCAL_YEAR_ALL_VALUE) {
-        // User explicitly chose "all years" — respect it.
+        // User explicitly chose "all years", respect it.
         setPeriodId(null)
       } else if (stored && fetched.some((p) => p.id === stored)) {
         setPeriodId(stored)
@@ -294,7 +294,7 @@ export default function JournalEntryList() {
 
   // Debounce the free-text search before it reaches the API. Require ≥2 chars:
   // a single character matches almost every verifikationstext and isn't a useful
-  // filter, so 0–1 chars are treated as "no search" instead of firing a query on
+  // filter, so 0-1 chars are treated as "no search" instead of firing a query on
   // every keystroke (ASVS V2.4).
   useEffect(() => {
     const handle = setTimeout(() => {
@@ -307,14 +307,14 @@ export default function JournalEntryList() {
 
   async function fetchEntries() {
     setLoading(true)
-    setSelectedIds(new Set()) // selection is page-scoped — reset on reload
+    setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
       sort_by: sortBy,
     })
     if (listMode === 'drafts') {
-      // Drafts get their own view spanning all years — they're work-in-progress
+      // Drafts get their own view spanning all years: they're work-in-progress
       // and shouldn't be hidden by the selected fiscal-year scope.
       params.set('status', 'draft')
     } else {
@@ -353,7 +353,7 @@ export default function JournalEntryList() {
     fetchAttachmentCounts(ids)
   }
 
-  // Cheap count-only query for the "Utkast" badge — all years, so the badge
+  // Cheap count-only query for the "Utkast" badge, all years, so the badge
   // surfaces drafts regardless of the selected fiscal-year scope.
   async function fetchDraftCount() {
     try {
@@ -409,7 +409,7 @@ export default function JournalEntryList() {
     }
   }
 
-  // Pure reversal (storno) of a posted verifikat — books a stornoverifikation
+  // Pure reversal (storno) of a posted verifikat: books a stornoverifikation
   // with no replacement, per BFL 5 kap 5§. Routes through the engine's
   // reverseEntry (storno + reverses_id link; original → 'reversed', never
   // deleted). "Rätta" stays the path for booking a replacement entry instead.
@@ -439,7 +439,7 @@ export default function JournalEntryList() {
   }
 
   // A posted, document-requiring entry with no attachment yet and not already
-  // exempt — i.e. the rows that show the warning triangle. Only these can be
+  // exempt, i.e. the rows that show the warning triangle. Only these can be
   // batch-marked "Inget underlag krävs".
   const isEligibleForExempt = useCallback(
     (entry: JournalEntry) =>
@@ -495,7 +495,7 @@ export default function JournalEntryList() {
   }
 
   // Filter-scoped bulk mark: mark EVERY missing-doc verifikat matching the active
-  // filters (period/series/date/search), across all pages — the scalable remedy
+  // filters (period/series/date/search), across all pages: the scalable remedy
   // for a post-import flood. A dry_run first surfaces the exact count to confirm.
   const filterPayload = () => ({
     period_id: periodId,
@@ -572,7 +572,7 @@ export default function JournalEntryList() {
     (seriesFilter !== 'all' ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
     (showMissingOnly ? 1 : 0)
-  // Year scope included — drives empty-state messaging + keeping the bar mounted.
+  // Year scope included: drives empty-state messaging + keeping the bar mounted.
   const activeFilterCount = (periodId ? 1 : 0) + dialogFilterCount
 
   // When any filter or search is active we keep the filter bar mounted even
@@ -633,7 +633,7 @@ export default function JournalEntryList() {
 
   // Pristine, untouched ledger: nothing posted, no drafts, no filters, and we're
   // on the committed view. ONLY this genuinely-empty case may short-circuit the
-  // whole component — every other empty state (a draft exists, or we're in the
+  // whole component: every other empty state (a draft exists, or we're in the
   // drafts view) must fall through to the main render below so the
   // Verifikat/Utkast toggle stays reachable.
   if (!loading && entries.length === 0 && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
@@ -792,7 +792,7 @@ export default function JournalEntryList() {
                     }}
                     className="h-9 flex-1 text-sm"
                   />
-                  <span className="text-sm text-muted-foreground">–</span>
+                  <span className="text-sm text-muted-foreground">-</span>
                   <Input
                     type="text"
                     placeholder={t('date_to_placeholder')}
@@ -868,7 +868,7 @@ export default function JournalEntryList() {
           </DialogContent>
         </Dialog>
         {/* Active fiscal-year scope as a direct one-click picker, pushed to the
-            right of the control bar — keeps the räkenskapsår visible per BFL and
+            right of the control bar, keeps the räkenskapsår visible per BFL and
             changeable in one click. Distinct from Filtrera (which now holds only
             sort / series / date / underlag); previously both just opened the same
             dialog. The selector persists the choice to localStorage; the first-load
@@ -892,7 +892,7 @@ export default function JournalEntryList() {
       ) : filteredEntries.length === 0 ? (
         // Empty placeholder, scoped to the situation: an empty drafts view, a
         // filtered committed view with no matches, or a committed view with no
-        // posted entries yet (but drafts exist — hence we got here, not the
+        // posted entries yet (but drafts exist, hence we got here, not the
         // pristine early return above).
         <DataList>
           <DataListEmpty
@@ -974,7 +974,7 @@ export default function JournalEntryList() {
               </div>
             ) : (
               // Filter-scoped: mark every missing-doc verifikat matching the active
-              // filters across all pages — scales to a post-import flood.
+              // filters across all pages: scales to a post-import flood.
               <Button size="sm" variant="outline" onClick={openBulk}>
                 <CircleSlash className="mr-2 h-4 w-4" />
                 {t('batch_mark_all_missing')}
@@ -1485,7 +1485,7 @@ export default function JournalEntryList() {
 
       {/* Pagination + page-size selector. Shown when the result set spans more
           than one page at the default size, OR when a non-default page size
-          ('all' included) is active — so a user who narrowed the list below the
+          ('all' included) is active, so a user who narrowed the list below the
           default can always switch the size back. Hidden for an empty result. */}
       {count > 0 && (count > PAGE_SIZE_OPTIONS[0] || pageSizeChoice !== '20') && (
         <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1518,7 +1518,7 @@ export default function JournalEntryList() {
             </span>
           </div>
 
-          {/* Page navigation — hidden when showing all or when everything fits on one page */}
+          {/* Page navigation: hidden when showing all or when everything fits on one page */}
           {!showingAll && count > pageSize && (
             <div className="flex items-center gap-1">
               <Button

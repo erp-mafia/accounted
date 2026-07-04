@@ -8,10 +8,10 @@ import {
   listSignatureRequests,
 } from '@/lib/bokslut/arsredovisning/signature-service'
 
-// Roles are constrained to the underskrifter set ÅRL allows — keeps the API
+// Roles are constrained to the underskrifter set ÅRL allows: keeps the API
 // from accepting arbitrary "Administrator" / "CEO" strings that the UI
 // dropdown doesn't expose. Name capped at 200 chars per GDPR data-min
-// (Art.25.2) — Swedish names are well under that; bound is a defense.
+// (Art.25.2): Swedish names are well under that; bound is a defense.
 const CreateSchema = z.object({
   role: z.enum(['Styrelseledamot', 'Styrelseordförande', 'VD', 'Verkställande direktör']),
   signer_name: z.string().min(1).max(200),

@@ -42,15 +42,15 @@ export default function ArticleForm({
   const supabase = createClient()
   const t = useTranslations('form_article')
   // Active class-3 (revenue) accounts for the combobox. The combobox accepts
-  // unknown 4-digit numbers optimistically — the API answers with
+  // unknown 4-digit numbers optimistically: the API answers with
   // ACCOUNTS_NOT_IN_CHART for activatable BAS accounts, and the host page's
   // ActivateAccountsDialog flow takes over (same UX as the journal entry form).
   const [revenueAccounts, setRevenueAccounts] = useState<BASAccount[]>([])
   // Inline account creation: what the user typed in the combobox when they hit
-  // "Skapa konto" — non-null opens AddAccountDialog prefilled with it.
+  // "Skapa konto": non-null opens AddAccountDialog prefilled with it.
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string | null>(null)
   // Momsregistrerad? A non-VAT-registered company never charges moms, so the
-  // VAT field is hidden and the rate forced to 0 — mirrors the invoice editor.
+  // VAT field is hidden and the rate forced to 0: mirrors the invoice editor.
   const [vatRegistered, setVatRegistered] = useState(true)
 
   async function fetchRevenueAccounts() {
@@ -393,7 +393,7 @@ export default function ArticleForm({
 
       {/* Inline custom-account creation (renders in a portal, outside the form).
           After create: refresh the chart and select the new number as the
-          article's revenue account — mirrors the journal entry form. */}
+          article's revenue account: mirrors the journal entry form. */}
       <AddAccountDialog
         open={createAccountPrefill != null}
         onOpenChange={(next) => {

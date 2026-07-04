@@ -1,7 +1,7 @@
 /**
  * Guards the machine-readable staging contract surfaced via tools/list `_meta`.
  *
- * An agent must be able to tell — without reading description prose — whether a
+ * An agent must be able to tell: without reading description prose: whether a
  * write stages a pending_operation (and so needs a follow-up
  * gnubok_approve_pending_operation), and whether a read-only pre-flight exists.
  * That signal is `_meta.requires_approval` / `_meta.preflight`, derived from the
@@ -47,7 +47,7 @@ describe('staging contract _meta', () => {
   it('every staging tool declares staging in its description (uniform prose signal)', () => {
     // The approval REFERENCE is carried machine-readably by _meta.approve_tool
     // (see the test above), so prose only needs to make the staging nature
-    // unambiguous — every staged write says it stages (stage/stages/staged/staging).
+    // unambiguous: every staged write says it stages (stage/stages/staged/staging).
     const violations = tools
       .filter(isStagingTool)
       .filter((t) => !/stag(e|ing)/i.test(t.description))

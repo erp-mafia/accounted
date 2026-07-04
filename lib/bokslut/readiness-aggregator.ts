@@ -17,14 +17,14 @@ export interface BokslutReminder {
 }
 
 export interface BokslutReadinessReport {
-  /** Mirrors validateYearEndReadiness.ready — true ⇔ no blocking errors. */
+  /** Mirrors validateYearEndReadiness.ready: true ⇔ no blocking errors. */
   ready: boolean
   /** Blocking errors that prevent year-end execution (from year-end-service). */
   blockers: string[]
   /** Non-blocking warnings (from year-end-service). */
   warnings: string[]
   /** Soft reminders (Phase 2+ features not yet shipped, manual steps the user
-   *  should consider). Never blockers — surfaced so users know what's manual. */
+   *  should consider). Never blockers: surfaced so users know what's manual. */
   reminders: BokslutReminder[]
   /** Convenience counts for the UI header. */
   draftCount: number
@@ -59,7 +59,7 @@ export interface BokslutReadinessReport {
  * Wraps validateYearEndReadiness (which owns the legally-required checks) and
  * layers on:
  *   - bank reconciliation snapshot for the period (informational warning if
- *     unmatched transactions exist — not a legal blocker)
+ *     unmatched transactions exist: not a legal blocker)
  *   - soft reminders for Phase 2+ features that ship later (depreciation,
  *     accruals, tax provision). These tell the user what's manual today.
  *
@@ -96,7 +96,7 @@ export async function buildBokslutReadinessReport(
   const entityType = (settingsResult.data?.entity_type ?? 'aktiebolag') as BokslutReadinessReport['entityType']
 
   // Bank reconciliation snapshot for the period. Run after period fetch so we
-  // know the date range. Failure here must not break the report — fall back
+  // know the date range. Failure here must not break the report: fall back
   // to null so the UI degrades gracefully.
   let reconciliation: BokslutReadinessReport['reconciliation'] = null
   try {
@@ -126,14 +126,14 @@ export async function buildBokslutReadinessReport(
         reconciliation.unmatched_transaction_count > 0
           ? `${reconciliation.unmatched_transaction_count} banktransaktioner är inte matchade. Avstäm banken innan bokslut.`
           : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
-      // Bankavstämning's real route — the earlier '/reconciliation/bank' href
+      // Bankavstämning's real route: the earlier '/reconciliation/bank' href
       // pointed at a page that has never existed, so the wizard's "Öppna"
       // link 404ed.
       href: '/reports/bank-reconciliation',
     })
   }
 
-  // Periodiseringar (accruals) are still manual — no wizard step ships in
+  // Periodiseringar (accruals) are still manual: no wizard step ships in
   // Phases 1-3. Depreciation, bolagsskatt and periodiseringsfond now have
   // dedicated calculators (DepreciationPanel + DispositionsStep) so they're
   // no longer surfaced as manual reminders.
@@ -148,7 +148,7 @@ export async function buildBokslutReadinessReport(
     // Pre-compute the EF declaration so the wizard's overview reflects what
     // the user will see when they reach the dispositions step. Egenavgifter,
     // räntefördelning, periodiseringsfond-EF and expansionsfond are NOT
-    // booked — they go into the NE-bilaga / INK1. This reminder explains
+    // booked: they go into the NE-bilaga / INK1. This reminder explains
     // the BFL distinction.
     reminders.push({
       code: 'ef_skatt_via_ne',
@@ -159,7 +159,7 @@ export async function buildBokslutReadinessReport(
 
     // Surface a soft warning when kapitalunderlag is missing AND the booked
     // surplus is large enough to make positive räntefördelning meaningful
-    // (> 50 000 kr — the spärrbelopp). This is non-blocking but actionable:
+    // (> 50 000 kr: the spärrbelopp). This is non-blocking but actionable:
     // the user should enter their IB equity on the dispositions step.
     try {
       const preview = await computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId)
@@ -168,11 +168,11 @@ export async function buildBokslutReadinessReport(
           code: 'ef_kapitalunderlag_missing',
           severity: 'warning',
           message:
-            'Kapitalunderlag (IB eget kapital) saknas — räntefördelning beräknas inte. Fyll i på dispositionssteget för att utnyttja skattefördelen.',
+            'Kapitalunderlag (IB eget kapital) saknas: räntefördelning beräknas inte. Fyll i på dispositionssteget för att utnyttja skattefördelen.',
         })
       }
     } catch {
-      // EF preview is informational — never block readiness on it.
+      // EF preview is informational: never block readiness on it.
     }
   }
 

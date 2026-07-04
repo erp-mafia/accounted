@@ -30,7 +30,7 @@ export interface OperationProgress {
   /** Optional unit counters for percent calculation client-side. */
   current?: number
   total?: number
-  /** Free-form additional fields — kept under jsonb so additions don't migrate. */
+  /** Free-form additional fields: kept under jsonb so additions don't migrate. */
   [k: string]: unknown
 }
 
@@ -56,7 +56,7 @@ export interface OperationRow {
  * and then resolves via `completeOperation` / `failOperation`.
  *
  * For true async dispatch (future cron worker), pass `status='queued'` and
- * leave `started_at` null — the worker stamps it when it picks the row up.
+ * leave `started_at` null: the worker stamps it when it picks the row up.
  */
 export async function startOperation(
   supabase: SupabaseClient,
@@ -150,7 +150,7 @@ export async function failOperation(
 
 /**
  * Update progress on a running operation. Non-blocking: a write failure is
- * logged but not raised — the work continues regardless.
+ * logged but not raised: the work continues regardless.
  */
 export async function updateOperationProgress(
   supabase: SupabaseClient,
@@ -168,7 +168,7 @@ export async function updateOperationProgress(
 
 /**
  * Read an operation row, scoped to the caller's company. Returns null when
- * the id is not found (or belongs to another company — RLS already excludes
+ * the id is not found (or belongs to another company; RLS already excludes
  * those, but the explicit `.eq('company_id')` keeps the contract clear).
  */
 export async function getOperation(

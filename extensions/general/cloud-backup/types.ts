@@ -1,7 +1,7 @@
 /**
  * Connection stored per company in extension_data under key
  * `google_drive_connection`. The refresh token is AES-256-GCM encrypted
- * (see lib/crypto.ts) — never store it in plaintext.
+ * (see lib/crypto.ts): never store it in plaintext.
  */
 export interface GoogleDriveConnection {
   refresh_token_encrypted: string

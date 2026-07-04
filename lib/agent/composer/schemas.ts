@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-// Atom selection output. The Opus call returns this via tool_use forcing —
+// Atom selection output. The Opus call returns this via tool_use forcing:
 // the model is forced to invoke `compose_agent_profile(...)` once, which
 // gives us Zod-validatable structured output instead of free-text JSON.
 export const AtomSelectionSchema = z.object({

@@ -1,5 +1,5 @@
 /**
- * Migration orchestrator — coordinates the data migration from
+ * Migration orchestrator: coordinates the data migration from
  * an external accounting system directly via provider APIs into gnubok.
  *
  * Bookkeeping data (accounts, balances, vouchers) is imported
@@ -121,7 +121,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               // Observability: a provider sent a VAT number we can't normalise
               // to a valid SE+12 momsregistreringsnummer. We drop it (above),
               // but surface the anomaly so consistently-bad provider data is
-              // visible. Don't log the raw value — it can embed a personnummer.
+              // visible. Don't log the raw value: it can embed a personnummer.
               console.warn(
                 `[migration] Dropped malformed VAT number from ${provider} for company ${companyId} (normalized length ${normalizedVat.length})`,
               )
@@ -386,7 +386,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
-          // Need to create a minimal customer — dedupe by org number first,
+          // Need to create a minimal customer: dedupe by org number first,
           // then by name, so invoices sharing a missing party only create
           // one stub row.
           const key = (customerOrgNumber ?? `name:${inv.customer.name.toLowerCase()}`).trim()
@@ -576,7 +576,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
-          // Need to create a minimal supplier — dedupe the same way as customers.
+          // Need to create a minimal supplier: dedupe the same way as customers.
           const key = (supplierOrgNumber ?? `name:${inv.supplier.name.toLowerCase()}`).trim()
           let stub = stubByKey.get(key)
           if (!stub) {
@@ -705,7 +705,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     // separately via SIE. Supplier invoices arrive (via ?filter=unpaid) as open
     // payables with no link to those vouchers, so settled invoices would surface
     // as overdue. Auto-link the unambiguous matches. Best-effort: a failure here
-    // must never fail the migration — the imported data is already persisted.
+    // must never fail the migration: the imported data is already persisted.
     if (options.reconcileVouchers !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Stämmer av betalningar mot verifikationer...', progress: 95 })
       try {

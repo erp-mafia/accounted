@@ -372,7 +372,7 @@ function CustomersPageInner() {
                         </TableCell>
                         <TableCell className="tabular-nums text-muted-foreground">
                           <div className="flex items-center gap-2">
-                            <span>{identifier || '—'}</span>
+                            <span>{identifier || '-'}</span>
                             {customer.org_number && customer.vat_number_validated && (
                               <Badge variant="success" className="text-xs">
                                 {t('verified')}
@@ -381,10 +381,10 @@ function CustomersPageInner() {
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground truncate max-w-[220px]">
-                          {customer.email || '—'}
+                          {customer.email || '-'}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
-                          {customer.city || '—'}
+                          {customer.city || '-'}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">
                           {formatDate(customer.created_at)}

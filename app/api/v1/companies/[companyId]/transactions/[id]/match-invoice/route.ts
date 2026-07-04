@@ -11,7 +11,7 @@
  *   5. Insert invoice_payments row; link transaction to invoice.
  *
  * Mirrors the internal route's failure ordering exactly. Idempotent on
- * (transaction, key). NOT dry-runnable — the multi-row interlock makes a
+ * (transaction, key). NOT dry-runnable: the multi-row interlock makes a
  * meaningful preview infeasible without staging the JE for real, and dry-
  * run is reserved for endpoints where the caller benefits from a fully
  * resolved preview before commit. Skip the flag here; document it.
@@ -44,7 +44,7 @@ const MatchInvoiceResponse = z.object({
   journal_entry_id: z.string().uuid().nullable(),
   // Preserved from the prior :categorize call (or whatever the existing
   // value was). Returns null when the transaction had never been
-  // categorized — the v1 surface no longer guesses 'income_services'
+  // categorized: the v1 surface no longer guesses 'income_services'
   // for unmatched-revenue rows because the wrong default flows into
   // BAS 3001/3041/3530 selection and INK2R/SRU reporting.
   category: z.string().nullable(),
@@ -60,11 +60,11 @@ registerEndpoint({
   useWhen:
     'You have a bank receipt and a known open invoice it pays. The transaction must be positive (income) and unlinked.',
   doNotUseFor:
-    'Categorizing a transaction without an invoice — use `:categorize`. Matching to a supplier invoice — use `:match-supplier-invoice`. Bulk auto-match — use `POST /reconciliation/bank/run`.',
+    'Categorizing a transaction without an invoice: use `:categorize`. Matching to a supplier invoice: use `:match-supplier-invoice`. Bulk auto-match: use `POST /reconciliation/bank/run`.',
   pitfalls: [
-    'Proforma + delivery notes are rejected (MATCH_INVOICE_NOT_INVOICE_TYPE) — only document_type=\'invoice\' can be matched.',
-    'Transaction must be positive (amount > 0) — negative transactions return MATCH_INVOICE_NOT_INCOME.',
-    'Invoice must be in sent / overdue / partially_paid status — paid or draft invoices return MATCH_INVOICE_NOT_OPEN.',
+    'Proforma + delivery notes are rejected (MATCH_INVOICE_NOT_INVOICE_TYPE): only document_type=\'invoice\' can be matched.',
+    'Transaction must be positive (amount > 0): negative transactions return MATCH_INVOICE_NOT_INCOME.',
+    'Invoice must be in sent / overdue / partially_paid status: paid or draft invoices return MATCH_INVOICE_NOT_OPEN.',
     'Idempotency-Key is mandatory.',
   ],
   example: {
@@ -140,7 +140,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     // Preserve any prior category (e.g. income_products for goods sales).
     // Only fall back to the generic 'income_services' default if the
-    // transaction has never been categorized — Greptile + Swedish-compliance
+    // transaction has never been categorized: Greptile + Swedish-compliance
     // flagged the dashboard's hardcode-on-write as a wrong BAS classification
     // for goods/rental income flows.
     const existingTxCategory = (transaction as { category?: string | null }).category ?? null
@@ -186,7 +186,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Hard-duplicate guard: status leak — the invoice still says
+    // Hard-duplicate guard: status leak: the invoice still says
     // 'sent'/'overdue' but already has a payment voucher attached. Mirror
     // of the internal route's defensive check.
     if (invoice.status === 'sent' || invoice.status === 'overdue') {
@@ -256,7 +256,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         transactionId: txId,
         invoiceId: invoice_id,
         // Attribute the override to the calling user AND the API key. The
-        // user identifier alone is not enough for v1 — a single user can
+        // user identifier alone is not enough for v1: a single user can
         // hold multiple keys (CI bot, integration, personal), and revocation
         // / abuse triage needs to know which key was used.
         userId: ctx.userId,
@@ -268,7 +268,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const paidAmount = transaction.amount
 
-    // Overshoot guard + paid/remaining math — shared with the dashboard and
+    // Overshoot guard + paid/remaining math: shared with the dashboard and
     // agent (commit) paths via planInvoicePayment. Without this, the public API
     // silently overpaid an invoice (recording paid_amount > total, over-crediting
     // AR). Runs BEFORE the storno + strict-mode JE creation, so a rejected match
@@ -317,7 +317,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // The JE shape is driven by the INVOICE'S booking state, not the
     // company's current setting. If the invoice already has a JE (Dr 1510
-    // posted at send), the match must clear 1510 — otherwise the receivable
+    // posted at send), the match must clear 1510: otherwise the receivable
     // stays orphaned and 30xx + 26xx get double-counted. The current
     // accounting_method only governs the cash-method fast path for
     // invoices that were never booked.
@@ -411,7 +411,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (err instanceof AccountsNotInChartError) {
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
-      txLog.error('match-invoice: payment JE creation failed — aborting before state mutation', err as Error)
+      txLog.error('match-invoice: payment JE creation failed: aborting before state mutation', err as Error)
       const message = isBookkeepingError(err)
         ? getErrorMessage(err, { context: 'invoice' })
         : err instanceof Error
@@ -480,7 +480,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // The "intäkt bokförs vid slutbetalning" note only applies to genuine
-    // kontantmetoden partials — never-booked invoices. When the invoice was
+    // kontantmetoden partials: never-booked invoices. When the invoice was
     // booked under accrual, the clearing entry handles the partial cleanly
     // and the note would be misleading.
     const paymentNotes =
@@ -516,7 +516,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // When the tx already has a category (set by a prior :categorize call,
     // could be income_products / rental / etc.), preserve it. When there is
-    // none, leave the column UNTOUCHED — the existing default ('uncategorized')
+    // none, leave the column UNTOUCHED: the existing default ('uncategorized')
     // persists. Writing a hardcoded 'income_services' here was the source of
     // a known mis-classification for goods/rental flows (BAS 3001/3041/3530
     // distinct accounts → wrong INK2R field → wrong SRU).

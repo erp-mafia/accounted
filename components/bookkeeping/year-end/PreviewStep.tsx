@@ -109,9 +109,9 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Bokslutsverifikation — förhandsgranskning</CardTitle>
+          <CardTitle className="text-base">Bokslutsverifikation: förhandsgranskning</CardTitle>
           <p className="text-sm text-muted-foreground">
-            {preview.closingLines.length} kontorader. Nollställer klass 3–8 mot {preview.closingAccount}.
+            {preview.closingLines.length} kontorader. Nollställer klass 3-8 mot {preview.closingAccount}.
           </p>
         </CardHeader>
         <CardContent className="p-0">
@@ -130,10 +130,10 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
                   <TableCell className="tabular-nums">{line.account_number}</TableCell>
                   <TableCell className="text-sm">{line.line_description}</TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {line.debit_amount > 0 ? formatCurrency(line.debit_amount) : '—'}
+                    {line.debit_amount > 0 ? formatCurrency(line.debit_amount) : '-'}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {line.credit_amount > 0 ? formatCurrency(line.credit_amount) : '—'}
+                    {line.credit_amount > 0 ? formatCurrency(line.credit_amount) : '-'}
                   </TableCell>
                 </TableRow>
               ))}

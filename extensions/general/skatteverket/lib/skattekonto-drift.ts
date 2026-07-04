@@ -86,7 +86,7 @@ export async function computeSkattekontoDrift(
 /**
  * Decide whether to emit `skattekonto.drift_detected` for this run, then update
  * the throttle state. Returns true when the event was emitted. Suppression
- * window is 24h unless the sign of the drift flips — a sign change means
+ * window is 24h unless the sign of the drift flips: a sign change means
  * something materially different is happening and the user should know.
  */
 export async function maybeAlertDrift(
@@ -105,7 +105,7 @@ export async function maybeAlertDrift(
     lastState.lastSign === currentSign
 
   if (withinThrottle) {
-    log.info('drift detected but within throttle window — skipping alert', {
+    log.info('drift detected but within throttle window: skipping alert', {
       companyId: ctx.companyId,
       drift: drift.drift,
       lastAlertAt: lastState!.lastAlertAt,

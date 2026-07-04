@@ -3,7 +3,7 @@ import { escapeLikePattern, normalizeOcrReference } from '../duplicate-payment-g
 
 describe('escapeLikePattern', () => {
   // These cases lock in that a user-supplied needle reaches an ILIKE pattern with
-  // its LIKE metacharacters neutralised — each of `%`, `_`, `\` must match only
+  // its LIKE metacharacters neutralised: each of `%`, `_`, `\` must match only
   // itself and never expand as a wildcard (compliance A.8.28 / ASVS V1.2.5).
   it('escapes a literal percent so it matches only itself', () => {
     expect(escapeLikePattern('50% rabatt')).toBe('50\\% rabatt')

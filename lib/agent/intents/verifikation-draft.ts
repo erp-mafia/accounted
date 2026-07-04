@@ -2,7 +2,7 @@ import { defineAgentIntent } from './types'
 import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
-// verifikation.draft — "Fråga om denna verifikation" on the journal entry
+// verifikation.draft: "Fråga om denna verifikation" on the journal entry
 // creation/draft surfaces (Bokföring → "Skapa med assistent", the Ny
 // verifikat-dialog, and a draft verifikat's own page).
 //
@@ -43,7 +43,7 @@ interface CapturedVerifikationDraft {
   // Underlag already linked to the entry (when editing a draft). Flattened
   // from document_attachments.extracted_data the same way
   // transaction.categorization does, so the agent can read the figures
-  // without a round-trip. Empty for a brand-new verifikation — there the
+  // without a round-trip. Empty for a brand-new verifikation: there the
   // agent discovers underlag via gnubok_list_inbox_items.
   underlag: {
     document_id: string | null
@@ -76,7 +76,7 @@ export const verifikationDraft = defineAgentIntent<
     'gnubok_get_trial_balance',
     'gnubok_query_journal',
     'gnubok_create_voucher',
-    // Underlag reading — the ground rules (shared-rules.ts) already instruct
+    // Underlag reading: the ground rules (shared-rules.ts) already instruct
     // the agent to look in the inbox and read the underlag before proposing a
     // booking; these are the tools that make those instructions callable.
     'gnubok_get_document_content',
@@ -92,7 +92,7 @@ export const verifikationDraft = defineAgentIntent<
   model: SONNET_MODEL,
 
   // Work out the entry (accounts, VAT, balance) in the thinking channel, so the
-  // visible reply lands once — after the voucher is staged — instead of an
+  // visible reply lands once: after the voucher is staged: instead of an
   // analysis before the tool call and a near-identical answer after it. The
   // always-on prompt promises "resonemang sker i tankekanalen"; without this
   // that channel doesn't exist and the reasoning spills into the visible reply.
@@ -142,7 +142,7 @@ export const verifikationDraft = defineAgentIntent<
           }
         }
 
-        // Underlag already linked to this draft — surface the extracted fields
+        // Underlag already linked to this draft: surface the extracted fields
         // so the agent suggests accounts from what's on the kvitto without
         // re-asking. Mirrors transaction.categorization's document_attachments
         // read (same table, same extracted_data shape).
@@ -219,7 +219,7 @@ export const verifikationDraft = defineAgentIntent<
       }
       lines.push(`  SUMMA          ${debits.toLocaleString('sv-SE').padStart(12)}  ${credits.toLocaleString('sv-SE').padStart(12)}`)
       if (Math.abs(debits - credits) > 0.005) {
-        lines.push(`  ⚠ Diff: ${(debits - credits).toLocaleString('sv-SE')} — debet ≠ kredit`)
+        lines.push(`  ⚠ Diff: ${(debits - credits).toLocaleString('sv-SE')}: debet ≠ kredit`)
       }
     }
 
@@ -238,11 +238,11 @@ export const verifikationDraft = defineAgentIntent<
           parts.push(`moms=${u.vat_amount.toLocaleString('sv-SE')} ${u.currency ?? 'SEK'}`)
         }
         lines.push(
-          `  • ${parts.join(', ') || `${u.file_name ?? 'underlag'} (ingen extraherad data — läs med gnubok_get_document_content)`}`,
+          `  • ${parts.join(', ') || `${u.file_name ?? 'underlag'} (ingen extraherad data: läs med gnubok_get_document_content)`}`,
         )
       }
       lines.push('')
-      lines.push('Extraktionen ovan är det vi REDAN VET — fråga inte om leverantör/belopp som står där. Räcker den inte (t.ex. saknar momsbelopp), läs underlaget med gnubok_get_document_content(document_id=…).')
+      lines.push('Extraktionen ovan är det vi REDAN VET: fråga inte om leverantör/belopp som står där. Räcker den inte (t.ex. saknar momsbelopp), läs underlaget med gnubok_get_document_content(document_id=…).')
     }
 
     if (captured.period_status) {
@@ -253,18 +253,18 @@ export const verifikationDraft = defineAgentIntent<
         })`,
       )
       if (captured.period_status.status === 'locked' || captured.period_status.status === 'closed') {
-        lines.push('PERIODEN ÄR LÅST — ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden under Bokföring → Räkenskapsår om datumet måste stå kvar.')
+        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden under Bokföring → Räkenskapsår om datumet måste stå kvar.')
       }
     }
     lines.push('')
     lines.push('Arbetssätt:')
-    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta i Dokumentinkorgen med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv — det är just det du hjälper till med.')
-    lines.push('2. Föreslå rätt BAS-konton utifrån underlaget och beskrivningen. Syns en motpart — kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ tidigare mönster.')
+    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta i Dokumentinkorgen med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
+    lines.push('2. Föreslå rätt BAS-konton utifrån underlaget och beskrivningen. Syns en motpart: kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ tidigare mönster.')
     lines.push('3. Säkerställ att debet = kredit. Förklara varje rad kort (i kategori-/kontonamn, inte kontonummer).')
-    lines.push('4. Är detta egentligen en kund-/leverantörsfaktura eller en bankrad? Be användaren matcha den istället — direktbokning skapar dubbletter.')
+    lines.push('4. Är detta egentligen en kund-/leverantörsfaktura eller en bankrad? Be användaren matcha den istället: direktbokning skapar dubbletter.')
     lines.push('5. Skapa verifikationen:')
-    lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget i Dokumentinkorgen — skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
-    lines.push('   • BEFINTLIGT utkast (visas ovan): föreslå konton/moms och kontrollera balansen så att användaren kan färdigställa utkastet i formuläret. Staga INTE en ny verifikation för ett utkast som redan finns — det skapar en dubblett.')
+    lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget i Dokumentinkorgen: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
+    lines.push('   • BEFINTLIGT utkast (visas ovan): föreslå konton/moms och kontrollera balansen så att användaren kan färdigställa utkastet i formuläret. Staga INTE en ny verifikation för ett utkast som redan finns: det skapar en dubblett.')
     lines.push('')
     lines.push('Svara på svenska, kort och konkret.')
     return lines.join('\n')

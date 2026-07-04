@@ -5,7 +5,7 @@ import { parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 // Mocks. extract-invoice-fields is the AI call we want to assert is NOT
-// invoked when the gate trips. uploadDocument is the storage write — we
+// invoked when the gate trips. uploadDocument is the storage write: we
 // short-circuit it to a synthetic doc row.
 vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', async () => {
   const actual = await vi.importActual<
@@ -99,7 +99,7 @@ async function makePdfBuffer(pageCount: number): Promise<Uint8Array> {
   return pdf.save()
 }
 
-// createMockRequest hard-codes application/json — build the multipart Request
+// createMockRequest hard-codes application/json: build the multipart Request
 // directly so the formData() parse on the server side succeeds.
 function makeMultipartRequest(form: FormData): Request {
   return new Request('http://localhost:3000/upload', {
@@ -120,7 +120,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('POST /upload — page-count gate (issue #553)', () => {
+describe('POST /upload: page-count gate (issue #553)', () => {
   it('skips extraction and marks the row as skipped when PDF has more than 3 pages', async () => {
     const captured: { row?: Record<string, unknown> } = {}
     const supabase = makeSupabase(captured)

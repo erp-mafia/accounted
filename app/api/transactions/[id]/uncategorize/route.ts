@@ -57,7 +57,7 @@ export async function POST(
     return NextResponse.json({ error: 'Journal entry is not posted' }, { status: 400 })
   }
 
-  // Storno reversal (legally compliant — never deletes)
+  // Storno reversal (legally compliant: never deletes)
   try {
     await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
   } catch (err) {

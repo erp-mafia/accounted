@@ -9,7 +9,7 @@
  *   - All other users with the flag unset (legacy email/password signups) →
  *     set has_password = true. They have a real password.
  *
- *   - Anyone with the flag already set is left alone — fully idempotent.
+ *   - Anyone with the flag already set is left alone: fully idempotent.
  *
  * Usage:
  *   npx tsx scripts/backfill-has-password.ts            # apply

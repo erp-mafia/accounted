@@ -2,7 +2,7 @@
 	reverse_proxy app:3000
 
 	# HSTS: lock clients onto HTTPS for one year.
-	# `preload` is intentionally omitted — submission to browser preload lists
+	# `preload` is intentionally omitted: submission to browser preload lists
 	# is irreversible on short timescales (months of lead time to remove a
 	# domain). Operators who want preload eligibility can add the directive
 	# after committing to HTTPS-only permanently and submitting via

@@ -17,7 +17,7 @@ export async function POST(request: Request) {
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // VIES is a live external call to the EU Commission — block in the sandbox
+  // VIES is a live external call to the EU Commission: block in the sandbox
   // so the demo can't generate background traffic against it.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked

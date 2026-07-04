@@ -57,7 +57,7 @@ describe('computeAnnualDepreciation', () => {
   })
 
   it('pro-rates first year when acquired mid-period', () => {
-    // Acquired July 1, full year period: window = Jul 1 – Dec 31 = 184 days
+    // Acquired July 1, full year period: window = Jul 1: Dec 31 = 184 days
     // out of 365 ≈ 0.5041. Annual depreciation 12_000 × 0.5041 ≈ 6_049
     const asset = makeAsset({ acquisition_date: '2025-07-01' })
     const result = computeAnnualDepreciation(asset, FULL_YEAR)
@@ -68,7 +68,7 @@ describe('computeAnnualDepreciation', () => {
 
   it('pro-rates final year when life ends mid-period', () => {
     // 5-year asset acquired 2021-07-01. End of life = 2026-07-01. For fiscal
-    // year 2026 (Jan 1 – Dec 31) only 181 days are inside the asset's life.
+    // year 2026 (Jan 1: Dec 31) only 181 days are inside the asset's life.
     const asset = makeAsset({
       acquisition_date: '2021-07-01',
       useful_life_months: 60,
@@ -93,7 +93,7 @@ describe('computeAnnualDepreciation', () => {
   })
 
   it('pro-rates when asset is disposed mid-period', () => {
-    // Disposed June 30 of the fiscal year — half-year depreciation.
+    // Disposed June 30 of the fiscal year: half-year depreciation.
     const asset = makeAsset({
       disposed_at: '2025-06-30',
       disposed_proceeds: 5_000,
@@ -105,7 +105,7 @@ describe('computeAnnualDepreciation', () => {
   })
 
   it('returns 0 when asset is fully depreciated before period start', () => {
-    // 5-year asset acquired 2018-01-01 — fully depreciated by 2023-01-01.
+    // 5-year asset acquired 2018-01-01: fully depreciated by 2023-01-01.
     const asset = makeAsset({ acquisition_date: '2018-01-01' })
     const result = computeAnnualDepreciation(asset, FULL_YEAR)
     expect(result.amount).toBe(0)
@@ -147,7 +147,7 @@ describe('computeAnnualDepreciation', () => {
       period_end: '2026-12-31',
     })
     // 30 days out of 365 of a 12_000 annual = ~986. The buggy version would
-    // have computed ~1_117 (34 days) — the gap detects the regression.
+    // have computed ~1_117 (34 days): the gap detects the regression.
     expect(result.amount).toBeGreaterThan(950)
     expect(result.amount).toBeLessThan(1_020)
   })
@@ -158,12 +158,12 @@ describe('computeAnnualDepreciation', () => {
 // ============================================================
 //
 // Swedish practice: declining methods take the full annual amount regardless
-// of acquisition month (K2 10.23 — "Full annual amount regardless of partial
+// of acquisition month (K2 10.23: "Full annual amount regardless of partial
 // year"). The engine therefore does NOT pro-rate by day-overlap for these
 // methods. Disposal during the period still yields the full year because the
 // disposal entry zeroes out the remaining book value separately.
 
-describe('computeAnnualDepreciation — declining_balance_30 (räkenskapsenlig huvudregel)', () => {
+describe('computeAnnualDepreciation: declining_balance_30 (räkenskapsenlig huvudregel)', () => {
   it('year 1: 100 000 kr × 30 % = 30 000 kr (no prior accumulated)', () => {
     const asset = makeAsset({
       acquisition_cost: 100_000,
@@ -193,7 +193,7 @@ describe('computeAnnualDepreciation — declining_balance_30 (räkenskapsenlig h
   })
 
   it('does NOT pro-rate for mid-year acquisition (full annual amount)', () => {
-    // Acquired July 1 — linear would pro-rate to ~50 %. Declining methods
+    // Acquired July 1: linear would pro-rate to ~50 %. Declining methods
     // take the full year amount per K2 10.23 and tax practice.
     const asset = makeAsset({
       acquisition_cost: 100_000,
@@ -227,7 +227,7 @@ describe('computeAnnualDepreciation — declining_balance_30 (räkenskapsenlig h
   })
 })
 
-describe('computeAnnualDepreciation — declining_balance_20 (kompletteringsregel, byggnader)', () => {
+describe('computeAnnualDepreciation: declining_balance_20 (kompletteringsregel, byggnader)', () => {
   it('year 1: 1 000 000 kr building × 20 % = 200 000', () => {
     const asset = makeAsset({
       category: 'building',
@@ -253,7 +253,7 @@ describe('computeAnnualDepreciation — declining_balance_20 (kompletteringsrege
   })
 })
 
-describe('computeAnnualDepreciation — restvardesavskrivning_25 (IL 18 kap 13§ st.3)', () => {
+describe('computeAnnualDepreciation: restvardesavskrivning_25 (IL 18 kap 13§ st.3)', () => {
   it('year 1: (100 000 − 20 000 restvärde) × 25 % = 20 000', () => {
     const asset = makeAsset({
       acquisition_cost: 100_000,
@@ -275,7 +275,7 @@ describe('computeAnnualDepreciation — restvardesavskrivning_25 (IL 18 kap 13§
     expect(result.amount).toBe(15_000)
   })
 
-  it('floors at restvärde — book value already at floor returns 0', () => {
+  it('floors at restvärde: book value already at floor returns 0', () => {
     const asset = makeAsset({
       acquisition_cost: 100_000,
       depreciation_method: 'restvardesavskrivning_25',
@@ -300,7 +300,7 @@ describe('computeAnnualDepreciation — restvardesavskrivning_25 (IL 18 kap 13§
     }
     const finalBookValue = 100_000 - accumulated
     expect(finalBookValue).toBeGreaterThanOrEqual(20_000)
-    // Should be tracking toward the floor — within a kr or two after 10 years.
+    // Should be tracking toward the floor: within a kr or two after 10 years.
     expect(finalBookValue).toBeLessThan(26_000)
   })
 
@@ -316,7 +316,7 @@ describe('computeAnnualDepreciation — restvardesavskrivning_25 (IL 18 kap 13§
     expect(result.proRated).toBe(false)
   })
 
-  it('treats restvarde_target=null as 0 (defensive — DB CHECK should prevent this state)', () => {
+  it('treats restvarde_target=null as 0 (defensive: DB CHECK should prevent this state)', () => {
     const asset = makeAsset({
       acquisition_cost: 100_000,
       depreciation_method: 'restvardesavskrivning_25',

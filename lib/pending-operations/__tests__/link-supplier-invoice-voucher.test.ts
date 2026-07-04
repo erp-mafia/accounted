@@ -6,7 +6,7 @@
  * 'link_supplier_invoice_voucher' pending_operation; this dispatcher picks it up
  * and the executor delegates to linkSupplierInvoiceToVoucher (the atomic
  * link_supplier_invoice_to_voucher RPC). The RPC itself is covered by
- * lib/invoices/__tests__/supplier-voucher-matching{,.pg}.test.ts — these tests
+ * lib/invoices/__tests__/supplier-voucher-matching{,.pg}.test.ts: these tests
  * focus on the dispatcher/executor wiring + status mapping.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

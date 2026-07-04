@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     .eq('is_active', true)
     .order('priority', { ascending: false })
 
-  // Counterparty-keyed history from past categorized transactions — the
+  // Counterparty-keyed history from past categorized transactions: the
   // suggestion engine only surfaces history tied to the SAME merchant
   // (global frequency padding produced identical low-confidence spreads).
   const { data: historicalTxns } = await supabase

@@ -13,7 +13,7 @@ import { getLibrarySections, type ReportDescriptor } from '@/lib/reports/catalog
 import type { EntityType } from '@/types'
 
 /**
- * The report library — the calm landing for /reports. Reports grouped by
+ * The report library: the calm landing for /reports. Reports grouped by
  * accounting taxonomy, each section a single DataList. One report = one row =
  * one destination; no data preview, so the landing stays a fast index.
  */

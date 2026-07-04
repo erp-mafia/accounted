@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { makeTaxCode } from '@/tests/helpers'
 
 // ============================================================
-// Mock — separate client (no .then) from query builder (thenable)
+// Mock: separate client (no .then) from query builder (thenable)
 // ============================================================
 
 let resultIdx: number
@@ -88,9 +88,9 @@ describe('calculateMomsFromTaxCodes', () => {
     ]
 
     results = [
-      // 0: journal lines query (thenable — no .single())
+      // 0: journal lines query (thenable: no .single())
       { data: lines, error: null },
-      // 1: getTaxCodes query (thenable — no .single())
+      // 1: getTaxCodes query (thenable: no .single())
       { data: [mp1, ip1], error: null },
     ]
 

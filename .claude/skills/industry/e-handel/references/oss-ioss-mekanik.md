@@ -1,16 +1,16 @@
 # OSS- och IOSS-mekanik
 
-## OSS — unionsordningen för distansförsäljning
+## OSS: unionsordningen för distansförsäljning
 
 ### Registreringsförfarande
-- Anmälan via Skatteverkets e-tjänst "Moms — särskilda ordningar" (kräver BankID och momsregistrering i Sverige).
+- Anmälan via Skatteverkets e-tjänst "Moms: särskilda ordningar" (kräver BankID och momsregistrering i Sverige).
 - Ikraftträdande: från första dagen i nästkommande kalenderkvartal efter anmälan.
 - Frivillig anmälan under tröskeln 99 680 SEK: bindande i minst två kalenderår.
 - Vid passerande av tröskeln 6 kap. 62 § ML 2023:200: anmälan ska göras senast den 10:e i månaden efter den månad då tröskeln passerades; OSS kan tillämpas retroaktivt från överskridandetransaktionen.
 - Identifieringsstat = Sverige för svenska säljare. Vid flytt av etableringsstat krävs avregistrering + omregistrering.
 
 ### Deklarationsperiod
-- **Kvartalsvis**: Q1 (jan–mar) → deklaration senast 30 april; Q2 → 31 juli; Q3 → 31 oktober; Q4 → 31 januari.
+- **Kvartalsvis**: Q1 (jan-mar) → deklaration senast 30 april; Q2 → 31 juli; Q3 → 31 oktober; Q4 → 31 januari.
 - Betalning samtidigt med deklaration till Skatteverkets särskilda OSS-bankgiro.
 - Noll-deklaration krävs även om ingen omsättning skett under perioden.
 
@@ -35,16 +35,16 @@ Rekommenderad struktur på **2670**:
 
 Motsvarande underkontostruktur på **3106** för försäljningssidan.
 
-## IOSS — importordningen
+## IOSS: importordningen
 
 ### Tillämpningsområde
 - Försändelser från tredjeland till EU-konsument, **verkligt värde ≤ 150 EUR** exkl. punktskattepliktiga varor.
 - Verkligt värde = pris exkl. transport, försäkring och skatter (Tullverkets praxis enligt TFS 2022:5, Unionstullkodexen art. 23).
-- Frivilligt — alternativ är standardimportförfarande där mottagaren betalar moms vid gränsen.
+- Frivilligt: alternativ är standardimportförfarande där mottagaren betalar moms vid gränsen.
 
 ### Registreringsförfarande
 - IOSS-nummer (IM-prefix) tilldelas av Skatteverket vid registrering.
-- Försäljare utanför EU måste utse en EU-baserad förmedlare (mellanman) — den blir solidariskt ansvarig för momsen.
+- Försäljare utanför EU måste utse en EU-baserad förmedlare (mellanman): den blir solidariskt ansvarig för momsen.
 
 ### Deklarationsperiod
 - **Månadsvis**: deklaration + betalning senast sista dagen i månaden efter rapporteringsmånaden.
@@ -58,7 +58,7 @@ Motsvarande underkontostruktur på **3106** för försäljningssidan.
 ### Bokföring
 - Intäkt på **3106** med underkonto per destinationsland.
 - Utgående moms på **2670** med destinationslandets sats.
-- Inget importmomskonto (2615/2645) används — själva importen är momsbefriad vid korrekt IOSS-tillämpning.
+- Inget importmomskonto (2615/2645) används: själva importen är momsbefriad vid korrekt IOSS-tillämpning.
 
 ## Samspel med ordinarie momsdeklaration
 - OSS-omsättning ska **inte** redovisas i ordinarie momsdeklaration (Ruta 35 är för B2B intra-EU varor, ej OSS).

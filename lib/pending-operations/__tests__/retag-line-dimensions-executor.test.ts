@@ -1,5 +1,5 @@
 /**
- * commitRetagLineDimensions — executor tests (dimensions PR6).
+ * commitRetagLineDimensions: executor tests (dimensions PR6).
  *
  * The executor is private to lib/pending-operations/commit.ts and reached
  * through commitPendingOperation, same pattern as
@@ -50,7 +50,7 @@ beforeEach(() => {
   eventBus.clear()
 })
 
-describe('commitPendingOperation: retag_line_dimensions — schema validation', () => {
+describe('commitPendingOperation: retag_line_dimensions, schema validation', () => {
   it('rejects a non-UUID line id at the commit boundary (tampered params)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -120,7 +120,7 @@ describe('commitPendingOperation: retag_line_dimensions — schema validation', 
   })
 })
 
-describe('commitPendingOperation: retag_line_dimensions — execution', () => {
+describe('commitPendingOperation: retag_line_dimensions, execution', () => {
   it('happy path: one RPC call per line, aggregates changed/unchanged', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -133,7 +133,7 @@ describe('commitPendingOperation: retag_line_dimensions — execution', () => {
         line_ids: [uuidAt(1), uuidAt(2)],
         dimensions: { '1': 'KS01', '6': 'P01' },
         reason: 'Retro-taggning av projektet',
-        filter_summary: 'konto 4010, datum 2024-01-01–2024-12-31',
+        filter_summary: 'konto 4010, datum 2024-01-01 till 2024-12-31',
       },
     })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
@@ -145,7 +145,7 @@ describe('commitPendingOperation: retag_line_dimensions — execution', () => {
       failed_count: 0,
       failed: [],
       dimensions: { '1': 'KS01', '6': 'P01' },
-      filter_summary: 'konto 4010, datum 2024-01-01–2024-12-31',
+      filter_summary: 'konto 4010, datum 2024-01-01 till 2024-12-31',
     })
 
     const rpc = supabase.rpc as ReturnType<typeof vi.fn>
@@ -165,7 +165,7 @@ describe('commitPendingOperation: retag_line_dimensions — execution', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 ok
-    enqueue({ data: null, error: { message: 'Perioden är låst — använd rättelseverifikat (storno).' } }) // line 2 fails
+    enqueue({ data: null, error: { message: 'Perioden är låst: använd rättelseverifikat (storno).' } }) // line 2 fails
     enqueue({ data: { changed: true, log_id: 'log-3' }, error: null }) // line 3 ok
     enqueue({ data: null, error: null }) // finalize update
 
@@ -181,7 +181,7 @@ describe('commitPendingOperation: retag_line_dimensions — execution', () => {
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ retagged: 2, unchanged: 0, failed_count: 1 })
     expect(result.data?.failed).toEqual([
-      { line_id: uuidAt(2), error: 'Perioden är låst — använd rättelseverifikat (storno).' },
+      { line_id: uuidAt(2), error: 'Perioden är låst: använd rättelseverifikat (storno).' },
     ])
     expect(supabase.rpc).toHaveBeenCalledTimes(3)
   })

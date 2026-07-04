@@ -28,7 +28,7 @@ const expiredTokens = {
   provider_company_id: 'acct-1',
 };
 
-describe('resolveConsent — Briox token refresh concurrency', () => {
+describe('resolveConsent: Briox token refresh concurrency', () => {
   let mock: ReturnType<typeof createQueuedMockSupabase>;
 
   beforeEach(() => {
@@ -85,8 +85,8 @@ describe('resolveConsent — Briox token refresh concurrency', () => {
 
     const result = await resolveConsent('co1', 'c1');
 
-    // Must use the persisted fresh tokens, NOT call Briox /tokenrefresh again
-    // — a second rotation would invalidate the winner's pair.
+    // Must use the persisted fresh tokens, NOT call Briox /tokenrefresh again:
+    // a second rotation would invalidate the winner's pair.
     expect(result.accessToken).toBe('winner-access');
     expect(result.providerCompanyId).toBe('acct-1');
     expect(refreshBrioxToken).toHaveBeenCalledTimes(1);
@@ -97,7 +97,7 @@ describe('resolveConsent — Briox token refresh concurrency', () => {
     mock.enqueue({ data: [expiredTokens] }); // expired token row
     mock.enqueue({ data: null, error: { message: 'connection reset' } }); // update failed
 
-    // Briox has already rotated the tokens at this point — the stored pair is
+    // Briox has already rotated the tokens at this point: the stored pair is
     // dead, so the user must reconnect with fresh credentials.
     await expect(resolveConsent('co1', 'c1')).rejects.toMatchObject({
       status: 500,
@@ -130,8 +130,8 @@ describe('resolveConsent — Briox token refresh concurrency', () => {
     mock.enqueue({ data: [expiredTokens] }); // expired token row
 
     // Fortnox answers the token endpoint with error_missing_license when the
-    // customer's integration license has lapsed. Re-auth can't revive it — the
-    // license must be re-ordered first — so it gets its own code rather than the
+    // customer's integration license has lapsed. Re-auth can't revive it: the
+    // license must be re-ordered first: so it gets its own code rather than the
     // generic "reconnect" PROVIDER_AUTH_EXPIRED.
     vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(
       new Error(
@@ -151,7 +151,7 @@ describe('resolveConsent — Briox token refresh concurrency', () => {
     mock.enqueue({ data: [fortnoxConsent] }); // consent lookup
     mock.enqueue({ data: [expiredTokens] }); // expired token row
 
-    // A plain expired/revoked grant IS revivable by reconnecting — it must not
+    // A plain expired/revoked grant IS revivable by reconnecting: it must not
     // be mis-mapped to the license code.
     vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(
       new Error('Fortnox token refresh failed: 400 {"error":"invalid_grant"}'),

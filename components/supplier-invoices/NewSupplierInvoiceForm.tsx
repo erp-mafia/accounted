@@ -147,7 +147,7 @@ function VatRateCell({ value, onChange }: { value: number; onChange: (v: number)
   // controlled input snapping back to a parsed integer.
   const [draft, setDraft] = useState(() => rateToPctString(value))
 
-  // Re-sync from form value only when the field isn't focused — keeps AI
+  // Re-sync from form value only when the field isn't focused: keeps AI
   // prefill / supplier defaults / dropdown picks flowing in without clobbering
   // active typing.
   useEffect(() => {
@@ -169,7 +169,7 @@ function VatRateCell({ value, onChange }: { value: number; onChange: (v: number)
           onChange={(e) => {
             const raw = e.target.value
             // Strict whitelist: digits with at most one decimal separator.
-            // Blocks "2-22", "100-2", "1.2.3", letters, signs — the keystroke
+            // Blocks "2-22", "100-2", "1.2.3", letters, signs: the keystroke
             // is dropped before reaching the draft.
             if (raw !== '' && !/^\d*[.,]?\d*$/.test(raw)) return
             const normalized = raw.replace(',', '.')
@@ -226,7 +226,7 @@ function VatRateCell({ value, onChange }: { value: number; onChange: (v: number)
 
 // Self-assessment rate picker shown in place of the Momssats cell when an
 // invoice is reverse charge. The supplier charges no VAT (the line vat_rate is
-// 0); this is the Swedish statutory rate the buyer self-assesses at — 25%
+// 0); this is the Swedish statutory rate the buyer self-assesses at: 25%
 // huvudregeln for EU services, 12%/6% for reduced-rated services (ML 6 kap 34 §).
 function RcRateSelect({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const t = useTranslations('supplier_invoice_editor')
@@ -260,7 +260,7 @@ export interface NewSupplierInvoiceFormProps {
   inboxItemId?: string | null
   /**
    * Render without page chrome (back button + h1) for use inside
-   * NewSupplierInvoiceDialog — the same convention as JournalEntryForm's
+   * NewSupplierInvoiceDialog: the same convention as JournalEntryForm's
    * `bare`.
    */
   bare?: boolean
@@ -315,7 +315,7 @@ export default function NewSupplierInvoiceForm({
   // overridable per invoice via the toggle in the totals section.
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   // Dimension tagging (kostnadsställe/projekt). Affordances render only when
-  // company_settings.dimensions_enabled — the same UI-visibility gate as
+  // company_settings.dimensions_enabled: the same UI-visibility gate as
   // JournalEntryForm. defaultDims is the invoice-level default bag; per-item
   // bags live on the form's items and merge over it server-side.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
@@ -368,7 +368,7 @@ export default function NewSupplierInvoiceForm({
       payment_reference: '',
       notes: '',
       paid_with_private_funds: false,
-      // account_number is deliberately empty — a silent prefilled expense
+      // account_number is deliberately empty: a silent prefilled expense
       // account (the old '5010' Lokalhyra seed) produced legally wrong
       // verifikat whenever the user didn't notice it. An explicit choice is
       // required; the supplier's default_expense_account fills it when set.
@@ -411,7 +411,7 @@ export default function NewSupplierInvoiceForm({
 
   // Out-of-period guard (mirrors the manual voucher form). A registration JE is
   // only posted at registration time under the accrual method or when the
-  // invoice is marked paid privately — cash method books at payment, so an
+  // invoice is marked paid privately: cash method books at payment, so an
   // out-of-period date is fine there and we stay quiet. periodsLoaded gates the
   // warning so it never flashes before the fiscal periods have been fetched.
   const willBookAtRegistration = accountingMethod === 'accrual' || watchedPaidPrivately
@@ -430,7 +430,7 @@ export default function NewSupplierInvoiceForm({
 
   // One-shot: load inbox item and prefill form. Runs after suppliers are
   // loaded so we can resolve matched_supplier_id to a real picker value.
-  // Gate on `suppliersLoaded`, not `suppliers.length > 0` — otherwise the
+  // Gate on `suppliersLoaded`, not `suppliers.length > 0`: otherwise the
   // effect never fires for users who haven't booked a supplier yet and
   // the "Laddar uppgifter från inkorgen…" spinner sticks forever.
   useEffect(() => {
@@ -494,10 +494,10 @@ export default function NewSupplierInvoiceForm({
         // Line items: keep the single empty default if AI returned nothing,
         // otherwise replace it with the extracted lines. When the document
         // states a service window of 2+ calendar months (insurance period,
-        // license term), pre-fill periodisering on every positive line — the
+        // license term), pre-fill periodisering on every positive line: the
         // user sees the panel and can remove it before booking.
         if (extracted.lineItems && extracted.lineItems.length > 0) {
-          // AI-extracted values are untrusted input — only accept strict
+          // AI-extracted values are untrusted input: only accept strict
           // ISO-8601 dates before they reach form state (and later the API).
           const isIsoDate = (v: unknown): v is string =>
             typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
@@ -521,7 +521,7 @@ export default function NewSupplierInvoiceForm({
                 description: li.description || '',
                 amount,
                 // Extraction never suggests accounts (forcibly nulled at parse
-                // time) and a silent default misbooks — leave empty so the user
+                // time) and a silent default misbooks: leave empty so the user
                 // (or the supplier default) makes the call.
                 account_number: '',
                 vat_rate: vatRateFromAi(li.vatRate),
@@ -537,7 +537,7 @@ export default function NewSupplierInvoiceForm({
           )
         }
 
-        // Treat the AI prefill as the new baseline — otherwise the unsaved-
+        // Treat the AI prefill as the new baseline: otherwise the unsaved-
         // changes prompt fires the moment the user navigates away, even if
         // they didn't touch anything.
         reset(getValues())
@@ -560,7 +560,7 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inboxItemId, suppliersLoaded, suppliers])
 
-  // Auto-fill due date and defaults when supplier is selected — but never
+  // Auto-fill due date and defaults when supplier is selected: but never
   // overwrite a value the AI already filled in for us.
   useEffect(() => {
     if (!watchedSupplierId) return
@@ -575,7 +575,7 @@ export default function NewSupplierInvoiceForm({
       setValue('due_date', due.toISOString().split('T')[0])
     }
     if (supplier.default_expense_account && fields.length > 0) {
-      // Fill every row the user hasn't assigned yet — an empty account is the
+      // Fill every row the user hasn't assigned yet: an empty account is the
       // only signal needed (rows start empty by design, no seeded default).
       const items = getValues('items')
       items.forEach((row, i) => {
@@ -598,7 +598,7 @@ export default function NewSupplierInvoiceForm({
   // date changes too. Never overwrites a user-entered rate. Reuses the
   // watchedInvoiceDate declared above for the AI-filled-indicator flag.
   // The "user has manually edited the rate" flag is scoped *per currency*.
-  // Switching from EUR (rate 11.8 edited by hand) to USD must re-fetch — the
+  // Switching from EUR (rate 11.8 edited by hand) to USD must re-fetch: the
   // EUR rate is meaningless for a USD invoice. Tracking last-fetched currency
   // lets us reset the touched flag on a currency switch while still honoring
   // a manual edit when only the invoice date changes within the same currency.
@@ -612,7 +612,7 @@ export default function NewSupplierInvoiceForm({
       return
     }
     if (lastFxCurrencyRef.current !== watchedCurrency) {
-      // Currency switched — drop the previous currency's manual-edit flag.
+      // Currency switched: drop the previous currency's manual-edit flag.
       userTouchedRateRef.current = false
       lastFxCurrencyRef.current = watchedCurrency
     }
@@ -631,7 +631,7 @@ export default function NewSupplierInvoiceForm({
         if (userTouchedRateRef.current) return
         setValue('exchange_rate', String(Math.round(data.rate * 10000) / 10000))
       } catch {
-        // Non-critical — user can type the rate manually.
+        // Non-critical: user can type the rate manually.
       }
     })()
     return () => { cancelled = true }
@@ -666,7 +666,7 @@ export default function NewSupplierInvoiceForm({
       const res = await fetch('/api/settings')
       const { data } = await res.json()
       if (data?.entity_type) setEntityType(data.entity_type)
-      // Cash method books at payment, not registration — drives whether the
+      // Cash method books at payment, not registration: drives whether the
       // out-of-period warning is relevant (see willBookAtRegistration below).
       if (data?.accounting_method === 'cash' || data?.accounting_method === 'accrual') {
         setAccountingMethod(data.accounting_method)
@@ -684,7 +684,7 @@ export default function NewSupplierInvoiceForm({
       const { data } = await res.json()
       setPeriods(data || [])
     } catch {
-      // Non-critical — the server still hard-blocks an out-of-period booking.
+      // Non-critical: the server still hard-blocks an out-of-period booking.
     } finally {
       setPeriodsLoaded(true)
     }
@@ -701,8 +701,8 @@ export default function NewSupplierInvoiceForm({
 
   // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
   // kostnaden direkt mot ägarkontot och kan inte periodiseras. Omvänd
-  // skattskyldighet kan inte heller periodiseras — kostnadsraden utgör
-  // momsunderlaget (ruta 20–32) och får inte flyttas till ett interimskonto.
+  // skattskyldighet kan inte heller periodiseras: kostnadsraden utgör
+  // momsunderlaget (ruta 20-32) och får inte flyttas till ett interimskonto.
   const canUseAccrual =
     accountingMethod === 'accrual' && !watchedPaidPrivately && !watchedReverseCharge
 
@@ -835,7 +835,7 @@ export default function NewSupplierInvoiceForm({
   const itemTotals = (watchedItems || []).map((item) => {
     const lineTotal = Math.round((item.amount || 0) * 100) / 100
     // Reverse charge: VAT is self-assessed at reverse_charge_rate (25% default),
-    // not the line's vat_rate (which is 0 — the supplier charged nothing).
+    // not the line's vat_rate (which is 0: the supplier charged nothing).
     const effectiveRate = watchedReverseCharge ? (item.reverse_charge_rate ?? 0.25) : (item.vat_rate || 0)
     const vatAmount = Math.round(lineTotal * effectiveRate * 100) / 100
     return { lineTotal, vatAmount }
@@ -844,7 +844,7 @@ export default function NewSupplierInvoiceForm({
   const totalVat = itemTotals.reduce((sum, t) => sum + t.vatAmount, 0)
   // Reverse charge: supplier never invoices VAT, so it doesn't roll into the
   // payable total. The VAT is still accounted for via 2614 / 2645 in
-  // bookkeeping — the line stays in the breakdown for transparency.
+  // bookkeeping: the line stays in the breakdown for transparency.
   const payableVat = watchedReverseCharge ? 0 : totalVat
   const total = Math.round((subtotal + payableVat) * 100) / 100
 
@@ -916,7 +916,7 @@ export default function NewSupplierInvoiceForm({
 
   function buildPayload(data: FormData) {
     const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
-    // When paid privately, due_date is irrelevant — but the API still requires
+    // When paid privately, due_date is irrelevant: but the API still requires
     // a YYYY-MM-DD value. Default to invoice_date so the field passes validation.
     const dueDate = data.paid_with_private_funds && !data.due_date
       ? data.invoice_date
@@ -935,7 +935,7 @@ export default function NewSupplierInvoiceForm({
       notes: data.notes || undefined,
       paid_with_private_funds: data.paid_with_private_funds,
       ore_rounding: oreRounding,
-      // Invoice-level default dimensions (kostnadsställe/projekt) — only sent
+      // Invoice-level default dimensions (kostnadsställe/projekt): only sent
       // when the user actually picked something.
       ...(Object.keys(defaultDims).length > 0 ? { default_dimensions: defaultDims } : {}),
       items: data.items.map((item) => ({
@@ -948,7 +948,7 @@ export default function NewSupplierInvoiceForm({
         reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
         // Periodisering: only sent when the row has a complete period AND the
         // flow supports it (kontantmetod/eget utlägg would be rejected by the
-        // API — an AI prefill must never block those submits).
+        // API: an AI prefill must never block those submits).
         ...(canUseAccrual && item.accrual_period_start && item.accrual_period_end
           ? {
               accrual_period_start: item.accrual_period_start,
@@ -956,7 +956,7 @@ export default function NewSupplierInvoiceForm({
               accrual_balance_account: item.accrual_balance_account || undefined,
             }
           : {}),
-        // Per-item dimensions override — only when the bag carries values
+        // Per-item dimensions override: only when the bag carries values
         // (an open-but-empty panel means "inherit the invoice default").
         ...(item.dimensions && Object.keys(item.dimensions).length > 0
           ? { dimensions: item.dimensions }
@@ -1005,10 +1005,10 @@ export default function NewSupplierInvoiceForm({
     }
   }
 
-  // Single submit endpoint chooser — convert when we came from inbox, plain
+  // Single submit endpoint chooser: convert when we came from inbox, plain
   // POST otherwise. Both endpoints validate the same CreateSupplierInvoiceSchema
   // and return the same canonical error envelope ({ error: { code, message,
-  // details } }) — including the recoverable duplicate-number 409.
+  // details } }): including the recoverable duplicate-number 409.
   async function postCreate(data: FormData): Promise<{
     ok: boolean
     status: number
@@ -1084,7 +1084,7 @@ export default function NewSupplierInvoiceForm({
       return
     }
 
-    // Privately-paid skips the AB review dialog — the toggle itself is the
+    // Privately-paid skips the AB review dialog: the toggle itself is the
     // explicit user intent, and the resulting verifikat is just expense + VAT
     // against the owner account (2893/2018). Same path for EF.
     if (isEF || data.paid_with_private_funds) {
@@ -1105,7 +1105,7 @@ export default function NewSupplierInvoiceForm({
 
     if (!ok) {
       // EF/direct path also hits the duplicate-number 409 (e.g. converting an
-      // inbox receipt whose number was already registered) — offer recovery
+      // inbox receipt whose number was already registered): offer recovery
       // instead of a dead-end toast.
       if (!tryHandleDuplicateConflict(status, result)) {
         handleCreateError(status, result)
@@ -1160,7 +1160,7 @@ export default function NewSupplierInvoiceForm({
       const invoiceId = result.data.id
       const arrivalNumber = result.data.arrival_number
       setShowReview(false)
-      // Clear dirty state — see comment in handleDirectSubmit.
+      // Clear dirty state: see comment in handleDirectSubmit.
       reset(pendingData)
 
       if (pendingTransactionId) {
@@ -1291,7 +1291,7 @@ export default function NewSupplierInvoiceForm({
   // Match-on-create: register the invoice, then match the picked transaction.
   // EF goes straight through (auto-approve included). AB stores the picked
   // transaction and routes through the same review dialog as the plain
-  // register flow — handleConfirm picks up the match step on confirmation.
+  // register flow: handleConfirm picks up the match step on confirmation.
   async function handlePickTransaction(transactionId: string) {
     if (!pendingData) return
     setShowBankPicker(false)
@@ -1519,7 +1519,7 @@ export default function NewSupplierInvoiceForm({
               )}
             </div>
 
-            {/* Invoice-level default dims (kostnadsställe/projekt) — applied to
+            {/* Invoice-level default dims (kostnadsställe/projekt): applied to
                 every generated journal line; per-row bags in Kontering merge on
                 top. Renders only when dimensions are enabled for the company. */}
             {dimensionsEnabled && (
@@ -1568,7 +1568,7 @@ export default function NewSupplierInvoiceForm({
             </Button>
           </CardHeader>
           <CardContent>
-            {/* Valuta & moms — kept inline with the line items because they
+            {/* Valuta & moms: kept inline with the line items because they
                 drive how each row is interpreted. Hidden defaults (SEK +
                 normal moms) collapse to nothing so most users don't see this. */}
             <div className="mb-4 pb-4 border-b grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1916,7 +1916,7 @@ export default function NewSupplierInvoiceForm({
               ))}
             </div>
 
-            {/* AI totals comparison — only when extracted */}
+            {/* AI totals comparison: only when extracted */}
             {extractedData?.totals && (extractedData.totals.subtotal != null || extractedData.totals.total != null) && (
               <div className="mt-4 pt-4 border-t flex flex-wrap gap-2 text-xs">
                 <span className="text-muted-foreground">{t('ai_totals_label')}</span>
@@ -1954,7 +1954,7 @@ export default function NewSupplierInvoiceForm({
                 <span>{t('total_label')}</span>
                 <span className="tabular-nums sm:w-32 text-right">{formatCurrency(total, watchedCurrency)}</span>
               </div>
-              {/* Öresavrundning — display-only rounding of the displayed total to
+              {/* Öresavrundning: display-only rounding of the displayed total to
                   whole kronor (SEK only). The registered amount and the booked
                   verifikat keep the exact öre; this only changes what's shown. */}
               {(watchedCurrency || 'SEK') === 'SEK' && (
@@ -2054,7 +2054,7 @@ export default function NewSupplierInvoiceForm({
         </div>
       </form>
 
-      {/* Review dialog (AB only — also shown after a bank transaction is picked
+      {/* Review dialog (AB only: also shown after a bank transaction is picked
           in the register-and-match flow). */}
       {pendingData && !isEF && showReview && (() => {
         const selectedSupplier = suppliers.find((s) => s.id === pendingData.supplier_id)

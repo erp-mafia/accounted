@@ -9,7 +9,7 @@
  * Notes:
  * - Fields are double-quoted
  * - Two adjacent date columns (Datum + Bokföringsdag) is unique to Länsförsäkringar
- * - No guaranteed header row — detect by structure
+ * - No guaranteed header row: detect by structure
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'

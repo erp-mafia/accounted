@@ -21,16 +21,16 @@ export interface EditableRow {
 export interface OpeningBalanceEditorState {
   rows: EditableRow[]
   totals: { debit: number; credit: number; diff: number; isBalanced: boolean }
-  /** Balanced, no row errors, and at least two lines — safe to book/correct. */
+  /** Balanced, no row errors, and at least two lines: safe to book/correct. */
   canSubmit: boolean
 }
 
 interface OpeningBalanceRowEditorProps {
-  /** Seed rows. Read once on mount (later prop changes are ignored — remount
+  /** Seed rows. Read once on mount (later prop changes are ignored: remount
    *  via `key` or a conditional render to reset the grid). */
   initialRows: EditableRow[]
   /** Fires whenever rows / totals / validity change. Held in a ref internally,
-   *  so it does NOT need to be referentially stable — passing an inline arrow
+   *  so it does NOT need to be referentially stable: passing an inline arrow
    *  is safe and will not cause an update-loop. */
   onChange: (state: OpeningBalanceEditorState) => void
 }
@@ -109,7 +109,7 @@ function dedupeRows(initialRows: EditableRow[]): EditableRow[] {
  * BAS autocomplete, a live debit-credit balance check, blocking of resultat-
  * konton (class 3-8), and a "round to 2099" auto-balance for sub-1-SEK drift.
  *
- * Stateless about WHY it's editing — the wizard seeds it from a parsed file,
+ * Stateless about WHY it's editing: the wizard seeds it from a parsed file,
  * the verifikat correction dialog seeds it from the booked IB's lines. Both
  * read the current rows + validity through `onChange`.
  */

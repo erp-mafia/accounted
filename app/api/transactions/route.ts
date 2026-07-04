@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   }
   const dateFrom = searchParams.get('date_from') || undefined
   const dateTo = searchParams.get('date_to') || undefined
-  // When set, return only ignored rows — used by the reconciliation view to
+  // When set, return only ignored rows: used by the reconciliation view to
   // surface a "Visa ignorerade" undo list. The default (no param) behaviour
   // continues to exclude ignored rows from unmatched results.
   const onlyIgnored = searchParams.get('only_ignored') === 'true'
@@ -67,11 +67,11 @@ export async function GET(request: Request) {
     .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
     .eq('company_id', companyId)
 
-  // unmatched and reconciled are mutually exclusive — unmatched wins if both set
+  // unmatched and reconciled are mutually exclusive: unmatched wins if both set
   if (unmatched) {
     query = query.is('journal_entry_id', null)
     // Hide rows the user has explicitly suppressed from the reconciliation
-    // view. Other callers (e.g. BookDirectlyDialog) also benefit — once
+    // view. Other callers (e.g. BookDirectlyDialog) also benefit: once
     // ignored, the row stops surfacing in the "to book" funnel everywhere.
     if (!onlyIgnored) query = query.eq('is_ignored', false)
   } else if (reconciled) {
@@ -117,7 +117,7 @@ export const POST = withRouteContext(
   'transaction.create',
   async (request, { supabase, companyId, user, log }) => {
     // Pass the request-scoped logger so a rejected payload (e.g. a malformed
-    // date) is recorded server-side — that's where anomaly detection belongs,
+    // date) is recorded server-side: that's where anomaly detection belongs,
     // not in the render-path formatter.
     const validation = await validateBody(request, CreateTransactionSchema, {
       log,
@@ -144,7 +144,7 @@ export const POST = withRouteContext(
 
     if (error) {
       // A DB-level rejection here (e.g. the transactions_date_sane_range CHECK)
-      // is invalid input, not a server fault — surface it as 400 with the PG
+      // is invalid input, not a server fault: surface it as 400 with the PG
       // code so the client maps it to a friendly message.
       return NextResponse.json(
         { error: error.message, code: error.code, type: 'database_error' },

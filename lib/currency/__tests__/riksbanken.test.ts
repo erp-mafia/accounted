@@ -100,7 +100,7 @@ describe('fetchMultipleRates', () => {
     expect(result.get('USD')!.rate).toBe(10.50)
   })
 
-  it('handles partial failure — returns fallback for failed currencies', async () => {
+  it('handles partial failure: returns fallback for failed currencies', async () => {
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce(
         new Response(JSON.stringify([{ value: '11.42', date: '2025-01-15' }]), { status: 200 })

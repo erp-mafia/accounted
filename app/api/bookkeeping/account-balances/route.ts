@@ -38,7 +38,7 @@ export async function GET(request: Request) {
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // Find the fiscal period containing as_of (any state — we want a reference
+  // Find the fiscal period containing as_of (any state: we want a reference
   // saldo even for closed/locked periods).
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')

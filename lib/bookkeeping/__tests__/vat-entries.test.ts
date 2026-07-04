@@ -109,7 +109,7 @@ describe('generateSalesVatLines', () => {
   })
 })
 
-describe('generateReverseChargeLines — EU/non-EU (isDomestic=false)', () => {
+describe('generateReverseChargeLines: EU/non-EU (isDomestic=false)', () => {
   it('debits 2645 and credits 2614 at 25%', () => {
     const lines = generateReverseChargeLines(1000, 0.25, false)
     expect(lines).toHaveLength(2)
@@ -138,7 +138,7 @@ describe('generateReverseChargeLines — EU/non-EU (isDomestic=false)', () => {
   })
 })
 
-describe('generateReverseChargeLines — domestic (isDomestic=true, ML 16 kap)', () => {
+describe('generateReverseChargeLines: domestic (isDomestic=true, ML 16 kap)', () => {
   it('debits 2647 (not 2645) and credits 2614 at 25%', () => {
     const lines = generateReverseChargeLines(1000, 0.25, true)
     expect(lines).toHaveLength(2)
@@ -165,7 +165,7 @@ describe('generateReverseChargeLines — domestic (isDomestic=true, ML 16 kap)',
   })
 })
 
-describe('generateReverseChargeLines — defaults & invariants', () => {
+describe('generateReverseChargeLines: defaults & invariants', () => {
   it('defaults to vatRate=0.25 and isDomestic=false when omitted', () => {
     const lines = generateReverseChargeLines(1000)
     expect(lines[0].account_number).toBe('2645')

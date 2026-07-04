@@ -2,7 +2,7 @@
  * POST /api/v1/companies/{companyId}/transactions/batch-categorize
  *
  * Apply a single categorization to up to 100 transactions in one call.
- * Partial-success semantics — per-item failure does not roll back items
+ * Partial-success semantics: per-item failure does not roll back items
  * that succeeded. Each item is processed through the same orchestration
  * as the single :categorize endpoint, so it can fail individually for any
  * of the same reasons (invalid template, invalid mapping, race, etc.).
@@ -76,10 +76,10 @@ registerEndpoint({
   useWhen:
     'You have many transactions to categorize with the same logic (e.g. apply a booking template across a queue, mark a batch as private, override accounts on a series).',
   doNotUseFor:
-    'Categorizing transactions with mixed logic — make multiple :categorize calls. Auto-categorization via templates — handled inside `ingest` for matching rows, no separate endpoint needed.',
+    'Categorizing transactions with mixed logic: make multiple :categorize calls. Auto-categorization via templates: handled inside `ingest` for matching rows, no separate endpoint needed.',
   pitfalls: [
     'Max 100 items per call. Sequential processing.',
-    'Idempotency-Key covers the WHOLE batch — replays return the cached full response.',
+    'Idempotency-Key covers the WHOLE batch: replays return the cached full response.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
   ],
   example: {
@@ -205,7 +205,7 @@ async function categorizeOne(
   // partial-success branch silently marks the row bokförd with no
   // verifikation. Validate in both dry-run and live paths so previews
   // surface the same actionable error. Standard BAS accounts merely absent
-  // from the chart pass — the engine seeds them on demand.
+  // from the chart pass: the engine seeds them on demand.
   const missingAccounts = await findUnresolvableAccounts(
     supabase,
     companyId,
@@ -269,7 +269,7 @@ async function categorizeOne(
     }
   }
 
-  // Period-lock pre-check — same rationale as the single :categorize route.
+  // Period-lock pre-check: same rationale as the single :categorize route.
   // A locked period surfaces as PERIOD_LOCKED on the per-item error rather
   // than a generic INTERNAL_ERROR from the trigger exception.
   const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
@@ -309,7 +309,7 @@ async function categorizeOne(
     // AccountsNotInChartError means an account was deactivated between our
     // pre-validation and the engine call (rare race). Return the per-item
     // failure WITHOUT the transaction update below so the row stays in
-    // "Att bokföra" — partial-success on a missing-account error would
+    // "Att bokföra": partial-success on a missing-account error would
     // mark it bokförd with no verifikation.
     if (err instanceof AccountsNotInChartError) {
       return {
@@ -350,7 +350,7 @@ async function categorizeOne(
     }
   }
   if ((!updated || updated.length === 0) && journalEntryId) {
-    // CAS race — storno the orphan (BFL 5 kap 5 §). Direct status flip
+    // CAS race: storno the orphan (BFL 5 kap 5 §). Direct statusflip
     // would be blocked by enforce_journal_entry_immutability since the
     // engine writes the JE as posted. Same fix as the single :categorize
     // route. Storno keeps the verifikationsnummer series unbroken.

@@ -76,7 +76,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
         date_to: '2024-12-31',
         limit: '10',
         offset: '5',
-        // Strict period filtering — exercises the PostgREST path, not the RPC.
+        // Strict period filtering: exercises the PostgREST path, not the RPC.
         include_related: 'false',
       },
     })

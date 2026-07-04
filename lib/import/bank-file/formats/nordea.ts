@@ -145,7 +145,7 @@ function parseCSVLine(line: string, delimiter: string): string[] {
     }
   }
 
-  // Push last field — if inQuotes is still true, the quote was unclosed.
+  // Push last field: if inQuotes is still true, the quote was unclosed.
   // Treat the accumulated data as-is rather than silently merging fields.
   fields.push(current)
   return fields

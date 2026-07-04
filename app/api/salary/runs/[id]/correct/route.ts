@@ -62,7 +62,7 @@ export async function POST(
     try {
       await reverseEntry(supabase, companyId, user.id, entryId)
     } catch (err) {
-      // Entry may already be reversed — continue
+      // Entry may already be reversed: continue
       if (err instanceof EntryAlreadyReversedError) continue
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed

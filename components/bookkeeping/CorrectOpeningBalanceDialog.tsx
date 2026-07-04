@@ -32,7 +32,7 @@ interface Props {
 let seedIdCounter = 0
 
 // Map the booked IB's lines into editable rows. account_name isn't stored on
-// the line, so resolve it from BAS for display (cosmetic — only account_number
+// the line, so resolve it from BAS for display (cosmetic: only account_number
 // + amounts are sent on save).
 function seedRowsFromEntry(entry: JournalEntry): EditableRow[] {
   const lines = ((entry.lines || []) as JournalEntryLine[])
@@ -134,12 +134,12 @@ export default function CorrectOpeningBalanceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Storno explanation — a booked verifikat can't be edited in place */}
+        {/* Storno explanation: a booked verifikat can't be edited in place */}
         <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
           <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
           <p className="text-sm text-warning">
             En bokförd verifikation kan inte ändras direkt (Bokföringslagen). När du sparar stornas
-            den gamla IB-verifikationen och en ny bokförs — båda sparas som en spårbar rättelse.
+            den gamla IB-verifikationen och en ny bokförs: båda sparas som en spårbar rättelse.
           </p>
         </div>
 

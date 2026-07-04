@@ -111,7 +111,7 @@ export function generateConsentExpiryEmailText(data: ConsentExpiryEmailData): st
  */
 export function generateConsentExpiryEmailSubject(data: ConsentExpiryEmailData): string {
   if (data.isExpired) {
-    return `Banksynkronisering stoppad — ${data.bankName}`
+    return `Banksynkronisering stoppad - ${data.bankName}`
   }
-  return `Banksamtycke löper ut om ${data.daysUntilExpiry} ${data.daysUntilExpiry === 1 ? 'dag' : 'dagar'} — ${data.bankName}`
+  return `Banksamtycke löper ut om ${data.daysUntilExpiry} ${data.daysUntilExpiry === 1 ? 'dag' : 'dagar'} - ${data.bankName}`
 }

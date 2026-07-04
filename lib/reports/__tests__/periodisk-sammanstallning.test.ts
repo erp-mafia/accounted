@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue (mirrors vat-declaration.test.ts)
+// Mock: sequential result queue (mirrors vat-declaration.test.ts)
 // ============================================================
 
 let resultIdx: number
@@ -404,7 +404,7 @@ describe('generatePeriodiskSammanstallning', () => {
 describe('reconcilePsAgainstVatDeclaration', () => {
   it('returns null matches when periods do not coincide', async () => {
     const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'quarterly', 2025, 2)
-    // No data calls expected — function bails before invoking calculateVatDeclaration.
+    // No data calls expected: function bails before invoking calculateVatDeclaration.
     results = []
     const reconciled = await reconcilePsAgainstVatDeclaration(supabase, 'c1', report, 'monthly')
     expect(reconciled.reconciliation.matches).toBeNull()

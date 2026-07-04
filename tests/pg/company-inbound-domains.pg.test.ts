@@ -108,7 +108,7 @@ describe('company_inbound_domains constraints', () => {
   it('enforces one owner per domain globally, case-insensitively', async () => {
     const { companyId } = await seedCompany()
     const other = await seedCompany()
-    // Random per run — superuser seeds persist across runs on a local DB.
+    // Random per run: superuser seeds persist across runs on a local DB.
     const domain = `unique-claim-${randomUUID().slice(0, 8)}.example`
     await insertDomain(companyId, { domain })
 

@@ -1,11 +1,11 @@
 /**
- * Dimension resolver — the single place line dimensions are normalized
+ * Dimension resolver: the single place line dimensions are normalized
  * (dev_docs/dimensions_implementation_plan.md).
  *
  * Storage model: journal_entry_lines.dimensions is a JSONB map keyed by SIE
  * dimension number ({"1":"KS01","6":"P001"}) and is the single source of
  * truth. Since the PR9 cutover (20260702230000) the cost_center/project
- * columns are GENERATED ALWAYS from keys '1'/'6' — writers set only the
+ * columns are GENERATED ALWAYS from keys '1'/'6': writers set only the
  * bag; writing the mirror columns explicitly errors at the database.
  */
 
@@ -23,7 +23,7 @@ export const DIM_PROJECT = '6'
 export type LineDimensions = Record<string, string>
 
 /**
- * THE schema for a dimensions bag ({sie_dim_no: object_code}) — the single
+ * THE schema for a dimensions bag ({sie_dim_no: object_code}): the single
  * source of truth for its constraints. The API layer
  * (CreateJournalEntryLineSchema) and the staged pending-operations path
  * (coerceDimensionsBag) both use this exact schema, so the two validation
@@ -63,7 +63,7 @@ export function normalizeLineDimensions(line: DimensionAliasInput): LineDimensio
       const dimNo = String(Number(key))
       const trimmed = typeof value === 'string' ? value.trim() : ''
       if (!trimmed) {
-        // Explicit empty string in the bag means "clear this dimension" — it
+        // Explicit empty string in the bag means "clear this dimension": it
         // must also override a non-empty alias, so remove any alias-filled key.
         delete out[dimNo]
         continue
@@ -77,14 +77,14 @@ export function normalizeLineDimensions(line: DimensionAliasInput): LineDimensio
 
 /**
  * Boundary validator for an untyped dimensions bag (staged pending-operation
- * params, tool payloads). Delegates to DimensionsBagSchema — the exact schema
- * the API layer uses — so the staged path cannot drift from API validation.
+ * params, tool payloads). Delegates to DimensionsBagSchema (the exact schema
+ * the API layer uses) so the staged path cannot drift from API validation.
  * Whole-bag semantics: a bag containing ANY invalid entry is rejected
  * (returns undefined) rather than partially salvaged; staged payloads were
  * already schema-validated at staging time, so an invalid entry here means
- * drift or tampering — booking then proceeds without dimensions, which are
+ * drift or tampering: booking then proceeds without dimensions, which are
  * never load-bearing for validity. Interior normalization
- * (normalizeLineDimensions) stays permissive on charset by design — it must
+ * (normalizeLineDimensions) stays permissive on charset by design: it must
  * preserve legacy DB values verbatim on reversal/correction; this function is
  * the input gate.
  */
@@ -99,7 +99,7 @@ export function coerceDimensionsBag(raw: unknown): LineDimensions | undefined {
 /**
  * Merge a line/item-level dimensions bag over a document-level default
  * (producers, PR7: invoice default_dimensions under item.dimensions). The
- * override wins per key; an explicit empty-string override clears the key —
+ * override wins per key; an explicit empty-string override clears the key:
  * the same clear-semantics as normalizeLineDimensions, which does the final
  * cleanup. Returns undefined when the merged bag is empty so callers can
  * assign it to an optional field without writing `{}` noise.
@@ -120,7 +120,7 @@ export function mergeDimensionBags(
  * that aggregate amounts per account can keep items with different dimension
  * tags on separate journal lines (account + bag = the aggregation identity).
  * Key order is canonicalized; '' means "no dimensions". Callers must pass a
- * NORMALIZED bag (mergeDimensionBags/normalizeLineDimensions output) — an
+ * NORMALIZED bag (mergeDimensionBags/normalizeLineDimensions output): an
  * unnormalized bag ('01' vs '1', untrimmed values) would key differently
  * from its normalized twin.
  */
@@ -135,7 +135,7 @@ export function dimensionsBagKey(dimensions?: LineDimensions): string {
 
 // lineDimensionColumns() was removed in the PR9 cutover: the mirror columns
 // are GENERATED ALWAYS from the bag at the database, so there is nothing for
-// TypeScript writers to derive — they set only `dimensions`.
+// TypeScript writers to derive: they set only `dimensions`.
 
 /**
  * Soft registry validation of the dimensions referenced by a set of entry
@@ -147,7 +147,7 @@ export function dimensionsBagKey(dimensions?: LineDimensions): string {
  *  1. Untagged entries are free: if no line carries a dimension, the function
  *     returns without touching the database at all.
  *  2. Companies without company_settings.dimensions_enabled keep the historic
- *     free-text passthrough — existing API/MCP writers are unaffected. This is
+ *     free-text passthrough: existing API/MCP writers are unaffected. This is
  *     the ONE place the toggle is load-bearing beyond UI visibility.
  *  3. Enabled companies get referential validation against the registry: a
  *     dimension number with no `dimensions` row, a code with no
@@ -156,10 +156,10 @@ export function dimensionsBagKey(dimensions?: LineDimensions): string {
  *     names every offending code.
  *
  * Cost: at most three queries per entry (settings, dimensions,
- * dimension_values) regardless of line count — never per-line lookups.
+ * dimension_values) regardless of line count: never per-line lookups.
  *
  * Failure posture: query errors fail OPEN (validation is skipped). This is
- * soft validation — a transient DB error must not block bookkeeping, and the
+ * soft validation: a transient DB error must not block bookkeeping, and the
  * write that follows hits the same database anyway. Reversal/storno/correction
  * paths intentionally bypass this function: they copy posted data verbatim
  * (BFL 5 kap 5§ requires the storno to mirror the original even if a value
@@ -181,7 +181,7 @@ export async function validateEntryDimensions(
   }
   if (union.size === 0) return
 
-  // 2. Toggle gate — fetched once. Missing row/column or a query error means
+  // 2. Toggle gate: fetched once. Missing row/column or a query error means
   //    passthrough (fail-open, same posture as resolveSeriesFromSettings).
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -192,7 +192,7 @@ export async function validateEntryDimensions(
   const enabled = (settings as { dimensions_enabled?: boolean } | null)?.dimensions_enabled
   if (settingsError || !enabled) return
 
-  // 3a. Registry rows for every referenced dimension number — one query.
+  // 3a. Registry rows for every referenced dimension number: one query.
   const { data: dimRows, error: dimError } = await supabase
     .from('dimensions')
     .select('id, sie_dim_no')
@@ -214,7 +214,7 @@ export async function validateEntryDimensions(
     else issues.push({ sie_dim_no: dimNo, code: null, reason: 'unknown_dimension' })
   }
 
-  // 3b. Value rows for every referenced (dimension, code) pair — one query.
+  // 3b. Value rows for every referenced (dimension, code) pair: one query.
   //     Filtering by the code union may return a same-named code under another
   //     referenced dimension; lookups below key on (dimension_id, code) so
   //     that cannot cause a false pass.

@@ -53,7 +53,7 @@ const totals: AGITotals = {
   },
 }
 
-describe('generateAGIXml — root structure', () => {
+describe('generateAGIXml: root structure', () => {
   it('starts with XML declaration', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>')
@@ -80,7 +80,7 @@ describe('generateAGIXml — root structure', () => {
   })
 })
 
-describe('generateAGIXml — Avsandare', () => {
+describe('generateAGIXml: Avsandare', () => {
   it('includes program name "gnubok"', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).toContain('<gem:Programnamn>gnubok</gem:Programnamn>')
@@ -106,7 +106,7 @@ describe('generateAGIXml — Avsandare', () => {
   })
 })
 
-describe('generateAGIXml — Blankettgemensamt', () => {
+describe('generateAGIXml: Blankettgemensamt', () => {
   it('includes AgRegistreradId for the employer in IDENTITET format', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).toContain('<gem:AgRegistreradId>165561234567</gem:AgRegistreradId>')
@@ -119,7 +119,7 @@ describe('generateAGIXml — Blankettgemensamt', () => {
   })
 })
 
-describe('generateAGIXml — Huvuduppgift (HU)', () => {
+describe('generateAGIXml: Huvuduppgift (HU)', () => {
   it('includes AgRegistreradId with FK201 inside HU (IDENTITET format)', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).toContain('<gem:AgRegistreradId faltkod="201">165561234567</gem:AgRegistreradId>')
@@ -142,7 +142,7 @@ describe('generateAGIXml — Huvuduppgift (HU)', () => {
     expect(xml).toContain('<gem:SummaArbAvgSlf faltkod="487">24076</gem:SummaArbAvgSlf>')
   })
 
-  it('does NOT emit FK060/061/062 — those field codes do not exist in HU', () => {
+  it('does NOT emit FK060/061/062: those field codes do not exist in HU', () => {
     const xml = generateAGIXml(company, employees, totals)
     // Look for those faltkoder inside the HU section
     const huMatch = xml.match(/<gem:HU>[\s\S]*?<\/gem:HU>/)
@@ -167,7 +167,7 @@ describe('generateAGIXml — Huvuduppgift (HU)', () => {
   })
 })
 
-describe('generateAGIXml — Individuppgift (IU)', () => {
+describe('generateAGIXml: Individuppgift (IU)', () => {
   it('uses BetalningsmottagarId FK215 (not Personnummer) for the payment recipient', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).toContain('<gem:BetalningsmottagarId faltkod="215">199001011234</gem:BetalningsmottagarId>')
@@ -243,7 +243,7 @@ describe('generateAGIXml — Individuppgift (IU)', () => {
   })
 })
 
-describe('generateAGIXml — fail-fast on missing data', () => {
+describe('generateAGIXml: fail-fast on missing data', () => {
   it('throws AGIIncompleteDataError when org number is missing', () => {
     const bad = { ...company, orgNumber: '' }
     expect(() => generateAGIXml(bad, employees, totals)).toThrow(AGIIncompleteDataError)
@@ -303,7 +303,7 @@ describe('buildIndividuppgifterSnapshot', () => {
 
 // ─── Frånvarouppgift (FK820-827) ────────────────────────────────────
 
-describe('generateAGIXml — Frånvarouppgift', () => {
+describe('generateAGIXml: Frånvarouppgift', () => {
   const employeesWithAbsence: AGIEmployeeData[] = [
     {
       personnummer: 'emp1_encrypted',
@@ -363,7 +363,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
     const xml = generateAGIXml(company, employeesWithAbsence, totals)
     // emp1 has two events with specnummer 1 and 2 (assigned by DB trigger);
     // emp2 has one event with specnummer 1. The values come from the
-    // event object — they are NOT recomputed from array index.
+    // event object: they are NOT recomputed from array index.
     expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">1</gem:FranvaroSpecifikationsnummer>')
     expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">2</gem:FranvaroSpecifikationsnummer>')
   })
@@ -400,7 +400,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
     expect(xml).toContain('<gem:FranvaroTimmarTFP faltkod="825">4.5</gem:FranvaroTimmarTFP>')
   })
 
-  it('clamps hours into the spec range (0.01–24.00)', () => {
+  it('clamps hours into the spec range (0.01-24.00)', () => {
     const xml = generateAGIXml(
       company,
       [{
@@ -485,7 +485,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
   })
 })
 
-describe('generateAGIXml — nolldeklaration (HU-only, no IU)', () => {
+describe('generateAGIXml: nolldeklaration (HU-only, no IU)', () => {
   const zeroTotals: AGITotals = {
     totalTax: 0,
     totalAvgifterBasis: 0,

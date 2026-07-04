@@ -5,18 +5,18 @@ import type { ParsedSIEFile } from './types'
 /**
  * Registry-side of lossless SIE dimension import (dimensions plan PR5).
  *
- * Collects every dimension the file mentions — declared (#DIM/#UNDERDIM),
- * valued (#OBJEKT), or merely referenced by a #TRANS object list — and
+ * Collects every dimension the file mentions: declared (#DIM/#UNDERDIM),
+ * valued (#OBJEKT), or merely referenced by a #TRANS object list: and
  * inserts the missing `dimensions`/`dimension_values` rows. Existing rows
  * are NEVER touched (ON CONFLICT DO NOTHING): an import must not rename a
  * user's dimensions or values. Undeclared reserved numbers synthesize their
- * SIE-standard names (1 Kostnadsställe, 2→1 Kostnadsbärare, 6 Projekt, 7–10);
+ * SIE-standard names (1 Kostnadsställe, 2→1 Kostnadsbärare, 6 Projekt, 7-10);
  * unknown customs fall back to "Dimension N", exactly mirroring the export's
  * orphan synthesis so a parse→import→re-export round-trip is lossless.
  *
  * Rows created here carry `created_by_import_id` so `undo_sie_import` can
  * remove registry values that the undone import introduced (and that nothing
- * else references) — the lockstep the plan requires.
+ * else references): the lockstep the plan requires.
  */
 
 export interface DimensionImportSummary {
@@ -31,7 +31,7 @@ export interface DimensionImportSummary {
   warnings: string[]
 }
 
-/** dimension_values.code DB CHECK: 1–40 chars, none of `"{}`. */
+/** dimension_values.code DB CHECK: 1-40 chars, none of `"{}`. */
 function isValidRegistryCode(code: string): boolean {
   return code.length >= 1 && code.length <= 40 && !/["{}]/.test(code)
 }
@@ -102,7 +102,7 @@ export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
 
 /**
  * Upsert the registry rows the file needs and flip dimensions_enabled on.
- * Returns null when the file carries no dimension data at all — companies
+ * Returns null when the file carries no dimension data at all: companies
  * without dimensions see literally nothing changed.
  */
 export async function importDimensionRegistry(
@@ -128,7 +128,7 @@ export async function importDimensionRegistry(
   // Seed system dims 1/6 (idempotent) before touching the registry.
   await supabase.rpc('ensure_company_dimensions', { p_company_id: companyId })
 
-  // ── dimensions rows — insert missing, never rename existing ────
+  // ── dimensions rows: insert missing, never rename existing ────
   let dimensionsCreated = 0
   if (dims.size > 0) {
     const dimInserts = [...dims.entries()].map(([sieDimNo, info]) => ({
@@ -138,7 +138,7 @@ export async function importDimensionRegistry(
       name: info.name,
       // Dim 1 resets annually per SIE convention; projekt (6) accumulates.
       // ensure_company_dimensions already seeded 1/6 with the right flags,
-      // so this only matters for custom dims — default to resetting.
+      // so this only matters for custom dims: default to resetting.
       resets_annually: sieDimNo !== 6,
       is_system: false,
       created_by_import_id: importId,

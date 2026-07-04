@@ -9,15 +9,15 @@ import { requireCompanyId } from '@/lib/company/context'
 // touching storage (no signed URL creation per poll).
 //
 // Derived status:
-//   running     — extracted_at IS NULL (pipeline hasn't stamped yet)
-//   succeeded   — extracted_at IS NOT NULL AND extracted_data IS NOT NULL
-//   unsupported — extraction_model = 'skipped:*' (HEIC, ZIP, …)
-//   failed      — extracted_at IS NOT NULL AND extracted_data IS NULL AND
+//   running     : extracted_at IS NULL (pipeline hasn't stamped yet)
+//   succeeded   : extracted_at IS NOT NULL AND extracted_data IS NOT NULL
+//   unsupported : extraction_model = 'skipped:*' (HEIC, ZIP, …)
+//   failed      : extracted_at IS NOT NULL AND extracted_data IS NULL AND
 //                 extraction_model = 'failed:*'
-//   disabled    — the document-extraction extension isn't enabled (column
+//   disabled    : the document-extraction extension isn't enabled (column
 //                 stays untouched indefinitely). Client times out and shows
 //                 a quiet fallback. We don't distinguish this from running
-//                 server-side — the client decides based on elapsed time.
+//                 server-side: the client decides based on elapsed time.
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },

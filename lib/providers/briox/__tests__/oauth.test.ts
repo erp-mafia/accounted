@@ -7,7 +7,7 @@ import { BrioxApiError } from '../client';
  *   POST /token?clientid={accountId}&token={applicationToken}
  *   POST /tokenrefresh?refreshtoken={refreshToken}&token={currentAccessToken}
  *
- * The refresh test pins the exact param mapping — the original implementation
+ * The refresh test pins the exact param mapping: the original implementation
  * sent the refresh token for BOTH params (and took the account id as an
  * unused first argument), which Briox rejects.
  */
@@ -67,7 +67,7 @@ describe('briox oauth', () => {
       'https://api-se.briox.services/v2/tokenrefresh?refreshtoken=refresh-1&token=expired-access-1',
     );
     expect((init as RequestInit).method).toBe('POST');
-    // Briox rotates both tokens — the new pair must be surfaced so the
+    // Briox rotates both tokens: the new pair must be surfaced so the
     // caller persists the rotated refresh token.
     expect(result.access_token).toBe('access-2');
     expect(result.refresh_token).toBe('refresh-2');

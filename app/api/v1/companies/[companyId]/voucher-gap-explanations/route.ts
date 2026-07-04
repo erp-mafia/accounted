@@ -2,7 +2,7 @@
  * POST /api/v1/companies/{companyId}/voucher-gap-explanations
  *
  * Document a gap in a verifikationsserie per BFL 5 kap 6-7 §§ (the
- * unbroken-löpnummer obligation) — supplemented by BFNAR 2013:2 kap 8 §
+ * unbroken-löpnummer obligation): supplemented by BFNAR 2013:2 kap 8 §
  * for the systemdokumentation / behandlingshistorik aspect. Voucher
  * numbers are sequential within (fiscal_period_id, voucher_series); any
  * missing number must have a documented explanation. The gap can be a
@@ -13,7 +13,7 @@
  *   - Audit response when a number was burned by a failed commit attempt
  *   - Operational recovery after manual reconciliation
  *
- * Idempotent (mandatory Idempotency-Key). Insert is small — no dry-run helper.
+ * Idempotent (mandatory Idempotency-Key). Insert is small: no dry-run helper.
  */
 
 import { z } from 'zod'
@@ -57,11 +57,11 @@ registerEndpoint({
   useWhen:
     'You\'re responding to a voucher-gap audit finding and need to document the cause. Also used by migration flows that claim numbers without filling them.',
   doNotUseFor:
-    'Falsifying a series — every gap MUST have a genuine explanation. The dashboard surfaces these for auditor review.',
+    'Falsifying a series: every gap MUST have a genuine explanation. The dashboard surfaces these for auditor review.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'gap_end must be >= gap_start; a single-number gap has gap_start = gap_end.',
-    'voucher_series is a single uppercase letter (A–Z); the same series + period + numeric range must not already exist.',
+    'voucher_series is a single uppercase letter (A-Z); the same series + period + numeric range must not already exist.',
   ],
   example: {
     request: {
@@ -70,7 +70,7 @@ registerEndpoint({
       gap_start: 142,
       gap_end: 145,
       explanation:
-        'Migration from previous bookkeeping system on 2026-05-12 — series A148-onwards corresponds to the new Accounted numbering; numbers A142-A145 were assigned in the legacy system to manual paper vouchers archived offline (BFL 7 kap retention applies). Paper vouchers are stored in the company archive under reference 2026-PAPER-Q2.',
+        'Migration from previous bookkeeping system on 2026-05-12: series A148-onwards corresponds to the new Accounted numbering; numbers A142-A145 were assigned in the legacy system to manual paper vouchers archived offline (BFL 7 kap retention applies). Paper vouchers are stored in the company archive under reference 2026-PAPER-Q2.',
     },
     response: {
       data: { id: '0e9c…', voucher_series: 'A', gap_start: 142, gap_end: 145 },
@@ -110,7 +110,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Ownership pre-check: the caller-supplied `fiscal_period_id` must belong
     // to ctx.companyId. Otherwise an insert would persist a row with
     // company_id from the URL pointing at a fiscal_period from another
-    // company — a broken-link state that confuses every downstream gap-
+    // company: a broken-link state that confuses every downstream gap-
     // detection query. (No cross-tenant data leak per se, but the row is
     // garbage.)
     const { data: periodCheck } = await ctx.supabase

@@ -35,7 +35,7 @@ const GROUP_HEADER_REDIRECTS: Record<string, string> = {
  * Check if an account is a source-system internal account that should be
  * excluded from import. BAS accounts use classes 1-8 (1000-8999). Account
  * numbers starting with 0 (e.g. Fortnox 0099) are internal system accounts
- * with no BAS equivalent — they should be silently filtered out rather than
+ * with no BAS equivalent: they should be silently filtered out rather than
  * forcing the user to map them.
  */
 export function isSystemAccount(accountNumber: string): boolean {

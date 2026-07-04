@@ -20,7 +20,7 @@ export const maxDuration = 60
  * signeradTid) is the canonical filing receipt. Without this cron,
  * `salary_runs.agi_submitted_at` only gets stamped when the user returns
  * to the panel and clicks "Hämta kvittens" or stays on the page long
- * enough for the in-browser timers to fire — which is unreliable, and
+ * enough for the in-browser timers to fire, which is unreliable, and
  * leaves the audit trail out of step with reality (BFNAR 2013:2 kap 8 +
  * BFL 5 kap 5§ require the behandlingshistorik to faithfully record
  * filing events).
@@ -30,7 +30,7 @@ export const maxDuration = 60
  * extension's per-user token, and on a hit promote the row to
  * `submitted` + stamp salary_runs.agi_submitted_at.
  *
- * Per-row errors are logged and skipped — one expired token shouldn't
+ * Per-row errors are logged and skipped: one expired token shouldn't
  * block other companies' reconciliation.
  *
  * Time budget: 50s (Vercel default 60s function timeout with 10s margin).
@@ -93,7 +93,7 @@ export async function GET(request: Request) {
     const period = formatRedovisningsperiod('monthly', decl.period_year as number, decl.period_month as number)
 
     if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) {
-      console.info('[agi-kvittenser-cron] skip — capability not entitled', { companyId })
+      console.info('[agi-kvittenser-cron] skip: capability not entitled', { companyId })
       continue
     }
 
@@ -158,7 +158,7 @@ export async function GET(request: Request) {
         })
       }
 
-      // submitted_by is the token-owning auth.users row — the human who
+      // submitted_by is the token-owning auth.users row: the human who
       // connected via BankID. The legally load-bearing signer identity
       // is kvittens.signeradAv (a personnummer), which the token user_id
       // does NOT necessarily match (e.g. if the connected user is a

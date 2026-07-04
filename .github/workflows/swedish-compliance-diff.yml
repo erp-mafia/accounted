@@ -4,7 +4,7 @@ name: Compliance diff
 #
 # This runs on the untrusted PR head, but is SAFE because it has NO secrets and
 # only a read-only token: it computes the diff and uploads it as an artifact.
-# It never runs project code (no `npm install`, no `node`) — only git plumbing,
+# It never runs project code (no `npm install`, no `node`): only git plumbing,
 # which does not execute repository hooks. The privileged half (model call +
 # comment) lives in stage 2, which never checks out fork code.
 
@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
       - name: Compute diff vs base
         # Pass GitHub context via env, never interpolate ${{ }} into the shell
-        # body — expression substitution happens before bash parses the script,
+        # body: expression substitution happens before bash parses the script,
         # so a value with shell metacharacters would be a code-execution sink.
         env:
           BASE_REF: ${{ github.base_ref }}

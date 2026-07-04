@@ -191,7 +191,7 @@ describe('findStageApproveConflict', () => {
 
   it('does NOT treat agent:write as a staging scope', () => {
     expect(STAGING_SCOPES).not.toContain('agent:write')
-    // agent:write + approve is not a SoD conflict — memory writes don't stage
+    // agent:write + approve is not a SoD conflict: memory writes don't stage
     // bookkeeping that approve would commit.
     expect(
       findStageApproveConflict(['agent:write', 'pending_operations:approve']),
@@ -206,7 +206,7 @@ describe('findStageApproveConflict', () => {
 describe('agent:write scope', () => {
   it('is a registered scope with a Swedish label and description', () => {
     expect(API_KEY_SCOPES['agent:write']).toBeDefined()
-    expect(API_KEY_SCOPES['agent:write'].label).toBe('Agent — skriv')
+    expect(API_KEY_SCOPES['agent:write'].label).toBe('Agent: skriv')
     expect(typeof API_KEY_SCOPES['agent:write'].description).toBe('string')
   })
 

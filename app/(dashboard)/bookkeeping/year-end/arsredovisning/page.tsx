@@ -29,7 +29,7 @@ export default function ArsredovisningPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Editable narrative fields — persisted to arsredovisning_narratives so
+  // Editable narrative fields: persisted to arsredovisning_narratives so
   // the PDF always reflects the latest saved version and a refresh / new
   // user picks up the same content.
   const [description, setDescription] = useState('')
@@ -293,7 +293,7 @@ export default function ArsredovisningPage() {
             <CardTitle className="text-base">Välj räkenskapsår</CardTitle>
             <p className="text-sm text-muted-foreground">
               Välj det räkenskapsår du vill se årsredovisningen för. Du kan
-              förhandsgranska och ladda ner PDF-utkastet utan att stänga året — det
+              förhandsgranska och ladda ner PDF-utkastet utan att stänga året: det
               fullständiga bokslutet görs sedan via{' '}
               <Link href="/bookkeeping/year-end" className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground">
                 Bokslut
@@ -373,7 +373,7 @@ export default function ArsredovisningPage() {
             <p className="text-muted-foreground mt-1">
               Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
               utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-              anläggningstillgångar) — krav som följer K3 men inte K2.
+              anläggningstillgångar): krav som följer K3 men inte K2.
             </p>
           </CardContent>
         </Card>
@@ -381,7 +381,7 @@ export default function ArsredovisningPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Förvaltningsberättelse — narrativ</CardTitle>
+          <CardTitle className="text-base">Förvaltningsberättelse: narrativ</CardTitle>
           <p className="text-sm text-muted-foreground">
             Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
             för att behålla ändringarna mellan sessioner.
@@ -425,7 +425,7 @@ export default function ArsredovisningPage() {
               className="max-w-[220px]"
             />
             <p className="text-xs text-muted-foreground">
-              Datum då årsstämman fastställde årsredovisningen — fyller i datumraden på
+              Datum då årsstämman fastställde årsredovisningen: fyller i datumraden på
               fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
             </p>
           </div>
@@ -481,7 +481,7 @@ export default function ArsredovisningPage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="ar-parent-name">
-                Moderföretag — namn (om koncerntillhörighet)
+                Moderföretag: namn (om koncerntillhörighet)
               </Label>
               <Input
                 id="ar-parent-name"
@@ -491,7 +491,7 @@ export default function ArsredovisningPage() {
               />
               <p className="text-xs text-muted-foreground">
                 BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8. Lämna tomt om bolaget
-                inte ingår i en koncern — noten utelämnas då.
+                inte ingår i en koncern: noten utelämnas då.
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -572,7 +572,7 @@ export default function ArsredovisningPage() {
                   </td>
                   <td className="py-2 text-right tabular-nums">
                     {row.soliditet_pct === null
-                      ? '—'
+                      ? '-'
                       : `${row.soliditet_pct.toFixed(1)} %`}
                   </td>
                 </tr>
@@ -587,7 +587,7 @@ export default function ArsredovisningPage() {
           <CardTitle className="text-base">Underskrifter</CardTitle>
           <p className="text-sm text-muted-foreground">
             Lägg till varje styrelseledamot + VD som ska skriva under. BankID-signering
-            kommer i en kommande version — för nu visas slottar och status här, och
+            kommer i en kommande version: för nu visas slottar och status här, och
             själva underskriften görs på pappret.
           </p>
         </CardHeader>
@@ -677,7 +677,7 @@ export default function ArsredovisningPage() {
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
             </Button>
-            {/* Bolagsverket-delarna blurras tills integrationen är godkänd —
+            {/* Bolagsverket-delarna blurras tills integrationen är godkänd:
                 rubriken, instruktionstexten och PDF-knappen förblir skarpa. */}
             <span
               inert={INLAMNING_COMING_SOON}
@@ -723,7 +723,7 @@ export default function ArsredovisningPage() {
             årsredovisning föreslås bli obligatorisk för K2/K3-aktiebolag för
             räkenskapsår som inleds efter 2025-12-31. Använd avsnittet{' '}
             <strong>Digital inlämning</strong> nedan för att granska, validera och lämna
-            in årsredovisningen som iXBRL — PDF:en ovan är ett läsexemplar.
+            in årsredovisningen som iXBRL. PDF:en ovan är ett läsexemplar.
           </div>
           </div>
         </CardContent>

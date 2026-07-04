@@ -50,7 +50,7 @@ async function insertDraftInvoice(params: {
   return invoiceId
 }
 
-describe('invoice-number RPCs — authorization (defense in depth)', () => {
+describe('invoice-number RPCs: authorization (defense in depth)', () => {
   it('peek_next_invoice_number raises when caller is not a member of the target company', async () => {
     const intruder = await seedCompany()
     const target = await seedCompany()
@@ -119,8 +119,7 @@ describe('invoice-number RPCs — authorization (defense in depth)', () => {
 
   it('superuser (no JWT context) bypasses the membership check', async () => {
     // Service role / cron / pg-real seed paths run without a JWT. The
-    // membership check is intentionally skipped when auth.uid() IS NULL —
-    // calling the RPC directly on the pool (no withUserContext) must still
+    // membership check is intentionally skipped when auth.uid() IS NULL:     // calling the RPC directly on the pool (no withUserContext) must still
     // succeed.
     const { userId, companyId } = await seedCompany()
     await ensureCompanySettings({ userId, companyId, invoicePrefix: 'F', nextInvoiceNumber: 1 })

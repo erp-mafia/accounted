@@ -62,7 +62,7 @@ export function friendlyModelError(err: unknown): string {
 export type StreamEvent =
   | { kind: 'text_delta'; delta: string }
   // Extended-thinking reasoning stream. Emitted token-by-token while the model
-  // reasons, before it answers or calls a tool. Stream-time only — not
+  // reasons, before it answers or calls a tool. Stream-time only: not
   // persisted, not hydrated on resume.
   | { kind: 'reasoning_delta'; delta: string }
   | { kind: 'tool_use'; tool_use_id: string; name: string; input: Record<string, unknown> }
@@ -75,7 +75,7 @@ export type StreamEvent =
     }
   | {
       // The agent successfully wrote a memory mid-conversation (remember_fact
-      // or forget_fact). Stream-time only — not persisted. The chat surface
+      // or forget_fact). Stream-time only: not persisted. The chat surface
       // renders a discreet "Sparat: …" chip so users know memory happened
       // without having to visit /settings/agent-memory.
       kind: 'memory_captured'
@@ -114,8 +114,8 @@ interface RunTurnArgs {
 // run away forever. Real conversations rarely use more than 5-6 round trips.
 const MAX_TOOL_ITERATIONS = 12
 
-// Bound a tool result before it enters the model context. Read tools — above
-// all gnubok_get_document_content, which returns full OCR/PDF text — can return
+// Bound a tool result before it enters the model context. Read tools (above
+// all gnubok_get_document_content, which returns full OCR/PDF text) can return
 // arbitrarily large payloads. Unbounded, that payload is re-sent on every later
 // iteration of this turn's loop AND replayed on every future turn (it is
 // persisted as a 'tool' message and rehydrated by loadConversationMessages),
@@ -125,7 +125,7 @@ const MAX_TOOL_ITERATIONS = 12
 // Per Anthropic's tool guidance: truncate with sensible defaults and steer the
 // agent to a narrower request; the practical ceiling cited for a single tool
 // return is ~25k tokens, so 40k chars (~10k tokens) sits well under that while
-// leaving multi-page receipts/invoices intact — only pathological dumps get cut.
+// leaving multi-page receipts/invoices intact: only pathological dumps get cut.
 export const MAX_TOOL_RESULT_CHARS = 40_000
 
 export function boundToolResultText(raw: string): string {
@@ -136,13 +136,13 @@ export function boundToolResultText(raw: string): string {
 
 // Wrap a bounded tool-result string in <tool_output> markers before feeding
 // it back to the model. Paired with the system-prompt rule that text inside
-// <tool_output> is third-party data, never instructions — mitigates the
+// <tool_output> is third-party data, never instructions: mitigates the
 // prompt-injection surface from OCR'd documents, inbox items, and any
 // other tool that returns untrusted vendor/customer text. Closing tag uses a
 // distinct strings so a malicious payload containing the literal token can't
 // trivially escape; the contained JSON is serialized so embedded `<` chars
-// are escaped by JSON.stringify (which they are not — they survive
-// stringification) — to defend, we additionally strip the literal close-tag
+// are escaped by JSON.stringify (which they are not; they survive
+// stringification): to defend, we additionally strip the literal close-tag
 // sequence from the content.
 export function wrapToolResult(toolUseId: string, raw: string): string {
   const safe = raw.replaceAll('</tool_output>', '</tool_​output>') // ZWSP injected
@@ -150,7 +150,7 @@ export function wrapToolResult(toolUseId: string, raw: string): string {
 }
 
 // Anthropic content block types ------------------------------------------------
-// We don't import the SDK type — accept any to keep this file decoupled from
+// We don't import the SDK type: accept any to keep this file decoupled from
 // SDK version churn. The shapes we read are stable: text blocks have `text`,
 // tool_use blocks have `id`, `name`, `input`.
 
@@ -172,7 +172,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     emit,
   } = args
 
-  // 1 + 2 — load profile + ranked memory + atoms + tools.
+  // 1 + 2: load profile + ranked memory + atoms + tools.
   const [profile, memory, vatStatus] = await Promise.all([
     loadProfileSummary(supabase, companyId),
     loadRankedMemory(supabase, companyId, 30),
@@ -193,7 +193,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
 
   const tools = await collectIntentTools(intent)
 
-  // 3 — assemble Anthropic messages: prior history + new user turn.
+  // 3: assemble Anthropic messages: prior history + new user turn.
   const history = await loadConversationMessages(supabase, conversationId)
   const newUserMessage = { role: 'user' as const, content: userMessage }
 
@@ -235,13 +235,13 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     : undefined
   const maxTokens = (intent.thinking?.budgetTokens ?? 0) + 4096
 
-  // 4 + 5 + 6 — iterate until the model stops requesting tools.
+  // 4 + 5 + 6: iterate until the model stops requesting tools.
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++
 
     // Token-by-token streaming. The Anthropic SDK's MessageStream emits a
     // `text` event for every text delta as Bedrock pushes them, so the user
-    // sees Anna's reply appear word-by-word instead of waiting 1–5 s for
+    // sees Anna's reply appear word-by-word instead of waiting 1-5 s for
     // the full block to land. We still collect the final assembled message
     // for tool detection, persistence and stop-reason control flow.
     const stream = anthropic.messages.stream({
@@ -326,13 +326,13 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       break
     }
 
-    // 7 — dispatch each tool_use sequentially. Anthropic accepts parallel
+    // 7: dispatch each tool_use sequentially. Anthropic accepts parallel
     // tool_results within a single user turn, so we collect them and emit
     // one combined user message.
     const toolResultBlocks: ContentBlock[] = []
     for (const tu of toolUses) {
       // The chip was already announced via the streamEvent listener above;
-      // skip re-emitting unless we missed the early signal (defensive — the
+      // skip re-emitting unless we missed the early signal (defensive: the
       // dispatch loop should never run faster than the stream events).
       if (!eagerToolIds.has(tu.id)) {
         emit({
@@ -382,7 +382,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
         }
 
         // Memory tools write immediately (no staging). Surface the capture
-        // inline so the user sees memory is happening — silent writes were
+        // inline so the user sees memory is happening: silent writes were
         // the biggest UX gap pre-2026-05-18 (plan §11 transparency).
         if (tu.name === 'gnubok_remember_fact') {
           const r = result as { id?: unknown; kind?: unknown; content?: unknown }
@@ -412,7 +412,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           }
         }
 
-        // Emit the full result to the client (display only — not model
+        // Emit the full result to the client (display only: not model
         // context). The block that re-enters the model loop and gets persisted
         // is bounded so a large read can't dominate the context window, and
         // wrapped in <tool_output> markers so the model treats the content as
@@ -451,7 +451,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   if (iterations >= MAX_TOOL_ITERATIONS) {
     emit({
       kind: 'error',
-      message: `Avbröt efter ${MAX_TOOL_ITERATIONS} verktygsanrop — sannolikt en loop. Försök igen.`,
+      message: `Avbröt efter ${MAX_TOOL_ITERATIONS} verktygsanrop: sannolikt en loop. Försök igen.`,
     })
   }
 
@@ -472,7 +472,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       .eq('id', conversationId)
 
     // Update recency of the memories included in this turn's prompt block.
-    // Errors are swallowed — a ranking-signal hiccup shouldn't fail the turn.
+    // Errors are swallowed: a ranking-signal hiccup shouldn't fail the turn.
     try {
       await bumpMemoryAccess(
         supabase,
@@ -501,7 +501,7 @@ async function loadProfileSummary(
 }
 
 // Hard-fact VAT status the agent must cite before any moms recommendation.
-// Lives on company_settings.vat_registered + vat_number — the single source of
+// Lives on company_settings.vat_registered + vat_number: the single source of
 // truth. Agent has historically guessed this from the conversation ("eftersom
 // du inte är momsregistrerad…") instead of reading the company profile;
 // surfacing it as a structured fact in the prompt removes the temptation.
@@ -623,9 +623,9 @@ async function collectIntentTools(intent: AgentIntent): Promise<AgentTool[]> {
   return agentToolRegistry.getMany(intent.tools)
 }
 
-// Thinking blocks stay in the in-memory `messages` array — Anthropic requires
+// Thinking blocks stay in the in-memory `messages` array: Anthropic requires
 // the preceding assistant turn's thinking block to be present when you return
-// tool_results within the same turn — but we strip them before persistence:
+// tool_results within the same turn, but we strip them before persistence:
 // they hold the raw chain of thought (storage bloat), and replaying past-turn
 // thinking on resume is neither required nor used by the model. The chat
 // surface shows reasoning live via reasoning_delta; it is not hydrated.

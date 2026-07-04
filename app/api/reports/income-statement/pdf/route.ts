@@ -10,7 +10,7 @@ import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterF
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
 // into three named blocks with subtotals:
-//   80–84 → Finansiella poster (followed by "Resultat efter finansiella poster")
+//   80-84 → Finansiella poster (followed by "Resultat efter finansiella poster")
 //   88   → Bokslutsdispositioner
 //   89   → Skatt på årets resultat
 // The generator lumps these together under financial_sections, so we split
@@ -124,7 +124,7 @@ export async function GET(request: Request) {
     const totalOvrigaFinansiellaPoster = Math.round(
       ovrigaFinansiellaPosterSections.reduce((sum, s) => sum + s.subtotal, 0) * 100,
     ) / 100
-    // Catch-all is treated as part of "finansiella poster" for the subtotal —
+    // Catch-all is treated as part of "finansiella poster" for the subtotal:
     // 85-87 accounts in BAS are financial-adjacent (not tax, not bokslut).
     const resultatEfterFinansiellaPoster = Math.round(
       (operatingResult + totalFinansiellaPoster + totalOvrigaFinansiellaPoster) * 100,
@@ -207,7 +207,7 @@ export async function GET(request: Request) {
       FinancialStatementPDF({
         // Partial-view disclosure in the document title (BFNAR 2013:2).
         title: dimensionFilterDisclosure(dimFilter.dimensions)
-          ? `Resultaträkning — ${dimensionFilterDisclosure(dimFilter.dimensions)}`
+          ? `Resultaträkning: ${dimensionFilterDisclosure(dimFilter.dimensions)}`
           : 'Resultaträkning',
         groups,
         summary,
@@ -218,7 +218,7 @@ export async function GET(request: Request) {
     )
 
     // "-utkast" suffix keeps the draft status visible even after the file
-    // leaves the browser — complements the in-document ÅRL 2:7 disclaimer.
+    // leaves the browser: complements the in-document ÅRL 2:7 disclaimer.
     const filename = `resultatrakning${dimensionFilterFileSuffix(dimFilter.dimensions)}-${report.period.start}--${report.period.end}-utkast.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {

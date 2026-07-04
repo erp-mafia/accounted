@@ -2,10 +2,10 @@ import { defineAgentIntent } from './types'
 import { OPUS_MODEL, THINKING_BUDGET_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
-// vat.review — "Fråga [namn]" from the VAT declaration preview.
+// vat.review: "Fråga [namn]" from the VAT declaration preview.
 //
 // Highest-stakes regular intent: the user is about to submit a momsdeklaration
-// and wants a sanity check. The agent reads the Rutor (05–62), spots
+// and wants a sanity check. The agent reads the Rutor (05-62), spots
 // anomalies vs. the prior period, validates that one-sided reverse-charge
 // flags balance, and points out filing/payment deadlines.
 //
@@ -13,7 +13,7 @@ import { renderAgentGroundRules } from './shared-rules'
 // the company's vertical/modifier so industry-specific quirks fire
 // (restaurang's 12/25 % split, bygg's omvänd skattskyldighet, e-handel OSS).
 //
-// Opus per plan §8 V1 #7 — anomaly + cross-check reasoning rewards deeper
+// Opus per plan §8 V1 #7: anomaly + cross-check reasoning rewards deeper
 // reasoning than Sonnet.
 
 interface VatReviewArgs {
@@ -121,7 +121,7 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
     lines.push('Arbetssätt:')
     lines.push('1. Hämta declarationen med gnubok_get_vat_report (period_type, year, period).')
     lines.push('2. Hämta gnubok_vat_close_check för pre-filing varningar (t.ex. ensidig reverse charge utan motpost).')
-    lines.push('3. Återrapportera Rutor 05–62 i ett kort format användaren kan ögna igenom: SE-försäljning, EU-tjänster, export, ingående/utgående moms per skattesats, reverse-charge-vyer, samt Ruta 49 (att betala / återfå).')
+    lines.push('3. Återrapportera Rutor 05-62 i ett kort format användaren kan ögna igenom: SE-försäljning, EU-tjänster, export, ingående/utgående moms per skattesats, reverse-charge-vyer, samt Ruta 49 (att betala / återfå).')
     lines.push('4. Varna explicit för anomalier: stora avvikelser mot förra perioden, oväntade reverse-charge-belopp, saknad motpost.')
     lines.push('5. Påminn om deadline (deklarationsdatum + betalningsdatum) och rekommendera fortsatta steg om allt ser bra ut.')
     lines.push('')

@@ -132,12 +132,12 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4">
                       AI-inferens (kategorisering samt dokument- och
                       kvittotolkning) via Amazon Bedrock. Bearbetar bokföringsdata
-                      och uppladdade underlag — endast när AI-funktioner är
+                      och uppladdade underlag: endast när AI-funktioner är
                       aktiverade.
                     </td>
                     <td className="py-2 pr-4">EU (eu-north-1, Stockholm)</td>
                     <td className="py-2">
-                      EU-baserad inferens — ingen tredjelandsöverföring. DPA, SCC
+                      EU-baserad inferens: ingen tredjelandsöverföring. DPA, SCC
                       och DPF-certifiering. Prompter lagras ej efter anropet och
                       används ej till modellträning.
                     </td>
@@ -164,7 +164,7 @@ export default function PrivacyPolicyPage() {
 
             <p className="mt-4 text-sm text-muted-foreground">
               AI-funktioner är frivilliga och kräver separat samtycke före
-              aktivering — data skickas först när du aktivt godkänner
+              aktivering: data skickas först när du aktivt godkänner
               användningen. AI:t använder Anthropics Claude-modeller men körs
               inom Amazon Bedrock i EU (eu-north-1, Stockholm); datan lämnar
               alltså inte EU och delas inte med Anthropic. Kärntjänsten

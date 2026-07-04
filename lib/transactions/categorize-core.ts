@@ -3,12 +3,12 @@
  *
  * This is the single implementation behind three callers:
  *   1. The single-transaction approval executor `commitCategorizeTransaction`
- *      (lib/pending-operations/commit.ts) — the agent / web "Kategorisera"
+ *      (lib/pending-operations/commit.ts): the agent / web "Kategorisera"
  *      flow.
  *   2. The bulk-book-inbox executor `commitBulkBookInboxItems`
- *      (lib/pending-operations/commit.ts) — Lena driving the Underlag view.
+ *      (lib/pending-operations/commit.ts): Lena driving the Underlag view.
  *   3. The direct UI bulk-book route (`POST /items/bulk-book` in the
- *      invoice-inbox extension) — the "Bokför valda" button.
+ *      invoice-inbox extension): the "Bokför valda" button.
  *
  * Extracting it keeps the VAT/mapping logic, the duplicate guard, and the
  * matched-inbox underlag propagation in ONE place. "Booking an underlag" in the
@@ -18,7 +18,7 @@
  * the new verifikation (BFL 7 kap) and stamps the inbox item resolved.
  *
  * Booking is always in SEK off the bank transaction's own amount (BFL 5 kap
- * 2§), so the foreign-currency underlag never needs an FX step here — the bank
+ * 2§), so the foreign-currency underlag never needs an FX step here: the bank
  * already settled it.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -54,14 +54,14 @@ export interface CategorizeMatchedTransactionOpts {
   /** Audit-trail text appended to the verifikation description. */
   notes?: string
   /**
-   * Bypass the booking-time duplicate guard. Default false — the guard fails
+   * Bypass the booking-time duplicate guard. Default false: the guard fails
    * closed when another verifikat already books this amount on the bank
    * account, and the caller surfaces the skip.
    */
   allowDuplicate?: boolean
   /**
    * Dimensions PR7: bag applied to the business (expense/revenue) lines of the
-   * generated verifikat — bank/VAT lines stay untagged. Resolved against the
+   * generated verifikat: bank/VAT lines stay untagged. Resolved against the
    * registry at staging time (MCP) or picked in the UI.
    */
   dimensions?: Record<string, string>
@@ -163,13 +163,13 @@ export async function categorizeMatchedTransaction(
     .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
 
   if (fetchError || !transaction) {
-    return { error: 'Transaction not found — it may have been deleted.', status: 404 }
+    return { error: 'Transaction not found: it may have been deleted.', status: 404 }
   }
   if (transaction.journal_entry_id) {
-    return { error: 'Transaction already has a journal entry — it was categorized in the meantime.', status: 409 }
+    return { error: 'Transaction already has a journal entry: it was categorized in the meantime.', status: 409 }
   }
 
-  // Booking-time duplicate guard — parity with the web /categorize route.
+  // Booking-time duplicate guard: parity with the web /categorize route.
   // Refuse to mint a second verifikat for an affärshändelse already in the
   // ledger: an already-booked sibling transaction, OR an unlinked voucher that
   // already books this amount on the bank account (invoice "markera som
@@ -195,7 +195,7 @@ export async function categorizeMatchedTransaction(
       return {
         error:
           `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) bokför redan ${amountAbs} kr på bankkontot. ` +
-          `Den här affärshändelsen ser redan ut att vara bokförd — länka transaktionen till den befintliga ` +
+          `Den här affärshändelsen ser redan ut att vara bokförd: länka transaktionen till den befintliga ` +
           `verifikationen i stället för att bokföra den igen. Om banktransaktionen verkligen är en separat ` +
           `affärshändelse, kör om med allow_duplicate=true.`,
         status: 409,
@@ -291,7 +291,7 @@ export async function categorizeMatchedTransaction(
   //        document_attachments.journal_entry_id = journalEntryId (idempotent)
   //   3. stamp invoice_inbox_items.created_journal_entry_id so the inbox row
   //      visibly moves to "Bearbetade" and shows "Öppna verifikation".
-  // Errors are logged but don't fail the commit — the verifikation itself is
+  // Errors are logged but don't fail the commit: the verifikation itself is
   // already posted, and the link can be repaired by re-running this step.
   if (journalEntryId) {
     try {
@@ -374,8 +374,8 @@ export interface BulkBookInboxResult {
 /**
  * Book each selected inbox item against its matched bank transaction with one
  * shared category + VAT treatment. Items without a matched transaction, already
- * booked, or already linked to a leverantörsfaktura are skipped — never an
- * error — so one bad underlag never blocks the rest ("Bokför valda hoppar
+ * booked, or already linked to a leverantörsfaktura are skipped: never an
+ * error: so one bad underlag never blocks the rest ("Bokför valda hoppar
  * över"). A per-item throw (period locked, accounts not in chart) is caught and
  * recorded as a skip with the actionable message.
  *

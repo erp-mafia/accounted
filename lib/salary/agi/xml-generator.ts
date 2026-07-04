@@ -1,7 +1,7 @@
 import { decryptPersonnummer } from '../personnummer'
 
 /**
- * AGI XML generator — Arbetsgivardeklaration på individnivå.
+ * AGI XML generator: Arbetsgivardeklaration på individnivå.
  *
  * Produces XML conforming to Skatteverket's schema:
  *   http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1
@@ -25,9 +25,9 @@ import { decryptPersonnummer } from '../personnummer'
  *   - One <gem:Franvarouppgift> per (employee, date, specifikationsnummer)
  *   - Sibling of <gem:Blankett>, top-level under <Skatteverket>
  *   - FranvaroChoice contains FranvaroTyp (TILLFALLIG_FORALDRAPENNING for VAB,
- *     FORALDRAPENNING for parental leave) — the borttag flow is not used.
+ *     FORALDRAPENNING for parental leave): the borttag flow is not used.
  *   - Hours emitted via FranvaroTimmarTFP (FK825) for VAB or FranvaroTimmarFP
- *     (FK827) for parental. The procent variants (824/826) are not used —
+ *     (FK827) for parental. The procent variants (824/826) are not used:
  *     Accounted tracks hours, not percent.
  *   - FranvaroSpecifikationsnummer is persisted on salary_absence_days
  *     (column franvaro_specifikationsnummer; assigned by DB trigger on
@@ -39,7 +39,7 @@ import { decryptPersonnummer } from '../personnummer'
  *     matches each event back to its prior submission.
  *   - Periods before 202501 emit no Frånvarouppgift (Skatteverket rejects).
  *
- * Per-employee sick days are NOT reported via AGI under any version — they
+ * Per-employee sick days are NOT reported via AGI under any version: they
  * go to Försäkringskassan separately. The company-level FK499
  * TotalSjuklonekostnad in HU is correctly emitted from sick_day2_14 line
  * items × dailyRate × 0.80 (see agi/xml/route.ts).
@@ -48,7 +48,7 @@ import { decryptPersonnummer } from '../personnummer'
 const INSTANS_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1'
 const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/komponent/schema/1.1'
 
-// Programnamn — software identifier embedded in every AGI submission.
+// Programnamn: software identifier embedded in every AGI submission.
 // Free-text per Skatteverket's schema (no vendor registry), but kept stable
 // across visual rebrands so the value the tax authority sees never churns.
 // Bump only if Skatteverket ever introduces a formal vendor registration
@@ -57,36 +57,36 @@ const AGI_PROGRAMNAMN = 'gnubok'
 
 /**
  * One absence event for AGI Frånvarouppgift emission. Loaded from
- * salary_absence_days (per-day records). Sick days are NOT included — they
+ * salary_absence_days (per-day records). Sick days are NOT included: they
  * go to Försäkringskassan, not Skatteverket.
  */
 export interface AGIAbsenceEvent {
-  /** YYYY-MM-DD — emitted as FK821 FranvaroDatum. */
+  /** YYYY-MM-DD: emitted as FK821 FranvaroDatum. */
   date: string
   /** Mapped to FranvaroTyp:
    *    'vab'      → TILLFALLIG_FORALDRAPENNING (FK825 hours field)
    *    'parental' → FORALDRAPENNING            (FK827 hours field) */
   type: 'vab' | 'parental'
-  /** Hours absent on this date, 0.01–24.00. Defaults to 8 in salary_absence_days. */
+  /** Hours absent on this date, 0.01-24.00. Defaults to 8 in salary_absence_days. */
   hours: number
   /**
-   * FK822 FranvaroSpecifikationsnummer — stable per-(employee, year-month)
+   * FK822 FranvaroSpecifikationsnummer: stable per-(employee, year-month)
    * sequence assigned at the DB level (see migration
    * 20260517120000_salary_absence_days_franvaro_specifikationsnummer.sql).
-   * MUST stay constant across corrections — never recompute from array
+   * MUST stay constant across corrections: never recompute from array
    * index. Persisted on salary_absence_days.franvaro_specifikationsnummer.
    */
   specifikationsnummer: number
 }
 
 export interface AGIEmployeeData {
-  personnummer: string       // Encrypted — decrypted for XML
-  specificationNumber: number // FK570 — MUST stay consistent per employee
+  personnummer: string       // Encrypted: decrypted for XML
+  specificationNumber: number // FK570: MUST stay consistent per employee
   grossSalary: number         // FK011 KontantErsattningUlagAG
   taxWithheld: number         // FK001 AvdrPrelSkatt
   avgifterBasis: number       // Retained for backwards compat; equals grossSalary for standard cases. Not emitted separately (FK011 already captures basis).
   /**
-   * FK205 Borttag — tombstone this IU. When true, the XML emits only the
+   * FK205 Borttag: tombstone this IU. When true, the XML emits only the
    * identity fields (FK201, FK215, FK570, FK006) plus <Borttag>1</Borttag>;
    * amounts and benefits are skipped. Skatteverket then removes the prior
    * IU matching (AgRegistreradId, BetalningsmottagarId, RedovisningsPeriod,
@@ -95,7 +95,7 @@ export interface AGIEmployeeData {
    */
   removed?: boolean
   /**
-   * Växa-stöd flag — emitted as one of two mutually exclusive boolean fields:
+   * Växa-stöd flag: emitted as one of two mutually exclusive boolean fields:
    *   'forsta_anstalld' → FK062 ForstaAnstalld (anställd före 2024-05-01)
    *   'vaxa_stod'       → FK063 VaxaStod      (anställd efter 2024-04-30)
    * Set when the employer claims växa-stöd reduction (10.21% avgifter rate)
@@ -104,7 +104,7 @@ export interface AGIEmployeeData {
    */
   vaxaStod?: 'forsta_anstalld' | 'vaxa_stod'
   /**
-   * FK048 FormanHarJusterats — set when any benefit value on this IU has
+   * FK048 FormanHarJusterats: set when any benefit value on this IU has
    * been adjusted away from the standard schablon. Reflects
    * salary_run_employees.benefits_adjusted.
    */
@@ -114,7 +114,7 @@ export interface AGIEmployeeData {
   benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7)
   /**
    * FK015 KostformanUlagAG (amount, BELOPP10). Kostförmån has its own
-   * dedicated field in the AGI spec with a PBB-linked schablon value —
+   * dedicated field in the AGI spec with a PBB-linked schablon value:
    * Skatteverket cross-checks the reported amount against the schablon.
    * Aggregating meals into FK012 (övriga förmåner) triggers automated
    * discrepancy notices. Always emit FK015 separately when > 0.
@@ -122,7 +122,7 @@ export interface AGIEmployeeData {
   benefitMeals?: number
   /**
    * Housing benefit indicator. FK041 (smahus) and FK043 (ej_smahus) are
-   * boolean KRYSS flags in the XSD — they just signal that this kind of
+   * boolean KRYSS flags in the XSD: they just signal that this kind of
    * benefit was given. The AMOUNT must be folded into benefitOther
    * (FK012). Pass 'smahus' or 'ej_smahus' to set the flag; omit if no
    * housing benefit applies.
@@ -130,7 +130,7 @@ export interface AGIEmployeeData {
   housingBenefit?: 'smahus' | 'ej_smahus'
   /**
    * FK012 SkatteplOvrigaFormanerUlagAG (amount, BELOPP10). Catch-all for
-   * taxable benefits without their own dedicated FK code — bike, wellness,
+   * taxable benefits without their own dedicated FK code: bike, wellness,
    * "other", AND the full krona-amount for housing (since FK041/FK043
    * carry only the flag). Meals go in benefitMeals (FK015), NOT here.
    */
@@ -152,7 +152,7 @@ export interface AGIEmployeeData {
   parentalDays?: number
   /**
    * Per-event absence records for the period. Drives <gem:Franvarouppgift>
-   * emission. VAB and parental only — sick days excluded by spec (FK).
+   * emission. VAB and parental only: sick days excluded by spec (FK).
    */
   absenceEvents?: AGIAbsenceEvent[]
 }
@@ -172,8 +172,8 @@ export interface AGITotals {
   totalAvgifterBasis: number      // retained for compat (sum of IU underlag)
   totalAvgifterAmount: number     // FK487 SummaArbAvgSlf (sum of calculated avgifter across categories)
   /**
-   * FK499 TotalSjuklonekostnad — company's total sjuklön cost for the period
-   * (sum of sjuklön paid days 2–14 across all employees). Required per 2025+ rules.
+   * FK499 TotalSjuklonekostnad: company's total sjuklön cost for the period
+   * (sum of sjuklön paid days 2-14 across all employees). Required per 2025+ rules.
    * Day 1 is karens (unpaid); day 15+ is Försäkringskassan, not employer.
    */
   totalSjuklonekostnad?: number
@@ -208,7 +208,7 @@ function assertRequiredCompanyData(company: AGICompanyData): void {
 
   if (missing.length > 0) {
     throw new AGIIncompleteDataError(
-      `AGI kan inte genereras — följande uppgifter saknas: ${missing.join(', ')}. ` +
+      `AGI kan inte genereras, följande uppgifter saknas: ${missing.join(', ')}. ` +
         'Fyll i dem under Inställningar → Företag och Inställningar → Lön.',
       missing
     )
@@ -217,7 +217,7 @@ function assertRequiredCompanyData(company: AGICompanyData): void {
 
 /**
  * Smallest period the AGI API accepts, per Skatteverket v1.7 spec §6.3:
- * "redovisningsperiod (URI-parameter) — YYYYMM, tidigast 201807".
+ * "redovisningsperiod (URI-parameter): YYYYMM, tidigast 201807".
  * Periods before this raise HTTP 404 felkod 31 at SKV's gateway.
  */
 const AGI_MIN_PERIOD_YYYYMM = 201807
@@ -225,7 +225,7 @@ const AGI_MIN_PERIOD_YYYYMM = 201807
 function assertRequiredPeriod(year: number, month: number): void {
   if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
     throw new AGIIncompleteDataError(
-      `Ogiltig redovisningsperiod: ${year}-${month}. Ange ett giltigt år och månad (1–12).`,
+      `Ogiltig redovisningsperiod: ${year}-${month}. Ange ett giltigt år och månad (1-12).`,
       ['redovisningsperiod'],
     )
   }
@@ -258,12 +258,12 @@ export class AGIPayloadTooLargeError extends Error {
 
 /**
  * Resolve the Skatteverket environment from a dedicated env var. Default
- * to the stricter 'test' bucket when unset/unrecognised — a missing or
+ * to the stricter 'test' bucket when unset/unrecognised: a missing or
  * misconfigured value must never silently raise the size ceiling.
  *
  * Documented in deployment runbook; substring-matching the API URL is
  * forbidden (a misconfigured URL containing 'api.test.skatteverket.se'
- * would otherwise lower the limit on a production tenant — the inverse
+ * would otherwise lower the limit on a production tenant: the inverse
  * was equally bad).
  */
 function resolveSkatteverketEnv(): 'test' | 'production' {
@@ -271,7 +271,7 @@ function resolveSkatteverketEnv(): 'test' | 'production' {
   if (raw === 'production' || raw === 'prod') return 'production'
   if (raw === 'test') return 'test'
   if (raw && raw !== '') {
-    // Unrecognised value — fail closed to test. Logged once so deployments
+    // Unrecognised value: fail closed to test. Logged once so deployments
     // catch typos in CI rather than at audit time.
     // eslint-disable-next-line no-console
     console.warn(
@@ -319,7 +319,7 @@ const IDENTITET_PATTERN = /^(((19|20)[0-9][0-9])((((01|03|05|07|08|10|12)(6[1-9]
  *   - 12-digit personnummer (EF e.g. 196904206942) → used as-is
  *
  * Throws AGIIncompleteDataError if the resulting value cannot match the
- * IDENTITET pattern — this catches bogus test data (e.g. "420694-2069") before
+ * IDENTITET pattern: this catches bogus test data (e.g. "420694-2069") before
  * the file reaches Skatteverket.
  */
 function toIdentitet(raw: string): string {
@@ -338,7 +338,7 @@ function toIdentitet(raw: string): string {
 
   if (!IDENTITET_PATTERN.test(candidate)) {
     throw new AGIIncompleteDataError(
-      `Ogiltigt organisationsnummer "${raw}" — värdet är inte ett svenskt organisationsnummer eller personnummer enligt Skatteverkets format. ` +
+      `Ogiltigt organisationsnummer "${raw}": värdet är inte ett svenskt organisationsnummer eller personnummer enligt Skatteverkets format. ` +
         'Kontrollera värdet under Inställningar → Företag. För AB ska det vara 10 siffror (t.ex. 556123-4567). ' +
         'För enskild firma ska det vara ett fullständigt 12-siffrigt personnummer (YYYYMMDD-XXXX).',
       ['organisationsnummer']
@@ -351,7 +351,7 @@ function toIdentitet(raw: string): string {
  * Generate AGI XML for a period.
  *
  * Throws AGIIncompleteDataError if required fields (orgNumber, contact info)
- * are missing — we never emit partial XML that Skatteverket would reject.
+ * are missing: we never emit partial XML that Skatteverket would reject.
  */
 export function generateAGIXml(
   company: AGICompanyData,
@@ -404,7 +404,7 @@ export function generateAGIXml(
   lines.push('    </gem:Arendeinformation>')
   lines.push('    <gem:Blankettinnehall>')
   // HU/IU substitute for the abstract gem:Uppgift element in the komponent
-  // namespace (substitution group head). Use the concrete element directly —
+  // namespace (substitution group head). Use the concrete element directly:
   // gem:Uppgift itself is abstract and cannot appear in an instance document.
   lines.push('      <gem:HU>')
   // AgRegistreradId is wrapped in ArbetsgivareHUGROUP, all payload elements
@@ -414,17 +414,17 @@ export function generateAGIXml(
   lines.push('        </gem:ArbetsgivareHUGROUP>')
   lines.push(`        <gem:RedovisningsPeriod faltkod="006">${period}</gem:RedovisningsPeriod>`)
 
-  // FK497 — Summa skatteavdrag (total from all IU)
+  // FK497: Summa skatteavdrag (total from all IU)
   if (totals.totalTax > 0) {
     lines.push(`        <gem:SummaSkatteavdr faltkod="497">${formatAmount(totals.totalTax)}</gem:SummaSkatteavdr>`)
   }
 
-  // FK487 — Summa arbetsgivaravgifter och SLF (calculated total, NOT basis)
+  // FK487: Summa arbetsgivaravgifter och SLF (calculated total, NOT basis)
   if (totals.totalAvgifterAmount > 0) {
     lines.push(`        <gem:SummaArbAvgSlf faltkod="487">${formatAmount(totals.totalAvgifterAmount)}</gem:SummaArbAvgSlf>`)
   }
 
-  // FK499 — Total sjuklönekostnad (legal requirement from 2025 when > 0)
+  // FK499: Total sjuklönekostnad (legal requirement from 2025 when > 0)
   if (totals.totalSjuklonekostnad && totals.totalSjuklonekostnad > 0) {
     lines.push(`        <gem:TotalSjuklonekostnad faltkod="499">${formatAmount(totals.totalSjuklonekostnad)}</gem:TotalSjuklonekostnad>`)
   }
@@ -479,7 +479,7 @@ export function generateAGIXml(
     lines.push(`        <gem:RedovisningsPeriod faltkod="006">${period}</gem:RedovisningsPeriod>`)
     lines.push(`        <gem:Specifikationsnummer faltkod="570">${emp.specificationNumber}</gem:Specifikationsnummer>`)
 
-    // FK205 Borttag — tombstone this IU. When set, skip all amount/benefit
+    // FK205 Borttag: tombstone this IU. When set, skip all amount/benefit
     // fields; only the identity quintuple above (FK201, FK215, FK006, FK570)
     // plus this flag are needed for Skatteverket to remove the prior IU.
     if (emp.removed) {
@@ -490,12 +490,12 @@ export function generateAGIXml(
       continue
     }
 
-    // FK011 — Kontant ersättning, underlag arbetsgivaravgifter (= gross salary)
+    // FK011: Kontant ersättning, underlag arbetsgivaravgifter (= gross salary)
     if (emp.grossSalary > 0) {
       lines.push(`        <gem:KontantErsattningUlagAG faltkod="011">${formatAmount(emp.grossSalary)}</gem:KontantErsattningUlagAG>`)
     }
 
-    // FK001 — Avdragen preliminärskatt
+    // FK001: Avdragen preliminärskatt
     if (emp.taxWithheld > 0) {
       lines.push(`        <gem:AvdrPrelSkatt faltkod="001">${formatAmount(emp.taxWithheld)}</gem:AvdrPrelSkatt>`)
     }
@@ -518,7 +518,7 @@ export function generateAGIXml(
 
     // Kostförmån AMOUNT: FK015 (UlagAG) or FK139 (ej UlagSA). Has its own
     // field because Skatteverket cross-checks the krona-belopp against the
-    // PBB-anchored schablon — folding it into FK012 triggers discrepancy
+    // PBB-anchored schablon: folding it into FK012 triggers discrepancy
     // notices. Always emit separately when > 0.
     if (emp.benefitMeals && emp.benefitMeals > 0) {
       const code = exclSA ? '139' : '015'
@@ -548,17 +548,17 @@ export function generateAGIXml(
       lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitOther)}</gem:${elem}>`)
     }
 
-    // FK131 — Ersättning till mottagare med F-skattsedel (ej underlag SA)
+    // FK131: Ersättning till mottagare med F-skattsedel (ej underlag SA)
     if (emp.fSkattPayment && emp.fSkattPayment > 0) {
       lines.push(`        <gem:KontantErsattningEjUlagSA faltkod="131">${formatAmount(emp.fSkattPayment)}</gem:KontantErsattningEjUlagSA>`)
     }
 
-    // FK048 — FormanHarJusterats (any benefit value adjusted away from schablon)
+    // FK048: FormanHarJusterats (any benefit value adjusted away from schablon)
     if (emp.benefitsAdjusted) {
       lines.push('        <gem:FormanHarJusterats faltkod="048">1</gem:FormanHarJusterats>')
     }
 
-    // FK062 / FK063 — Växa-stöd. Mutually exclusive: FK062 for employees
+    // FK062 / FK063: Växa-stöd. Mutually exclusive: FK062 for employees
     // hired before 2024-05-01 (legacy "första anställda"-reglerna), FK063
     // for those hired 2024-05-01 and later (utvidgat växa-stöd).
     if (emp.vaxaStod === 'forsta_anstalld') {
@@ -694,7 +694,7 @@ function formatAmount(amount: number): string {
 
 /**
  * Format hours for FranvaroTimmarTFP/FP (FK825/827).
- * Spec range: 0.01 – 24.00, up to two decimals. Whole-hour values emit
+ * Spec range: 0.01 - 24.00, up to two decimals. Whole-hour values emit
  * without trailing zeros (e.g. 8 → "8") to match Skatteverket's example
  * file ("4" not "4.00"); fractional values keep their decimals.
  */

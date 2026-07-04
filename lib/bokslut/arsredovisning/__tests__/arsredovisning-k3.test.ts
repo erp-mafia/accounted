@@ -277,17 +277,17 @@ beforeEach(() => {
   plantStandardReports()
 })
 
-describe('buildArsredovisningData — K3', () => {
+describe('buildArsredovisningData: K3', () => {
   it('records accounting_framework=k3 in the output', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient — chainable mock isn't fully typed
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient: chainable mock isn't fully typed
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.accounting_framework).toBe('k3')
   })
 
   it('includes a kassaflödesanalys when framework is K3', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.kassaflodesanalys).toBeDefined()
     expect(data.kassaflodesanalys?.total_cash_flow).toBe(300_000)
@@ -296,7 +296,7 @@ describe('buildArsredovisningData — K3', () => {
 
   it('includes a separate equity_changes_statement when framework is K3', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.equity_changes_statement).toBeDefined()
     expect(data.equity_changes_statement!.rows.length).toBeGreaterThan(0)
@@ -304,7 +304,7 @@ describe('buildArsredovisningData — K3', () => {
 
   it('emits the K3-style redovisningsprinciper note with framework citation', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))
     expect(principles).toBeDefined()
@@ -313,7 +313,7 @@ describe('buildArsredovisningData — K3', () => {
 
   it('emits an "Uppskjutna skatter" note with 2240 movement when balances exist', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     const uppskjuten = data.noter.find((n) => n.title === 'Uppskjutna skatter')
     expect(uppskjuten).toBeDefined()
@@ -324,14 +324,14 @@ describe('buildArsredovisningData — K3', () => {
 
   it('emits an Eventualförpliktelser note', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.noter.find((n) => n.title === 'Eventualförpliktelser')).toBeDefined()
   })
 
   it('emits Väsentliga händelser efter balansdagen for K3', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(
       data.noter.find((n) => n.title === 'Väsentliga händelser efter balansdagen'),
@@ -340,7 +340,7 @@ describe('buildArsredovisningData — K3', () => {
 
   it('DROPS the old "K3 noter need manual augmentation" warning text', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     // The warning should no longer say the K3 noter need manual augmentation
     expect(
@@ -351,31 +351,31 @@ describe('buildArsredovisningData — K3', () => {
   })
 })
 
-describe('buildArsredovisningData — K2 byte-equivalence', () => {
+describe('buildArsredovisningData: K2 byte-equivalence', () => {
   it('records accounting_framework=k2', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.accounting_framework).toBe('k2')
   })
 
   it('OMITS kassaflödesanalys when framework is K2', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.kassaflodesanalys).toBeUndefined()
   })
 
   it('OMITS equity_changes_statement when framework is K2', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.equity_changes_statement).toBeUndefined()
   })
 
   it('emits the K2-style redovisningsprinciper note (BFNAR 2016:10)', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))
     expect(principles).toBeDefined()
@@ -384,7 +384,7 @@ describe('buildArsredovisningData — K2 byte-equivalence', () => {
 
   it('does NOT call generateKassaflodesanalys for K2', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
-    // @ts-expect-error — chainable mock isn't fully typed as SupabaseClient
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(mockedKassaflode).not.toHaveBeenCalled()
   })

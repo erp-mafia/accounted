@@ -76,7 +76,7 @@ function buildJournalPreview(
   reverseCharge: boolean,
   supplierType: string | undefined,
   // FX multiplier applied to every amount. 1 when the invoice is in SEK or
-  // when no rate is set. Matches what the backend writes — items go through
+  // when no rate is set. Matches what the backend writes: items go through
   // resolveSekAmount(item.line_total, null, currency, exchange_rate), so the
   // saved verifikation is always in SEK, never in invoice currency.
   fxRate: number,
@@ -86,7 +86,7 @@ function buildJournalPreview(
 
   // Aggregate expense amounts by booking account (in SEK). Periodiserade
   // lines book their net to the 17xx interim account instead of the cost
-  // account — same resolveBookingAccount the entry generator uses, so the
+  // account: same resolveBookingAccount the entry generator uses, so the
   // preview matches the saved verifikat.
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
@@ -105,7 +105,7 @@ function buildJournalPreview(
     })
   }
 
-  // Per-line effective VAT — manual override wins over computed amount × rate.
+  // Per-line effective VAT: manual override wins over computed amount × rate.
   // The engine reads stored vat_amount; the preview must reflect the same.
   const itemVat = (item: ReviewLineItem) =>
     item.vat_amount != null
@@ -114,7 +114,7 @@ function buildJournalPreview(
 
   if (reverseCharge) {
     // Reverse charge: the supplier charges no VAT, so the buyer self-assesses at
-    // the Swedish statutory rate (resolveReverseChargeRate — 25% huvudregel
+    // the Swedish statutory rate (resolveReverseChargeRate: 25% huvudregel
     // default, or the per-item reverse_charge_rate). We book BOTH the fiktiv-moms
     // pair (2645/2647 + 2614/2624/2634) AND the basbeloppsrader (44xx/45xx +
     // 4598), exactly as the engine does, so this preview matches the saved
@@ -290,7 +290,7 @@ export function SupplierInvoiceReviewContent({
         )}
       </div>
 
-      {/* Line items — table on desktop, cards on mobile */}
+      {/* Line items: table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">

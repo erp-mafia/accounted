@@ -14,7 +14,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // closes that test debt.
 
 async function insertWebhook(params: {
-  // userId kept in the signature for parity with seedCompany's return — the
+  // userId kept in the signature for parity with seedCompany's return: the
   // webhooks table itself has no user_id column (see route comment in
   // app/api/v1/companies/[companyId]/webhooks/route.ts).
   userId: string
@@ -54,7 +54,7 @@ async function insertDelivery(params: {
   return id
 }
 
-describe('webhook_deliveries triggers — immutability + DELETE block', () => {
+describe('webhook_deliveries triggers: immutability + DELETE block', () => {
   // The lifecycle that dispatcher.ts depends on must remain mutable:
   // pending → in_flight (claim), in_flight → failed (retry-pending),
   // failed → in_flight (re-claim). Only `delivered` and `dead` are
@@ -162,7 +162,7 @@ describe('webhook_deliveries triggers — immutability + DELETE block', () => {
     ).rejects.toThrow(/terminal status \(dead\) cannot be deleted/i)
   })
 
-  // Non-terminal rows are still deletable — the queue-cleanup path
+  // Non-terminal rows are still deletable: the queue-cleanup path
   // (operator clears a stuck pending row, dev environment wipes,
   // companies CASCADE delete) keeps working.
   it('allows DELETE on a pending row', async () => {
@@ -178,12 +178,12 @@ describe('webhook_deliveries triggers — immutability + DELETE block', () => {
   })
 })
 
-describe('webhook_deliveries triggers — cross-tenant INSERT guard', () => {
+describe('webhook_deliveries triggers: cross-tenant INSERT guard', () => {
   it('rejects INSERT when delivery.company_id != webhooks.company_id', async () => {
     // Tenant A owns the webhook; tenant B owns the company on the
     // delivery row. A compromised service-role caller (or future bug)
     // attempting to enqueue a delivery against another tenant's webhook
-    // is refused at write time — closes cases (a) (cross-tenant
+    // is refused at write time: closes cases (a) (cross-tenant
     // visibility) and (c) (existence leak) flagged in migration
     // 20260515190000's comment.
     const a = await seedCompany()
@@ -222,7 +222,7 @@ describe('webhook_deliveries triggers — cross-tenant INSERT guard', () => {
     // ON DELETE SET NULL on the FK leaves these rows after a webhook is
     // deleted. New inserts with webhook_id IS NULL aren't a normal write
     // path (the handler never inserts a null webhook_id) but the trigger
-    // explicitly bypasses the check rather than blocking — leaving room
+    // explicitly bypasses the check rather than blocking: leaving room
     // for an admin-side audit-replay tool that recreates an archived
     // delivery for forensic export.
     const { companyId } = await seedCompany()

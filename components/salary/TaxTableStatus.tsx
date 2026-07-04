@@ -60,7 +60,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
     status.source === 'api'
       ? `Skattetabeller för ${status.year} hämtas live från Skatteverket`
       : status.source === 'fallback'
-        ? `Skatteverkets API är inte nåbart — använder lokal reservdata för ${status.year}`
+        ? `Skatteverkets API är inte nåbart: använder lokal reservdata för ${status.year}`
         : `Skattetabeller för ${status.year} kunde inte hämtas`
 
   if (compact) {

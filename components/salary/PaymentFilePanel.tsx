@@ -158,7 +158,7 @@ export function PaymentFilePanel({
                   </div>
                 ))}
                 <p className="pt-1 text-muted-foreground border-t mt-2">
-                  Beloppen är förifyllda — kvar är att signera med BankID i banken.
+                  Beloppen är förifyllda: kvar är att signera med BankID i banken.
                 </p>
               </div>
             )}
@@ -167,7 +167,7 @@ export function PaymentFilePanel({
               <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span>
                 <strong className="text-foreground">Open Payments / direktbetalning</strong> via PSD2 (utan filimport)
-                är planerat för framtiden via Enable Banking. Initiering kräver separat PIS-avtal — vi följer upp när
+                är planerat för framtiden via Enable Banking. Initiering kräver separat PIS-avtal: vi följer upp när
                 tillräckligt många kunder använder lönebetalfiler regelbundet.
               </span>
             </div>

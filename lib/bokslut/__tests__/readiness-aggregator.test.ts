@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { YearEndValidation } from '@/types'
 
 // Mock both sources the aggregator composes from. Tests focus on composition
-// (reminders by entity, reconciliation surfacing, error tolerance) — the
+// (reminders by entity, reconciliation surfacing, error tolerance): the
 // underlying validateYearEndReadiness already has its own coverage.
 vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
   validateYearEndReadiness: vi.fn(),
@@ -102,7 +102,7 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.ready).toBe(true)
     expect(report.blockers).toEqual([])
     expect(report.entityType).toBe('aktiebolag')
-    // Phase 3 handles depreciation + bolagsskatt + p-fond automatically — only
+    // Phase 3 handles depreciation + bolagsskatt + p-fond automatically: only
     // the accruals reminder should remain (Phase 4 will replace it).
     expect(report.reminders.map((r) => r.code)).toContain('accruals_manual')
     expect(report.reminders.map((r) => r.code)).not.toContain('depreciation_manual')
@@ -166,7 +166,7 @@ describe('buildBokslutReadinessReport', () => {
     expect(reconReminder).toBeDefined()
     expect(reconReminder?.severity).toBe('warning')
     expect(reconReminder?.message).toContain('7')
-    // Reconciliation reminder is not a legal blocker — ready should still mirror validation
+    // Reconciliation reminder is not a legal blocker: ready should still mirror validation
     expect(report.ready).toBe(true)
   })
 

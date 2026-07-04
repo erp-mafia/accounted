@@ -1,15 +1,15 @@
 /**
- * /api/v1/companies/{companyId}/suppliers — list + create supplier endpoints.
+ * /api/v1/companies/{companyId}/suppliers: list + create supplier endpoints.
  *
- * GET   — list with filters (supplier_type, search, include_archived).
+ * GET  : list with filters (supplier_type, search, include_archived).
  *         Cursor pagination on (created_at ASC, id ASC).
- * POST  — create. Idempotent (mandatory Idempotency-Key). Dry-runnable
+ * POST : create. Idempotent (mandatory Idempotency-Key). Dry-runnable
  *         (?dry_run=true returns the validated would-be record without
  *         committing).
  *
  * VIES validation note: unlike customers, suppliers do not carry a
  * `vat_number_validated` flag in the schema today. The vat_number is
- * accepted as input but not auto-verified against VIES — a deliberate
+ * accepted as input but not auto-verified against VIES: a deliberate
  * scope decision documented in the endpoint pitfalls.
  */
 
@@ -49,7 +49,7 @@ const SupplierSummary = z.object({
 
 const SuppliersListResponse = listEnvelope(SupplierSummary)
 
-// Explicit projection — never SELECT *. Schema migrations adding columns
+// Explicit projection: never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.
 const SUPPLIER_SUMMARY_COLUMNS =
   'id, name, supplier_type, email, org_number, vat_number, default_payment_terms, default_currency, archived_at, created_at'
@@ -62,12 +62,12 @@ registerEndpoint({
   description:
     'Returns active suppliers in created-first order. Pass ?include_archived=true to include archived rows. Use ?search to match against name or org_number.',
   useWhen:
-    'You need a supplier roster — for building a UI picker, resolving a supplier_id before registering a supplier invoice, or syncing an external AP system.',
+    'You need a supplier roster: for building a UI picker, resolving a supplier_id before registering a supplier invoice, or syncing an external AP system.',
   doNotUseFor:
-    'Fetching a single supplier you already know the id of — use GET /api/v1/companies/{companyId}/suppliers/{id}. Customers are a separate resource.',
+    'Fetching a single supplier you already know the id of: use GET /api/v1/companies/{companyId}/suppliers/{id}. Customers are a separate resource.',
   pitfalls: [
     'Archived suppliers are hidden by default; the dashboard makes the same choice.',
-    'org_number identifies legal entities only — suppliers currently have no `individual` type, so the field is Bolagsverket public-record data when present.',
+    'org_number identifies legal entities only: suppliers currently have no `individual` type, so the field is Bolagsverket public-record data when present.',
     'vat_number is stored as supplied; unlike customers, suppliers are not auto-validated against VIES on create. Validate externally if the integration requires it.',
   ],
   example: {
@@ -222,7 +222,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST — create supplier
+// POST: create supplier
 // ──────────────────────────────────────────────────────────────────
 
 const SupplierCreated = z.object({
@@ -261,15 +261,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/suppliers',
   summary: 'Create a supplier.',
   description:
-    'Creates a new supplier for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing — the dry-run response shows the would-be record minus id and timestamps.',
+    'Creates a new supplier for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing: the dry-run response shows the would-be record minus id and timestamps.',
   useWhen:
     'You need to register a new supplier before booking supplier invoices against them. Use dry-run first to catch validation errors before committing.',
   doNotUseFor:
     'Updating an existing supplier (PATCH instead). Creating customers (different resource).',
   pitfalls: [
-    'Idempotency-Key is mandatory — calls without it return 400 VALIDATION_ERROR.',
+    'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
     'org_number uniqueness is enforced at the database level; duplicate inserts return 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
-    'Unlike customers, suppliers carry no `vat_number_validated` flag — vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.',
+    'Unlike customers, suppliers carry no `vat_number_validated` flag: vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.',
     'default_expense_account is a BAS account number (e.g. "5410"); the value is stored as-is and used as the suggested debit account when supplier invoices are booked.',
   ],
   example: {
@@ -400,7 +400,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     if (error) {
       if (error.code === '23505') {
-        // Symmetric with customers: do NOT echo body.org_number — guards
+        // Symmetric with customers: do NOT echo body.org_number: guards
         // against accidentally leaking a natural-person identifier in the
         // future if SupplierType ever gains an `individual` variant.
         return v1ErrorResponseFromCode('SUPPLIER_DUPLICATE_ORG_NUMBER', ctx.log, {

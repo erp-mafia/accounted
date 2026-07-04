@@ -30,8 +30,8 @@ export default function EmployeesPage() {
   const searchParams = useSearchParams()
 
   // The "Ny anställd" modal is driven by the URL (?new=1) so every entry
-  // point — the header button, the empty state, and the legacy
-  // /salary/employees/new redirect — opens the same dialog, and the browser
+  // point (the header button, the empty state, and the legacy
+  // /salary/employees/new redirect) opens the same dialog, and the browser
   // back button closes it. Same pattern as /invoices.
   const showNewEmployee = searchParams.has('new')
   const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
@@ -122,14 +122,14 @@ export default function EmployeesPage() {
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {emp.salary_type === 'hourly'
-                        ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}${t('hourly_suffix')}` : '—'
-                        : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '—'}
+                        ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
+                        : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '-'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {emp.employment_degree}%
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
-                      {emp.tax_table_number ? t('tax_table_format', { table: emp.tax_table_number, column: emp.tax_column ?? '' }) : '—'}
+                      {emp.tax_table_number ? t('tax_table_format', { table: emp.tax_table_number, column: emp.tax_column ?? '' }) : '-'}
                     </TableCell>
                   </TableRow>
                 ))}

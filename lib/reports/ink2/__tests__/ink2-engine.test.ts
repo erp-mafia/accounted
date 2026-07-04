@@ -141,7 +141,7 @@ describe('INK2R Account Mappings', () => {
     })
   })
 
-  describe('Income statement (per bas.se — CRITICAL: 5000-6999 ALL → 7513)', () => {
+  describe('Income statement (per bas.se: CRITICAL: 5000-6999 ALL → 7513)', () => {
     it('3000-3799 -> 7410 (Nettoomsättning)', () => {
       expect(findSRUCodeForAccount('3000')).toBe('7410')
       expect(findSRUCodeForAccount('3001')).toBe('7410')
@@ -211,7 +211,7 @@ describe('INK2R Account Mappings', () => {
 
     describe('bokslutsdispositioner (BAS 2020-aligned)', () => {
       // These mappings were corrected when the Phase 2 bokslut calculators
-      // landed — the previous ranges (8810/8830/8840) targeted accounts that
+      // landed: the previous ranges (8810/8830/8840) targeted accounts that
       // BAS doesn't seed. Locking the corrected mapping prevents regression.
       it('8811 -> 7525 (Avsättning till periodiseringsfond)', () => {
         expect(findSRUCodeForAccount('8811')).toBe('7525')

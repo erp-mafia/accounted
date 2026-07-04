@@ -23,7 +23,7 @@ export function MainContainer({
 }) {
   const pathname = usePathname()
   // Full-bleed routes own their own padding + multi-pane layout. They
-  // shouldn't sit inside max-w-5xl or any horizontal padding — that's what
+  // shouldn't sit inside max-w-5xl or any horizontal padding: that's what
   // causes a visible gap between the dashboard sidebar and the chat-sidebar
   // pane on wide viewports.
   const isFullBleed = pathname.startsWith('/e/') || pathname.startsWith('/chat')

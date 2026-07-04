@@ -77,7 +77,7 @@ export function AccountDangerZone() {
 
       if (response.status === 409) {
         const body = await response.json()
-        // Precondition tripped mid-flow — refresh the list and show inline.
+        // Precondition tripped mid-flow: refresh the list and show inline.
         setBlockers(body.blockers ?? [])
         setError(body.error || t('delete_failed_blockers'))
         setIsDeleting(false)

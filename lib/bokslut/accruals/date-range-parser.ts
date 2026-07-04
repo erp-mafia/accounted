@@ -4,11 +4,11 @@
  * can auto-detect supplier invoices and customer invoices whose service
  * window crosses the fiscal-period boundary.
  *
- * The function is intentionally conservative — it only returns a parse when
+ * The function is intentionally conservative: it only returns a parse when
  * BOTH a recognizable start and end date are present. Single dates, "från
  * 2026-01-01" with no end, and malformed strings all return null. The auto-
  * detect step later sets `confidence: 'low'` when the parser only caught a
- * partial pattern (currently always "high" since partials return null —
+ * partial pattern (currently always "high" since partials return null,
  * kept as a knob so the wizard UI can downgrade future heuristics without
  * touching this file).
  *
@@ -20,7 +20,7 @@
  *   5. yyyy-mm: "2026-01 till 2027-12"  (expanded to 1st of start / last of end)
  *   6. Free  : "giltig från 2026-01-01 till 2027-12-31"
  *
- * All return ISO `yyyy-mm-dd`. The function does no fiscal logic — it just
+ * All return ISO `yyyy-mm-dd`. The function does no fiscal logic: it just
  * reports the parsed window. The caller decides whether endDate > period_end.
  */
 
@@ -61,7 +61,7 @@ const ISO = '(\\d{4}-\\d{2}-\\d{2})'
 /** yyyy-mm without day. */
 const YM = '(\\d{4}-\\d{2})'
 
-/** Swedish long form "1 jan 2026" — day optional. */
+/** Swedish long form "1 jan 2026": day optional. */
 const SWE_LONG = `(?:(\\d{1,2})\\s+)?(${MONTH_NAMES_PATTERN})\\s+(\\d{4})`
 
 function pad2(n: number): string {
@@ -111,7 +111,7 @@ function expandSwedishLong(
 
 function validateRange(startDate: string, endDate: string): boolean {
   // endDate must be strictly after startDate. A single date repeated isn't
-  // a range, just a point — the caller should treat that as "no range".
+  // a range, just a point: the caller should treat that as "no range".
   return endDate > startDate
 }
 
@@ -128,7 +128,7 @@ export function parseInvoiceDateRange(description: string | null | undefined): P
   if (!description) return null
   const text = description.toLowerCase()
 
-  // 1. ISO–ISO: "2026-01-01 till 2027-12-31", "2026-01-01 - 2027-12-31"
+  // 1. ISO-ISO: "2026-01-01 till 2027-12-31", "2026-01-01 - 2027-12-31"
   const isoRe = new RegExp(`${ISO}${SEP}${ISO}`, 'i')
   const isoMatch = isoRe.exec(text)
   if (isoMatch) {
@@ -151,7 +151,7 @@ export function parseInvoiceDateRange(description: string | null | undefined): P
   }
 
   // 3. yyyy-mm on both sides: "2026-01 till 2027-12"
-  // Guarded: don't allow a full ISO date here — anchor to space / start.
+  // Guarded: don't allow a full ISO date here, anchor to space / start.
   const ymRe = new RegExp(`(?:^|[^\\d-])${YM}${SEP}${YM}(?![\\d-])`, 'i')
   const ymMatch = ymRe.exec(text)
   if (ymMatch) {

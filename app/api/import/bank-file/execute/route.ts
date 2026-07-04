@@ -15,7 +15,7 @@ ensureInitialized()
 // Bank-file imports run a sequential, per-row ingest (insert + invoice/supplier
 // matching + FX lookup). A full-year file (300+ rows) takes ~85s of server time,
 // which sits right on the platform's default function limit and gets killed
-// mid-run — the import "spins then aborts" for the user. Give it the same 5-minute
+// mid-run: the import "spins then aborts" for the user. Give it the same 5-minute
 // budget the SIE import route uses (app/api/import/sie/execute/route.ts).
 export const maxDuration = 300
 
@@ -41,7 +41,7 @@ export const POST = withRouteContext(
     const { user, supabase, log, requestId } = ctx
 
     // We still call getCompanyRole because viewers are allowed through with
-    // rawInsertOnly behavior — `requireWrite: true` would block them.
+    // rawInsertOnly behavior: `requireWrite: true` would block them.
     const roleCheck = await getCompanyRole(supabase, user.id)
     if (!roleCheck.ok) {
       // Inject the request id for traceability and pass through.

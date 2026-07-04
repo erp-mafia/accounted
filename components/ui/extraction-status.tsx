@@ -12,7 +12,7 @@ interface Props {
 
 // Inline status indicator for an AI extraction in flight. Sits next to a
 // freshly-attached document in upload flows. Five visual states map to the
-// useDocumentExtraction hook output. "disabled" renders nothing — the free
+// useDocumentExtraction hook output. "disabled" renders nothing: the free
 // tier has no AI extraction and shouldn't see scary UI.
 //
 // Copy is intentionally short and Swedish. The status changes inline; the
@@ -73,7 +73,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
       )}
     >
       <AlertCircle className="h-3.5 w-3.5" />
-      Kunde inte läsa automatiskt — fyll i manuellt
+      Kunde inte läsa automatiskt: fyll i manuellt
     </span>
   )
 }

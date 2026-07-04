@@ -41,7 +41,7 @@ Add at module level (outside the handler):
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 
-ensureInitialized()  // MUST be module-level — loads extensions
+ensureInitialized()  // MUST be module-level: loads extensions
 ```
 
 Then emit after successful operations:
@@ -52,7 +52,7 @@ await eventBus.emit('invoice.created', { invoice: result, userId: user.id })
 
 ## Dynamic Route Params (Next.js 16)
 
-Params are a Promise — must await:
+Params are a Promise; must await:
 
 ```typescript
 export async function POST(
@@ -78,7 +78,7 @@ try {
   }
 } catch (err) {
   console.error('Failed to create journal entry:', err)
-  // Continue — don't fail the request
+  // Continue: don't fail the request
 }
 ```
 
@@ -126,9 +126,9 @@ if (!data) {
 
 ## Common Mistakes
 
-1. Forgetting `ensureInitialized()` on routes that emit events — events silently won't fire
-2. Using `params.id` instead of `(await params).id` — Next.js 16 breaking change
-3. Missing `user_id` filter on queries — relies solely on RLS
-4. Blocking on supplementary journal entry failure — must wrap in try/catch (but payment entries MUST block — see above)
-5. Returning `{ message }` instead of `{ error }` on failure — inconsistent with codebase
-6. Forgetting `await` on `createClient()` — it's async in server context
+1. Forgetting `ensureInitialized()` on routes that emit events: events silently won't fire
+2. Using `params.id` instead of `(await params).id`: Next.js 16 breaking change
+3. Missing `user_id` filter on queries: relies solely on RLS
+4. Blocking on supplementary journal entry failure: must wrap in try/catch (but payment entries MUST block, see above)
+5. Returning `{ message }` instead of `{ error }` on failure: inconsistent with codebase
+6. Forgetting `await` on `createClient()`: it's async in server context

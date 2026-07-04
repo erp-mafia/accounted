@@ -5,7 +5,7 @@
  * and stamps `paid_at`. No engine interaction, no event emission (the dashboard's
  * route is also silent; the verifikation event fires from `:book`).
  *
- * Idempotent at the call level — a replay with the same Idempotency-Key returns
+ * Idempotent at the call level: a replay with the same Idempotency-Key returns
  * the cached response. State-wise, calling :mark-paid on an already-paid run
  * returns 400 (status must be approved).
  */
@@ -35,9 +35,9 @@ registerEndpoint({
   useWhen:
     'You\'ve confirmed the salary payment hit employee bank accounts and want to advance the run\'s lifecycle so `:book` can post the verifikation.',
   doNotUseFor:
-    'Initiating the actual bank transfer (the v1 API does not yet expose payment-file generation; use the dashboard\'s payment-file endpoints). Posting journal entries (use `:book`). Reverting a paid run (no `:unpaid` exists — call `:correct` once booked if you need to undo).',
+    'Initiating the actual bank transfer (the v1 API does not yet expose payment-file generation; use the dashboard\'s payment-file endpoints). Posting journal entries (use `:book`). Reverting a paid run (no `:unpaid` exists: call `:correct` once booked if you need to undo).',
   pitfalls: [
-    'Run must be in `approved` — non-`approved` runs return 400 SALARY_RUN_MARK_PAID_NOT_APPROVED.',
+    'Run must be in `approved`: non-`approved` runs return 400 SALARY_RUN_MARK_PAID_NOT_APPROVED.',
     'paid_at is set server-side to the current UTC timestamp; the API does not accept a body-supplied date to keep BFL audit clean.',
   ],
   example: {

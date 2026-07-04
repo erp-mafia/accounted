@@ -38,7 +38,7 @@ interface Props {
  * Tier-2 retro-tagging on a posted voucher line (dimensions plan PR6).
  * Edits ONLY the dimension tags via the audited retag RPC; the verifikat
  * itself is untouchable. Dims other than 1/6 pass through unedited (same
- * merge semantics as the voucher editor). Hardcoded Swedish — voucher
+ * merge semantics as the voucher editor). Hardcoded Swedish: voucher
  * detail is a stays-Swedish surface.
  */
 export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }: Props) {
@@ -114,7 +114,7 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
         <div className="rounded-lg border border-border p-3 text-sm">
           <AccountNumber number={line.account_number} showName />
           <div className="mt-1 flex items-center justify-between text-muted-foreground">
-            <span className="truncate">{line.line_description || '—'}</span>
+            <span className="truncate">{line.line_description || '-'}</span>
             <span className="tabular-nums shrink-0 ml-3">
               {amount.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} kr {side}
             </span>

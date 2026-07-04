@@ -25,7 +25,7 @@ export async function POST(
   return NextResponse.json({ error: 'Funktionen är inaktiverad' }, { status: 503 })
 }
 
-// Implementation preserved but unreachable — feature disabled at the export above.
+// Implementation preserved but unreachable: feature disabled at the export above.
 // To re-enable, replace the POST export above with this function body.
 async function _sendPayslipsImpl(
   _request: Request,
@@ -155,7 +155,7 @@ async function _sendPayslipsImpl(
 
       const sendResult = await emailService.sendEmail({
         to: emp.email,
-        subject: `Lönespecifikation ${monthName} ${run.period_year} — ${company.name}`,
+        subject: `Lönespecifikation ${monthName} ${run.period_year}: ${company.name}`,
         html: `<p>Hej ${emp.first_name},</p>
 <p>Bifogat finner du din lönespecifikation för ${monthName} ${run.period_year}.</p>
 <p>Utbetalningsdag: ${run.payment_date}</p>

@@ -2,7 +2,7 @@
 
 ## Perspective
 
-You are scanning for performance issues in a Next.js 16 (App Router) + React 19 + Supabase application. Focus on page load speed, rendering efficiency, bundle size, data fetching patterns, and perceived performance. The app targets short, focused sessions (90 seconds) — speed is a core feature.
+You are scanning for performance issues in a Next.js 16 (App Router) + React 19 + Supabase application. Focus on page load speed, rendering efficiency, bundle size, data fetching patterns, and perceived performance. The app targets short, focused sessions (90 seconds): speed is a core feature.
 
 ## Checklist
 

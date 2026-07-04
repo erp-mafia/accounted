@@ -59,7 +59,7 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
 
       if (!response.ok) {
         // Surface the specific Zod field message when the API sent a
-        // validation_error envelope — generic "Validation failed" is useless
+        // validation_error envelope: generic "Validation failed" is useless
         // to the user.
         if (
           result?.type === 'validation_error'

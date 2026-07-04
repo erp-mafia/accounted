@@ -8,13 +8,13 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 // Mutate a single memory entry. Powers the list/edit/pin/dismiss affordances
 // on /settings/agent-memory (plan §11).
 //
-//   content    — edit the durable text (kind never changes; that would
+//   content: edit the durable text (kind never changes; that would
 //                muddle the audit lineage). Append-only is preserved by
 //                superseded_by chains when an upstream caller wants it; the
 //                transparency UI is allowed to overwrite in place because
 //                the row's `updated_at` already documents the edit.
-//   is_pinned  — boost into the top-N prompt block regardless of score.
-//   is_active  — false = dismiss (removes from ranking pool); true = restore.
+//   is_pinned: boost into the top-N prompt block regardless of score.
+//   is_active: false = dismiss (removes from ranking pool); true = restore.
 //
 // RLS scopes to user_company_ids(); we ALSO re-verify membership for the
 // row's company_id as defense in depth before mutating.

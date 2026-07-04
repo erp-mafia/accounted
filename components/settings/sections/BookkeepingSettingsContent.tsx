@@ -52,7 +52,7 @@ export function BookkeepingSettingsContent() {
 
     // Write-through: the booking engine resolves the series from the
     // per-source-type map, NOT from default_voucher_series. So when the user
-    // changes the global default, propagate it across the map — but only for
+    // changes the global default, propagate it across the map, but only for
     // types that were still following the previous default, leaving explicit
     // per-type overrides (set via VoucherSeriesPerSourceTypeForm) untouched.
     // Without this the "Standardserie" dropdown is a no-op for bookkeeping.
@@ -148,7 +148,7 @@ export function BookkeepingSettingsContent() {
         <FiscalYearsManager />
       </div>
 
-      {/* Voucher series — per-source-type mapping */}
+      {/* Voucher series: per-source-type mapping */}
       <div className="border-t border-border pt-8">
         <VoucherSeriesPerSourceTypeForm
           settings={settings}
@@ -156,7 +156,7 @@ export function BookkeepingSettingsContent() {
         />
       </div>
 
-      {/* Voucher series — read-only display */}
+      {/* Voucher series: read-only display */}
       <div className="border-t border-border pt-8">
         <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
       </div>

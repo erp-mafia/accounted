@@ -10,7 +10,7 @@ interface Props {
 // agent_profile yet. Mounted from the dashboard server component which
 // already does the existence check, so this component itself doesn't fetch.
 //
-// Single CTA, no dismiss — building the agent is part of onboarding and
+// Single CTA, no dismiss: building the agent is part of onboarding and
 // once verified it disappears on its own.
 export default function AgentSetupBanner({ companyName }: Props) {
   return (
@@ -28,7 +28,7 @@ export default function AgentSetupBanner({ companyName }: Props) {
             <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Skräddarsy en hjälp som kan ditt företag — laddas på under en halv minut för {companyName}.
+            Skräddarsy en hjälp som kan ditt företag: laddas på under en halv minut för {companyName}.
           </p>
         </div>
         <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />

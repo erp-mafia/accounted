@@ -30,7 +30,7 @@ interface Props {
 }
 
 /**
- * "Ny anställd" as a modal — mirrors NewSupplierInvoiceDialog. The last
+ * "Ny anställd" as a modal: mirrors NewSupplierInvoiceDialog. The last
  * register entity (after customers/suppliers/articles) to move off a full
  * page. Card sections carry over from the old /salary/employees/new page.
  */
@@ -41,7 +41,7 @@ export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Pro
         className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
         // A half-typed employee must survive an accidental backdrop click or
         // a stray Escape (the municipality combobox and dimension pickers
-        // portal outside the dialog). Closing is explicit — the header X or
+        // portal outside the dialog). Closing is explicit: the header X or
         // Avbryt. Same convention as NewJournalEntryDialog.
         onEscapeKeyDown={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
@@ -67,7 +67,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   const [vacationRule, setVacationRule] = useState('procentregeln')
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
-  // company_settings.dimensions_enabled — same UI gate as the voucher form.
+  // company_settings.dimensions_enabled: same UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [dimensions, setDimensions] = useState<Record<string, string>>({})
   const [tax, setTax] = useState<EmployeeTaxValue>({
@@ -125,7 +125,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       bank_account_number: form.get('bank_account_number') as string || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
-      // Always sent — {} means no default dimensions.
+      // Always sent: {} means no default dimensions.
       default_dimensions: dimensions,
     }
 
@@ -333,7 +333,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               )}
               {vacationRule === 'semesterersattning' && (
                 <p className="text-xs text-muted-foreground">
-                  12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp — vanligt för tim- och visstidsanställda.
+                  12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp. Vanligt för tim- och visstidsanställda.
                 </p>
               )}
             </div>

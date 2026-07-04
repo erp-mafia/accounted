@@ -1,14 +1,14 @@
-export const COOKBOOK_WEBHOOKS_MD = `# Cookbook — set up webhooks and verify signatures end-to-end
+export const COOKBOOK_WEBHOOKS_MD = `# Cookbook: set up webhooks and verify signatures end-to-end
 
 > Subscribe a receiver to invoice events, verify HMAC signatures correctly, handle the at-least-once retry semantics, and build idempotency around the delivery id.
 
-This is the operational companion to the [Webhooks concept page](/docs/api/webhooks) — that page explains *what* webhooks are; this one walks through *how* to wire one up correctly the first time.
+This is the operational companion to the [Webhooks concept page](/docs/api/webhooks): that page explains *what* webhooks are; this one walks through *how* to wire one up correctly the first time.
 
 ## What you'll need
 
 - A test API key with \`webhooks:manage\` scope (and \`payroll:read\` if you intend to subscribe to payroll events).
-- A receiver URL that Accounted can POST to. For local development use [smee.io](https://smee.io) or \`ngrok\` — Accounted refuses webhook URLs that resolve to private IPs (SSRF protection), so localhost won't work directly.
-- HTTPS only — \`http://\` URLs are rejected at registration.
+- A receiver URL that Accounted can POST to. For local development use [smee.io](https://smee.io) or \`ngrok\`: Accounted refuses webhook URLs that resolve to private IPs (SSRF protection), so localhost won't work directly.
+- HTTPS only: \`http://\` URLs are rejected at registration.
 
 ## 1. Register the webhook
 
@@ -22,7 +22,7 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks" \\
   -d '{
     "event_type": "invoice.paid",
     "webhook_url": "https://my-receiver.example.com/gnubok",
-    "name": "CRM sync — invoice paid"
+    "name": "CRM sync: invoice paid"
   }'
 \`\`\`
 
@@ -32,7 +32,7 @@ Response:
 {
   "data": {
     "id": "wh_a8f1...",
-    "name": "CRM sync — invoice paid",
+    "name": "CRM sync: invoice paid",
     "event_type": "invoice.paid",
     "webhook_url": "https://my-receiver.example.com/gnubok",
     "active": true,
@@ -46,13 +46,13 @@ Response:
 
 > ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, the recovery path is to delete the webhook and create a new one (which generates a fresh secret); receivers must re-deploy with the new value.
 
-**Store the secret in a secrets manager** (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, Doppler, 1Password Connect, ...) rather than a plaintext \`.env\` file or a config commit. The secret is signing material — anyone who reads it can forge events that will pass your signature check. Treat it with the same care as a database password.
+**Store the secret in a secrets manager** (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, Doppler, 1Password Connect, ...) rather than a plaintext \`.env\` file or a config commit. The secret is signing material: anyone who reads it can forge events that will pass your signature check. Treat it with the same care as a database password.
 
 ## 2. Implement signature verification
 
 Use the [Node](https://app.gnubok.se/docs/api/webhooks#nodejs) or [Python](https://app.gnubok.se/docs/api/webhooks#python) sample on the concept page. The critical detail: capture the **raw request body** before any framework JSON-parses it. Re-serialising the body produces different bytes and the signature won't match.
 
-For an Express handler, that means \`express.raw({ type: 'application/json' })\` — NOT the default \`express.json()\` middleware. For FastAPI / Flask use \`request.get_data()\`. For Cloudflare Workers use \`await request.text()\` BEFORE \`request.json()\`.
+For an Express handler, that means \`express.raw({ type: 'application/json' })\`: NOT the default \`express.json()\` middleware. For FastAPI / Flask use \`request.get_data()\`. For Cloudflare Workers use \`await request.text()\` BEFORE \`request.json()\`.
 
 ## 3. Send a test event
 
@@ -133,7 +133,7 @@ The next dispatcher tick (within 60s) delivers an \`invoice.paid\` event to your
 Deliveries are at-least-once. The same \`X-Gnubok-Delivery\` may arrive twice when the network drops a 200 response or your receiver times out after processing. Build idempotency around that header:
 
 \`\`\`javascript
-// Pseudo-code — adapt to your storage layer.
+// Pseudo-code: adapt to your storage layer.
 async function handleEvent(event) {
   const inserted = await db.processedDeliveries.insertIfMissing({
     delivery_id: event.id,
@@ -159,13 +159,13 @@ curl -X POST "https://app.gnubok.se/api/v1/webhook-deliveries/$DELIVERY_ID/retry
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
-The retry creates a fresh delivery row pointing at the same payload — the original audit row stays in place. Receivers see the same \`X-Gnubok-Delivery\` (the new row's id, not the original's), so the idempotency table needs no special handling.
+The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers see the same \`X-Gnubok-Delivery\` (the new row's id, not the original's), so the idempotency table needs no special handling.
 
 ## Auto-disable
 
 After:
 - HTTP 410 Gone from your receiver, OR
-- HTTP 3xx redirect (refused to follow — SSRF policy), OR
+- HTTP 3xx redirect (refused to follow: SSRF policy), OR
 - The webhook URL resolves to a private/loopback/link-local/cloud-metadata IP at dispatch time
 
 …the webhook is automatically disabled (\`active=false\`, \`disabled_reason\` set). Re-enable with:
@@ -177,12 +177,12 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBH
   -d '{ "active": true }'
 \`\`\`
 
-This clears \`disabled_at\` and \`disabled_reason\` but does NOT replay the deliveries that died while disabled — replay them individually with the retry endpoint.
+This clears \`disabled_at\` and \`disabled_reason\` but does NOT replay the deliveries that died while disabled: replay them individually with the retry endpoint.
 
 ## Common pitfalls
 
 - **Re-serialising the body.** \`JSON.parse(rawBody); JSON.stringify(parsed)\` produces different bytes than Accounted sent. Always sign-check against the raw bytes.
 - **Forgetting the timestamp window.** Without a \`t\` check, an attacker who captured one signed payload can replay it forever. 5 minutes is the recommended tolerance.
 - **Returning 5xx for application errors.** A 5xx triggers full retries (~72h). If a payload is malformed-but-stable, return 200 and queue for internal investigation.
-- **Treating \`failed\` as terminal.** \`failed\` rows will retry; only \`delivered\` and \`dead\` are terminal. Don't alert on \`failed\` — alert when retries exhaust to \`dead\`.
+- **Treating \`failed\` as terminal.** \`failed\` rows will retry; only \`delivered\` and \`dead\` are terminal. Don't alert on \`failed\`: alert when retries exhaust to \`dead\`.
 `

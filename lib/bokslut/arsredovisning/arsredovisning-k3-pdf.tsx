@@ -7,7 +7,7 @@ import type { ArsredovisningData } from './types'
  * Layout extends the K2 template with two additional statements required
  * for K3:
  *   - Kassaflödesanalys (K3 ch.7)
- *   - Förändring av eget kapital (K3 ch.6 — separate statement, not a
+ *   - Förändring av eget kapital (K3 ch.6: separate statement, not a
  *     förvaltningsberättelse table).
  *
  * Page order:
@@ -18,7 +18,7 @@ import type { ArsredovisningData } from './types'
  *   4. Balansräkning
  *   5. Kassaflödesanalys
  *   6. Förändring av eget kapital
- *   7+ Noter (paginates automatically — the richer K3 note set rarely fits
+ *   7+ Noter (paginates automatically: the richer K3 note set rarely fits
  *      on one page so we let @react-pdf wrap)
  *   last. Underskrifter + Fastställelseintyg
  *
@@ -177,7 +177,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         <View>
           <Text style={styles.title}>Årsredovisning</Text>
           <Text style={styles.subtitle}>
-            för räkenskapsåret {data.fiscal_period.period_start} — {data.fiscal_period.period_end}
+            för räkenskapsåret {data.fiscal_period.period_start}: {data.fiscal_period.period_end}
           </Text>
           <Text style={styles.k3Banner}>Upprättad enligt K3 (BFNAR 2012:1)</Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
@@ -221,7 +221,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
             <Text style={styles.colAmount}>{fmt(row.net_revenue)}</Text>
             <Text style={styles.colAmount}>{fmt(row.result_after_financial)}</Text>
             <Text style={styles.colAmount}>
-              {row.soliditet_pct === null ? '—' : row.soliditet_pct.toFixed(1)}
+              {row.soliditet_pct === null ? '-' : row.soliditet_pct.toFixed(1)}
             </Text>
           </View>
         ))}
@@ -282,7 +282,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         </View>
       </Page>
 
-      {/* Kassaflödesanalys — K3 only. Rendered as a flat list of rows so the
+      {/* Kassaflödesanalys: K3 only. Rendered as a flat list of rows so the
           page is laid out consistently with the other statements in this
           template. */}
       {data.kassaflodesanalys && (
@@ -423,7 +423,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
             {!data.kassaflodesanalys.reconciliation.is_reconciled && (
               <View style={styles.tableRow}>
                 <Text style={[styles.colLabel, { color: '#b91c1c' }]}>
-                  Avvikelse — kontrollera bokföringen
+                  Avvikelse: kontrollera bokföringen
                 </Text>
                 <Text style={[styles.colAmount, { color: '#b91c1c' }]}>
                   {fmt(data.kassaflodesanalys.reconciliation.mismatch_amount)}
@@ -434,7 +434,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         </Page>
       )}
 
-      {/* Förändring av eget kapital — K3 separate statement */}
+      {/* Förändring av eget kapital: K3 separate statement */}
       {data.equity_changes_statement && (
         <Page size="A4" style={styles.page}>
           <PageChrome data={data} pageLabel="Förändring av eget kapital" />
@@ -464,7 +464,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         {data.noter.map((note) => (
           <View key={note.number} style={{ marginBottom: 16 }} wrap>
             <Text style={{ fontFamily: 'Helvetica-Bold', marginBottom: 4 }}>
-              Not {note.number} — {note.title}
+              Not {note.number}: {note.title}
             </Text>
             <Text style={styles.noteBody}>{note.body}</Text>
           </View>
@@ -496,7 +496,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
       </Page>
 
       {/*
-        Fastställelseintyg — mirrors the K2 template. K3 documents face the
+        Fastställelseintyg: mirrors the K2 template. K3 documents face the
         same Bolagsverket filing requirement (ÅRL 8 kap 3 §). Signer label
         remains "Styrelseledamot (närvarande vid stämman)".
       */}

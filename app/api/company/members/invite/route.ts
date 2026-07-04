@@ -169,7 +169,7 @@ export async function POST(request: Request) {
       console.error('[company/members/invite] email send failed:', result.error)
     }
   } else {
-    console.warn('[company/members/invite] email service not configured — skipping send', {
+    console.warn('[company/members/invite] email service not configured: skipping send', {
       to: email,
     })
   }

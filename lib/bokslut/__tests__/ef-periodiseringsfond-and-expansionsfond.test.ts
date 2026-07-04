@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { proposeEfPfondAvsattning, proposeEfPfondAteforing } from '../enskild-firma/periodiseringsfond-ef'
 import { calculateExpansionsfondChange } from '../enskild-firma/expansionsfond-calculator'
 
-describe('EF periodiseringsfond — avsättning', () => {
+describe('EF periodiseringsfond: avsättning', () => {
   it('caps at 30 % of surplus (vs 25 % for AB)', () => {
     const r = proposeEfPfondAvsattning({ surplus: 100_000, fiscalYear: 2026, desiredAmount: 50_000 })
     expect(r).not.toBeNull()
@@ -17,7 +17,7 @@ describe('EF periodiseringsfond — avsättning', () => {
   })
 })
 
-describe('EF periodiseringsfond — återföring', () => {
+describe('EF periodiseringsfond: återföring', () => {
   it('forces full reversal of 6+ year old fonder', () => {
     const items = proposeEfPfondAteforing({
       existingFonder: [{ cohort_year: 2020, balance: 50_000 }],

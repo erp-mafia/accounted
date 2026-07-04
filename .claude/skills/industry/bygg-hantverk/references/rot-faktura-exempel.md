@@ -1,17 +1,17 @@
-# ROT-fakturering enligt fakturamodellen – flöde och kontering
+# ROT-fakturering enligt fakturamodellen: flöde och kontering
 
 ## Regelverk
 
-- **IL 67 kap. 11–19 §§** – Skattereduktion för hushållsarbete; rotarbete definierat i 13 a §; undantag i 13 c §.
+- **IL 67 kap. 11-19 §§**: Skattereduktion för hushållsarbete; rotarbete definierat i 13 a §; undantag i 13 c §.
 - **Lag (2009:194)** om förfarandet vid skattereduktion för hushållsarbete (HUSFL) §§ 4, 6, 7, 8, 11, 12.
 - **Skatteverkets rättsliga vägledning** "Skattereduktion för rot- och rutarbete" https://www4.skatteverket.se/rattsligvagledning/edition/2024.4/339102.html
 - **Krav på elektronisk betalning** sedan 2020-01-01 (67 kap. 19 § IL).
 
-## Belopp och subventionsgrad 2025–2026
+## Belopp och subventionsgrad 2025-2026
 
 - Ordinarie tak: **50 000 kr/person/år** ROT (gemensamt utrymme med RUT på 75 000 kr, varav max 50 000 kr ROT).
 - Ordinarie subventionsgrad: **30 % av arbetskostnaden**.
-- Tillfällig höjning **50 %** under perioden **2025-05-12 – 2025-12-31** enligt prop. 2024/25:156 / FiU32. Avgörande är **betalningsdatum**, inte fakturadatum.
+- Tillfällig höjning **50 %** under perioden **2025-05-12 till 2025-12-31** enligt prop. 2024/25:156 / FiU32. Avgörande är **betalningsdatum**, inte fakturadatum.
 - Återgång till 30 % från 2026-01-01.
 
 ## Dokumentationskrav vid utbetalningsbegäran (9 § HUSFL)
@@ -38,7 +38,7 @@ Begäran lämnas via Skatteverkets e-tjänst senast **31 januari** året efter b
 
 **Vid fakturering (2025-09-15):**
 - Debet **1511** Kundfordringar (kunddel) 25 000
-- Debet **1513** Kundfordringar – delad faktura (ROT-del) 18 750
+- Debet **1513** Kundfordringar, delad faktura (ROT-del) 18 750
 - Kredit **2611** Utgående moms 25 % 8 750
 - Kredit **3011** Försäljning tjänster 25 % moms 30 000
 - Kredit **3041** Försäljning varor 25 % moms 5 000
@@ -59,7 +59,7 @@ Begäran lämnas via Skatteverkets e-tjänst senast **31 januari** året efter b
 - **Bostadsrätt där annan än sökanden bor permanent:** Ger inte ROT.
 - **Service/installation av maskiner och inventarier:** Ger inte ROT (67 kap. 13 c § IL).
 - **Arbete där försäkringsersättning lämnats:** Ger inte ROT (SKV dnr 131 338276-10/111).
-- **Material, frakt, maskinhyra, resor:** Aldrig ROT-grund – endast arbetskostnad.
+- **Material, frakt, maskinhyra, resor:** Aldrig ROT-grund: endast arbetskostnad.
 - **UE utför arbetet:** OK om huvudutförare har F-skatt och faktiskt utfört uppdraget (skenavtal vägras, jfr HFD 2018 ref. 49).
 - **Betalning kontant:** Inte ROT-grundande sedan 2020-01-01 (67 kap. 19 § IL).
-- **Avgränsning mot grön teknik:** SRN 2023-07-19 dnr 83-22/D – ROT och grön teknik har separata utrymmen; arbete kan inte räknas dubbelt.
+- **Avgränsning mot grön teknik:** SRN 2023-07-19 dnr 83-22/D: ROT och grön teknik har separata utrymmen; arbete kan inte räknas dubbelt.

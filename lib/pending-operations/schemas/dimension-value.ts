@@ -9,7 +9,7 @@
  * a caller writes directly to pending_operations.params bypassing the MCP
  * tool (ASVS V4.5 / ISO A.8.28), mirroring CreateSupplierParamsSchema.
  *
- * The code format is the strict Fortnox charset — deliberately tighter than
+ * The code format is the strict Fortnox charset: deliberately tighter than
  * both the DB CHECK (1..40 chars, no `"{}`) and DimensionsBagSchema: legacy
  * free-text codes from the backfill/SIE import must survive on lines, but new
  * registry codes minted by agents stay portable to Fortnox/Visma. Identical
@@ -49,7 +49,7 @@ export const CreateDimensionValueParamsSchema = z
         .string()
         .regex(
           FORTNOX_CODE_RE,
-          'Koden får bara innehålla bokstäver (A–Ö), siffror, _, + och - (max 20 tecken)',
+          'Koden får bara innehålla bokstäver (A-Ö), siffror, _, + och - (max 20 tecken)',
         ),
     ),
     name: z.preprocess(

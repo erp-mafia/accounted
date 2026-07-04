@@ -10,7 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 
 interface Props {
   documentId: string | null | undefined
-  /** The booked tx's journal entry — link target when the underlag lives only
+  /** The booked tx's journal entry: link target when the underlag lives only
    *  at verifikat level (multi-doc entries, booking-dialog uploads). */
   journalEntryId?: string | null
   /** Underlag exists on the journal entry even though no doc is pinned to the
@@ -18,7 +18,7 @@ interface Props {
   hasJeDoc?: boolean
   /** Booked, requires underlag, has none (computeJeUnderlagStatus === 'missing'). */
   missing?: boolean
-  /** Opens the attach dialog from the negative state. Omit for viewers —
+  /** Opens the attach dialog from the negative state. Omit for viewers:
    *  the badge then renders non-interactive. */
   onAttach?: () => void
   className?: string
@@ -34,7 +34,7 @@ const hitAreaClass = 'shrink-0 p-1 -m-1'
  * - Pinned doc (transactions.document_id): clickable badge that fetches a
  *   signed URL and opens the document in a new tab.
  * - Verifikat-level doc only: same badge, links to the verifikat page (which
- *   lists all attachments — handles multi-doc without a per-row fetch).
+ *   lists all attachments: handles multi-doc without a per-row fetch).
  * - Missing on a booked row: discreet outline badge that doubles as the
  *   attach affordance when onAttach is provided.
  */

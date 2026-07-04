@@ -1,11 +1,11 @@
 /**
  * Snapshot/structure test for the K3 ÅR PDF template. We don't snapshot the
- * binary output — instead we verify that:
+ * binary output: instead we verify that:
  *   1. The template renders to a non-empty PDF buffer (no exceptions thrown
- *      by react-pdf — the most common failure when a structural mistake
+ *      by react-pdf: the most common failure when a structural mistake
  *      slips into the layout).
  *   2. The K3 template can render with minimal / empty kassaflöde and
- *      equity_changes (defensive — the PDF should handle reduced data).
+ *      equity_changes (defensive, the PDF should handle reduced data).
  *
  * A full visual snapshot is overkill at this layer; if visual regressions
  * matter we'll add a Playwright-based screenshot test later.
@@ -177,7 +177,7 @@ describe('ArsredovisningK3PDF', () => {
   })
 })
 
-describe('ArsredovisningPDF (K2) — byte-equivalence guard', () => {
+describe('ArsredovisningPDF (K2): byte-equivalence guard', () => {
   it('K2 PDF still renders the same template (no breaking change from K3 work)', async () => {
     const data = makeMinimalK3Data()
     data.accounting_framework = 'k2'

@@ -38,7 +38,7 @@ async function loadConnection(
 
 const DEFAULT_SCHEDULE: GoogleDriveSchedule = {
   enabled: false,
-  hour_utc: 3, // 05:00 Swedish summer time / 04:00 winter — low-traffic default
+  hour_utc: 3, // 05:00 Swedish summer time / 04:00 winter: low-traffic default
   last_auto_sync_at: null,
   last_auto_sync_status: null,
   last_auto_sync_error: null,
@@ -53,7 +53,7 @@ export const cloudBackupExtension: Extension = {
   // The canonical entry point for cloud-backup is now `/import#cloud-backup`
   // (under "Importera/Exportera"). `/settings/backup` is preserved as a
   // permanent redirect to that anchor so legacy bookmarks and OAuth callbacks
-  // keep working — see `app/(dashboard)/settings/backup/page.tsx`.
+  // keep working: see `app/(dashboard)/settings/backup/page.tsx`.
   settingsPanel: {
     label: 'Molnsynkronisering',
     path: '/settings/backup',
@@ -202,7 +202,7 @@ export const cloudBackupExtension: Extension = {
     },
 
     // Update the auto-sync schedule. Preserves `last_auto_sync_*` fields the
-    // cron writes — those are not user-editable.
+    // cron writes: those are not user-editable.
     {
       method: 'PUT',
       path: '/schedule',

@@ -57,7 +57,7 @@ describe('voucher number atomicity', () => {
    * commitEntry uses the atomic commit_journal_entry RPC which increments the
    * voucher sequence and updates the entry status in one transaction.
    * If the RPC fails (e.g., balance trigger rejection), the sequence increment
-   * rolls back — no burned number, no gap.
+   * rolls back: no burned number, no gap.
    */
   it('commitEntry RPC failure does not burn a sequence number', async () => {
     const supabase = {
@@ -72,7 +72,7 @@ describe('voucher number atomicity', () => {
       commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')
     ).rejects.toThrow(BookkeepingDatabaseError)
 
-    // The atomic RPC was called — it failed, rolling back both the
+    // The atomic RPC was called: it failed, rolling back both the
     // sequence increment and the status update. No burned number.
     expect(supabase.rpc).toHaveBeenCalledWith('commit_journal_entry', {
       p_company_id: 'co-1',
@@ -83,7 +83,7 @@ describe('voucher number atomicity', () => {
       p_actor_label: null,
     })
 
-    // from() was never called — the RPC handles everything atomically
+    // from() was never called: the RPC handles everything atomically
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -267,7 +267,7 @@ describe('createJournalEntry orphan draft cleanup', () => {
         }
         return {}
       }),
-      // commit_journal_entry RPC fails — simulates overload ambiguity or balance error
+      // commit_journal_entry RPC fails: simulates overload ambiguity or balance error
       rpc: vi.fn().mockResolvedValue({
         data: null,
         error: { message: 'Could not choose the best candidate function' },
@@ -349,7 +349,7 @@ describe('createJournalEntry orphan draft cleanup', () => {
                 }),
               }),
             }),
-            // Cleanup throws — original error should still propagate
+            // Cleanup throws: original error should still propagate
             update: vi.fn().mockImplementation(() => {
               throw new Error('Network error during rollback')
             }),

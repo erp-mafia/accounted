@@ -10,13 +10,13 @@ const PRICE: Record<BillingPlan, { amount: string; suffix: string; sub: string; 
     amount: '199 kr',
     suffix: '/ mån',
     sub: 'Faktureras månadsvis.',
-    cta: 'Aktivera abonnemang – 199 kr/mån',
+    cta: 'Aktivera abonnemang: 199 kr/mån',
   },
   yearly: {
     amount: '166 kr',
     suffix: '/ mån',
-    sub: '1 999 kr/år — du betalar för 10 månader.',
-    cta: 'Aktivera årsabonnemang – 1 999 kr/år',
+    sub: '1 999 kr/år: du betalar för 10 månader.',
+    cta: 'Aktivera årsabonnemang: 1 999 kr/år',
   },
 }
 

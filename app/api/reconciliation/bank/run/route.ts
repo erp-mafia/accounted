@@ -29,7 +29,7 @@ export async function POST(request: Request) {
   const accountNumber = account_number ?? '1930'
 
   // Defense-in-depth: reject a non-default account the company hasn't
-  // registered as a cash account. The default '1930' is exempt — when no
+  // registered as a cash account. The default '1930' is exempt: when no
   // cash_accounts row exists it falls back to currency-only scoping
   // (cashAccountId undefined), so a company reconciling its primary SEK account
   // without a row behaves exactly as before this feature. Matches the status
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     accountNumber,
     currency,
     cashAccountId: cashAccount?.id as string | undefined,
-    // Only the primary account claims unassigned (NULL cash_account_id) rows —
+    // Only the primary account claims unassigned (NULL cash_account_id) rows:
     // a secondary same-currency account must scope strictly to its own id.
     includeUnassigned: Boolean(cashAccount?.is_primary),
     dryRun: dry_run ?? false,

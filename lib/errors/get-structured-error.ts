@@ -8,7 +8,7 @@
  *   - message_en gives the agent a translation it can act on without parsing
  *     Swedish tokens
  *   - remediation, when present, points the agent at a tool/args/resource
- *     that fixes the problem. Optional — only set when there's a clear
+ *     that fixes the problem. Optional: only set when there's a clear
  *     mechanical next step
  *
  * Both MCP and REST consume this. errorResponse() below produces the standard
@@ -60,7 +60,7 @@ export interface StructuredError {
   retryable: boolean
 }
 
-// Postgres SQLSTATEs that indicate a transient condition — the same statement
+// Postgres SQLSTATEs that indicate a transient condition: the same statement
 // can succeed on retry without any input change.
 const TRANSIENT_SQLSTATES = new Set([
   '40001', // serialization_failure
@@ -79,7 +79,7 @@ const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 502, 503, 504, 522, 524])
 
 // Message-level signatures for transient failures. Tools commonly wrap DB
 // errors as plain `Error(\`Database error: ${message}\`)`, losing the
-// SQLSTATE — these patterns survive that wrapping.
+// SQLSTATE: these patterns survive that wrapping.
 const TRANSIENT_MESSAGE_PATTERNS = [
   /fetch failed/i,
   /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN/,
@@ -189,7 +189,7 @@ export function getStructuredError(
 
   const transient = isTransientFailure(error, message_en)
   let code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
-  // Nothing more specific matched but the failure is transient — surface the
+  // Nothing more specific matched but the failure is transient: surface the
   // stable TRANSIENT_ERROR code so agents can dispatch on it.
   if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
 
@@ -210,7 +210,7 @@ export function getStructuredError(
     message_en,
     ...(remediation ? { remediation } : {}),
     // Registry declaration wins; otherwise the transient inference decides.
-    // Always explicit — agents must never have to distinguish absent from false.
+    // Always explicit: agents must never have to distinguish absent from false.
     retryable: entry?.retryable ?? transient,
   }
 }
@@ -313,7 +313,7 @@ export function errorResponse(
   log: MinimalLogger,
   ctx: ErrorResponseContext = {},
 ): NextResponse {
-  // 1. Bookkeeping domain errors — route through the registry, preserving
+  // 1. Bookkeeping domain errors: route through the registry, preserving
   //    the structured details each typed error class carries.
   if (isBookkeepingError(err)) {
     const { code, details } = extractBookkeepingDetails(err)
@@ -361,7 +361,7 @@ export function errorResponse(
     return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
   }
 
-  // 5. Fallback — log the actual error so we can still debug
+  // 5. Fallback: log the actual error so we can still debug
   log.error('unhandled error', err instanceof Error ? err : new Error(String(err)), {
     requestId: ctx.requestId,
   })
@@ -463,7 +463,7 @@ function buildResponse(
 
 /**
  * Construct an envelope-shaped error directly from a code (when the route
- * already knows the failure mode). Skips dispatch — useful inside a handler
+ * already knows the failure mode). Skips dispatch: useful inside a handler
  * that wants the standard shape without throwing.
  */
 export function errorResponseFromCode(

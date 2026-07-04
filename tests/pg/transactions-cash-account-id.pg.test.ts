@@ -15,7 +15,7 @@ import { getPool } from '@/tests/pg/setup'
  * 20260606120100_..._backfill.sql).
  *
  * Locks in:
- *   - FK ON DELETE SET NULL — deleting a cash account never deletes the bank
+ *   - FK ON DELETE SET NULL: deleting a cash account never deletes the bank
  *     transaction (räkenskapsinformation, BFL 7 kap), only nulls the link.
  *   - The four backfill passes (booked single 19xx line, PSD2 external_id,
  *     single-account-of-currency, leave NULL) and their guards.
@@ -55,7 +55,7 @@ async function runRepair(): Promise<void> {
 
 // Insert a journal entry (draft) with the given bank-class line account
 // numbers. One line per account at amount 100 (debit). Balance isn't required
-// for a draft entry — the balance trigger only fires on draft→posted.
+// for a draft entry: the balance trigger only fires on draft→posted.
 async function insertEntryWithBankLines(params: {
   userId: string
   companyId: string
@@ -86,7 +86,7 @@ async function getCashAccountId(txId: string): Promise<string | null> {
   return rows[0]?.cash_account_id ?? null
 }
 
-describe('transactions.cash_account_id — schema + FK', () => {
+describe('transactions.cash_account_id: schema + FK', () => {
   it('ON DELETE SET NULL keeps the transaction when its cash account is deleted', async () => {
     const { userId, companyId } = await seedCompany()
     const caId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
@@ -103,7 +103,7 @@ describe('transactions.cash_account_id — schema + FK', () => {
   })
 })
 
-describe('transactions.cash_account_id — backfill pass (a) booked rows', () => {
+describe('transactions.cash_account_id: backfill pass (a) booked rows', () => {
   it('binds a booked transaction via its single bank line; skips multi-bank-line vouchers', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     // Two SEK accounts so the single-account fallback (pass c) cannot fire.
@@ -143,7 +143,7 @@ describe('transactions.cash_account_id — backfill pass (a) booked rows', () =>
   })
 })
 
-describe('transactions.cash_account_id — backfill pass (b) PSD2 external_id', () => {
+describe('transactions.cash_account_id: backfill pass (b) PSD2 external_id', () => {
   it('routes by IBAN and by external_uid embedded in external_id', async () => {
     const { userId, companyId } = await seedCompany()
     // Two SEK accounts → pass (c) cannot fire, so only the PSD2 identity binds.
@@ -182,7 +182,7 @@ describe('transactions.cash_account_id — backfill pass (b) PSD2 external_id', 
   })
 })
 
-describe('transactions.cash_account_id — backfill pass (c) single-account-of-currency', () => {
+describe('transactions.cash_account_id: backfill pass (c) single-account-of-currency', () => {
   it('binds when the company has exactly one enabled account of the currency', async () => {
     const { userId, companyId } = await seedCompany()
     const ca = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
@@ -206,7 +206,7 @@ describe('transactions.cash_account_id — backfill pass (c) single-account-of-c
   })
 })
 
-describe('transactions.cash_account_id — account-scoped query isolation', () => {
+describe('transactions.cash_account_id: account-scoped query isolation', () => {
   it('only the primary account claims NULL rows; a secondary same-currency account stays strict', async () => {
     const { userId, companyId } = await seedCompany()
     const ca1930 = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
@@ -246,7 +246,7 @@ describe('transactions.cash_account_id — account-scoped query isolation', () =
     expect(for1930).not.toContain(txNullEur) // wrong-currency NULL excluded
 
     // Secondary (1931) is strict. Pulling in the NULL row would double-count
-    // what belongs to 1930 — the user-reported "1930 works but the other
+    // what belongs to 1930: the user-reported "1930 works but the other
     // accounts go wonky" bug, where 1930's unassigned rows inflated 1931's bank
     // total and produced a large bogus difference.
     const for1931 = await scoped(ca1931, 'SEK', false)
@@ -256,7 +256,7 @@ describe('transactions.cash_account_id — account-scoped query isolation', () =
   })
 })
 
-describe('transactions.cash_account_id — repair backfill (20260609120000)', () => {
+describe('transactions.cash_account_id: repair backfill (20260609120000)', () => {
   it('re-seeds a default 1930 SEK cash account for a company that has none', async () => {
     const { companyId } = await seedCompany()
     // seedCompany inserts the company directly (no cash account).
@@ -279,7 +279,7 @@ describe('transactions.cash_account_id — repair backfill (20260609120000)', ()
     const ca1930 = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
     const ca1931 = await insertCashAccount({ companyId, ledgerAccount: '1931', currency: 'SEK' })
 
-    // The voucher settled on 1930, but the row was wrongly bound to 1931 — the
+    // The voucher settled on 1930, but the row was wrongly bound to 1931: the
     // exact mis-assignment the NULL-only original backfill can never undo.
     const je = await insertEntryWithBankLines({
       userId,
@@ -329,7 +329,7 @@ describe('transactions.cash_account_id — repair backfill (20260609120000)', ()
     expect(await getCashAccountId(tx)).toBeNull()
   })
 
-  it('is idempotent — a second run changes nothing', async () => {
+  it('is idempotent: a second run changes nothing', async () => {
     const { userId, companyId } = await seedCompany()
     const ca = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
     const tx = await insertTransaction({ companyId, userId, currency: 'SEK' })
@@ -355,7 +355,7 @@ describe('transactions.cash_account_id — repair backfill (20260609120000)', ()
   })
 })
 
-describe('transactions.cash_account_id — cross-company isolation', () => {
+describe('transactions.cash_account_id: cross-company isolation', () => {
   it('backfill never binds a transaction to another company\'s cash account', async () => {
     const a = await seedCompany()
     const b = await seedCompany()

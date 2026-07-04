@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { useCompany } from '@/contexts/CompanyContext'
 
 /**
- * CompanyTabSync — cross-tab active company enforcement.
+ * CompanyTabSync: cross-tab active company enforcement.
  *
  * Mounted once inside the dashboard layout (via CompanyProvider), this
  * component guarantees that every open tab of the same user always shows
@@ -17,7 +17,7 @@ import { useCompany } from '@/contexts/CompanyContext'
  *
  *   2. visibilitychange
  *      Catches tabs that were hidden/minimized during a switch. On focus,
- *      the tab checks /api/company/current and reloads on mismatch — before
+ *      the tab checks /api/company/current and reloads on mismatch, before
  *      any pixel of stale data is painted to the user.
  *
  *   3. pageshow with event.persisted === true
@@ -26,8 +26,8 @@ import { useCompany } from '@/contexts/CompanyContext'
  *      neither BroadcastChannel nor visibilitychange fires. pageshow is the
  *      only reliable signal and is guaranteed to fire on bfcache restore.
  *
- * All three layers converge on the same action: window.location.assign('/')
- * — a hard navigation that wipes React state, the router cache, in-flight
+ * All three layers converge on the same action: window.location.assign('/'),
+ * a hard navigation that wipes React state, the router cache, in-flight
  * requests, blob URLs, and every other in-tab leak vector.
  *
  * No-op when the user has no active company (renders nothing, attaches no
@@ -42,7 +42,7 @@ export default function CompanyTabSync() {
       window.location.assign('/')
     }
 
-    // Layer 1: BroadcastChannel — live cross-tab sync
+    // Layer 1: BroadcastChannel: live cross-tab sync
     let channel: BroadcastChannel | null = null
     if (typeof BroadcastChannel !== 'undefined') {
       channel = new BroadcastChannel('gnubok-company-switch')
@@ -54,7 +54,7 @@ export default function CompanyTabSync() {
       }
     }
 
-    // Layer 2: visibilitychange — on focus, verify against server
+    // Layer 2: visibilitychange: on focus, verify against server
     const checkServer = async () => {
       try {
         const res = await fetch('/api/company/current', {
@@ -67,7 +67,7 @@ export default function CompanyTabSync() {
           hardReload()
         }
       } catch {
-        // Network error / offline — do nothing (don't accidentally reload-loop)
+        // Network error / offline: do nothing (don't accidentally reload-loop)
       }
     }
 
@@ -78,7 +78,7 @@ export default function CompanyTabSync() {
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
-    // Layer 3: pageshow (persisted === true) — bfcache restore
+    // Layer 3: pageshow (persisted === true): bfcache restore
     const handlePageShow = (event: PageTransitionEvent) => {
       if (event.persisted) {
         void checkServer()

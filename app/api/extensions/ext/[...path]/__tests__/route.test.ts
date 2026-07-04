@@ -48,7 +48,7 @@ function createPathParams(path: string[]) {
 describe('Extension Catch-All Route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // clearAllMocks doesn't reset implementations — re-assert the default so the
+    // clearAllMocks doesn't reset implementations: re-assert the default so the
     // AAL2 test's mockReturnValue(true) can't leak into later cases.
     mockShouldEnforceMfa.mockReturnValue(false)
     extensionRegistry.clear()

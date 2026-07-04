@@ -10,7 +10,7 @@ import type { DeductionType } from './rot-rut-rules'
 
 /**
  * Shared service behind the rot/rut payout-file API routes and the MCP tool
- * (gnubok_generate_rot_rut_file) — one implementation of "which invoices can
+ * (gnubok_generate_rot_rut_file): one implementation of "which invoices can
  * go into a begäran" and "record the begäran", so the two surfaces can never
  * drift apart.
  */
@@ -119,7 +119,7 @@ export type CreateRotRutRequestResult =
  * per-invoice blockers. The DB trigger enforce_single_active_rot_rut_request
  * stays the authoritative double-request guard (surfaced as INVOICE_CONFLICT).
  *
- * Document archiving is deliberately NOT done here — it needs the storage
+ * Document archiving is deliberately NOT done here: it needs the storage
  * bucket and differs per surface (the API route archives, best-effort).
  */
 export async function createRotRutPayoutRequest(
@@ -194,7 +194,7 @@ export async function createRotRutPayoutRequest(
     .insert(itemRows)
 
   if (itemsError) {
-    // Roll back the header row — without items the request is meaningless.
+    // Roll back the header row: without items the request is meaningless.
     await supabase.from('rot_rut_payout_requests').delete().eq('id', payoutRequest.id)
     const conflict =
       (itemsError as { code?: string }).code === '23505' ||

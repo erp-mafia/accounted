@@ -1,7 +1,7 @@
 /**
  * Full-flow regression suite for issue #675.
  *
- * Some systems export SIE files without current-year #IB 0 records — the
+ * Some systems export SIE files without current-year #IB 0 records: the
  * opening balances exist only implicitly via the SIE continuity invariant
  * IB(year 0) = UB(year -1). executeSIEImport must derive the IB from the
  * file's #UB -1 records, create a real opening-balance entry whose voucher
@@ -9,7 +9,7 @@
  *
  * The make-or-break line is the gate in executeSIEImport: it must open on
  * the EFFECTIVE opening balances (getEffectiveOpeningBalances), not on raw
- * parsed.openingBalances — the raw set is empty for these files.
+ * parsed.openingBalances: the raw set is empty for these files.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { executeSIEImport } from '../sie-import'
@@ -90,7 +90,7 @@ function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
       { number: '1930', name: 'Företagskonto' },
       { number: '2010', name: 'Eget kapital' },
     ],
-    // Issue #675 shape: no #IB 0 at all — only prior-year IB/UB and current UB.
+    // Issue #675 shape: no #IB 0 at all: only prior-year IB/UB and current UB.
     openingBalances: [{ yearIndex: -1, account: '1930', amount: 9483.08 }],
     closingBalances: [
       { yearIndex: -1, account: '1930', amount: 37400.78 },
@@ -129,15 +129,15 @@ function makeMapping(source: string, target: string): AccountMapping {
 function standardQueues() {
   return {
     sie_imports: [
-      { data: null }, // checkDuplicateImport — no duplicate
+      { data: null }, // checkDuplicateImport: no duplicate
       {}, // cleanupStaleImportRecords delete
       { data: { id: 'imp-1' } }, // createPendingImportRecord insert
-      { data: null }, // checkDuplicatePeriodImport — no duplicate
+      { data: null }, // checkDuplicatePeriodImport: no duplicate
       // finalizeImportRecord updates ride on defaults
     ],
     chart_of_accounts: [
       {
-        // syncMappedAccounts paged fetch — both accounts already exist
+        // syncMappedAccounts paged fetch: both accounts already exist
         data: [
           { account_number: '1930', account_name: 'Företagskonto' },
           { account_number: '2010', account_name: 'Eget kapital' },
@@ -150,7 +150,7 @@ function standardQueues() {
       // link update + resync next-period lookup ride on defaults (null)
     ],
     journal_entries: [
-      { count: 0 }, // companyHasPriorActivity — first-ever import
+      { count: 0 }, // companyHasPriorActivity: first-ever import
     ],
   }
 }
@@ -168,7 +168,7 @@ const standardMappings = [makeMapping('1930', '1930'), makeMapping('2010', '2010
 
 // --- Tests ---
 
-describe('executeSIEImport — derived IB from #UB -1 (issue #675)', () => {
+describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -230,7 +230,7 @@ describe('executeSIEImport — derived IB from #UB -1 (issue #675)', () => {
     expect(input.description).toBe('Ingående balanser från SIE-import')
   })
 
-  it('respects the continuation guard — no derived IB when the company has prior activity', async () => {
+  it('respects the continuation guard: no derived IB when the company has prior activity', async () => {
     const queues = standardQueues()
     queues.journal_entries = [{ count: 5 }] // posted entries exist
     const supabase = buildRoutingSupabase(queues)

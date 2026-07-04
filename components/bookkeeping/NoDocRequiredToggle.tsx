@@ -63,7 +63,7 @@ export default function NoDocRequiredToggle({
           description: body.error,
           variant: 'destructive',
         })
-        // Roll back UI state on failure — both the toggle AND the reason so
+        // Roll back UI state on failure: both the toggle AND the reason so
         // the rendered state matches the DB row we failed to mutate.
         setExempt(!nextExempt)
         setReason(previousReason)

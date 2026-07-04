@@ -9,7 +9,7 @@
  *
  *   2. skattekonto v2  GET /beskattning/skattekonto/v2/skattekonton/{omfragad}/saldo
  *      Scope: ska (already on token)
- *      Auth host: peroauth.test (different from moms — empirical risk)
+ *      Auth host: peroauth.test (different from moms, empirical risk)
  *
  *   3. skattekonto v2  GET /skattekonton/{omfragad}/transaktioner
  *      Same scope as #2
@@ -19,7 +19,7 @@
  * Example: npx tsx scripts/test-skv-other-endpoints.ts \
  *            9762dd12-7009-4ba2-aa9f-f9966d53e077 161128000013
  *
- * READ-ONLY against SKV. Won't modify any SKV state — every operation tested
+ * READ-ONLY against SKV. Won't modify any SKV state: every operation tested
  * is a GET. Won't modify the gnubok DB either; just reads the token.
  */
 
@@ -107,24 +107,24 @@ async function callSkv(label: string, url: string, accessToken: string): Promise
 async function main() {
   const accessToken = await getAccessToken()
 
-  // 1. inkomstdeklaration2-4 — same OAuth host as moms, requires `inkforetag` scope
+  // 1. inkomstdeklaration2-4: same OAuth host as moms, requires `inkforetag` scope
   await callSkv(
-    'inkomstdeklaration2-4 — perioder',
+    'inkomstdeklaration2-4: perioder',
     `https://api.test.skatteverket.se/foretag/inkomstdeklaration/v1/${redovisare}/perioder`,
     accessToken,
   )
 
-  // 2. skattekonto v2 — declares peroauth.test (different from moms peroauth2.test).
+  // 2. skattekonto v2: declares peroauth.test (different from moms peroauth2.test).
   //    Test if our existing token is accepted; 401 here means we'd need a separate handshake.
   await callSkv(
-    'skattekonto v2 — saldo',
+    'skattekonto v2: saldo',
     `https://api.test.skatteverket.se/beskattning/skattekonto/v2/skattekonton/${redovisare}/saldo`,
     accessToken,
   )
 
-  // 3. skattekonto v2 — transaktioner (only meaningful if #2 worked)
+  // 3. skattekonto v2: transaktioner (only meaningful if #2 worked)
   await callSkv(
-    'skattekonto v2 — transaktioner',
+    'skattekonto v2: transaktioner',
     `https://api.test.skatteverket.se/beskattning/skattekonto/v2/skattekonton/${redovisare}/transaktioner`,
     accessToken,
   )

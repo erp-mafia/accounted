@@ -16,7 +16,7 @@ interface ExecuteStepProps {
 
 /**
  * Final confirmation before executing year-end. Uses the destructive confirm
- * dialog because year-end is irreversible per BFL — once the period is closed,
+ * dialog because year-end is irreversible per BFL: once the period is closed,
  * no further entries can be posted to it and the closing transaction is
  * immutable.
  */
@@ -39,7 +39,7 @@ export function ExecuteStep({ periodName, isRunning, error, onBack, onExecute }:
           </p>
           <ul className="text-sm space-y-2 list-disc pl-5 text-muted-foreground">
             <li>Kursrevaluering bokas för öppna poster i utländsk valuta (om relevant)</li>
-            <li>Bokslutsverifikationen skapas och nollställer klass 3–8</li>
+            <li>Bokslutsverifikationen skapas och nollställer klass 3-8</li>
             <li>Perioden låses och stängs (oåterkalleligt enligt BFL)</li>
             <li>En ny räkenskapsperiod skapas och får ingående balanser från balansräkningen</li>
             <li>IB/UB-kontinuitet verifieras</li>

@@ -1,5 +1,5 @@
 /**
- * GET /api/v1/companies — list companies the calling API key can access.
+ * GET /api/v1/companies: list companies the calling API key can access.
  *
  * The API key is bound to a user; that user may be a member of multiple
  * companies (consultant-style). This endpoint returns every company the user
@@ -42,7 +42,7 @@ registerEndpoint({
   useWhen:
     'You need to discover which company IDs an API key has access to before calling company-scoped endpoints.',
   doNotUseFor:
-    'Fetching a single company you already know the id of — use GET /api/v1/companies/{companyId} for that.',
+    'Fetching a single company you already know the id of: use GET /api/v1/companies/{companyId} for that.',
   pitfalls: [
     'Multi-company keys (e.g. consultants) will see >1 result. Always pass the correct companyId in subsequent paths.',
     'Archived companies are excluded; if a company disappears the user has been removed from it or it was archived.',
@@ -133,13 +133,13 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
   }
 
   type Row = {
-    // `company_members.id` — the membership row's own UUID, used as the
+    // `company_members.id`: the membership row's own UUID, used as the
     // cursor's secondary key. Not exposed in the response.
     id: string
     role: 'owner' | 'admin' | 'member' | 'viewer'
     joined_at: string
     // PostgREST returns the joined company as either an object (one-to-one FK
-    // resolution) or an array. Accept both — Supabase's auto-typing chooses
+    // resolution) or an array. Accept both: Supabase's auto-typing chooses
     // the array shape, but actual responses for a single-row FK are objects.
     companies: CompanyRow | CompanyRow[] | null
   }
@@ -156,7 +156,7 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
   // Defense in depth: PostgREST's `.is('companies.archived_at', null)` is
   // expected to filter out archived companies before the row reaches us.
   // If a `company_members` row arrives without an associated company object,
-  // the join filter behaved differently than expected — drop the row AND
+  // the join filter behaved differently than expected: drop the row AND
   // surface it as a warn so we notice silent data-integrity regressions.
   let droppedNulls = 0
   const companies = trimmed
@@ -181,7 +181,7 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     ctx.log.warn('companies.list: dropped rows with null company join', { droppedNulls })
   }
 
-  // Cursor encodes the LAST row's `(joined_at, company_members.id)` — always
+  // Cursor encodes the LAST row's `(joined_at, company_members.id)`: always
   // present, no null-guard needed. Independent of whether the joined company
   // dropped out of the response shape.
   const last = trimmed[trimmed.length - 1]

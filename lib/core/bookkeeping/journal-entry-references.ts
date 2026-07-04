@@ -1,13 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
- * A followable reference from a verifikation back to its underlag — the customer
+ * A followable reference from a verifikation back to its underlag: the customer
  * or supplier invoice that identifies what the affärshändelse avser and who the
  * motpart is.
  *
  * Surfacing these makes the verifieringskedja traceable from the verifikat side,
- * not only from the invoice side (BFL 5 kap 7§ — hänvisning till underlag;
- * BFNAR 2013:2 — the verification chain must be followable in both directions).
+ * not only from the invoice side (BFL 5 kap 7§: hänvisning till underlag;
+ * BFNAR 2013:2: the verification chain must be followable in both directions).
  *
  * Bank transactions are deliberately excluded: a bank line is the trace of the
  * affärshändelse, not its underlag. Counting it as underlag would wrongly silence
@@ -18,7 +18,7 @@ export type UnderlagReferenceType = 'invoice' | 'supplier_invoice'
 export interface UnderlagReference {
   type: UnderlagReferenceType
   id: string
-  /** invoice_number / supplier_invoice_number — the UI builds the label from this. */
+  /** invoice_number / supplier_invoice_number: the UI builds the label from this. */
   number: string
 }
 

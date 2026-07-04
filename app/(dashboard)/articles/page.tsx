@@ -124,7 +124,7 @@ function ArticlesPageInner() {
 
   // Create runs through useSubmitWithAccountActivation so an ACCOUNTS_NOT_IN_CHART
   // response (revenue account not yet activated) opens the standard
-  // activate-and-retry dialog instead of failing — same UX as the journal entry form.
+  // activate-and-retry dialog instead of failing: same UX as the journal entry form.
   const pendingCreateRef = useRef<CreateArticleInput | null>(null)
   const submitCreate = useCallback(async () => {
     const response = await fetch('/api/articles', {
@@ -364,7 +364,7 @@ function ArticlesPageInner() {
                       onClick={() => router.push(`/articles/${article.id}`)}
                     >
                       <TableCell className="tabular-nums text-muted-foreground">
-                        {article.article_number || '—'}
+                        {article.article_number || '-'}
                       </TableCell>
                       <TableCell className="font-medium">
                         <Link

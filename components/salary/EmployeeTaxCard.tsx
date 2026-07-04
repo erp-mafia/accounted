@@ -18,7 +18,7 @@ export interface EmployeeTaxValue {
 }
 
 interface EmployeeTaxCardProps {
-  /** Live personnummer (full or masked) — drives the column suggestion. */
+  /** Live personnummer (full or masked): drives the column suggestion. */
   personnummer: string
   initial?: Partial<EmployeeTaxValue>
   /** Income year the table/column applies to. Defaults to the current year. */
@@ -67,7 +67,7 @@ export default function EmployeeTaxCard({
 
   // The effective column is the user's explicit choice once they've made one,
   // otherwise the value suggested from the personnummer (falling back to 1).
-  // Derived in render — no setState-in-effect needed.
+  // Derived in render: no setState-in-effect needed.
   const effectiveColumn = columnTouched ? column : (derivedColumn ?? 1)
 
   // Report the current value up. onChange via ref so an unstable parent callback
@@ -95,7 +95,7 @@ export default function EmployeeTaxCard({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="f_skatt_status">
-              <InfoTooltip content="A-skatt: du drar preliminärskatt enligt skattetabell. F-skatt/FA-skatt: personen sköter sin egen skatt — inget skatteavdrag görs.">
+              <InfoTooltip content="A-skatt: du drar preliminärskatt enligt skattetabell. F-skatt/FA-skatt: personen sköter sin egen skatt: inget skatteavdrag görs.">
                 Skatteform
               </InfoTooltip>
             </Label>
@@ -131,7 +131,7 @@ export default function EmployeeTaxCard({
           <>
             <div className="space-y-2">
               <Label htmlFor="tax_municipality">
-                <InfoTooltip content="Kommunen där personen är folkbokförd (per 1 november föregående år). Den avgör skattetabellen — välj kommun så fylls tabellen i automatiskt.">
+                <InfoTooltip content="Kommunen där personen är folkbokförd (per 1 november föregående år). Den avgör skattetabellen: välj kommun så fylls tabellen i automatiskt.">
                   Folkbokföringskommun
                 </InfoTooltip>
                 <RequiredMark />
@@ -143,7 +143,7 @@ export default function EmployeeTaxCard({
                 disabled={disabled}
                 onChange={(value) => {
                   setMunicipality(value)
-                  // Clearing the field must clear the derived table/rate too —
+                  // Clearing the field must clear the derived table/rate too:
                   // otherwise we'd report an empty kommun alongside a stale
                   // table number (an inconsistent pair). Manual entry keeps its
                   // own value.
@@ -163,7 +163,7 @@ export default function EmployeeTaxCard({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="tax_table_number">
-                  <InfoTooltip content="Skatteverkets tabell 29–42, baserad på kommunens totala skattesats. Härleds automatiskt från folkbokföringskommunen.">
+                  <InfoTooltip content="Skatteverkets tabell 29-42, baserad på kommunens totala skattesats. Härleds automatiskt från folkbokföringskommunen.">
                     Skattetabell
                   </InfoTooltip>
                   <RequiredMark />
@@ -237,7 +237,7 @@ export default function EmployeeTaxCard({
                   </p>
                 ) : isSenior && !columnTouched ? (
                   <p className="text-xs text-warning-foreground">
-                    Personen har fyllt 66 år — välj kolumn manuellt (lön = kolumn 3, pension = kolumn 2).
+                    Personen har fyllt 66 år: välj kolumn manuellt (lön = kolumn 3, pension = kolumn 2).
                   </p>
                 ) : null}
               </div>
@@ -246,8 +246,8 @@ export default function EmployeeTaxCard({
         ) : (
           <p className="rounded-md border border-dashed border-input px-3 py-3 text-sm text-muted-foreground">
             {sido
-              ? 'Sidoinkomst: ett fast skatteavdrag på 30 % görs — ingen skattetabell behövs.'
-              : 'Med F-skatt eller FA-skatt sköter personen sin egen skatt — inget skatteavdrag görs och ingen skattetabell behövs.'}
+              ? 'Sidoinkomst: ett fast skatteavdrag på 30 % görs: ingen skattetabell behövs.'
+              : 'Med F-skatt eller FA-skatt sköter personen sin egen skatt: inget skatteavdrag görs och ingen skattetabell behövs.'}
           </p>
         )}
       </CardContent>

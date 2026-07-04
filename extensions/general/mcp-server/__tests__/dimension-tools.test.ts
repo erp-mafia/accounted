@@ -1,5 +1,5 @@
 /**
- * Dimensions PR3 — MCP surface tests.
+ * Dimensions PR3: MCP surface tests.
  *
  * Covers the three new tools (gnubok_list_dimensions,
  * gnubok_list_dimension_values, staged gnubok_create_dimension_value), the
@@ -35,7 +35,7 @@ beforeEach(() => {
 
 /**
  * Wrap a queued supabase mock so every `.insert(payload)` is recorded with its
- * table name — lets tests assert the exact staged pending_operations params
+ * table name: lets tests assert the exact staged pending_operations params
  * (the contract the parallel-built executors consume), not just the preview.
  */
 function captureInserts(
@@ -216,7 +216,7 @@ describe('gnubok_list_dimension_values', () => {
 
 // ── gnubok_create_dimension_value (staging) ──────────────────────────────────
 
-describe('gnubok_create_dimension_value — staging', () => {
+describe('gnubok_create_dimension_value: staging', () => {
   it('rejects a non-Fortnox code before any staging', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
@@ -258,7 +258,7 @@ describe('gnubok_create_dimension_value — staging', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/arkiverat — återaktivera/)
+    ).rejects.toThrow(/arkiverat: återaktivera/)
   })
 
   it('rejects value dates on a resets-annually dimension (kostnadsställe)', async () => {
@@ -342,7 +342,7 @@ describe('resolveValueInDimension', () => {
   })
 
   it('rejects an archived code with the Swedish reactivation message', () => {
-    expect(() => resolveValueInDimension(makeDim(), 'P099')).toThrow(/arkiverat — återaktivera/)
+    expect(() => resolveValueInDimension(makeDim(), 'P099')).toThrow(/arkiverat: återaktivera/)
   })
 
   it('rejects an unknown value with the create-first instruction (never auto-creates)', () => {
@@ -473,7 +473,7 @@ describe('mergeLineDimensions / parseDimensionsArg', () => {
 
 // ── Dims bag flowing through gnubok_create_voucher ───────────────────────────
 
-describe('gnubok_create_voucher — dimensions bag', () => {
+describe('gnubok_create_voucher: dimensions bag', () => {
   it('resolves and stages per-line dims + default_dimensions onto the staged lines', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
@@ -623,7 +623,7 @@ describe('gnubok_create_voucher — dimensions bag', () => {
 
 // ── Dims bags on the PR7 producer tools ──────────────────────────────────────
 
-describe('gnubok_create_invoice — dimensions bag', () => {
+describe('gnubok_create_invoice: dimensions bag', () => {
   it('stages resolved default_dimensions top-level and per-item bags (default NOT merged into items)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
@@ -667,7 +667,7 @@ describe('gnubok_create_invoice — dimensions bag', () => {
     expect(result.staged).toBe(true)
 
     // Contract: staged params carry `default_dimensions` top-level (resolved to
-    // codes) and each item its OWN resolved bag — the executor merges.
+    // codes) and each item its OWN resolved bag: the executor merges.
     const op = inserts.find((i) => i.table === 'pending_operations')!
     expect(op).toBeDefined()
     const params = op.payload.params as {
@@ -721,7 +721,7 @@ describe('gnubok_create_invoice — dimensions bag', () => {
   })
 })
 
-describe('gnubok_categorize_transaction — dimensions bag', () => {
+describe('gnubok_categorize_transaction: dimensions bag', () => {
   it('resolves the bag and stages it as params.dimensions with the echo in the preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
@@ -805,7 +805,7 @@ describe('gnubok_categorize_transaction — dimensions bag', () => {
   })
 })
 
-describe('gnubok_bulk_book_transactions — dimensions bag', () => {
+describe('gnubok_bulk_book_transactions: dimensions bag', () => {
   it('merges default_dimensions into per-line bags and drops the default from staged params', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
@@ -848,7 +848,7 @@ describe('gnubok_bulk_book_transactions — dimensions bag', () => {
     expect(result.staged).toBe(true)
 
     // Contract: per-line `new_entry.lines[].dimensions` carries the MERGED
-    // (line-over-default) resolved bags; the top-level default is dropped —
+    // (line-over-default) resolved bags; the top-level default is dropped:
     // the executor's RPC reads per-line dims only.
     const params = inserts.find((i) => i.table === 'pending_operations')!.payload.params as {
       default_dimensions?: Record<string, string>

@@ -10,7 +10,7 @@ import {
 } from '@/lib/invoices/rot-rut-file'
 
 // Personnummer from Skatteverket's official example files (synthetic test
-// identities published by the agency — never real people).
+// identities published by the agency: never real people).
 const PNR_A = '198406012388'
 const PNR_B = '199604102393'
 
@@ -52,7 +52,7 @@ function makeRotInvoice(overrides: Partial<Invoice> = {}, items?: InvoiceItem[])
   })
 }
 
-describe('buildRotRutFile — rot', () => {
+describe('buildRotRutFile: rot', () => {
   it('produces a schema-shaped rot file for a paid invoice', () => {
     const result = buildRotRutFile({
       type: 'rot',
@@ -163,7 +163,7 @@ describe('buildRotRutFile — rot', () => {
   })
 })
 
-describe('buildRotRutFile — rut', () => {
+describe('buildRotRutFile: rut', () => {
   function makeRutInvoice(items: InvoiceItem[]): Invoice {
     return makeRotInvoice(
       { deduction_personnummer_encrypted: encryptPersonnummer(PNR_B) },

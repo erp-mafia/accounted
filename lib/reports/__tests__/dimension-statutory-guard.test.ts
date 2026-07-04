@@ -9,7 +9,7 @@ import { REPORT_CATALOG, DIMENSION_FILTER_SLUGS } from '../catalog'
 // A dimension-filtered statutory output is a WRONG output: a filtered
 // balance sheet doesn't balance, a filtered VAT declaration under-reports,
 // a filtered SIE export is not the company's bokföring. The whitelist of
-// filterable reports is therefore pinned by TEST, not by convention — this
+// filterable reports is therefore pinned by TEST, not by convention: this
 // suite fails when the filter leaks into a statutory report route or
 // generator, or when someone widens the catalog whitelist without touching
 // this file.
@@ -54,7 +54,7 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 
-describe('dimension filter — statutory exclusion', () => {
+describe('dimension filter: statutory exclusion', () => {
   it('the catalog whitelist is exactly the four P&L-safe reports', () => {
     const flagged = REPORT_CATALOG.filter((r) => r.dimensions).map((r) => r.slug).sort()
     expect(flagged).toEqual([...FILTERABLE_SLUGS].sort())
@@ -65,7 +65,7 @@ describe('dimension filter — statutory exclusion', () => {
     const entry = REPORT_CATALOG.find((r) => r.slug === 'dimension-pnl')
     expect(entry).toBeDefined()
     expect(entry?.needsDimensions).toBe(true)
-    // Free tier for everyone (founder decision 2026-07-02) — no other gate.
+    // Free tier for everyone (founder decision 2026-07-02): no other gate.
     expect(entry?.entityType).toBeUndefined()
     expect(entry?.needsEmployees).toBeUndefined()
   })
@@ -78,7 +78,7 @@ describe('dimension filter — statutory exclusion', () => {
       .map((f) => f.slice(ROOT.length + 1).replace(/\\/g, '/'))
       .sort()
 
-    // Exactly the P&L-safe routes — nothing more (statutory leak), nothing
+    // Exactly the P&L-safe routes: nothing more (statutory leak), nothing
     // less (a whitelisted route silently dropping the filter would show an
     // unfiltered report under a "Filtrerad" chip).
     expect(importers).toEqual([...ALLOWED_PARSER_IMPORTERS].sort())
@@ -99,7 +99,7 @@ describe('dimension filter — statutory exclusion', () => {
   it('statutory generators do not receive dimensions through generateTrialBalance', () => {
     // They may call generateTrialBalance, but never with a dimensions option.
     // The scan is paren-aware (walks to the call's closing paren), not a
-    // fixed character window — a long options object cannot slip the key
+    // fixed character window: a long options object cannot slip the key
     // past the guard (#862 review).
     for (const rel of STATUTORY_GENERATORS) {
       const src = readFileSync(join(ROOT, rel), 'utf8')

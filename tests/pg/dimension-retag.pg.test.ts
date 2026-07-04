@@ -8,7 +8,7 @@ import {
   insertDraftJournalEntry,
 } from '@/tests/pg/fixtures'
 
-// Migration 20260702170000_dimension_retag_log_and_rpc.sql — the founder-
+// Migration 20260702170000_dimension_retag_log_and_rpc.sql: the founder-
 // approved Tier-2 retro-tagging carve-out (dimensions plan PR6, §3).
 //
 // The mandatory suite from the plan:
@@ -120,7 +120,7 @@ describe('dimension retag carve-out (PR6)', () => {
       companyId, userId, fiscalPeriodId,
       dimensions: { '6': 'GAMMAL' },
     })
-    // GAMMAL never registered — old values need no registry presence.
+    // GAMMAL never registered: old values need no registry presence.
 
     const res = await callRetag(companyId, lineId, { '1': 'KS01', '6': 'P001' }, 'Rätt projekt', userId)
     expect(res.rows[0].result.changed).toBe(true)
@@ -208,7 +208,7 @@ describe('dimension retag carve-out (PR6)', () => {
       await client.query('ROLLBACK')
 
       // A pure dimension diff IS admitted under the GUC (the RPC's write
-      // shape). PR9: the bag alone — the generated mirrors recompute.
+      // shape). PR9: the bag alone: the generated mirrors recompute.
       await client.query('BEGIN')
       await client.query(`SELECT set_config('gnubok.allow_dimension_retag', 'true', true)`)
       await client.query(
@@ -232,7 +232,7 @@ describe('dimension retag carve-out (PR6)', () => {
   })
 
   it('rejects retag in closed and locked periods', async () => {
-    // Post first, then close — the period-lock trigger (correctly) refuses
+    // Post first, then close: the period-lock trigger (correctly) refuses
     // inserts into an already-closed period.
     const closed = await seedCompany()
     const { lineId: closedLine } = await insertPostedTaggedEntry({

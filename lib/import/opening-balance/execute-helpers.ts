@@ -30,7 +30,7 @@ export type OpeningBalanceValidation =
 
 /**
  * Validate opening-balance lines: drop zero-amount rows, require ≥2 lines,
- * reject P&L accounts (class 3–8), and verify debits equal credits.
+ * reject P&L accounts (class 3-8), and verify debits equal credits.
  */
 export function validateOpeningBalanceLines(
   lines: OpeningBalanceLine[],

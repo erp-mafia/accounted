@@ -1,5 +1,5 @@
 /**
- * Shared test helpers — mock factories and fixture builders
+ * Shared test helpers: mock factories and fixture builders
  */
 import { vi } from 'vitest'
 import type {
@@ -60,7 +60,7 @@ export function createMockSupabase() {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
-          // Make the chain thenable — resolves to pendingResult
+          // Make the chain thenable: resolves to pendingResult
           return (resolve: (v: unknown) => void) => resolve(pendingResult)
         }
         // Return a function that returns a new chain

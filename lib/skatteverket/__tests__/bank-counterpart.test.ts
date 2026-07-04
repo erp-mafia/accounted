@@ -32,7 +32,7 @@ describe('findBankSkvCounterparts', () => {
   it('does NOT pair when signs are equal (not a transfer)', () => {
     // Bank -5000 (outgoing) and SKV -5000 (outgoing from skattekonto)
     // would mean the user both paid 5000 from bank AND was charged 5000
-    // by SKV. Not the same event — independent cash flows.
+    // by SKV. Not the same event: independent cash flows.
     const result = findBankSkvCounterparts({
       bankRows: [{ id: 'bank-1', date: '2026-03-16', amount: -5000 }],
       skvRows: [skv({ id: 'skv-1', transaktionsdatum: '2026-03-17', belopp_skatteverket: -5000 })],
@@ -48,7 +48,7 @@ describe('findBankSkvCounterparts', () => {
     expect(result.has('bank-1')).toBe(false)
   })
 
-  it('rounds to öre — 5000.001 equals 5000', () => {
+  it('rounds to öre: 5000.001 equals 5000', () => {
     const result = findBankSkvCounterparts({
       bankRows: [{ id: 'bank-1', date: '2026-03-16', amount: -5000 }],
       skvRows: [
@@ -75,7 +75,7 @@ describe('findBankSkvCounterparts', () => {
   })
 
   it('first plausible match wins when multiple SKV rows would qualify', () => {
-    // Two SKV inflows of 5000 within window — the first one (in iteration
+    // Two SKV inflows of 5000 within window: the first one (in iteration
     // order) wins. UI only shows one hint, so we don't need to rank.
     const result = findBankSkvCounterparts({
       bankRows: [{ id: 'bank-1', date: '2026-03-16', amount: -5000 }],
@@ -128,7 +128,7 @@ describe('findBankSkvCounterparts', () => {
   })
 
   it('respects a custom dateWindowDays override', () => {
-    // 20 days apart — would fail default window, passes with override.
+    // 20 days apart: would fail default window, passes with override.
     const result = findBankSkvCounterparts({
       bankRows: [{ id: 'bank-1', date: '2026-03-01', amount: -5000 }],
       skvRows: [skv({ id: 'skv-1', transaktionsdatum: '2026-03-21', belopp_skatteverket: 5000 })],

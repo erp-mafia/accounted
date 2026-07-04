@@ -1,6 +1,6 @@
 /**
  * Tests for GET /api/bookkeeping/journal-entries/[id]/retag-log
- * (dimensions plan PR6 — the immutable retag history).
+ * (dimensions plan PR6, the immutable retag history).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'

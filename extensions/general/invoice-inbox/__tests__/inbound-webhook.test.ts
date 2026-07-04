@@ -20,7 +20,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 
 // applyDomainStatusFromWebhook confirms the receiving capability with Resend
-// before flipping a row to verified — keep that lookup off the network.
+// before flipping a row to verified: keep that lookup off the network.
 const { domainsMock } = vi.hoisted(() => ({
   domainsMock: {
     get: vi.fn(),
@@ -185,7 +185,7 @@ describe('POST /inbound', () => {
       }) as never
     )
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // Only the three shared-path queries are enqueued — if the handler also
+    // Only the three shared-path queries are enqueued: if the handler also
     // ran the custom-domain lookup, the queue would shift and created_by
     // would resolve to null (500). A 200 proves the shared path won.
     enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })

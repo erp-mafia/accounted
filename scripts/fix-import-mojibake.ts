@@ -4,7 +4,7 @@
  *
  * Background: prior to the CSV-encoding fix in lib/import/shared/workbook-reader.ts,
  * the supplier/customer CSV importer passed raw bytes to xlsx with `type: 'array'`,
- * which decodes UTF-8 multi-byte sequences as Latin-1 — turning "GÖTEBORG" into
+ * which decodes UTF-8 multi-byte sequences as Latin-1: turning "GÖTEBORG" into
  * "GÃ–TEBORG" (and similar for å, ä, å, Å, Ä, Ö). This script repairs those rows.
  *
  * Idempotent: lib/import/shared/encoding.ts:decodeStringContent is a no-op on

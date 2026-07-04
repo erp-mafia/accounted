@@ -22,7 +22,7 @@ export const ALL_YEARS_VALUE = '__all__'
 
 interface Props {
   /**
-   * Current selection. `null` means "all years" — no filter applied.
+   * Current selection. `null` means "all years": no filter applied.
    */
   value: string | null
   /**
@@ -103,7 +103,7 @@ export function FiscalYearSelector({
         const today = new Date().toISOString().split('T')[0]
         fetched = fetched.filter((p) => p.period_start <= today)
       }
-      // Newest first — most migrations list recent years at the top
+      // Newest first: most migrations list recent years at the top
       fetched.sort((a, b) => b.period_start.localeCompare(a.period_start))
       setPeriods(fetched)
       setLoaded(true)
@@ -176,7 +176,7 @@ export function FiscalYearSelector({
             )}
             {periods.map((p) => (
               <SelectItem key={p.id} value={p.id}>
-                {p.name} ({p.period_start} — {p.period_end})
+                {p.name} ({p.period_start} till {p.period_end})
                 {p.locked_at ? t('suffix_locked') : p.is_closed ? t('suffix_closed') : ''}
               </SelectItem>
             ))}

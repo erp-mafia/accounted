@@ -216,7 +216,7 @@ export const attentionResource: McpResource = {
         samples: ops,
         next: {
           description:
-            'Visa kön för användaren. När användaren godkänner en specifik operation_id i chatten, anropa gnubok_approve_pending_operation direkt — /pending är ett alternativ, inte ett krav.',
+            'Visa kön för användaren. När användaren godkänner en specifik operation_id i chatten, anropa gnubok_approve_pending_operation direkt: /pending är ett alternativ, inte ett krav.',
           tool: 'gnubok_list_pending_operations',
         },
       })

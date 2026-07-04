@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — client.from() returns a fresh chainable builder whose
+// Mock: client.from() returns a fresh chainable builder whose
 // terminal maybeSingle()/single() draw from a per-test results array
 // (same pattern as year-end-service.test.ts).
 // ============================================================
@@ -117,7 +117,7 @@ describe('generateResultAppropriation', () => {
     expect(getOpeningBalances).not.toHaveBeenCalled()
   })
 
-  it('is idempotent — returns null when an appropriation entry already exists', async () => {
+  it('is idempotent: returns null when an appropriation entry already exists', async () => {
     results = [AB, { data: { id: 'ra-existing' }, error: null }]
 
     const entry = await generateResultAppropriation(makeClient() as never, 'c1', 'u1', 'p1')
@@ -147,7 +147,7 @@ describe('generateResultAppropriation', () => {
     expect(createJournalEntry).toHaveBeenCalledTimes(1)
   })
 
-  it('reclassifies the IB 2099 amount only — current-year 2099 activity is excluded', async () => {
+  it('reclassifies the IB 2099 amount only: current-year 2099 activity is excluded', async () => {
     // getOpeningBalances reads the IB entry (the carried-forward prior result),
     // not the trial balance, so any current-year postings to 2099 in this period
     // (e.g. when the catch-up script runs mid-year) cannot inflate the omföring.

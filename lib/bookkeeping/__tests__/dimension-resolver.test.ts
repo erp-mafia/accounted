@@ -61,7 +61,7 @@ describe('normalizeLineDimensions', () => {
   })
 
   it("canonicalizes leading-zero keys ('01' -> '1') so the generated mirrors derive", () => {
-    // The DB generates cost_center/project from keys '1'/'6' (PR9 cutover) —
+    // The DB generates cost_center/project from keys '1'/'6' (PR9 cutover):
     // '01' must land on '1' or the generated mirror misses the value.
     const dims = normalizeLineDimensions({ dimensions: { '01': 'KS01', '06': 'P001' } })
     expect(dims).toEqual({ '1': 'KS01', '6': 'P001' })
@@ -75,7 +75,7 @@ describe('normalizeLineDimensions', () => {
 
   it('reversal parity: empty bag + populated aliases equals alias-only input', () => {
     // reverseEntry passes {dimensions: {}, cost_center, project} for legacy
-    // rows; storno passes the row directly — both must normalize identically.
+    // rows; storno passes the row directly: both must normalize identically.
     expect(
       normalizeLineDimensions({ dimensions: {}, cost_center: 'KS01', project: 'P001' })
     ).toEqual(normalizeLineDimensions({ cost_center: 'KS01', project: 'P001' }))
@@ -97,7 +97,7 @@ describe('coerceDimensionsBag (boundary validator for staged payloads)', () => {
     })
   })
 
-  it('rejects the WHOLE bag on any invalid entry — same as the API schema', () => {
+  it('rejects the WHOLE bag on any invalid entry: same as the API schema', () => {
     // Numeric value (no silent coercion), invalid key, leading-zero key:
     // exactly what CreateJournalEntryLineSchema would reject.
     expect(coerceDimensionsBag({ '6': 42 })).toBeUndefined()
@@ -119,7 +119,7 @@ describe('coerceDimensionsBag (boundary validator for staged payloads)', () => {
 })
 
 // lineDimensionColumns() tests were removed with the function in the PR9
-// cutover — mirror derivation now lives in the database as GENERATED columns
+// cutover: mirror derivation now lives in the database as GENERATED columns
 // and is covered by tests/pg/dimensions-generated-cutover.pg.test.ts.
 
 describe('validateEntryDimensions (soft registry validation, PR3)', () => {
@@ -215,11 +215,11 @@ describe('validateEntryDimensions (soft registry validation, PR3)', () => {
       issues: [{ sie_dim_no: '6', code: 'X', reason: 'archived_value' }],
     })
     await expect(promise).rejects.toThrow(
-      '"X" är arkiverat — återaktivera värdet för att använda det.'
+      '"X" är arkiverat: återaktivera värdet för att använda det.'
     )
   })
 
-  it('accepts valid active codes — three queries total, never per line', async () => {
+  it('accepts valid active codes: three queries total, never per line', async () => {
     const q = createQueuedMockSupabase()
     q.enqueue(enabledSettings)
     q.enqueue(registry)
@@ -241,7 +241,7 @@ describe('validateEntryDimensions (soft registry validation, PR3)', () => {
   })
 
   it('does not false-pass when the same code exists under a different dimension', async () => {
-    // "100" is a registered kostnadsställe but the line tags it as projekt —
+    // "100" is a registered kostnadsställe but the line tags it as projekt:
     // lookups key on (dimension_id, code), so this must still reject.
     const q = createQueuedMockSupabase()
     q.enqueue(enabledSettings)

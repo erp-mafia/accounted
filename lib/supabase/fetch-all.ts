@@ -13,7 +13,7 @@ export interface FetchAllRowsOptions<T> {
    * This is a safety net, NOT the fix: PostgREST `.range()` paging is only
    * correct when the underlying query has a stable TOTAL order (see the
    * ordering invariant below). If a duplicate is ever observed here it means a
-   * caller's query is missing that `.order()` — the warn surfaces the
+   * caller's query is missing that `.order()`: the warn surfaces the
    * regression in logs instead of letting it silently double financial totals.
    * Note this only catches *duplicates*; *skipped* rows can only be prevented
    * by ordering on a unique column at the call site.
@@ -31,10 +31,10 @@ export interface FetchAllRowsOptions<T> {
  * requests, so without a stable total order, rows on a page boundary are
  * silently DUPLICATED and/or SKIPPED across pages. For aggregating reports
  * (general ledger, trial balance, grundbok) that means doubled or missing
- * balances. Order is purely for paging stability — callers that need a
+ * balances. Order is purely for paging stability: callers that need a
  * different display order should re-sort after fetching.
  *
- * The callback receives `{ from, to }` range values — append `.range(from, to)`
+ * The callback receives `{ from, to }` range values: append `.range(from, to)`
  * to your query builder, AFTER a stable `.order()`:
  *
  * ```ts
@@ -93,7 +93,7 @@ export async function fetchAllRows<T>(
     const dropped = allRows.length - deduped.length
     if (dropped > 0) {
       log.warn(
-        'fetchAllRows dropped duplicate rows across pages — a paginated query is missing a stable .order() on a unique column',
+        'fetchAllRows dropped duplicate rows across pages: a paginated query is missing a stable .order() on a unique column',
         { dropped, total: allRows.length, pages }
       )
       return deduped

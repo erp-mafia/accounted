@@ -41,7 +41,7 @@ interface Props {
 }
 
 /**
- * "Nytt schema" as a modal — mirrors NewInvoiceDialog now that regular
+ * "Nytt schema" as a modal: mirrors NewInvoiceDialog now that regular
  * invoice creation opens in one. Card sections carry over from the old
  * /invoices/recurring/new page.
  */
@@ -54,7 +54,7 @@ export default function NewRecurringScheduleDialog({ open, onOpenChange, onCreat
         className="sm:max-w-4xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
         // A half-typed schedule must survive an accidental backdrop click or
         // a stray Escape (the customer/currency selects portal outside the
-        // dialog). Closing is explicit — the header X or Avbryt. Same
+        // dialog). Closing is explicit: the header X or Avbryt. Same
         // convention as NewInvoiceDialog.
         onEscapeKeyDown={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}

@@ -7,33 +7,33 @@ const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
 // ── API Key Scopes ──────────────────────────────────────────
 
 export const API_KEY_SCOPES = {
-  'transactions:read':  { label: 'Transaktioner — läs',  description: 'Lista transaktioner, mallförslag, kategoriförslag (3 verktyg)' },
-  'transactions:write': { label: 'Transaktioner — skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura (4 verktyg)' },
-  'customers:read':     { label: 'Kunder — läs',         description: 'Lista kunder (1 verktyg)' },
-  'customers:write':    { label: 'Kunder — skriv',       description: 'Skapa kunder (1 verktyg)' },
-  'articles:read':      { label: 'Artiklar — läs',       description: 'Lista artiklar i artikelregistret (1 verktyg)' },
-  'articles:write':     { label: 'Artiklar — skriv',     description: 'Skapa och uppdatera artiklar (2 verktyg)' },
-  'invoices:read':      { label: 'Fakturor — läs',       description: 'Lista fakturor (1 verktyg)' },
-  'invoices:write':     { label: 'Fakturor — skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
-  'suppliers:read':     { label: 'Leverantörer — läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater (3 verktyg)' },
-  'suppliers:write':    { label: 'Leverantörer — skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor (6 verktyg)' },
-  'reports:read':       { label: 'Rapporter — läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
-  'bookkeeping:write':  { label: 'Bokföring — skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar' },
-  'payroll:read':       { label: 'Löner — läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
-  'payroll:write':      { label: 'Löner — skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
-  // v1 REST API — added Phase 1
-  'companies:read':     { label: 'Företag — läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
-  'events:read':        { label: 'Händelser — läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
-  'webhooks:manage':    { label: 'Webhooks — hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
-  'operations:read':    { label: 'Operationer — läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
-  'documents:read':     { label: 'Dokument — läs',       description: 'Lista och hämta dokumentbilagor' },
-  'documents:write':    { label: 'Dokument — skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
-  'compliance:read':    { label: 'Compliance — läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
-  'skatteverket:write': { label: 'Skatteverket — skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
-  'agent:read':         { label: 'Agent — läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
-  'agent:write':        { label: 'Agent — skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact)' },
-  'pending_operations:read':    { label: 'Stagade operationer — läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
-  'pending_operations:approve': { label: 'Stagade operationer — godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP — agenten ersätter web-UI:s granskning' },
+  'transactions:read':  { label: 'Transaktioner: läs',  description: 'Lista transaktioner, mallförslag, kategoriförslag (3 verktyg)' },
+  'transactions:write': { label: 'Transaktioner: skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura (4 verktyg)' },
+  'customers:read':     { label: 'Kunder: läs',         description: 'Lista kunder (1 verktyg)' },
+  'customers:write':    { label: 'Kunder: skriv',       description: 'Skapa kunder (1 verktyg)' },
+  'articles:read':      { label: 'Artiklar: läs',       description: 'Lista artiklar i artikelregistret (1 verktyg)' },
+  'articles:write':     { label: 'Artiklar: skriv',     description: 'Skapa och uppdatera artiklar (2 verktyg)' },
+  'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor (1 verktyg)' },
+  'invoices:write':     { label: 'Fakturor: skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
+  'suppliers:read':     { label: 'Leverantörer: läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater (3 verktyg)' },
+  'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor (6 verktyg)' },
+  'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
+  'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar' },
+  'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
+  'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
+  // v1 REST API: added Phase 1
+  'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
+  'events:read':        { label: 'Händelser: läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
+  'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
+  'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
+  'documents:read':     { label: 'Dokument: läs',       description: 'Lista och hämta dokumentbilagor' },
+  'documents:write':    { label: 'Dokument: skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
+  'compliance:read':    { label: 'Compliance: läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
+  'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
+  'agent:read':         { label: 'Agent: läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
+  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact)' },
+  'pending_operations:read':    { label: 'Stagade operationer: läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
+  'pending_operations:approve': { label: 'Stagade operationer: godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP: agenten ersätter web-UI:s granskning' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -52,7 +52,7 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
 
 /**
  * Default scope grant for OAuth-issued keys when the client did not pass an
- * explicit `scope` parameter at /authorize. Read-only by design — every
+ * explicit `scope` parameter at /authorize. Read-only by design: every
  * write or approval scope must be requested explicitly by the client AND
  * affirmatively ticked by the user on the consent screen.
  *
@@ -90,7 +90,7 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
 /**
  * Scopes advertised in the RFC 8414 authorization-server metadata document
  * (/.well-known/oauth-authorization-server). Restricted to the same set that
- * /authorize will grant by default — destructive scopes still work when
+ * /authorize will grant by default: destructive scopes still work when
  * requested explicitly, they just aren't enumerated for unauthenticated
  * callers (defense-in-depth against scope-escalation reconnaissance).
  */
@@ -103,7 +103,7 @@ export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCO
  *
  * Documented system control (BFNAR 2013:2 systemdokumentation): `agent:write`
  * is deliberately NOT a staging scope. The memory tools it gates
- * (gnubok_remember_fact/forget_fact) write advisory agent context — they
+ * (gnubok_remember_fact/forget_fact) write advisory agent context: they
  * cannot create, mutate, or stage räkenskapsinformation, so memory-write +
  * approve on one key does not let an agent both stage and commit bookkeeping.
  * If a future memory surface ever feeds DIRECTLY into voucher generation
@@ -120,7 +120,7 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   'payroll:write',
   'documents:write',
   // Skatteverket submit tools stage submit_vat_declaration / submit_agi, so a
-  // key holding both this and pending_operations:approve is a SoD conflict —
+  // key holding both this and pending_operations:approve is a SoD conflict:
   // findStageApproveConflict picks it up automatically from this list.
   'skatteverket:write',
 ]
@@ -204,7 +204,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_fiscal_periods:             'reports:read',
   gnubok_get_reconciliation_status:       'reports:read',
   gnubok_list_accrual_schedules:          'reports:read',
-  // Dimensions (kostnadsställe/projekt) registry — reads next to the report
+  // Dimensions (kostnadsställe/projekt) registry: reads next to the report
   // tools; the staged value-create is a bookkeeping write (dimensions PR3).
   gnubok_list_dimensions:                 'reports:read',
   gnubok_list_dimension_values:           'reports:read',
@@ -227,7 +227,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_salary_run:               'payroll:write',
   gnubok_calculate_salary_run:            'payroll:write',
   gnubok_generate_agi:                    'payroll:write',
-  // Bookkeeping write (Stream 1 Phase 1) — high-risk, always staged
+  // Bookkeeping write (Stream 1 Phase 1): high-risk, always staged
   gnubok_close_period:                    'bookkeeping:write',
   gnubok_lock_period:                     'bookkeeping:write',
   gnubok_unlock_period:                   'bookkeeping:write',
@@ -265,7 +265,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Agent surface (Phase 6 MCP parity): briefing tool exposes company-specific
   // profile + memory so it's scoped; gnubok_list_skills / gnubok_load_skill
   // stay unscoped (discovery + static Markdown bodies + globally-readable atom
-  // registry — no per-company data).
+  // registry: no per-company data).
   gnubok_get_agent_briefing:              'agent:read',
   // Agent memory write (previously UNMAPPED → callable by any key). Mapping to
   // agent:write; existing non-revoked keys are grandfathered in the
@@ -307,14 +307,14 @@ export function generateApiKey(mode: ApiKeyMode = 'live'): { key: string; hash: 
   const random = crypto.randomBytes(32).toString('base64url')
   // Test keys carry an explicit `test_` infix so integrators can tell at a
   // glance which environment a key targets (matches the llms.txt contract:
-  // `gnubok_sk_test_<random>`). The infix is purely cosmetic — the authoritative
+  // `gnubok_sk_test_<random>`). The infix is purely cosmetic: the authoritative
   // mode is the `mode` column on api_keys, read back by hash in validateApiKey,
   // so nothing trusts the key string. Both variants keep the `gnubok_sk_`
   // prefix so the `startsWith(KEY_PREFIX)` check in validateApiKey still holds.
   const key = mode === 'test' ? `${KEY_PREFIX}test_${random}` : `${KEY_PREFIX}${random}`
   const hash = hashApiKey(key)
   // First 18 chars: 'gnubok_sk_test_xyz' for test keys, 'gnubok_sk_xxxxxxxx'
-  // for live — the stored prefix is what the settings UI shows, so the test_
+  // for live: the stored prefix is what the settings UI shows, so the test_
   // infix is visible in the key list without exposing the secret.
   const prefix = key.slice(0, KEY_PREFIX.length + 8)
   return { key, hash, prefix }

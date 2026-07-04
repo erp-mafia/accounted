@@ -14,7 +14,7 @@ import { seedCompany, insertFiscalPeriod } from '@/tests/pg/fixtures'
  *   1. A correction can be posted into a DIFFERENT open period than the
  *      original, drawing its voucher number from that period's sequence, while
  *      the storno + original stay in the original period.
- *   2. enforce_period_lock rejects any write into a locked target period — the
+ *   2. enforce_period_lock rejects any write into a locked target period: the
  *      DB backstop behind recordateEntry's pre-flight TargetPeriodLockedError.
  */
 describe('recordate (pg-real)', () => {

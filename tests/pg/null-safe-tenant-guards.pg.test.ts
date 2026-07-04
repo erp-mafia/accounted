@@ -36,7 +36,7 @@ describe('NULL-safe tenant guards', () => {
     const offenders = await functionsWithRawPattern()
     expect(
       offenders,
-      `Functions still using the NULL-unsafe guard — use public.caller_is_company_member() instead:\n${offenders.join('\n')}`,
+      `Functions still using the NULL-unsafe guard: use public.caller_is_company_member() instead:\n${offenders.join('\n')}`,
     ).toEqual([])
   })
 

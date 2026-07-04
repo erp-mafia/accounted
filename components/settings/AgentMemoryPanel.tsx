@@ -258,7 +258,7 @@ export function AgentMemoryPanel() {
           <EmptyState
             icon={Brain}
             title="Inga minnen ännu"
-            description="När du lär assistenten saker — eller när den noterar saker själv med ditt godkännande — dyker de upp här."
+            description="När du lär assistenten saker (eller när den noterar saker själv med ditt godkännande) dyker de upp här."
           />
         )}
 
@@ -286,7 +286,7 @@ export function AgentMemoryPanel() {
                             : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
                         }`}
                         aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
-                        title={row.is_pinned ? 'Lossa' : 'Fäst — säkerställer att minnet alltid skickas med'}
+                        title={row.is_pinned ? 'Lossa' : 'Fäst: säkerställer att minnet alltid skickas med'}
                       >
                         {row.is_pinned ? <Pin className="h-4 w-4 fill-current" /> : <PinOff className="h-4 w-4" />}
                       </button>

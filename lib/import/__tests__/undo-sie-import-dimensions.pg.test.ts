@@ -6,7 +6,7 @@ import { seedCompany, insertDraftJournalEntry } from '@/tests/pg/fixtures'
 // Migration 20260702154500_dimension_import_provenance_undo_lockstep.sql:
 // SIE import creates dimensions/dimension_values rows carrying
 // created_by_import_id; undo_sie_import deletes the rows the undone import
-// introduced — but ONLY when no remaining posted/reversed line references
+// introduced, but ONLY when no remaining posted/reversed line references
 // them, and NEVER user-created rows (created_by_import_id IS NULL).
 //
 // The registry guard triggers (enforce_dimension_registry_guards /
@@ -144,7 +144,7 @@ describe('undo_sie_import: dimension registry lockstep', () => {
       sourceType: 'import', voucherNumber: 1,
       dimensions: { '6': 'P002' },
     })
-    // A MANUAL posted entry tagged with the same code — survives the undo and
+    // A MANUAL posted entry tagged with the same code: survives the undo and
     // must keep its registry row (retention trigger would block the delete;
     // the lockstep's own WHERE avoids even attempting it).
     await insertPostedTaggedEntry({

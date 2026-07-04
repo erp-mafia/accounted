@@ -32,16 +32,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/dimensions/:id/values',
   summary: 'Create a dimension value (kostnadsställe/projekt code).',
   description:
-    'Registers a new value (SIE #OBJEKT) under a dimension — e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE.',
+    'Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE.',
   useWhen:
     'A voucher or invoice references a cost centre / project code that does not exist yet and the user has confirmed it should be created.',
   doNotUseFor:
-    'Renaming or archiving an existing value (dashboard register in v1). Tagging lines — pass the dimensions map on the journal-entry line instead.',
+    'Renaming or archiving an existing value (dashboard register in v1). Tagging lines: pass the dimensions map on the journal-entry line instead.',
   pitfalls: [
-    'Idempotency-Key is mandatory — calls without it return 400 VALIDATION_ERROR.',
+    'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
     'The :id segment is the dimension UUID, not the SIE dimension number.',
-    'Codes are limited to the strict Fortnox charset (A–Ö, digits, _, +, -; max 20 chars) even though historical imported codes may be looser.',
-    'code is immutable after creation — there is no rename in v1; create the correct code and archive the wrong one.',
+    'Codes are limited to the strict Fortnox charset (A-Ö, digits, _, +, -; max 20 chars) even though historical imported codes may be looser.',
+    'code is immutable after creation: there is no rename in v1; create the correct code and archive the wrong one.',
   ],
   example: {
     request: { code: 'P001', name: 'Villa Almgren tak' },

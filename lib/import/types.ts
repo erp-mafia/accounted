@@ -29,7 +29,7 @@ export interface SIEHeader {
   flagga: number | null            // #FLAGGA (0 = not imported, 1 = already imported)
   program: string | null           // #PROGRAM
   programVersion: string | null
-  generatedDate: string | null     // #GEN — "YYYY-MM-DD"
+  generatedDate: string | null     // #GEN: "YYYY-MM-DD"
   format: string | null            // #FORMAT (PC8 = CP437)
 
   // Company info
@@ -94,7 +94,7 @@ export interface SIETransactionLine {
 export interface SIEDimension {
   sieDimNo: number
   name: string
-  /** Set when declared via #UNDERDIM — the parent dimension number. */
+  /** Set when declared via #UNDERDIM: the parent dimension number. */
   parentSieDimNo?: number
 }
 
@@ -333,7 +333,7 @@ export interface ImportResult {
 
   // If a prior-year backfill triggered IB resync on the immediately-following
   // fiscal period (storno + recreate of its opening_balance entry), the
-  // details of what happened — populated only when the resync ran.
+  // details of what happened: populated only when the resync ran.
   nextPeriodIBResync?: {
     nextPeriodId: string
     nextPeriodName: string
@@ -424,7 +424,7 @@ export interface MigrationDocumentation {
   }
 
   // Chart-of-accounts renames applied from the file's #KONTO records
-  // (behandlingshistorik per BFNAR 2013:2 — who/when is carried by
+  // (behandlingshistorik per BFNAR 2013:2, who/when is carried by
   // importedBy/importedAt on this record). Absent when nothing was renamed
   // and on imports recorded before this field existed.
   accountRenames?: Array<{ accountNumber: string; from: string; to: string }>

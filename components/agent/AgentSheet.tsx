@@ -10,7 +10,7 @@ import { useAgentSheet } from './AgentSheetProvider'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { cn } from '@/lib/utils'
 
-// Undimmed non-modal side sheet — sits above the page on a hairline border +
+// Undimmed non-modal side sheet: sits above the page on a hairline border +
 // shadow, but the page underneath stays fully interactive. Plan §3b.
 //
 // The sheet is a thin wrapper around AgentChat: it owns the title bar, close
@@ -58,7 +58,7 @@ export default function AgentSheet({
   const [loaded, setLoaded] = useState<LoadedConversation | null>(null)
   const [loadingConversation, setLoadingConversation] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
-  // Enlarge the panel IN PLACE (no navigation) — the user stays on the current
+  // Enlarge the panel IN PLACE (no navigation): the user stays on the current
   // page (e.g. /bookkeeping) with a wider reading/verifying surface.
   const [expanded, setExpanded] = useState(false)
   const { identity } = useAgentSheet()
@@ -139,18 +139,18 @@ export default function AgentSheet({
       aria-label={displayTitle}
       // z-[60] sits above the mobile bottom nav (z-50) so on phones the sheet
       // covers the full screen including where the nav would otherwise show.
-      // `hidden` (display:none) when collapsed keeps the component mounted — the
-      // conversation state in AgentChat survives — while removing it from view
+      // `hidden` (display:none) when collapsed keeps the component mounted (the
+      // conversation state in AgentChat survives) while removing it from view
       // and layout entirely (no stray horizontal scroll from an off-screen box).
       className={cn(
         'fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-lg transition-[max-width] duration-200 ease-out',
         collapsed && 'hidden',
-        // Expanded grows the panel leftward over the page (still non-modal — the
+        // Expanded grows the panel leftward over the page (still non-modal: the
         // page stays interactive); normal is the compact side sheet.
         expanded ? 'max-w-[min(100vw,1100px)]' : 'max-w-[480px]',
       )}
       style={{
-        // iOS notch / Android cutout — the sheet top edge needs to clear the
+        // iOS notch / Android cutout: the sheet top edge needs to clear the
         // status bar. Bottom is handled inside the form below.
         paddingTop: 'env(safe-area-inset-top, 0px)',
       }}
@@ -190,7 +190,7 @@ export default function AgentSheet({
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
           <h2 className="font-display text-lg tracking-tight truncate">{displayTitle}</h2>
           <div className="ml-auto flex items-center gap-1">
-            {/* Grow/shrink the panel in place — NEVER navigates away, so the
+            {/* Grow/shrink the panel in place: NEVER navigates away, so the
                 user stays on the current page. Hidden on mobile where the sheet
                 is already full-width (the toggle would be a no-op). */}
             {!isSandbox && (
@@ -203,15 +203,15 @@ export default function AgentSheet({
                 {expanded ? <Shrink className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
               </button>
             )}
-            {/* Labeled (not icon-only) so it isn't mistaken for close/minimize —
+            {/* Labeled (not icon-only) so it isn't mistaken for close/minimize,
                 and gated on an existing conversation so there's nothing to
                 mis-click on a fresh, empty chat. */}
             {activeConversationId && !isSandbox && (
               <button
                 onClick={onRestart}
                 className="h-9 inline-flex items-center gap-2 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-                aria-label="Rensa — börja en ny konversation"
-                title="Rensa — börja en ny konversation"
+                aria-label="Rensa: börja en ny konversation"
+                title="Rensa: börja en ny konversation"
               >
                 <Eraser className="h-4 w-4" />
                 Rensa
@@ -221,7 +221,7 @@ export default function AgentSheet({
               onClick={handleCollapse}
               className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Minimera"
-              title="Minimera — behåll sessionen"
+              title="Minimera: behåll sessionen"
             >
               <PanelRightClose className="h-4 w-4" />
             </button>

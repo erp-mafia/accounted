@@ -154,7 +154,7 @@ export async function findRcBasisGaps(
     }
   }
 
-  // Aggregate RC output per (entry, account) — a voucher may have multiple
+  // Aggregate RC output per (entry, account): a voucher may have multiple
   // 2614 lines (rare) and we want to flag the total shortfall.
   const aggregated = new Map<string, { row: RcLineRow; amount: number }>()
   for (const line of rcLines) {

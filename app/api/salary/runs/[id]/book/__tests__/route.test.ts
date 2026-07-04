@@ -48,7 +48,7 @@ const makePaidRun = (overrides = {}) => ({
   ...overrides,
 })
 
-describe('POST /api/salary/runs/[id]/book — nollkörning', () => {
+describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

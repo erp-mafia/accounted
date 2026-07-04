@@ -24,10 +24,10 @@ registerEndpoint({
   useWhen:
     'Year-end accountant handoff, migration to another bookkeeping system, audit archival, BFL 7 kap räkenskapsinformation backup.',
   doNotUseFor:
-    'JSON drilldown of period entries (use /reports/journal-register). Full archive including documents (use /reports/full-archive — not yet on v1).',
+    'JSON drilldown of period entries (use /reports/journal-register). Full archive including documents (use /reports/full-archive: not yet on v1).',
   pitfalls: [
     '`period_id` is required.',
-    'The response is text/plain with Content-Disposition: attachment — clients should treat as a binary download. Filename uses the pattern `export_{period_id}.se`.',
+    'The response is text/plain with Content-Disposition: attachment: clients should treat as a binary download. Filename uses the pattern `export_{period_id}.se`.',
     'Default encoding is UTF-8 (no #FORMAT PC8 tag). Pass `encoding=cp437` to get a spec-compliant CP437-encoded file with #FORMAT PC8, required by some legacy desktop bookkeeping software.',
     'Only `posted` entries are exported; drafts and reversed entries\' originals are included but marked accordingly.',
   ],
@@ -82,7 +82,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     )
     if (!gen.ok) return gen.response
 
-    // OWASP V3.2 / V4 — sanitise period_id before splicing into the
+    // OWASP V3.2 / V4: sanitise period_id before splicing into the
     // Content-Disposition header. period_id is a server-supplied UUID
     // (already constrained by the fiscal_periods row lookup), so this
     // is belt-and-suspenders.

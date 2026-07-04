@@ -3,7 +3,7 @@ import crypto from 'crypto'
 /**
  * AES-256-GCM encryption for long-lived refresh tokens stored in
  * extension_data. Key is derived from SUPABASE_SERVICE_ROLE_KEY (same
- * trust boundary as the database itself — anyone who can exfiltrate the
+ * trust boundary as the database itself: anyone who can exfiltrate the
  * key can already read the data).
  */
 

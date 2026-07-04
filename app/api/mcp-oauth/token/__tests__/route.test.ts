@@ -295,7 +295,7 @@ describe('POST /api/mcp-oauth/token', () => {
       const body = await res.json()
       // DEFAULT_OAUTH_SCOPES is read-only by design. Write and approval scopes
       // must be requested explicitly by the client AND ticked by the user on
-      // the consent screen — GDPR Art. 25(2), ISO 27001:2022 A.5.18 / A.8.2,
+      // the consent screen, GDPR Art. 25(2), ISO 27001:2022 A.5.18 / A.8.2,
       // SOC 2 CC6.3, ASVS V8.1.1 / V10.2.1.
       const granted = body.scope.split(' ')
       expect(granted).toContain('transactions:read')
@@ -348,7 +348,7 @@ describe('POST /api/mcp-oauth/token', () => {
     it('rejects a code whose embedded scopes are all unknown', async () => {
       // V9.2.1 defense-in-depth: even though /authorize already filters
       // unknown scopes, the token endpoint must not silently mint a
-      // key with empty scopes — the auth code payload boundary is
+      // key with empty scopes: the auth code payload boundary is
       // treated as hostile.
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
@@ -382,7 +382,7 @@ describe('POST /api/mcp-oauth/token', () => {
 
   describe('refresh_token scope response', () => {
     it('returns the granular scopes the api_key was minted with', async () => {
-      // Greptile P1 — refresh response previously hardcoded scope:'mcp',
+      // Greptile P1: refresh response previously hardcoded scope:'mcp',
       // causing OAuth 2.1 clients to think they had lost their grant.
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
@@ -425,7 +425,7 @@ describe('POST /api/mcp-oauth/token', () => {
       const granted = body.scope.split(' ')
       expect(granted).toContain('transactions:read')
       // No silent grant of write or approval scopes (GDPR Art. 25(2),
-      // SoD per findStageApproveConflict — see lib/auth/api-keys.ts).
+      // SoD per findStageApproveConflict, see lib/auth/api-keys.ts).
       expect(granted).not.toContain('transactions:write')
       expect(granted).not.toContain('pending_operations:approve')
       expect(granted).not.toContain('bookkeeping:write')

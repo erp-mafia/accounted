@@ -1,6 +1,6 @@
 // Recapt's identify SDK keeps the last-known uid in memory and in
 // localStorage. Passing `uid: undefined` is not a documented logout
-// signal — on some SDK versions it's coerced to the previous value.
+// signal: on some SDK versions it's coerced to the previous value.
 // We send an explicit empty-string uid (the SDK's "anonymous" marker),
 // then clear any persisted Recapt keys from localStorage so the next
 // pageload doesn't re-identify the logged-out user from cache.
@@ -26,6 +26,6 @@ export function clearRecaptIdentity(): void {
       }
     }
   } catch {
-    // best-effort — we're already in a logout flow
+    // best-effort: we're already in a logout flow
   }
 }

@@ -10,10 +10,10 @@
  * Fix (per affected aktiebolag): for EACH of the company's open (unlocked,
  * unclosed) periods, post one balanced omföring verifikat that clears the 2099
  * balance the period's ingående balans carried forward (Dr 2099 / Cr 2098 for a
- * profit, reversed for a loss). Each period is handled independently — this is
+ * profit, reversed for a loss). Each period is handled independently: this is
  * NOT a single lump-sum across years. A period whose 2099 is already flat (or
  * already has a result_appropriation entry) is skipped. No closed/locked years
- * are touched — entries land in open periods and respect every BFL trigger. This
+ * are touched: entries land in open periods and respect every BFL trigger. This
  * corrects the balance sheet going forward; it does not reconstruct per-year
  * history (which would require reopening closed years).
  *
@@ -111,7 +111,7 @@ async function listOpenPeriods(companyId: string): Promise<{ id: string; name: s
  * Resolve the user_id to attribute the verifikat to (BFL 5 kap 6§). Precedence:
  *   1. --user-id override (caller takes responsibility for correctness),
  *   2. the company owner,
- *   3. any member — but this is an arbitrary attribution, so it prints a loud
+ *   3. any member, but this is an arbitrary attribution, so it prints a loud
  *      WARNING; a rättelse landing on the wrong person must never be silent.
  * Returns null only when the company has no members at all.
  */
@@ -141,7 +141,7 @@ async function resolveAttributionUserId(
   const fallbackId = (anyMember?.user_id as string) ?? null
   if (fallbackId) {
     console.warn(
-      `  ⚠ ${companyLabel}: no owner row — attributing the omföring to an ARBITRARY ` +
+      `  ⚠ ${companyLabel}: no owner row: attributing the omföring to an ARBITRARY ` +
         `member (${fallbackId}). Pass --user-id <uuid> to attribute it deliberately.`,
     )
   }
@@ -190,14 +190,14 @@ async function main() {
       planned++
       console.log(
         `  · ${companyId} / ${period.name}: ${plan.direction} ${plan.amount} kr ` +
-          `— ${plan.lines.map((l) => `${l.account_number} ${l.debit_amount ? `D ${l.debit_amount}` : `K ${l.credit_amount}`}`).join(' / ')}`,
+          `: ${plan.lines.map((l) => `${l.account_number} ${l.debit_amount ? `D ${l.debit_amount}` : `K ${l.credit_amount}`}`).join(' / ')}`,
       )
 
       if (!COMMIT) continue
 
       const userId = await resolveAttributionUserId(companyId, `${companyId} / ${period.name}`)
       if (!userId) {
-        console.error(`  · ${companyId}: SKIPPED — no member to attribute the entry to`)
+        console.error(`  · ${companyId}: SKIPPED: no member to attribute the entry to`)
         skippedNoOwner++
         continue
       }

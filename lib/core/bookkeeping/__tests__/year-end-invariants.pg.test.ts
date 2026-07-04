@@ -8,11 +8,11 @@ import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
  * Plan 3 invariants. These tests verify the database-level guarantees that
  * back the application-level invariants in executeYearEndClosing():
  *
- *   1. Closing entries must balance to the öre — the journal_entries balance
+ *   1. Closing entries must balance to the öre: the journal_entries balance
  *      trigger rejects anything else on draft→posted.
  *   2. A one-öre discrepancy fed into a closing-style entry is rejected
  *      by the trigger; the row stays in 'draft' and no posted state is
- *      created — i.e. DB state is unchanged from the caller's perspective
+ *      created: i.e. DB state is unchanged from the caller's perspective
  *      (no voucher number assigned, no audit_log row for a posted entry).
  *
  * The full executeYearEndClosing() flow is exercised by the existing mock-
@@ -79,7 +79,7 @@ describe('year-end invariants (pg-real)', () => {
     )
     await getPool().query(`SELECT commit_journal_entry($1, $2)`, [companyId, revenueId])
 
-    // Step 2: the closing entry — debit 3001, credit 2099.
+    // Step 2: the closing entry: debit 3001, credit 2099.
     const closeId = await insertDraftJournalEntry({
       userId,
       companyId,
@@ -114,12 +114,12 @@ describe('year-end invariants (pg-real)', () => {
   it('result appropriation omföring zeros the carried-forward 2099 in the NEW period', async () => {
     // This mirrors production: the closing entry lands in year N, and the
     // omföring (2099 → 2098) is posted in the SEPARATE next period (year N+1)
-    // dated its first day — NOT back in the closing period. Posting both in one
+    // dated its first day: NOT back in the closing period. Posting both in one
     // period (as a naive test would) hides whether 2099 actually starts the new
     // year at zero, which is the whole invariant.
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
-    // Year N (2026): closing posts the result onto 2099 — a balanced 3001 → 2099
+    // Year N (2026): closing posts the result onto 2099: a balanced 3001 → 2099
     // transfer leaving 2099 with a 5000 credit balance as that year's UB.
     const closeId = await insertDraftJournalEntry({
       userId,
@@ -148,7 +148,7 @@ describe('year-end invariants (pg-real)', () => {
 
     // Opening-balance entry mirrors year N's UB into the new period: 2099 is
     // carried forward verbatim (1930 IB balances it). This is what leaves 2099
-    // non-zero at the start of the new year — exactly what the omföring fixes.
+    // non-zero at the start of the new year: exactly what the omföring fixes.
     const ibId = await insertDraftJournalEntry({
       userId,
       companyId,
@@ -189,7 +189,7 @@ describe('year-end invariants (pg-real)', () => {
 
     // In the NEW period: 2099 net must be 0 (IB +5000 credit cancelled by the
     // omföring's 5000 debit); 2098 must hold the result (credit-normal, so
-    // debit − credit = −5000). Scoping to nextPeriodId is the point — 2099 zeros
+    // debit − credit = −5000). Scoping to nextPeriodId is the point: 2099 zeros
     // out in the period the result was carried into, not the closing period.
     const { rows } = await getPool().query<{ acct: string; net: string }>(
       `SELECT l.account_number AS acct,
@@ -239,13 +239,13 @@ describe('year-end invariants (pg-real)', () => {
   })
 
   // Sanity: roundOre / ORE_TOLERANCE are wired through. This is the
-  // imported boundary — if it breaks, every consumer above breaks too.
+  // imported boundary: if it breaks, every consumer above breaks too.
   it('exposes a half-öre tolerance', () => {
     expect(ORE_TOLERANCE).toBe(0.005)
     expect(roundOre(1.005)).toBe(1.01)
   })
 
-  // Quiet linter — randomUUID is referenced through the seed helper but
+  // Quiet linter: randomUUID is referenced through the seed helper but
   // we keep an explicit import for future cases that need their own UUIDs.
   it('uuid helper is available', () => {
     expect(randomUUID()).toMatch(/[0-9a-f-]{36}/)

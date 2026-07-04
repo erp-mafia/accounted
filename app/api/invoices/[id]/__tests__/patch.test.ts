@@ -164,7 +164,7 @@ describe('PATCH /api/invoices/[id]', () => {
 
     expect(status).toBe(200)
     expect(body.data.id).toBe('inv-1')
-    // Editing a draft never re-issues it — status + number are unchanged and no
+    // Editing a draft never re-issues it: status + number are unchanged and no
     // invoice.created event is emitted.
     expect(body.data.status).toBe('draft')
     expect(body.data.invoice_number).toBe('F-1')

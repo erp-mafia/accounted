@@ -107,7 +107,7 @@ export const POST = withRouteContext(
             avgifter_rate: sre.avgifter_rate,
             vacation_accrual: sre.vacation_accrual,
             vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
-            // Dimensions PR8: read-at-book from the employee row — the run
+            // Dimensions PR8: read-at-book from the employee row, the run
             // review shows the same live bag, so preview matches booking.
             default_dimensions: sre.employee?.default_dimensions ?? undefined,
             line_items: (sre.line_items || []).map((li: Record<string, unknown>) => ({

@@ -19,14 +19,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/vacation-liability',
   summary: 'Vacation liability (semesterlöneskuld) per employee at year-end.',
   description:
-    'Returns per-employee semesterlöneskuld balances as of year-end based on their vacation_rule (procentregeln / sammaloneregeln) and accrued days. For employees on procentregeln or sammaloneregeln the row total contributes to the BAS 2920 closing balance. Employees on `none` or `semesterersattning` are excluded because their cost is expensed immediately (no balance-sheet accrual) — the BAS 2920 reconciliation against this report is therefore CORRECT whether or not the company has semesterersättning employees, since those employees contribute zero to both the report and the 2920 balance. Feeds the K2/K3 årsredovisning notes.',
+    'Returns per-employee semesterlöneskuld balances as of year-end based on their vacation_rule (procentregeln / sammaloneregeln) and accrued days. For employees on procentregeln or sammaloneregeln the row total contributes to the BAS 2920 closing balance. Employees on `none` or `semesterersattning` are excluded because their cost is expensed immediately (no balance-sheet accrual): the BAS 2920 reconciliation against this report is therefore CORRECT whether or not the company has semesterersättning employees, since those employees contribute zero to both the report and the 2920 balance. Feeds the K2/K3 årsredovisning notes.',
   useWhen:
     'Year-end reconciliation between the accrued liability on 2920 and the per-employee detail. Audit prep.',
   doNotUseFor:
     'Real-time accrual posting (handled per salary run). Vacation request management (not in scope for v1).',
   pitfalls: [
     '`year` is required.',
-    'Employees with vacation_rule = none or semesterersattning are excluded — they have no semesterlöneskuld liability.',
+    'Employees with vacation_rule = none or semesterersattning are excluded: they have no semesterlöneskuld liability.',
   ],
   example: {
     response: {

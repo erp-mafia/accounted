@@ -33,12 +33,12 @@ interface AccountComboboxProps {
   // Label shown next to catalogue-only (not-yet-activated) accounts. Defaults
   // to Swedish; bilingual hosts pass a localized string.
   notActivatedLabel?: string
-  // Extra classes merged into the trigger Input — callers pass `h-8` for dense
+  // Extra classes merged into the trigger Input: callers pass `h-8` for dense
   // table rows, omit it to use the default Input height.
   className?: string
   // Optional callback ref to the underlying <input>, invoked alongside the
   // internal one. Lets a parent imperatively focus the field (e.g. auto-advance
-  // to the next konteringsrad's account on Enter — see JournalEntryForm.focusAccount).
+  // to the next konteringsrad's account on Enter: see JournalEntryForm.focusAccount).
   inputRef?: React.RefCallback<HTMLInputElement>
 }
 
@@ -50,7 +50,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   const internalInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   // Whether the user has typed or arrow-navigated since the field was focused.
-  // Enter only selects the highlighted item after an actual interaction — a
+  // Enter only selects the highlighted item after an actual interaction: a
   // bare Enter on a freshly-focused field must not grab the first account in
   // the list (it either re-commits the current value or bubbles to the form).
   const hasInteractedRef = useRef(false)
@@ -149,7 +149,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
         setIsOpen(true)
         e.preventDefault()
       } else if (e.key === 'Enter' && /^\d{4}$/.test(search)) {
-        // Dropdown closed but a full account number sits in the field — treat
+        // Dropdown closed but a full account number sits in the field: treat
         // Enter as a re-commit so focus advances to the amount field.
         e.preventDefault()
         onCommit?.(search)
@@ -173,12 +173,12 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           e.preventDefault()
           selectAccount(flatList[highlightedIndex].account_number)
         } else if (/^\d{4}$/.test(search)) {
-          // Committed number, no new interaction — advance without re-selecting.
+          // Committed number, no new interaction: advance without re-selecting.
           e.preventDefault()
           setIsOpen(false)
           onCommit?.(search)
         } else {
-          // Nothing actively chosen — close the list and let the event bubble
+          // Nothing actively chosen: close the list and let the event bubble
           // so the form-level Enter (open review when balanced) can take over.
           setIsOpen(false)
         }
@@ -195,14 +195,14 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     hasInteractedRef.current = true
     setSearch(newValue)
     // Emit any 4-digit numeric value to the parent. Unknown BAS numbers are
-    // accepted optimistically — the submit-time ActivateAccountsDialog lets
+    // accepted optimistically: the submit-time ActivateAccountsDialog lets
     // the user activate missing accounts without leaving the form. A complete
     // 4-digit number is treated as a commit so focus can advance to the amount.
     if (/^\d{4}$/.test(newValue)) {
       onChange(newValue)
       // Only treat as a commit when the value newly becomes this account, so
       // editing an already-committed number doesn't keep stealing focus. On
-      // commit, close the dropdown too — focus advances to the amount field, so
+      // commit, close the dropdown too: focus advances to the amount field, so
       // a lingering open list would just cover the rows below.
       if (newValue !== value) {
         onCommit?.(newValue)
@@ -225,7 +225,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     // the rows below when focus advances via keyboard (Enter/Tab).
     setIsOpen(false)
     // Small delay to allow dropdown click to fire first. Keep any 4-digit
-    // numeric value even if it's not in the currently-active chart — the
+    // numeric value even if it's not in the currently-active chart: the
     // submit handler will prompt to activate it.
     setTimeout(() => {
       const isFourDigit = /^\d{4}$/.test(search)

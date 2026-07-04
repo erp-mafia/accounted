@@ -30,7 +30,7 @@ export function proposeEfPfondAvsattning(input: EfPfondAvsattningInput): EfDecla
 
   return {
     kind: 'periodiseringsfond_avsattning',
-    label: `Periodiseringsfond ${input.fiscalYear} — avsättning`,
+    label: `Periodiseringsfond ${input.fiscalYear}: avsättning`,
     description: `Max 30 % av skattemässigt överskott. Sätts av i NE-bilaga R30 (uppskjuten skatt). Bokförs inte.`,
     amount,
     ne_ruta: 'R30',
@@ -72,7 +72,7 @@ export function proposeEfPfondAteforing(
     if (amount === 0) continue
     items.push({
       kind: 'periodiseringsfond_ateforing',
-      label: `Periodiseringsfond ${fond.cohort_year} — återföring`,
+      label: `Periodiseringsfond ${fond.cohort_year}: återföring`,
       description: 'Återförs i NE-bilaga R29.',
       amount,
       ne_ruta: 'R29',

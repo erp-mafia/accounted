@@ -30,7 +30,7 @@ function nextDayIso(closingDate: string): string {
  *
  *   2. Semesterlöneskuld is a balance-sheet carry-forward (2920 / 2940
  *      persist until the vacation is actually paid). The bokslut delta is
- *      a normal posting that does NOT reverse on Jan 1 — reversing would
+ *      a normal posting that does NOT reverse on Jan 1: reversing would
  *      zero the liability on day 1 of the new year, which is a known
  *      Swedish bookkeeping error. Hence `reverses_on` is empty for this
  *      proposal; the wizard / UI suppresses the reversal badge accordingly.
@@ -55,7 +55,7 @@ export async function proposeVacationLiabilityChange(
 
   // Current closing balance (what 2920 should be at year-end)
   const targetLiability = Math.round(report.totals.accruedAmount)
-  // Anchor on the CURRENT closing balance, not opening — captures any
+  // Anchor on the CURRENT closing balance, not opening: captures any
   // mid-year accruals / reversals that have already touched 2920.
   const row2920 = tb.rows.find((r) => r.account_number === '2920')
   const currentLiability = row2920
@@ -132,7 +132,7 @@ export async function proposeVacationLiabilityChange(
 export interface AuditFeeInput {
   /** Estimated audit fee for the fiscal year being closed. */
   amount: number
-  /** Closing date — used to derive the reversal date. */
+  /** Closing date: used to derive the reversal date. */
   closingDate: string
   /** Account to credit on the liability side. Defaults to 2992 (revision),
    *  use 2991 for bokslut-fee accrual. */
@@ -151,7 +151,7 @@ export function proposeAuditFee(input: AuditFeeInput): AccrualProposal | null {
   const isBokslut = liabilityAccount === '2991'
   // BAS 2026: 6420 = "Revisionsarvode" (lagstadgad revision specifically).
   // Bokslutskostnader for a non-revisionspliktigt bolag belong on 6590
-  // (övriga externa tjänster) — Skatteverket may query a 6420 debit
+  // (övriga externa tjänster): Skatteverket may query a 6420 debit
   // without a corresponding revisor i bolaget.
   const expenseAccount = isBokslut ? '6590' : '6420'
 
@@ -188,7 +188,7 @@ export interface ManualPrepaidInput {
   /** Target prepaid account (e.g. 1730 förutbetalda försäkringspremier).
    *  Must be in the 17xx interimsfordringar range. */
   prepaidAccount: string
-  /** Period this prepaid covers — used in the line description. */
+  /** Period this prepaid covers: used in the line description. */
   description: string
   closingDate: string
 }
@@ -199,7 +199,7 @@ export interface ManualPrepaidInput {
  *
  * The caller chooses which expense and prepaid accounts to use because
  * heuristic detection from supplier invoices isn't reliable (no service-
- * period field on the invoice model — see types/index.ts SupplierInvoice).
+ * period field on the invoice model: see types/index.ts SupplierInvoice).
  * A future heuristic detector can replace this when the data model grows
  * service_period_start/_end fields.
  */
@@ -284,7 +284,7 @@ export function proposeManualAccrued(input: ManualAccruedInput): AccrualProposal
 export interface RevenueDeferralInput {
   amount: number
   /** Revenue account to debit (e.g. 3000 / 3001). The full periodisering
-   *  flow debits revenue and credits 2970 — opposite direction to a prepaid
+   *  flow debits revenue and credits 2970: opposite direction to a prepaid
    *  expense. */
   revenueAccount: string
   /** Target deferred-revenue account. Must be in the 29xx range; the wizard
@@ -296,7 +296,7 @@ export interface RevenueDeferralInput {
 
 /**
  * Propose a deferred-revenue entry. Customer has paid (or has been invoiced)
- * for a service that spans across year-end — the portion attributable to
+ * for a service that spans across year-end: the portion attributable to
  * NEXT year is reclassified out of revenue and into 2970. Reverses on Jan 1.
  *
  * Thin wrapper around `proposeManualAccrued` reversed direction-wise: debit
@@ -339,7 +339,7 @@ export interface AccruedInterestInput {
   /** Interest-expense account, typically 8410 räntekostnader. */
   expenseAccount: string
   /** Accrued-interest liability, typically 2940 upplupna sociala avgifter
-   *  is wrong — actual choice is the more general 2940 / 2960 family. The
+   *  is wrong: actual choice is the more general 2940 / 2960 family. The
    *  wizard defaults to 2960 / 2950; this helper validates 29xx. */
   accruedAccount: string
   description: string
@@ -379,7 +379,7 @@ export interface AccruedUtilityInput {
 
 /**
  * Propose accrued utility cost. Same shape as proposeAccruedInterest with a
- * different label — helps the wizard group similar accruals visually.
+ * different label: helps the wizard group similar accruals visually.
  */
 export function proposeAccruedUtility(input: AccruedUtilityInput): AccrualProposal | null {
   const base = proposeManualAccrued({

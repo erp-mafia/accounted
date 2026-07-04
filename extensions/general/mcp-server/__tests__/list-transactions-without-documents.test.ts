@@ -3,7 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 
 /**
- * The tool is a thin wrapper over the transactions_without_documents RPC —
+ * The tool is a thin wrapper over the transactions_without_documents RPC:
  * the bank-driven subset of the verifikat surface, keyed on the SAME document
  * truth (document_attachments + waivers), never transactions.document_id.
  * Predicate semantics are pinned by

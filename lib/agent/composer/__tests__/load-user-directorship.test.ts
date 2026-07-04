@@ -5,7 +5,7 @@ import { loadUserDirectorship } from '../inputs'
 // evidence the user actually directs this company. The signal: BankID
 // CompanyRoles for the active user, matched against this company's orgnr,
 // with a director-like positionType still active. These tests pin every
-// branch — false positives here means we'd narrate ownership for an
+// branch: false positives here means we'd narrate ownership for an
 // accountant or employee, which is the exact UX bug we just fixed.
 
 function buildSupabase(opts: {

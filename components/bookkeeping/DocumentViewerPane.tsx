@@ -12,17 +12,17 @@ import { cn } from '@/lib/utils'
  *
  * Renders by document id through the same-origin inline proxy
  * (/api/documents/:id/inline). PDFs use <object type="application/pdf"> rather
- * than <iframe> — Chrome intermittently blocks PDFs in a frame even with a
+ * than <iframe>: Chrome intermittently blocks PDFs in a frame even with a
  * permissive CSP (see the note in AttachmentPreviewSheet), and <object>
  * invokes the PDF plugin directly. Images use <img>.
  *
  * Unlike AttachmentPreviewSheet this is keyed off a document id, not a
- * journal_entry_id — during manual booking the entry does not exist yet.
+ * journal_entry_id: during manual booking the entry does not exist yet.
  */
 
 function isImageType(type: string | null, fileName?: string | null): boolean {
   if (type?.startsWith('image/')) return true
-  // Legacy uploads sometimes leave mime_type null or application/octet-stream —
+  // Legacy uploads sometimes leave mime_type null or application/octet-stream:
   // fall back to the filename extension.
   if (type === null || type === 'application/octet-stream') {
     return /\.(jpe?g|png|gif|webp|svg)$/i.test(fileName ?? '')
@@ -45,7 +45,7 @@ interface DocumentViewerPaneProps {
   mime?: string | null
   /** Pre-known signed URL for the "open in new tab" link. Optional. */
   downloadUrl?: string | null
-  /** Optional filename — used for mime sniffing on legacy/octet-stream files. */
+  /** Optional filename: used for mime sniffing on legacy/octet-stream files. */
   fileName?: string | null
   className?: string
 }
@@ -67,8 +67,8 @@ export default function DocumentViewerPane({
   // Resolve mime / download_url from the documents API only when the caller did
   // not supply a mime (e.g. a pre-linked transaction document). When a mime is
   // provided (fresh upload, inbox preview) we skip the round-trip entirely.
-  // setState happens only inside the async callbacks — never synchronously in
-  // the effect body — to avoid cascading renders (react-hooks/set-state-in-effect).
+  // setState happens only inside the async callbacks: never synchronously in
+  // the effect body: to avoid cascading renders (react-hooks/set-state-in-effect).
   useEffect(() => {
     if (!documentId || mimeProp) return
     let cancelled = false
@@ -83,7 +83,7 @@ export default function DocumentViewerPane({
         })
       })
       .catch(() => {
-        // preview is best-effort — record an empty result so we stop "loading"
+        // preview is best-effort: record an empty result so we stop "loading"
         if (!cancelled) setFetched({ id: documentId, mime: null, url: null })
       })
     return () => {
@@ -151,7 +151,7 @@ export default function DocumentViewerPane({
           >
             <div className="flex h-full w-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
               {t('not_previewable')}
-              {' — '}
+              {': '}
               <a
                 href={newTabHref}
                 target="_blank"

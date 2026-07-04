@@ -72,7 +72,7 @@ export async function GET(
 /**
  * DELETE /api/documents/:id
  * Remove an uploaded document. Only permitted when the document is not yet
- * linked to a journal entry — once linked, it is räkenskapsinformation under
+ * linked to a journal entry: once linked, it is räkenskapsinformation under
  * BFL 7 kap 2§ and must be retained for 7 years. For linked docs the caller
  * should use POST /api/documents/:id/versions to supersede via a new version.
  */

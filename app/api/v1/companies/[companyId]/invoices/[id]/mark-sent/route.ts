@@ -7,14 +7,14 @@
  *
  * What happens on commit:
  *   1. F-series invoice_number is allocated atomically via the
- *      generate_invoice_number Postgres RPC (ML 17 kap 24§ p.2 — only
+ *      generate_invoice_number Postgres RPC (ML 17 kap 24§ p.2: only
  *      issued invoices consume numbers; this is where the F-series
  *      number gets assigned, NOT at draft-create per PR-B-2a's design).
  *   2. Invoice status flips to 'sent'.
  *   3. If accounting_method='accrual' AND document_type='invoice', a
  *      journal entry is posted via createInvoiceJournalEntry (Debit AR
  *      1510, Credit revenue 3xxx, Credit output VAT 2611/2621/2631).
- *      Under kontantmetoden ('cash') no journal entry is created here —
+ *      Under kontantmetoden ('cash') no journal entry is created here:
  *      booking happens at payment time.
  *   4. invoice.sent event is emitted.
  *
@@ -25,7 +25,7 @@
  * Known residual race window: the F-series number is allocated via the
  * generate_invoice_number RPC BEFORE the status-flip UPDATE. If a
  * concurrent transition wins the race-guard check (status='draft' filter),
- * the F-series number is consumed but no invoice carries it — a gap in
+ * the F-series number is consumed but no invoice carries it: a gap in
  * the löpnummer series (ML 17 kap 24§ p.2). The internal /api/invoices
  * mark-sent route has the same semantic. The architecturally correct
  * fix is a Postgres RPC that allocates + flips status atomically;
@@ -44,7 +44,7 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { eventBus } from '@/lib/events'
 import type { EntityType, Invoice } from '@/types'
 
-// Explicit projection — drops user_id, company_id (internal scoping).
+// Explicit projection: drops user_id, company_id (internal scoping).
 const INVOICE_MARK_SENT_RESPONSE_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
 
@@ -69,15 +69,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-sent',
   summary: 'Transition a draft invoice to sent (without emailing).',
   description:
-    'Marks a draft invoice as sent — for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). On accounting_method=accrual, also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
+    'Marks a draft invoice as sent: for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). On accounting_method=accrual, also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
   useWhen:
     'You delivered the invoice through a channel other than Accounted\'s email (Peppol, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.',
   doNotUseFor:
-    'Sending the invoice via Accounted email — use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid — use :mark-paid (PR-B-2b-2).',
+    'Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).',
   pitfalls: [
     'Only invoices in `status=draft` can be marked sent. Other states return 409 INVOICE_UPDATE_NOT_DRAFT (re-used; the action is structurally an update).',
     'Allocation is atomic. If a concurrent transition beats the agent\'s request to the same draft, the runner-up gets 409 INVOICE_UPDATE_NOT_DRAFT and no number is consumed.',
-    'Delivery notes (document_type=delivery_note) don\'t transition to sent — they were never drafts in the f-series sense. This endpoint will reject them with 400 VALIDATION_ERROR.',
+    'Delivery notes (document_type=delivery_note) don\'t transition to sent: they were never drafts in the f-series sense. This endpoint will reject them with 400 VALIDATION_ERROR.',
     'Idempotency-Key is mandatory. A retried mark-sent with the same key replays the cached response.',
   ],
   example: {
@@ -182,7 +182,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Defense in depth: moms_ruta drives which output-VAT account the
     // journal-entry generator posts to (2611 / 2614 / etc.). A null value
-    // would silently default — wrong for reverse-charge / EU-service /
+    // would silently default: wrong for reverse-charge / EU-service /
     // zero-rated invoices. moms_ruta is populated by the POST handler
     // from getVatRules(); a null here means the row was created via a
     // path that bypassed v1 (legacy import, manual SQL).
@@ -201,7 +201,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Fetch company settings (accounting method + entity type drive the
-    // journal-entry decision). Best-effort — without settings we default
+    // journal-entry decision). Best-effort: without settings we default
     // to enskild_firma / accrual which matches the dashboard default.
     const { data: settings } = await ctx.supabase
       .from('company_settings')
@@ -267,10 +267,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!updated) {
       // Race: invoice transitioned out of draft between our pre-flight and
       // the update. The F-series number has been consumed (atomic RPC), so
-      // we have a draft-cancelled with an allocated number — log so the
+      // we have a draft-cancelled with an allocated number: log so the
       // operator can investigate.
       ctx.log.warn(
-        'mark-sent: status race — invoice transitioned out of draft between pre-flight and update',
+        'mark-sent: status race: invoice transitioned out of draft between pre-flight and update',
         { invoiceId, companyId: ctx.companyId },
       )
       return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
@@ -304,7 +304,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         )
         if (entry) {
           journalEntryId = entry.id
-          // Supabase returns { data, error } — never rejects on DB error.
+          // Supabase returns { data, error }: never rejects on DB error.
           // A failed write-back leaves the invoice with a real journal
           // entry in the ledger but no pointer on the row, which is
           // unreconcilable without operator visibility.

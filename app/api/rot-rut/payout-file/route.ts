@@ -11,16 +11,16 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
  *
  * Generates the begäran-om-utbetalning XML (Skatteverket husavdrag, schema
  * V6) for the selected invoices, records a rot_rut_payout_requests row (one
- * active begäran per invoice — DB-enforced), archives the file as
+ * active begäran per invoice, DB-enforced), archives the file as
  * räkenskapsinformation, and returns the XML for download.
  *
  * All-or-nothing: if any selected invoice fails eligibility the request is
- * rejected with per-invoice blockers — a silently thinner file would be a
+ * rejected with per-invoice blockers: a silently thinner file would be a
  * guess about the user's intent.
  *
  * DELIBERATE: the XML (which embeds buyers' personnummer, as Skatteverkets
  * schema requires) is returned inline. The file only exists to be saved and
- * uploaded manually on skatteverket.se — there is no UI download surface for
+ * uploaded manually on skatteverket.se: there is no UI download surface for
  * this headless flow, and a document-reference indirection would dead-end the
  * user whenever the (best-effort) archive failed. Transport is TLS,
  * authenticated, MFA-gated and write-role-gated via withRouteContext.

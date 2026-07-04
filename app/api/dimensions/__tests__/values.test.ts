@@ -97,7 +97,7 @@ describe('POST /api/dimensions/[id]/values', () => {
   })
 
   it('rejects start/end dates on a resets-annually dimension with 400', async () => {
-    // Kostnadsställe-style dims reset annually — value date ranges are only
+    // Kostnadsställe-style dims reset annually: value date ranges are only
     // meaningful on accumulating dims (projekt).
     enqueue({ data: { id: 'dim-1', resets_annually: true } })
 

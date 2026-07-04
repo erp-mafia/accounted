@@ -3,7 +3,7 @@
  * dev_docs/dimensions_implementation_plan.md).
  *
  * The routes live under /api/dimensions and are built against the same locked
- * contract — this module codes against the contract, not the route files, so
+ * contract: this module codes against the contract, not the route files, so
  * the register UI (DimensionsManager) and the shared picker (DimensionCombobox)
  * can ship independently of the API package.
  */

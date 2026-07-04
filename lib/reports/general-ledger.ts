@@ -33,7 +33,7 @@ export interface GeneralLedgerReport {
 
 /**
  * Generate general ledger (huvudbok) for a fiscal period.
- * BFL 5 kap. 1 § — systematisk ordning: all transactions grouped by account.
+ * BFL 5 kap. 1 §: systematisk ordning: all transactions grouped by account.
  *
  * Uses joined queries with pagination to handle any number of entries.
  * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
@@ -43,7 +43,7 @@ export interface GeneralLedgerReport {
  *
  * The account range filter (accountFrom/accountTo) is applied post-hoc
  * during result building, not in the queries. Opening balances are computed
- * for all accounts — the wasted Map entries for filtered-out accounts are
+ * for all accounts: the wasted Map entries for filtered-out accounts are
  * trivially cheap compared to the cost of the queries themselves.
  */
 export async function generateGeneralLedger(
@@ -54,7 +54,7 @@ export async function generateGeneralLedger(
   accountTo?: string,
   options?: {
     /** SIE dim → code filter ({"6":"P001"}). Opening balances are dropped
-     *  when set — they are company-wide and cannot be dimension-scoped. */
+     *  when set: they are company-wide and cannot be dimension-scoped. */
     dimensions?: Record<string, string>
   }
 ): Promise<GeneralLedgerReport> {
@@ -92,7 +92,7 @@ export async function generateGeneralLedger(
   // Race condition note: if year-end closing runs concurrently and creates
   // the OB entry between the period query and this query, the entry could
   // be missed. The window is sub-second and the consequence is a single
-  // stale report — acceptable.
+  // stale report: acceptable.
   // Supabase types !inner joins as arrays; for many-to-one (line → entry)
   // it returns a single object at runtime. Cast via `as any` on the query.
   const rawLines = await fetchAllRows<{
@@ -118,7 +118,7 @@ export async function generateGeneralLedger(
       .in('journal_entries.status', ['posted', 'reversed'])
 
     if (dimensionFilter) {
-      // jsonb containment (@>) — served by idx_jel_dimensions_gin.
+      // jsonb containment (@>): served by idx_jel_dimensions_gin.
       query = query.contains('dimensions', dimensionFilter)
     }
 
@@ -126,7 +126,7 @@ export async function generateGeneralLedger(
       query = query.neq('journal_entry_id', obEntryId)
     }
 
-    // Stable total order on the line PK — paging is only correct with a
+    // Stable total order on the line PK: paging is only correct with a
     // deterministic order, else rows duplicate/skip across pages and balances
     // double or accounts vanish (see fetch-all.ts ordering invariant). The
     // report re-sorts lines per account below, so this order is invisible.

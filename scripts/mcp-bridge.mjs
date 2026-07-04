@@ -73,7 +73,7 @@ async function handleMessage(line) {
     })
 
     if (res.status === 204) {
-      // No content (e.g. notifications/initialized) — nothing to write back
+      // No content (e.g. notifications/initialized): nothing to write back
       return
     }
 

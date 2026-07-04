@@ -106,10 +106,10 @@ For each approved finding, create a Linear issue using the `mcp__claude_ai_Linea
 - **description**: Markdown formatted:
   ```markdown
   ## Problem
-  {What's wrong — current state}
+  {What's wrong, current state}
 
   ## Proposed Change
-  {What it should be — desired state}
+  {What it should be, desired state}
 
   ## Implementation
   **File(s):** {file paths}
@@ -130,6 +130,6 @@ After creating tickets, list them with their Linear identifiers so the user can 
 - Be specific. "The button looks off" is not actionable. "The primary button in InvoiceForm uses `rounded-lg` while all other forms use `rounded-md`" is.
 - Reference exact Tailwind classes, component names, and line numbers.
 - Don't flag things that are intentional design choices documented in CLAUDE.md.
-- Don't suggest adding features — only flag design/UX issues with what already exists.
+- Don't suggest adding features, only flag design/UX issues with what already exists.
 - Keep findings focused on visual design, interaction design, and frontend polish. Not code quality or architecture.
 - If a component is very small or trivial (e.g., a simple redirect page), skip it.

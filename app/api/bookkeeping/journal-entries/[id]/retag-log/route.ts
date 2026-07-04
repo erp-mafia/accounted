@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 /**
  * GET /api/bookkeeping/journal-entries/[id]/retag-log
  *
- * The entry's dimension retag history (dimensions plan PR6) — the immutable
+ * The entry's dimension retag history (dimensions plan PR6), the immutable
  * before/after trail behind every Tier-2 retag, newest first.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(

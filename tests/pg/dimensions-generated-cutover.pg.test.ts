@@ -12,7 +12,7 @@ import { getPool } from '@/tests/pg/setup'
  * Covers 20260702230000_dimensions_generated_column_cutover (dimensions PR9):
  *
  *   - cost_center/project are GENERATED ALWAYS AS (NULLIF(dimensions->>'1'/'6',''))
- *     STORED — inserting only the bag produces the same mirror values the
+ *     STORED: inserting only the bag produces the same mirror values the
  *     dual-write produced.
  *   - An INSERT that names either mirror column errors (the reason every
  *     writer was stripped in this PR).

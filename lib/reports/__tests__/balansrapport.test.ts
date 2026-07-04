@@ -110,7 +110,7 @@ describe('generateBalansrapport', () => {
     expect(assets.subtotal_ib).toBe(60000)
     expect(assets.subtotal_ub).toBe(87500)
 
-    // Equity & liabilities — debit-negative (Fortnox/Visma convention)
+    // Equity & liabilities: debit-negative (Fortnox/Visma convention)
     const equity = report.groups[1]
     expect(equity.rows[0]).toEqual({
       account_number: '2099',
@@ -152,7 +152,7 @@ describe('generateBalansrapport', () => {
     expect(report.total_assets_ub).toBe(80000)
     expect(report.total_equity_liabilities_ub).toBe(-30000)
     expect(report.beraknat_resultat).toBe(50000)
-    // Trial balance still balances — double-entry guarantees this.
+    // Trial balance still balances: double-entry guarantees this.
     expect(report.is_balanced).toBe(true)
   })
 

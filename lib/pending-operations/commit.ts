@@ -11,7 +11,7 @@
  * handling, and status transition logic apply.
  *
  * The executor functions previously lived in the commit route. They are kept
- * private to this module — call `commitPendingOperation()` to invoke them.
+ * private to this module: call `commitPendingOperation()` to invoke them.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
@@ -110,7 +110,7 @@ export interface CommitResult {
   http_status?: number
   auto_rejected?: boolean
   // Set when the commit failed because the booking posts to BAS accounts not
-  // active in the company chart. Recoverable — the op is left 'pending' so the
+  // active in the company chart. Recoverable: the op is left 'pending' so the
   // caller can activate the accounts and retry. Lets the route rebuild the
   // structured ACCOUNTS_NOT_IN_CHART envelope (code + account_numbers).
   code?: string
@@ -127,8 +127,8 @@ export interface CommitOptions {
    * 'timing_ceiling' | 'migration' | 'legacy' | 'agent' | 'api_key'.
    *
    * Web-UI single-approval passes 'user_accept'; bulk-approval passes
-   * 'bulk_accept'. MCP approvals pass the relaying credential — 'api_key'
-   * (gnubok-mcp bridge) or 'agent' (OAuth connector) — so the immutable layer
+   * 'bulk_accept'. MCP approvals pass the relaying credential: 'api_key'
+   * (gnubok-mcp bridge) or 'agent' (OAuth connector), so the immutable layer
    * records that the acknowledgment was agent-relayed rather than a
    * first-party human session (agent_first_vision.md §8 P0-1). Every path is
    * still human-approval-gated; agent auto-commit was removed in
@@ -138,8 +138,8 @@ export interface CommitOptions {
   /**
    * WHO is relaying this approval (api_key with the key's display name, plain
    * user, agent_chat, …). Propagated to every journal-entry commit made by the
-   * operation via the runWithActor() AsyncLocalStorage scope — unlike
-   * commitMethod, which only the create_voucher executor threads explicitly —
+   * operation via the runWithActor() AsyncLocalStorage scope (unlike
+   * commitMethod, which only the create_voucher executor threads explicitly)
    * and stamped onto journal_entries.committed_actor_* plus the audit_log
    * COMMIT row by the commit_journal_entry RPC (migration 20260619120000).
    * Omitted → NULL attribution, identical to pre-attribution behaviour.
@@ -439,7 +439,7 @@ async function commitCreateSupplier(
 
 /**
  * Executor for the staged create_dimension_value operation
- * (gnubok_create_dimension_value — dimensions PR3). Inserts a dimension value
+ * (gnubok_create_dimension_value, dimensions PR3). Inserts a dimension value
  * (SIE #OBJEKT) into the registry. Agents never silently mint reporting
  * values: this always arrives via a human-approved pending_operation.
  *
@@ -455,7 +455,7 @@ async function commitCreateDimensionValue(
 ): Promise<ExecutorResult> {
   // Defense in depth: re-validate the staged params at the commit boundary so
   // a tampered pending_operations row cannot inject a non-portable code or
-  // malformed dates into the registry (ASVS V4.5) — mirrors commitCreateSupplier.
+  // malformed dates into the registry (ASVS V4.5): mirrors commitCreateSupplier.
   let validated
   try {
     validated = CreateDimensionValueParamsSchema.parse(params)
@@ -468,7 +468,7 @@ async function commitCreateDimensionValue(
     throw err
   }
 
-  // Get-or-create the system dims (1 = kostnadsställe, 6 = projekt) —
+  // Get-or-create the system dims (1 = kostnadsställe, 6 = projekt):
   // idempotent lazy seeding. Custom dims must already exist in the registry:
   // agents may stage new VALUES, never new dimensions.
   if (validated.sie_dim_no === 1 || validated.sie_dim_no === 6) {
@@ -498,7 +498,7 @@ async function commitCreateDimensionValue(
   }
 
   // Value dates only make sense on accumulating dimensions (projekt-style
-  // ranges) — mirrors POST /api/dimensions/[id]/values.
+  // ranges): mirrors POST /api/dimensions/[id]/values.
   if (dimension.resets_annually && (validated.start_date || validated.end_date)) {
     return {
       error: `Start-/slutdatum är inte tillåtna på dimensionen "${dimension.name}" (nollställs årligen).`,
@@ -521,7 +521,7 @@ async function commitCreateDimensionValue(
 
   if (insertError) {
     if (insertError.code === '23505') {
-      // Duplicate code — treat the existing value as success (idempotency).
+      // Duplicate code: treat the existing value as success (idempotency).
       const { data: existing, error: existingError } = await supabase
         .from('dimension_values')
         .select('id, code, name, is_active')
@@ -562,8 +562,8 @@ async function commitCreateDimensionValue(
 
 /**
  * Executor for the staged retag_line_dimensions operation
- * (gnubok_tag_journal_lines — dimensions PR6). Loops the staged line_ids
- * through the retag_line_dimensions RPC — the ONE audited write path for
+ * (gnubok_tag_journal_lines, dimensions PR6). Loops the staged line_ids
+ * through the retag_line_dimensions RPC: the ONE audited write path for
  * changing dimension tags on posted lines. The RPC enforces everything per
  * line at commit time (open period, company lock date, active registry
  * values, writer role, posted status) and writes an immutable
@@ -571,7 +571,7 @@ async function commitCreateDimensionValue(
  *
  * Partial-success semantics: one line failing (e.g. its period was locked
  * between staging and approval) must not roll back the lines already
- * retagged — each RPC call is its own transaction. Failures are collected
+ * retagged: each RPC call is its own transaction. Failures are collected
  * and echoed (capped at 20) so the caller can re-stage just the failed set.
  * Only when EVERY line fails does the operation as a whole fail.
  */
@@ -583,7 +583,7 @@ async function commitRetagLineDimensions(
 ): Promise<ExecutorResult> {
   // Defense in depth: re-validate the staged params at the commit boundary so
   // a tampered pending_operations row cannot inject arbitrary ids or a
-  // malformed bag (ASVS V4.5) — mirrors commitCreateDimensionValue.
+  // malformed bag (ASVS V4.5): mirrors commitCreateDimensionValue.
   let validated
   try {
     validated = RetagLineDimensionsParamsSchema.parse(params)
@@ -628,7 +628,7 @@ async function commitRetagLineDimensions(
       retagged,
       unchanged,
       failed_count: failed.length,
-      // Echo at most 20 failures — enough to act on without bloating
+      // Echo at most 20 failures: enough to act on without bloating
       // result_data on a pathological 500-line all-but-one failure.
       failed: failed.slice(0, 20),
       dimensions: validated.dimensions,
@@ -710,7 +710,7 @@ async function commitCreateInvoice(
     .from('customers').select('*').eq('id', customerId).eq('company_id', companyId).single()
 
   if (customerError || !customer) {
-    return { error: 'Customer not found — they may have been deleted.', status: 404 }
+    return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
@@ -741,7 +741,7 @@ async function commitCreateInvoice(
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
   }
 
-  // Validate any per-line revenue-account override (defense in depth — the field
+  // Validate any per-line revenue-account override (defense in depth: the field
   // is frozen onto invoice_items and flows to generatePerRateLines()).
   const overrideAccounts = Array.from(
     new Set(billableItems.map((i) => i.revenue_account).filter((a): a is string => !!a)),
@@ -809,7 +809,7 @@ async function commitCreateInvoice(
 
   const invoiceItems = items.map((item, index) => {
     // Text rows store the description only and zero everything else. Keys must
-    // match the product branch exactly — PostgREST rejects a bulk insert whose
+    // match the product branch exactly: PostgREST rejects a bulk insert whose
     // objects have differing key sets.
     if (item.line_type === 'text') {
       return {
@@ -894,7 +894,7 @@ async function commitMarkInvoicePaid(
     return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
   }
 
-  // Duplicate-payment guard — parity with the web mark-paid route, which the
+  // Duplicate-payment guard: parity with the web mark-paid route, which the
   // agent path otherwise bypassed. If an unlinked inbound bank transaction
   // already looks like this invoice's payment, booking a parallel payment
   // voucher here creates exactly the orphan that later double-counts the
@@ -934,7 +934,7 @@ async function commitMarkInvoicePaid(
     // behandlingshistorik record (BFNAR 2013:2 kap 8) so an auditor can see why
     // the duplicate was allowed. Re-detect to capture the dismissed candidate;
     // best-effort, never blocks the payment. Payload stays PII-safe
-    // (ids/amounts/dates only — no customer or merchant name).
+    // (ids/amounts/dates only: no customer or merchant name).
     const customerName = (invoice as { customer?: { name?: string } }).customer?.name
     if (customerName) {
       try {
@@ -978,14 +978,14 @@ async function commitMarkInvoicePaid(
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null
 
-  // Route on invoice state, not the company's current accounting_method —
+  // Route on invoice state, not the company's current accounting_method:
   // an invoice booked at send under accrual must clear 1510 here even if
   // the company has since switched to kontantmetoden.
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
   // Paid/remaining/status math + overpayment guard via the shared
-  // planInvoicePayment helper — the single source of truth across the three
+  // planInvoicePayment helper: the single source of truth across the three
   // mark-paid surfaces (this agent path, the dashboard route, and the v1 API).
   // This path settles the full remaining (no custom lines), so it can never
   // overpay, but routing through the helper keeps the state identical. Runs
@@ -1027,7 +1027,7 @@ async function commitMarkInvoicePaid(
     if (!journalEntryId) {
       return {
         error:
-          'Betalningen kunde inte bokföras (ingen verifikation skapades — t.ex. stängd räkenskapsperiod). ' +
+          'Betalningen kunde inte bokföras (ingen verifikation skapades: t.ex. stängd räkenskapsperiod). ' +
           'Fakturan har inte markerats som betald.',
         status: 422,
       }
@@ -1078,7 +1078,7 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  // Notify subscribers — invoice.paid fans out to registered webhooks
+  // Notify subscribers: invoice.paid fans out to registered webhooks
   // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
   // so an emit failure must not fail the operation. Parity with the v1 and
   // dashboard mark-paid routes, which previously emitted while this path did not.
@@ -1128,15 +1128,15 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  // partially_paid/credited imply the invoice was already issued too — the
+  // partially_paid/credited imply the invoice was already issued too: the
   // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
   if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
     return { error: 'Invoice has already been sent', status: 409 }
   }
   // A cancelled invoice keeps its F-series number for ML 17 kap 24§ compliance
-  // but is not a valid faktura — sending it would silently re-activate it (the
+  // but is not a valid faktura: sending it would silently re-activate it (the
   // status flip below has no guard) and deliver a "MAKULERAD" PDF as if live.
-  // Mirrors the send route's guard (audit C17 — this agent path lacked it).
+  // Mirrors the send route's guard (audit C17, this agent path lacked it).
   if (invoice.status === 'cancelled') {
     return {
       error:
@@ -1168,8 +1168,8 @@ async function commitSendInvoice(
   // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
   // number, so a render failure can't leave a numbered-but-never-issued
   // invoice (an F-series gap if the draft is later abandoned). Skipped when
-  // the row is already numbered (retry path) — we'd render twice for no gain.
-  // Mirrors the send route (audit C17 — this agent path assigned the number
+  // the row is already numbered (retry path): we'd render twice for no gain.
+  // Mirrors the send route (audit C17, this agent path assigned the number
   // first and rendered unguarded).
   const isFreshAllocation = !invoice.invoice_number
   if (isFreshAllocation) {
@@ -1208,7 +1208,7 @@ async function commitSendInvoice(
 
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens
   // after email delivery (line ~625); rendering with the stale 'draft' status
-  // would stamp the customer's PDF with "UTKAST – inte en giltig faktura".
+  // would stamp the customer's PDF with "UTKAST: inte en giltig faktura".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
@@ -1363,7 +1363,7 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
-  // Overshoot guard + paid/remaining math — shared with the dashboard and v1
+  // Overshoot guard + paid/remaining math: shared with the dashboard and v1
   // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
   // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
   // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
@@ -1394,7 +1394,7 @@ async function commitMatchTransactionInvoice(
   const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
   // Route on invoice state, not the company's current setting. Mirror of
-  // the match-invoice route fix — see that handler for the full rationale.
+  // the match-invoice route fix: see that handler for the full rationale.
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
@@ -1686,7 +1686,7 @@ async function commitAttachDocumentToTransaction(
   if (docError || !doc) return { error: 'Document not found', status: 404 }
 
   // A document that already serves as underlag for a DIFFERENT verifikation
-  // cannot be pinned here — propagating would either corrupt that link or be
+  // cannot be pinned here: propagating would either corrupt that link or be
   // blocked by the document-metadata immutability trigger. Same verifikation
   // is fine (idempotent re-attach; propagation below becomes a no-op).
   // Mirrors the REST route in app/api/transactions/[id]/attach-document.
@@ -1703,7 +1703,7 @@ async function commitAttachDocumentToTransaction(
   // before our UPDATE acquired the row lock. Reading the post-update state
   // (rather than the pre-staging state) is what makes the
   // attach-then-categorize and categorize-then-attach orderings produce the
-  // same final state — both end with document_attachments.journal_entry_id
+  // same final state: both end with document_attachments.journal_entry_id
   // set to the tx's journal_entry_id. (BFL 5 kap 6 § verifikation underlag.)
   const { data: postUpdate, error: updateError } = await supabase
     .from('transactions')
@@ -1762,14 +1762,14 @@ async function commitAttachDocumentToTransaction(
       .eq('company_id', companyId)
     if (linkErr) {
       // The enforce_period_lock trigger blocks journal_entry_id writes when
-      // the target entry sits in a closed/locked period. Map to 409 — the
+      // the target entry sits in a closed/locked period. Map to 409: the
       // dispatcher auto-rejects it, and a retry could never succeed until the
       // period is unlocked, so "försök igen" would be a false promise.
       const linkMsg = (linkErr as { message?: string }).message ?? ''
       if (/locked\/closed fiscal period|Bokföringen är låst/i.test(linkMsg)) {
         return {
           error:
-            'Bilagan kopplades till transaktionen men verifikationens period är låst — den kunde inte länkas till verifikationen.',
+            'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
           status: 409,
         }
       }
@@ -1782,14 +1782,14 @@ async function commitAttachDocumentToTransaction(
       console.error('[commitAttach] Failed to propagate to journal entry:', linkErr)
       return {
         error:
-          'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen — operationen är idempotent.',
+          'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen: operationen är idempotent.',
         status: 500,
       }
     }
   }
 
   // Rättelse audit trail (BFL 5 kap 5 §): if we replaced a non-null doc, log
-  // the swap to processing_history so the original is traceable. Best-effort —
+  // the swap to processing_history so the original is traceable. Best-effort:
   // a logging failure must not roll back the (compliant) attach.
   if (previousDocumentId && previousDocumentId !== documentId) {
     try {
@@ -1882,7 +1882,7 @@ async function commitLinkDocumentToVoucher(
     const msg = (err as Error).message ?? ''
     if (/locked\/closed fiscal period|Bokföringen är låst/i.test(msg)) {
       return {
-        error: 'Verifikationens period är låst — bilagan kan inte länkas.',
+        error: 'Verifikationens period är låst: bilagan kan inte länkas.',
         status: 409,
       }
     }
@@ -2191,7 +2191,7 @@ async function commitCreateSupplierInvoiceFromInbox(
     const pgErr = invoiceErr as { code?: string; message?: string } | null
     const isDuplicate = pgErr?.code === '23505'
     if (isDuplicate) {
-      // Generic 409 — supplier_invoice_number alone is already in the staged
+      // Generic 409: supplier_invoice_number alone is already in the staged
       // params the caller submitted; we just don't echo back the supplier's
       // name or row id. The UI surface uses the supplier-side ledger, not
       // this error.
@@ -2217,7 +2217,7 @@ async function commitCreateSupplierInvoiceFromInbox(
   // RC invariant: a reverse-charge supplier invoice never shows output VAT
   // from the supplier. Zero any per-line VAT that slipped through staging so
   // the registration JE's 2614/2645 self-assessed leg lines up with rutor
-  // 20–24 / 48 instead of double-counting input VAT into 2641. Tampered
+  // 20-24 / 48 instead of double-counting input VAT into 2641. Tampered
   // params can't smuggle non-zero VAT into the items table.
   const itemInserts = rawItems.map((item, idx) => {
     const vatRate = reverseCharge ? 0 : (typeof item.vat_rate === 'number' && Number.isFinite(item.vat_rate) ? item.vat_rate : 0)
@@ -2290,7 +2290,7 @@ async function commitCreateSupplierInvoiceFromInbox(
 
         // Attach the OCR'd source document to the verifikat so the
         // registration JE has its underlag per BFL 5 kap 6 §. Linking failure
-        // is non-fatal — the JE is already posted and immutable; we log and
+        // is non-fatal: the JE is already posted and immutable; we log and
         // continue so the supplier invoice stays usable.
         if (documentId) {
           try {
@@ -2307,7 +2307,7 @@ async function commitCreateSupplierInvoiceFromInbox(
         // createSupplierInvoiceRegistrationEntry returns null ONLY when no
         // fiscal period covers invoice_date (every other failure throws into
         // the catch below). Without this branch the inbox item gets linked to
-        // an unbooked supplier invoice — the same 2440/2641 orphan the catch
+        // an unbooked supplier invoice: the same 2440/2641 orphan the catch
         // guards against. Roll back (items first, see FK note below) and return
         // an actionable error instead of silently "succeeding".
         await supabase
@@ -2328,7 +2328,7 @@ async function commitCreateSupplierInvoiceFromInbox(
     } catch (err) {
       // Roll back: orphan supplier_invoices row without its registration JE
       // understates leverantörsskuld (2440) + ingående moms (2641) on the
-      // momsdeklaration. Items must be deleted BEFORE the parent — the FK
+      // momsdeklaration. Items must be deleted BEFORE the parent: the FK
       // on supplier_invoice_items.supplier_invoice_id is ON DELETE NO ACTION
       // (default), so a parent-first delete would be silently blocked and
       // leave the doomed invoice in the supplier ledger.
@@ -2343,7 +2343,7 @@ async function commitCreateSupplierInvoiceFromInbox(
         .eq('company_id', companyId)
       if (parentDeleteErr) {
         // Hard inconsistency: items gone but parent stuck. Log loudly so an
-        // operator can clean up — this should not happen in practice.
+        // operator can clean up; this should not happen in practice.
         log.error('Rollback partial: parent supplier_invoices delete failed after JE failure', {
           companyId,
           invoiceId: invoice.id,
@@ -2368,7 +2368,7 @@ async function commitCreateSupplierInvoiceFromInbox(
   // Terminal state for the inbox row: created_supplier_invoice_id is the
   // dedup key for next time this inbox item is touched, and it's what the UI
   // and list_unmatched_documents use to drop the row out of "needs action".
-  // Do NOT write status here — the status CHECK only allows received|error
+  // Do NOT write status here: the status CHECK only allows received|error
   // (migration 20260504180000); writing 'confirmed' makes Postgres reject the
   // whole UPDATE, so the link column never lands and the item stays unresolved.
   const { error: linkInboxErr } = await supabase
@@ -2646,7 +2646,7 @@ async function commitCreditInvoice(
 
   // Resolve the original verifikation reference so the credit-note JE can
   // point back to the corrected entry per BFL 5 kap. 5 §. We tolerate
-  // missing-JE on the original (legacy data) — the description simply omits
+  // missing-JE on the original (legacy data): the description simply omits
   // the voucher reference and keeps the invoice-number reference.
   let originalVoucherRef: string | undefined
   if (original.journal_entry_id) {
@@ -2803,7 +2803,7 @@ async function commitImportSie(
   const importOpeningBalances = Boolean(params.import_opening_balances)
   const importTransactions = Boolean(params.import_transactions)
   const voucherSeries = params.voucher_series as string | undefined
-  // Default true (not Boolean(...) — operations staged before this param
+  // Default true (not Boolean(...): operations staged before this param
   // existed must keep the file's account names, matching the UI default).
   const updateAccountNames =
     params.update_account_names === undefined ? true : Boolean(params.update_account_names)
@@ -2879,7 +2879,7 @@ async function commitUndoSieImport(
 /**
  * Normalize raw JSON line input from pending_operations.params into the
  * engine's typed line shape. Trusts shape because the MCP tool already
- * validates via Zod before staging — defensive coercion only.
+ * validates via Zod before staging: defensive coercion only.
  */
 function normalizeVoucherLines(raw: unknown): CreateJournalEntryLineInput[] {
   if (!Array.isArray(raw)) return []
@@ -2894,7 +2894,7 @@ function normalizeVoucherLines(raw: unknown): CreateJournalEntryLineInput[] {
       amount_in_currency: line.amount_in_currency !== undefined ? Number(line.amount_in_currency) : undefined,
       exchange_rate: line.exchange_rate !== undefined ? Number(line.exchange_rate) : undefined,
       tax_code: line.tax_code ? String(line.tax_code) : undefined,
-      // Boundary-validated with the same constraints as the Zod line schema —
+      // Boundary-validated with the same constraints as the Zod line schema:
       // staged payloads must not bypass API-layer validation (SOC 2 PI1.1).
       dimensions: coerceDimensionsBag(line.dimensions),
       cost_center: line.cost_center ? String(line.cost_center) : undefined,
@@ -2920,7 +2920,7 @@ async function commitCreateVoucher(
 
   // Re-validate balance defensively. The MCP tool already checks before
   // staging, but a tampered or hand-inserted pending_operations row would
-  // bypass that gate. createDraftEntry runs the same check internally — this
+  // bypass that gate. createDraftEntry runs the same check internally: this
   // is for a cleaner 400 + Swedish error before reaching the engine.
   const balance = validateBalance(lines)
   if (!balance.valid) {
@@ -2944,12 +2944,12 @@ async function commitCreateVoucher(
     fiscalPeriodId = resolved
   }
 
-  // source_type is derived here — never trust params.source_type. The MCP tool
+  // source_type is derived here: never trust params.source_type. The MCP tool
   // stages a typed boolean (is_opening_balance), not a raw source_type string,
   // so a tampered or future direct-staging path can't inject
   // 'bank'/'invoice'/etc. and corrupt audit attribution. The default is
   // 'manual'. We only upgrade to 'opening_balance' after independently
-  // re-validating the entry genuinely looks like an ingående balans — this
+  // re-validating the entry genuinely looks like an ingående balans: this
   // matters because bank reconciliation excludes an IB from the period movement
   // ONLY when source_type='opening_balance' (lib/reconciliation/bank-reconciliation.ts);
   // a mislabelled 'manual' IB shows up as a phantom reconciliation difference.
@@ -2968,14 +2968,14 @@ async function commitCreateVoucher(
     if (nonBalanceSheet.length > 0) {
       return {
         error:
-          `Ingående balans får bara innehålla balanskonton (klass 1–2). ` +
+          `Ingående balans får bara innehålla balanskonton (klass 1-2). ` +
           `Dessa konton hör inte hemma i en IB: ${[...new Set(nonBalanceSheet)].join(', ')}. ` +
           `Bokför resultatkonton som en vanlig verifikation utan is_opening_balance.`,
         status: 400,
       }
     }
 
-    // Constraint 2: the entry must be dated on the fiscal period's first day —
+    // Constraint 2: the entry must be dated on the fiscal period's first day:
     // an IB opens the period (same as the canonical flow, which dates the entry
     // on period.period_start). We fetch period_start here because the resolved
     // fiscalPeriodId may have come from either the explicit param or a date
@@ -3024,7 +3024,7 @@ async function commitCreateVoucher(
       opts.commitMethod ?? 'user_accept'
     )
 
-    // Optional inbox linking — set when gnubok_create_voucher is called with
+    // Optional inbox linking: set when gnubok_create_voucher is called with
     // inbox_item_id (book-direct flow for kvitton). The verifikat is already
     // posted and immutable; failures here are non-fatal and only affect
     // discoverability (inbox row stays in "needs action" with the document
@@ -3043,7 +3043,7 @@ async function commitCreateVoucher(
       // zero-rows-updated result and surfaces a structured warning. We also
       // require .eq('created_supplier_invoice_id', null) so a concurrent
       // create_supplier_invoice_from_inbox doesn't get clobbered either.
-      // Only the link column is written — the status CHECK allows received|error
+      // Only the link column is written: the status CHECK allows received|error
       // (migration 20260504180000), so writing 'confirmed' here would fail the
       // whole UPDATE and silently leave the inbox item in "needs action".
       const { data: updatedRows, error: linkInboxErr } = await supabase
@@ -3064,7 +3064,7 @@ async function commitCreateVoucher(
       } else if (!updatedRows || updatedRows.length === 0) {
         // Race: another commit already claimed this inbox item (either as a
         // journal entry or supplier invoice). The verifikat is already posted
-        // and immutable — we leave it; an operator can rättelse via storno
+        // and immutable: we leave it; an operator can rättelse via storno
         // if it's a true duplicate.
         log.warn('Voucher posted but inbox item was already claimed by a concurrent commit', {
           inboxItemId,
@@ -3074,7 +3074,7 @@ async function commitCreateVoucher(
         inboxLinked = true
       }
 
-      // Only attach the OCR document when the inbox link succeeded — if a
+      // Only attach the OCR document when the inbox link succeeded: if a
       // racing commit already owns the inbox row, the document already lives
       // on its JE and re-attaching here would either fail noisily (UNIQUE on
       // document_attachments.journal_entry_id, if any) or silently shift it.
@@ -3375,7 +3375,7 @@ function getSkatteverketServices(): SkatteverketCommitServices {
     | Partial<SkatteverketCommitServices>
     | undefined
   if (!services?.commitSubmitVatDeclaration || !services?.commitSubmitAgi) {
-    // Extension absent or not wired. Recoverable — leave the op pending so a
+    // Extension absent or not wired. Recoverable: leave the op pending so a
     // re-enable + re-approve works without re-staging.
     throw new SkatteverketRecoverableError(
       'Skatteverket-integrationen är inte tillgänglig.',
@@ -3448,7 +3448,7 @@ async function commitMatchBatchAllocate(
   //     `company_members.company_id = p_company_id`
   // The MCP execute() handler additionally pre-checks the same IDs to
   // surface clean errors before staging. This commit handler is a thin
-  // pass-through by design — re-querying here would triple the same
+  // pass-through by design: re-querying here would triple the same
   // check without adding security.
   const txId = params.transaction_id as string
   const allocations = params.allocations
@@ -3463,7 +3463,7 @@ async function commitMatchBatchAllocate(
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message, no
-    // payload — error.details can echo invoice IDs, amounts, etc.
+    // payload: error.details can echo invoice IDs, amounts, etc.
     log.error('match_batch_allocate RPC error', {
       code: (error as { code?: string }).code,
       message: error.message,
@@ -3479,7 +3479,7 @@ async function commitMatchBatchAllocate(
     }
   }
   // Structured audit-trail entry on success (compliance-swarm V16). Tx
-  // count + JE id + the source tx id only — no amounts, no
+  // count + JE id + the source tx id only: no amounts, no
   // counterparty identifiers, no descriptions. txId is included
   // intentionally so the audit trail can join successful commits back
   // to the source bank tx without a separate query; it's not PII on
@@ -3562,12 +3562,12 @@ async function commitBulkBookTransactions(
 }
 
 /**
- * Bulk-book selected Underlag (Dokumentinkorgen) — Lena-driven flow. Each
+ * Bulk-book selected Underlag (Dokumentinkorgen): Lena-driven flow. Each
  * selected inbox item is booked against its matched bank transaction using one
  * shared category + VAT treatment. The booking, VAT (incl. reverse charge), and
  * underlag→verifikat propagation are the SAME shared core the single-item
  * categorize path uses (categorizeMatchedTransaction). Items that can't be
- * booked are skipped with a reason rather than failing the whole batch — the
+ * booked are skipped with a reason rather than failing the whole batch: the
  * "Bokför valda hoppar över" contract. A per-item throw (e.g. period locked,
  * accounts not in chart) is caught and recorded as a skip so one bad underlag
  * never blocks the rest.
@@ -3634,7 +3634,7 @@ async function commitLinkTransactionJournalEntry(
   }
 
   // Structured audit-trail entry on success (compliance-swarm V16, SOC 2 CC4.1).
-  // Mirrors commitMatchBatchAllocate / commitBulkBookTransactions — IDs only,
+  // Mirrors commitMatchBatchAllocate / commitBulkBookTransactions: IDs only,
   // no amounts or counterparty PII. invoiceId is logged as boolean to avoid
   // leaking which invoices are touched while still distinguishing the two
   // code paths (link-only vs link+settle).
@@ -3669,8 +3669,8 @@ async function commitLinkTransactionJournalEntry(
  * transitions are applied here so the two callers stay consistent.
  *
  * When opts.actor is set, the entire executor runs inside a runWithActor()
- * scope so EVERY journal-entry commit the operation makes — regardless of
- * which entry generator produced it — carries actor attribution into
+ * scope so EVERY journal-entry commit the operation makes (regardless of
+ * which entry generator produced it) carries actor attribution into
  * journal_entries.committed_actor_* and the audit_log COMMIT row via
  * commitEntry() → commit_journal_entry RPC (migration 20260619120000).
  */
@@ -3694,7 +3694,7 @@ async function commitPendingOperationInner(
 ): Promise<CommitResult> {
   // ── Capability gate (commit-time twin of the MCP dispatch gate). The actual
   //    external-service call (email / Skatteverket submit) happens below, so
-  //    this is the true paid chokepoint — it also catches an op STAGED during
+  //    this is the true paid chokepoint: it also catches an op STAGED during
   //    the trial then approved AFTER the grant expired, regardless of caller
   //    (MCP approve tool or the UI approval path). Checked BEFORE the atomic
   //    claim so a blocked op stays 'pending' and is re-approvable once the
@@ -3880,8 +3880,8 @@ async function commitPendingOperationInner(
   } catch (err) {
     // Accounts-not-in-chart is RECOVERABLE: the booking itself is valid; the
     // company's chart just lacks the (standard BAS) accounts it posts to. Do
-    // NOT consume the op — release the atomic claim back to 'pending' so the
-    // user can activate the accounts and retry the SAME op — and surface the
+    // NOT consume the op: release the atomic claim back to 'pending' so the
+    // user can activate the accounts and retry the SAME op, and surface the
     // structured code + numbers so the client can offer one-click activation.
     if (err instanceof AccountsNotInChartError) {
       await supabase
@@ -3972,7 +3972,7 @@ async function commitPendingOperationInner(
   if (finalizeError) {
     // The executor's side-effects already committed (and are immutable); only
     // the terminal status write failed. Without surfacing this, the row would
-    // sit in 'committing' indefinitely — the expire sweep only targets
+    // sit in 'committing' indefinitely: the expire sweep only targets
     // 'pending' ops, so nothing would ever reconcile it. Log loudly with the
     // ids needed to finalize manually; the response still reports success
     // because the actual work is done.

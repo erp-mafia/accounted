@@ -1,12 +1,12 @@
 /**
- * /docs/api/errors content — generated from the STRUCTURED_ERRORS registry.
+ * /docs/api/errors content: generated from the STRUCTURED_ERRORS registry.
  *
  * The registry lives in lib/errors/structured-errors.ts; we re-import it here
  * and build a Stripe-style catalogue page where every code is anchorable
  * (the docs_url field on every error envelope already points at this page).
  *
  * Adding a new error code in the registry automatically surfaces here on the
- * next build — no manual edits to keep in sync.
+ * next build: no manual edits to keep in sync.
  */
 
 import { listErrorCodes, getErrorEntry } from '@/lib/errors/structured-errors'
@@ -14,7 +14,7 @@ import { listErrorCodes, getErrorEntry } from '@/lib/errors/structured-errors'
 interface DomainGroup {
   label: string
   description: string
-  /** Code prefix matchers — first match wins; codes without a match fall to 'Other'. */
+  /** Code prefix matchers: first match wins; codes without a match fall to 'Other'. */
   prefixes: string[]
 }
 
@@ -73,7 +73,7 @@ export function buildErrorReferenceMd(): string {
   const lines: string[] = []
   lines.push('# Errors')
   lines.push('')
-  lines.push(`> Every error returned by the Accounted REST API uses a stable code from this catalogue. Codes never change once shipped — agents can pattern-match on them safely. The \`docs_url\` field on every error envelope points at the anchor for that specific code.`)
+  lines.push(`> Every error returned by the Accounted REST API uses a stable code from this catalogue. Codes never change once shipped: agents can pattern-match on them safely. The \`docs_url\` field on every error envelope points at the anchor for that specific code.`)
   lines.push('')
   lines.push('## Envelope shape')
   lines.push('')
@@ -116,7 +116,7 @@ export function buildErrorReferenceMd(): string {
       const statusName = statusLabel(status)
       lines.push(`### ${code}`)
       lines.push('')
-      lines.push(`**HTTP \`${status}\`**${statusName ? ` — ${statusName}` : ''}`)
+      lines.push(`**HTTP \`${status}\`**${statusName ? `: ${statusName}` : ''}`)
       lines.push('')
       lines.push(`${entry.message_en}`)
       lines.push('')

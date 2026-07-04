@@ -54,8 +54,8 @@ export default function SupplierInvoicesPage() {
 
   // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
   // optionally with inbox_item_id for the invoice-inbox conversion flow) so
-  // every entry point — the header button, the empty state, the command
-  // palette, and the legacy /supplier-invoices/new redirect — opens the same
+  // every entry point (the header button, the empty state, the command
+  // palette, and the legacy /supplier-invoices/new redirect) opens the same
   // dialog, and the browser back button closes it.
   const showNewInvoice = searchParams.has('new')
   const inboxItemId = searchParams.get('inbox_item_id')

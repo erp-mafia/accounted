@@ -6,7 +6,7 @@
  *
  *   defaults  <  env vars  <  extension override
  *
- * If nothing is set, Accounted defaults are returned — production behaviour
+ * If nothing is set, Accounted defaults are returned: production behaviour
  * is unchanged. A whitelabel sets env vars (NEXT_PUBLIC_BRANDING_* for
  * client-readable, BRANDING_* for server-only) or registers a branding
  * extension via registerBrandingService().
@@ -61,7 +61,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   appName: 'Accounted',
   appDescription: 'Ekonomihantering',
   legalEntity: 'Arcim Technology AB',
-  // Emails and URLs intentionally keep the gnubok.se hostname — the rebrand is
+  // Emails and URLs intentionally keep the gnubok.se hostname: the rebrand is
   // visual only; we don't churn the support inbox or app domain alongside it.
   supportEmail: 'support@gnubok.se',
   privacyEmail: 'privacy@gnubok.se',

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
 
 // Minimal fixture inserters for pg-real tests. All inserts go through the
-// pool (superuser `postgres`), which bypasses RLS — that is intentional for
+// pool (superuser `postgres`), which bypasses RLS: that is intentional for
 // seeding. RLS is exercised only where a test explicitly opens a user
 // context via withUserContext().
 

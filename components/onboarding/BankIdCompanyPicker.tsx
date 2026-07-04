@@ -41,7 +41,7 @@ type SetupState =
   | { kind: 'opening'; companyId: string }
 
 // Swedish legal entity names (Aktiebolag, Enskild firma, etc.) are statutory
-// terms — kept in Swedish in both locales.
+// terms: kept in Swedish in both locales.
 function humanEntityType(t: string | null | undefined): string {
   if (!t) return ''
   if (t === 'aktiebolag') return 'Aktiebolag'
@@ -103,7 +103,7 @@ export default function BankIdCompanyPicker({
   // onboarding wizard with the orgnr (and entity_type via the server-side
   // CompanyRoles match in /onboarding) pre-filled. F-skatt / VAT / address
   // are confirmed by the user in Steps 2-4 instead of being auto-fetched
-  // from TIC — costs us ~1 Lens call per signup but avoids any TIC budget
+  // from TIC: costs us ~1 Lens call per signup but avoids any TIC budget
   // spend (companyRoles is on the Identity API, which is a separate quota).
   function handleCreateFromTic(role: EnrichmentCompanyRole) {
     if (busy) return
@@ -194,7 +194,7 @@ export default function BankIdCompanyPicker({
                 const mappable = mapEntityType(role.legalEntityType) !== null
 
                 // Companies already in gnubok under another account are still
-                // offered for setup — org-number reuse is allowed (a director
+                // offered for setup: org-number reuse is allowed (a director
                 // may keep a separate test copy). Keep a muted note so the
                 // "also already in {app}" context isn't lost.
                 const existsNote =

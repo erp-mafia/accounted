@@ -63,7 +63,7 @@ import type { VatPeriodType } from '@/types'
  *   the test-env key in prod)
  *
  * Optional:
- * - SKATTEVERKET_ENV                            — 'test' | 'production'.
+ * - SKATTEVERKET_ENV                            : 'test' | 'production'.
  *                                                 Drives security-relevant
  *                                                 limits (AGI payload size:
  *                                                 100 MB test vs 300 MB prod).
@@ -71,12 +71,12 @@ import type { VatPeriodType } from '@/types'
  *                                                 when unset or unrecognised.
  *                                                 MUST be set explicitly in
  *                                                 every deployment manifest.
- * - SKATTEVERKET_OAUTH_BASE_URL                 — defaults to test
- * - SKATTEVERKET_API_BASE_URL                   — momsdeklaration; defaults to test
- * - SKATTEVERKET_AGD_INLAMNING_API_BASE_URL     — AGI inlämning; defaults to test
- * - SKATTEVERKET_AGD_PERIOD_API_BASE_URL        — AGI period mgmt; defaults to test
- * - SKATTEVERKET_SKATTEKONTO_API_BASE_URL       — Skattekonto; defaults to test
- * - SKATTEVERKET_DISABLED=true                  — emergency kill switch
+ * - SKATTEVERKET_OAUTH_BASE_URL                 : defaults to test
+ * - SKATTEVERKET_API_BASE_URL                   : momsdeklaration; defaults to test
+ * - SKATTEVERKET_AGD_INLAMNING_API_BASE_URL     : AGI inlämning; defaults to test
+ * - SKATTEVERKET_AGD_PERIOD_API_BASE_URL        : AGI period mgmt; defaults to test
+ * - SKATTEVERKET_SKATTEKONTO_API_BASE_URL       : Skattekonto; defaults to test
+ * - SKATTEVERKET_DISABLED=true                  : emergency kill switch
  *
  * ─── Production cutover checklist ─────────────────────────────────────────
  * Before flipping the env URLs to prod, the following has to land first
@@ -175,7 +175,7 @@ export const skatteverketExtension: Extension = {
             ? requestedReturn
             : null
 
-        // Generate PKCE pair — verifier persisted server-side, challenge sent
+        // Generate PKCE pair: verifier persisted server-side, challenge sent
         // to SKV. Some SKV per-flow client configurations issue revoked-on-use
         // tokens unless PKCE is present, so we always send it.
         const pkce = generatePkcePair()
@@ -198,7 +198,7 @@ export const skatteverketExtension: Extension = {
     // ── OAuth: Callback ─────────────────────────────────────────────
     // Receives the auth code from Skatteverket after BankID login.
     // Exchanges code for tokens immediately (5-minute code expiry).
-    // skipAuth: true — browser redirect from Skatteverket. We handle
+    // skipAuth: true; browser redirect from Skatteverket. We handle
     // user identification via the stored state token + Supabase session.
     {
       method: 'GET',
@@ -269,7 +269,7 @@ export const skatteverketExtension: Extension = {
           )
         }
 
-        // Exchange code FIRST — 5-minute expiry, do this before anything else
+        // Exchange code FIRST: 5-minute expiry, do this before anything else
         const { createClient } = await import('@/lib/supabase/server')
         const { requireCompanyId } = await import('@/lib/company/context')
         const supabase = await createClient()
@@ -277,7 +277,7 @@ export const skatteverketExtension: Extension = {
         // Verify user session (browser should still have cookies)
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) {
-          // Login redirects always go to a full page — popups can't render the
+          // Login redirects always go to a full page: popups can't render the
           // login form usefully, so this is the one path that keeps a hard
           // redirect even from inside the popup.
           return NextResponse.redirect(
@@ -285,7 +285,7 @@ export const skatteverketExtension: Extension = {
           )
         }
 
-        // Resolve the active company — state/redirect_uri were stored keyed on company_id
+        // Resolve the active company: state/redirect_uri were stored keyed on company_id
         // by ctx.settings.set() in the /authorize handler.
         let companyId: string
         try {
@@ -327,7 +327,7 @@ export const skatteverketExtension: Extension = {
 
         // Retrieve the PKCE verifier stored in /authorize. Optional only for
         // backward compatibility with in-flight flows that started before the
-        // PKCE rollout — once those drain, this can be made required.
+        // PKCE rollout: once those drain, this can be made required.
         const { data: verifierData } = await supabase
           .from('extension_data')
           .select('value')
@@ -374,7 +374,7 @@ export const skatteverketExtension: Extension = {
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
           // so the user retries quickly instead of exhausting the code window.
           const message = err instanceof TimeoutError
-            ? 'Tidsgränsen mot Skatteverket överskreds — försök igen med BankID'
+            ? 'Tidsgränsen mot Skatteverket överskreds: försök igen med BankID'
             : err instanceof Error
               ? err.message
               : 'Token exchange misslyckades'
@@ -850,7 +850,7 @@ export const skatteverketExtension: Extension = {
     // Side effect: when SKV reports a terminal failure (DONE_REJECTED or
     // DONE_FAILED), promote the matching agi_declarations row to 'rejected'.
     // Without this the row would sit at 'generated' indefinitely while SKV's
-    // own state shows the underlag as failed — misrepresenting the filing
+    // own state shows the underlag as failed: misrepresenting the filing
     // outcome (BFNAR 2013:2 kap 8 / BFL 5 kap 5§).
     {
       method: 'GET',
@@ -875,7 +875,7 @@ export const skatteverketExtension: Extension = {
           }
 
           if (result.data.status === 'DONE_REJECTED' || result.data.status === 'DONE_FAILED') {
-            // Recover the salaryRunId from cached submission state — same
+            // Recover the salaryRunId from cached submission state: same
             // fallback mechanism /agi/spara uses. We only update when we can
             // identify the row; a missing local cache means we silently skip
             // (the alternative would be guessing which declaration to mark).
@@ -889,7 +889,7 @@ export const skatteverketExtension: Extension = {
               try {
                 const v = JSON.parse(row.value as string) as { inlamningId?: number; salaryRunId?: string }
                 if (v.inlamningId === inlamningId && v.salaryRunId) {
-                  // Same monotonicity rule as /agi/spara — never regress
+                  // Same monotonicity rule as /agi/spara: never regress
                   // from a successful filing back to 'rejected'.
                   await ctx.supabase
                     .from('agi_declarations')
@@ -914,7 +914,7 @@ export const skatteverketExtension: Extension = {
     // Body: { inlamningId, salaryRunId? }. Only meaningful between
     // POST /underlag and skapaGranskningsunderlag.
     //
-    // Flips agi_declarations.status to 'pending_signature' on success —
+    // Flips agi_declarations.status to 'pending_signature' on success:
     // the underlag is durable in SKV's Eget utrymme but is not yet a
     // filed declaration. /agi/kvittenser later promotes it to 'submitted'
     // when a uuidKvittens (signature receipt) is observed for the period.
@@ -971,7 +971,7 @@ export const skatteverketExtension: Extension = {
             // Monotonicity guard: only flip from a pre-filing state. If the
             // kvittens cron or the interactive /agi/kvittenser handler has
             // already promoted this row to 'submitted'/'accepted', don't
-            // regress it — behandlingshistorik must move forward through
+            // regress it: behandlingshistorik must move forward through
             // the filing milestones (BFNAR 2013:2 kap 8).
             //
             // 'rejected' IS allowed as an originating state: a previous
@@ -1145,7 +1145,7 @@ export const skatteverketExtension: Extension = {
           //   INCORRECT_DATA               → felrapport link, can't sign yet
           //   RECEIVING / CALCULATING      → server still processing
           //   SIGNING                      → another signing flow already running
-          // We key on tillstand alone — keying on HTTP status (e.g. 409) and
+          // We key on tillstand alone: keying on HTTP status (e.g. 409) and
           // the body string would miss future SKV additions like RECEIVING
           // returned with HTTP 200, leaving us in an awaiting_signing state
           // when the underlag isn't actually ready.
@@ -1168,7 +1168,7 @@ export const skatteverketExtension: Extension = {
           // Flip the matching agi_declarations row to pending_signature when
           // SKV returns a usable granskningsunderlag. Previously this happened
           // in /agi/spara, but /spara is only valid for re-saving rejected
-          // underlag — successful underlag are auto-persisted by SKV, so
+          // underlag: successful underlag are auto-persisted by SKV, so
           // /spara returns felkod 20 on the happy path. Doing the flip here
           // ensures the audit trail still moves through pending_signature
           // → submitted (BFNAR 2013:2 kap 8 / BFL 5 kap 6§) without /spara.
@@ -1242,7 +1242,7 @@ export const skatteverketExtension: Extension = {
             // Pin the receipt to the most recent declaration for this period
             // (id desc) so a correction chain doesn't get its kvittens written
             // onto a superseded row. Also stamp salary_runs.agi_submitted_at
-            // here, mirroring SKV's signeradTid — this is the only place we
+            // here, mirroring SKV's signeradTid: this is the only place we
             // know the AGI was actually filed (the orchestrator deliberately
             // doesn't stamp on underlag-ingest, see route.ts comment).
             //
@@ -1253,7 +1253,7 @@ export const skatteverketExtension: Extension = {
             // filing occurred at all, which itself misstates the behandlings-
             // historik (BFNAR 2013:2 kap 8 / BFL 5 kap 6§). The fallback
             // applies only on this code path because we're inside the
-            // `if (kvittens?.uuidKvittens)` branch — if no kvittens, no stamp.
+            // `if (kvittens?.uuidKvittens)` branch: if no kvittens, no stamp.
             const submittedAt = kvittens.signeradTid || new Date().toISOString()
             if (!kvittens.signeradTid) {
               console.warn('[skatteverket] kvittens missing signeradTid; using reconciliation time', {
@@ -1274,7 +1274,7 @@ export const skatteverketExtension: Extension = {
               // operator who polled the kvittens endpoint). The actual
               // BankID signer is identified by kvittens.signeradAv (a
               // personnummer string), which we preserve in response_data
-              // alongside the rest of the receipt — that's the legally
+              // alongside the rest of the receipt: that's the legally
               // load-bearing audit record per BFL 5 kap 6§.
               await ctx.supabase
                 .from('agi_declarations')
@@ -1332,7 +1332,7 @@ export const skatteverketExtension: Extension = {
         if (rbac) return rbac
 
         // Read body as bytes first so we can enforce a hard size cap before
-        // JSON.parse — protects against ~MB payloads that would otherwise
+        // JSON.parse: protects against ~MB payloads that would otherwise
         // hit the Zod validator.
         const rawBytes = Buffer.byteLength(await request.clone().text(), 'utf8')
         if (rawBytes > AGI_KONTROLLERA_MAX_BYTES) {
@@ -1592,7 +1592,7 @@ export const skatteverketExtension: Extension = {
             )
           }
           // Unlocking abandons the granskningsunderlag, so the locally-cached
-          // `awaiting_signing` record no longer reflects SKV — the signing link
+          // `awaiting_signing` record no longer reflects SKV: the signing link
           // it carries points at a released draft. Clear it (mirroring the
           // DELETE /agi/underlag and /agi/sparad handlers) so the panel drops
           // back to the pre-submission state instead of stranding the user on a
@@ -1683,7 +1683,7 @@ export const skatteverketExtension: Extension = {
         const { booked, overdue, upcoming } = splitTransactions(rows, today)
 
         // Enrich obokförda rader with a single-best-candidate suggestion.
-        // Only attached when there's exactly one match — avoids the UI
+        // Only attached when there's exactly one match: avoids the UI
         // confidently pointing at the wrong verifikat.
         const suggestions = await findMatchSuggestionsBulk(
           ctx.supabase,
@@ -1808,8 +1808,8 @@ export const skatteverketExtension: Extension = {
       },
     },
 
-    // Link the SKV row to a chosen candidate. No new verifikat is created
-    // — we just write journal_entry_id onto skattekonto_transactions. The
+    // Link the SKV row to a chosen candidate. No new verifikat is created:
+    // we just write journal_entry_id onto skattekonto_transactions. The
     // candidate is re-validated server-side (matching 1630 line, not already
     // linked) to catch races and a malicious client.
     {
@@ -1886,7 +1886,7 @@ export const skatteverketExtension: Extension = {
  *
  * The computation itself lives in lib/declaration-prep.ts (buildMomsuppgift)
  * so the commit-side service and MCP tools file exactly the same numbers this
- * route does — see the no-drift note there. This shell only parses the body.
+ * route does: see the no-drift note there. This shell only parses the body.
  */
 async function parseDeclarationRequest(
   request: Request,
@@ -1922,7 +1922,7 @@ function parseQueryParams(
     throw new Error('Saknar obligatoriska parametrar: redovisare, redovisningsperiod')
   }
 
-  // Suppress unused variable warning — ctx is required by the type signature
+  // Suppress unused variable warning: ctx is required by the type signature
   void ctx
 
   return { redovisare, redovisningsperiod }
@@ -1949,7 +1949,7 @@ async function loadAGIXml(
  */
 function handleSkvError(err: unknown): NextResponse {
   if (err instanceof SkatteverketAuthError) {
-    // MISSING_SCOPE returns 401 — the existing token works, but it doesn't
+    // MISSING_SCOPE returns 401: the existing token works, but it doesn't
     // grant access to this resource. Treating it as 401 (rather than 403)
     // signals to the frontend that the right remediation is to reconnect,
     // not to ask the user to gain new authorization at SKV.
@@ -1978,7 +1978,7 @@ function handleSkvError(err: unknown): NextResponse {
 //
 // Registry-resolved by lib/pending-operations/commit.ts when a staged
 // submit_vat_declaration / submit_agi op is approved. "Commit" runs the SKV
-// chain up to the BankID signing link and returns it — the user's signature in
+// chain up to the BankID signing link and returns it: the user's signature in
 // the browser is the irreversible filing act, outside this code.
 //
 // Direct lib calls bypass the HTTP dispatcher's SKATTEVERKET_ENABLED gate
@@ -2004,7 +2004,7 @@ const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
 
 /**
  * Translate a thrown error inside a commit service to a SkvSubmitResult.
- * SkatteverketAuthError (connection / scope / quota) is recoverable — the op
+ * SkatteverketAuthError (connection / scope / quota) is recoverable: the op
  * stays reviewable so the user reconnects and re-approves. Anything else is a
  * non-recoverable internal error → the op is rejected.
  */
@@ -2054,7 +2054,7 @@ async function commitSubmitVatDeclaration(
     const { redovisare, redovisningsperiod, momsuppgift } =
       await buildMomsuppgift(supabase, companyId, { periodType, year, period })
 
-    // 1. POST /utkast — save the draft to Eget utrymme. Overwrites any prior
+    // 1. POST /utkast: save the draft to Eget utrymme. Overwrites any prior
     //    draft for the period, so retry after a mid-chain failure is safe.
     const utkast = await skvRequest(
       supabase, userId, 'POST', `/utkast/${redovisare}/${redovisningsperiod}`, momsuppgift,
@@ -2072,7 +2072,7 @@ async function commitSubmitVatDeclaration(
     }
     const utkastData = (await utkast.json()) as SkatteverketUtkastResponse
 
-    // 2. PUT /las — lock for signing; returns the BankID signeringslänk.
+    // 2. PUT /las: lock for signing; returns the BankID signeringslänk.
     const las = await skvRequest(
       supabase, userId, 'PUT', `/las/${redovisare}/${redovisningsperiod}`,
     )
@@ -2169,7 +2169,7 @@ async function commitSubmitAgi(
         recoverable: false, error: kontroll.error }
     }
     if (kontroll.data.status === 'PROCESSING') {
-      // Still processing after the bounded poll — recoverable; re-approve shortly.
+      // Still processing after the bounded poll: recoverable; re-approve shortly.
       return { ok: false, code: 'SKATTEVERKET_PROCESSING', http_status: 202, recoverable: true,
         error: 'Skatteverket bearbetar fortfarande AGI-underlaget. Försök igen om en stund.' }
     }
@@ -2209,13 +2209,13 @@ async function commitSubmitAgi(
         error: gransk.data.meddelande || 'Skatteverket avvisade granskningsunderlaget. Åtgärda felen och generera om AGI:n.' }
     }
     if (!canSign) {
-      // RECEIVING / CALCULATING etc. — still processing, recoverable.
+      // RECEIVING / CALCULATING etc.: still processing, recoverable.
       return { ok: false, code: 'SKATTEVERKET_PROCESSING', http_status: 202, recoverable: true,
         error: gransk.data.meddelande || 'Skatteverket bearbetar fortfarande underlaget. Försök igen om en stund.' }
     }
 
     // Flip the declaration to pending_signature (monotonic guard). Scoped by
-    // salary_run_id so a correction run in the same period isn't co-flipped —
+    // salary_run_id so a correction run in the same period isn't co-flipped:
     // more precise than the period-only route handler, which has no run id.
     await supabase.from('agi_declarations').update({ status: 'pending_signature' })
       .eq('company_id', companyId).eq('salary_run_id', salaryRunId)

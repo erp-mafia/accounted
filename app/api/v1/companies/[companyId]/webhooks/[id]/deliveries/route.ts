@@ -1,5 +1,5 @@
 /**
- * /api/v1/companies/{companyId}/webhooks/{id}/deliveries — list deliveries.
+ * /api/v1/companies/{companyId}/webhooks/{id}/deliveries: list deliveries.
  *
  * Returns the most recent deliveries for the webhook, newest first.
  * Cursor pagination on (created_at DESC, id DESC). Single-delivery lookup
@@ -47,8 +47,8 @@ registerEndpoint({
   doNotUseFor:
     'Listing deliveries across multiple webhooks (this endpoint is single-webhook scoped).',
   pitfalls: [
-    'response_body is truncated to 4 KB — receivers returning long error pages have their response truncated.',
-    'A delivery in `failed` status is non-terminal — the dispatcher will retry it at next_attempt_at. `dead` is terminal.',
+    'response_body is truncated to 4 KB: receivers returning long error pages have their response truncated.',
+    'A delivery in `failed` status is non-terminal: the dispatcher will retry it at next_attempt_at. `dead` is terminal.',
   ],
   example: {
     response: {
@@ -87,7 +87,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    // Defensive early return — the wrapper guarantees companyId for
+    // Defensive early return: the wrapper guarantees companyId for
     // routes inside /companies/{companyId}/, but a missing value here
     // would silently produce `WHERE company_id = NULL` (always-empty)
     // rather than a hard auth failure. Surface the misconfiguration.
@@ -98,7 +98,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     // Verify the webhook itself belongs to ctx.companyId before listing
     // its deliveries. The deliveries query already filters by
     // (company_id, webhook_id) so a cross-tenant id wouldn't return
-    // anything — but emitting an explicit ownership check first surfaces
+    // anything, but emitting an explicit ownership check first surfaces
     // a clean 404 (rather than a confusing empty list) and matches the
     // pattern used for :retry and :test. Defense in depth alongside RLS.
     const { data: webhookOwnership, error: ownershipErr } = await ctx.supabase

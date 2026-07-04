@@ -36,7 +36,7 @@ export interface SkattekontoSyncResult {
  *
  * - When `transaktionsidentitet` is present (always on tidigare, sometimes
  *   on kommande), use it directly. It's stable across syncs.
- * - Otherwise compute a sha256 hex over (date|amount|text) — stable enough
+ * - Otherwise compute a sha256 hex over (date|amount|text): stable enough
  *   for kommande, which graduate to tidigare with the same content.
  *
  * The point of this function is reproducibility: the same logical
@@ -57,7 +57,7 @@ export function computeDedupKey(tx: {
 
 /**
  * Resolve the org/personnummer to send to Skatteverket as `omfragad`.
- * Reads from company_settings — same source the existing momsdeklaration
+ * Reads from company_settings: same source the existing momsdeklaration
  * flow uses.
  */
 async function resolveOmfragad(
@@ -123,7 +123,7 @@ function upcomingToRow(
  * 1. Resolve omfragad from company_settings.
  * 2. Fetch saldo + transaktioner in parallel (rate-limited).
  * 3. Upsert rows by (company_id, dedup_key). When a kommande row graduates
- *    to tidigare it's updated in place — same dedup_key, status flips,
+ *    to tidigare it's updated in place: same dedup_key, status flips,
  *    transaktionsidentitet populated.
  * 4. Cache the saldo response in extension_data with a fetched-at timestamp.
  * 5. Emit skattekonto.synced and (when applicable) other events.
@@ -200,7 +200,7 @@ export async function syncSkattekonto(
       .from('skattekonto_transactions')
       .upsert(allRows, {
         onConflict: 'company_id,dedup_key',
-        // Don't return rows — we already know what we wrote.
+        // Don't return rows: we already know what we wrote.
         ignoreDuplicates: false,
       })
     if (error) {

@@ -1,7 +1,7 @@
 import type { PayrollConfig } from './payroll-config'
 
 /**
- * Löneväxling till pension — salary sacrifice to occupational pension.
+ * Löneväxling till pension: salary sacrifice to occupational pension.
  *
  * The 1.058 factor: For every 1 SEK salary reduction, pension contribution
  * should be 1.058 SEK to make the employee roughly cost-neutral

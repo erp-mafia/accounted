@@ -1,5 +1,5 @@
 /**
- * GET /api/v1/health — public health check.
+ * GET /api/v1/health: public health check.
  *
  * Returns service status. No auth required. Used by load balancers, uptime
  * checks, and as a smoke test for the v1 wrapper itself.
@@ -27,7 +27,7 @@ registerEndpoint({
   useWhen: 'You want to verify connectivity, latency, or which API version is live before issuing other requests.',
   doNotUseFor: 'Anything that needs authenticated data. This endpoint returns no company-specific information.',
   pitfalls: [
-    'A 200 here only means the API process responds — downstream Postgres/Supabase may still be degraded.',
+    'A 200 here only means the API process responds: downstream Postgres/Supabase may still be degraded.',
   ],
   example: {
     response: {

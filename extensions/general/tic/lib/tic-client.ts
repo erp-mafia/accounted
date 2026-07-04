@@ -20,7 +20,7 @@ import { TICAPIError } from './tic-types'
 const TIC_API_TIMEOUT = 15_000
 
 // In-process TTL cache for proxy responses. Onboarding currently fires the
-// same org-number lookup 2–3 times in <2 s (server prefetch + client
+// same org-number lookup 2-3 times in <2 s (server prefetch + client
 // useEffect + duplicate-check) and the agent build re-fetches /profile data
 // minutes later. The TIC budget (3000/mo Lens calls) can't absorb the
 // duplication. 5 min is long enough to collapse a full onboarding flow into
@@ -65,7 +65,7 @@ export function __resetTicCacheForTest(): void {
  *
  * Routes through the proxy at TIC_API_PROXY_URL (no API key needed in this
  * codebase). The proxy targets `lens-api.tic.io` (v2 "Lens API") and adds
- * `x-api-key` server-side. v1 (`api.tic.io`) is retired — all paths below
+ * `x-api-key` server-side. v1 (`api.tic.io`) is retired: all paths below
  * are Lens paths (no `/datasets/` prefix, `id` instead of `companyId`).
  */
 export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
@@ -97,7 +97,7 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
     }
 
     if (response.status === 429) {
-      // Do NOT cache rate-limit responses — the next call after the window
+      // Do NOT cache rate-limit responses: the next call after the window
       // resets should be allowed through.
       throw new TICAPIError('Rate limit exceeded', 429, 'RATE_LIMIT_EXCEEDED')
     }
@@ -152,7 +152,7 @@ function toLensQueryNumber(cleaned: string): string {
  * TIC v2 is a Typesense index and `query_by=registrationNumber` is a
  * typo-tolerant full-text search: it returns ranked *near-misses*, not only
  * exact hits. An identifier that isn't in the index therefore comes back as
- * the closest lookalike number — a completely unrelated entity (this is how
+ * the closest lookalike number: a completely unrelated entity (this is how
  * an enskild firma's personnummer once resolved to a random foundation).
  *
  * We validate the returned `registrationNumber` against the requested number
@@ -164,7 +164,7 @@ function toLensQueryNumber(cleaned: string): string {
  * has neither number containing the other, so it is still discarded and the
  * caller sees a clean "not found" instead of a stranger's company.
  *
- * The upstream request is intentionally unchanged — the fuzzy `q=` call is
+ * The upstream request is intentionally unchanged: the fuzzy `q=` call is
  * what every working lookup already uses; we only tighten which hit we accept.
  */
 export async function searchCompanyByOrgNumber(
@@ -182,7 +182,7 @@ export async function searchCompanyByOrgNumber(
   // A real match either equals the requested number or embeds it (16-digit
   // enskild-firma number containing the 10-digit personnummer). Guard the
   // containment branch with a length floor so a short/garbage query can't
-  // coincidentally substring-match an unrelated number — all real Swedish
+  // coincidentally substring-match an unrelated number: all real Swedish
   // identifiers are >= 10 digits.
   const numbersRelated = (returned: string): boolean => {
     if (returned === cleaned) return true
@@ -244,7 +244,7 @@ export async function getCompanyDocuments(companyId: number): Promise<TICDocumen
 
 /**
  * Get fiscal-year configurations for a company. v2 endpoint with no v1
- * equivalent — used to auto-fill fiscal-year selection during Accounted
+ * equivalent: used to auto-fill fiscal-year selection during Accounted
  * onboarding so the user doesn't have to enter MM-DD manually.
  */
 export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[] | null> {
@@ -253,7 +253,7 @@ export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[]
 
 /**
  * Get accounting-period change history for a company. v2 endpoint with
- * no v1 equivalent — surfaces "this company has shifted its year-end"
+ * no v1 equivalent: surfaces "this company has shifted its year-end"
  * during onboarding/customer-setup.
  */
 export async function getAccountingPeriods(
@@ -263,7 +263,7 @@ export async function getAccountingPeriods(
 }
 
 /**
- * Get payroll summary for a company. v2 endpoint — restructured from
+ * Get payroll summary for a company. v2 endpoint: restructured from
  * v1's `/se/payroll`, returns `{ payroll2, payrolls }` where `payroll2`
  * is the modern per-period breakdown and `payrolls` is the legacy
  * Skatteverket MOMS/AG totals.
@@ -312,7 +312,7 @@ export async function getCompanyStatus(
  * exempt-from-registration flags. Used to answer ownership questions
  * authoritatively rather than asking the user to confirm.
  *
- * v2 endpoint — split out from what v1 grouped under `/parties`.
+ * v2 endpoint: split out from what v1 grouped under `/parties`.
  * Representatives (board/CEO/auditor) live at `/representatives` instead.
  */
 export async function getBeneficialOwners(

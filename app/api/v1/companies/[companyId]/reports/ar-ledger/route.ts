@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/ar-ledger
  *
- * Accounts receivable ledger (kundreskontra) — unpaid customer invoices
+ * Accounts receivable ledger (kundreskontra): unpaid customer invoices
  * grouped by customer with aging buckets.
  */
 
@@ -17,9 +17,9 @@ registerEndpoint({
   operation: 'reports.ar-ledger',
   method: 'GET',
   path: '/api/v1/companies/:companyId/reports/ar-ledger',
-  summary: 'AR ledger — unpaid customer invoices with aging.',
+  summary: 'AR ledger: unpaid customer invoices with aging.',
   description:
-    'Returns the customer-receivable ledger as of `as_of_date` (defaults to today). Each customer entry includes outstanding invoices grouped into aging buckets (0–30, 31–60, 61–90, 90+ days). Reconciles against BAS 1510.',
+    'Returns the customer-receivable ledger as of `as_of_date` (defaults to today). Each customer entry includes outstanding invoices grouped into aging buckets (0-30, 31-60, 61-90, 90+ days). Reconciles against BAS 1510.',
   useWhen:
     'Cash collection dashboards, dunning workflows, end-of-period reconciliation against the 1510 trial-balance figure.',
   doNotUseFor:

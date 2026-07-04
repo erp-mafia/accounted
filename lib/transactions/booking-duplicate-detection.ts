@@ -3,7 +3,7 @@
  *
  * Why this exists
  * ---------------
- * A bank account's transactions can land in the `transactions` table twice — a
+ * A bank account's transactions can land in the `transactions` table twice: a
  * CSV import on top of a PSD2 sync, or a re-sync whose external_id drifted (see
  * the import dedup in lib/transactions/ingest.ts). Import-time dedup is
  * best-effort and can miss. The cosmetic cost of a missed duplicate is a second
@@ -15,7 +15,7 @@
  * This guard runs at booking time. Before a transaction becomes a verifikat it
  * looks for ANOTHER transaction in the same company that is already booked and
  * shares this one's (date, amount, cash account). If found, the caller surfaces
- * it as a WARNING — never a hard block, because genuinely repeated
+ * it as a WARNING: never a hard block, because genuinely repeated
  * same-(date,amount) payments do occur (e.g. several identical Swish transfers
  * in one day). The user confirms with force=true after reviewing the candidate.
  *
@@ -26,7 +26,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 
-/** Integer öre — representation-agnostic amount key (mirrors the ingest dedup). */
+/** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
   return Math.round(Number(amount) * 100)
 }
@@ -36,7 +36,7 @@ export interface BookedDuplicateCandidate {
   /**
    * The sibling transaction that is already booked, or `null` when the duplicate
    * is a ledger-only voucher (a payment/payout booked straight to the cash
-   * account with no transaction row behind it — see detectLedgerDuplicateVoucher).
+   * account with no transaction row behind it: see detectLedgerDuplicateVoucher).
    */
   transaction_id: string | null
   /** Its verifikat. */
@@ -60,8 +60,8 @@ export interface BookingTarget {
  * Same-batch siblings to exclude from booking-time duplicate detection.
  *
  * When a bulk run books several DISTINCT bank movements that happen to share a
- * (date, amount, cash account) — several identical Swish transfers the user
- * explicitly selected — the second booking must NOT dedupe against the first
+ * (date, amount, cash account): several identical Swish transfers the user
+ * explicitly selected: the second booking must NOT dedupe against the first
  * booking's freshly-created verifikat: they are separate affärshändelser. The
  * bulk driver accumulates the ids it has booked so far in THIS batch and passes
  * them here so intra-batch siblings never flag one another.
@@ -86,7 +86,7 @@ export interface BookingDuplicateExclusions {
  * cash_account_id they must match; a null on either side is treated as
  * compatible (single-account companies and un-backfilled rows behave as before).
  *
- * Fail-open: a query error returns null rather than throwing — a detection
+ * Fail-open: a query error returns null rather than throwing: a detection
  * failure must never block a legitimate booking. The pick is deterministic
  * (lowest id) so a re-detection under force=true returns the same candidate the
  * user reviewed.
@@ -100,7 +100,7 @@ export async function detectBookedDuplicateTransaction(
   const targetOre = toOre(target.amount)
   if (targetOre === 0 || Number.isNaN(targetOre)) return null
   // Siblings booked earlier in this same bulk run are distinct events the user
-  // selected, not duplicates — never flag one against another.
+  // selected, not duplicates: never flag one against another.
   const excludeTransactionIds = new Set(opts?.excludeTransactionIds ?? [])
 
   // Same company, same date, already booked, not the target row itself. The
@@ -140,7 +140,7 @@ export async function detectBookedDuplicateTransaction(
   matches.sort((a, b) => a.id.localeCompare(b.id))
   const best = matches[0]
 
-  // Resolve the voucher label for the warning (best-effort — a missing label
+  // Resolve the voucher label for the warning (best-effort: a missing label
   // still yields a usable candidate the UI can render by date/amount).
   let voucherLabel = ''
   let entryDate = best.date
@@ -174,18 +174,18 @@ const BANK_ACCOUNT_HIGH = 1949
 
 /**
  * Find an unlinked posted voucher whose bank/cash (19xx) leg already books this
- * exact bank movement — the ledger-only twin of the bank line.
+ * exact bank movement: the ledger-only twin of the bank line.
  *
  * This is the second half of the booking-time duplicate guard. The first half
  * (detectBookedDuplicateTransaction) only finds an already-booked SIBLING
  * TRANSACTION. But the most damaging orphan has NO sibling transaction at all:
  * the affärshändelse was booked through a flow that posts straight to the ledger
- * and never creates or links a bank-transaction row — invoice "markera som
+ * and never creates or links a bank-transaction row: invoice "markera som
  * betald" (Dr 19xx / Cr 1510), the salary run's net-wage payout (Cr 19xx), a
  * hand-posted verifikat. Booking the bank line on top of that double-counts the
  * movement on the cash account: two verifikationer for one affärshändelse,
  * felaktig bokföring per BFL. Because the import dedup and the sibling guard
- * both only see the `transactions` table, neither catches this — only matching
+ * both only see the `transactions` table, neither catches this: only matching
  * the bank line against the ledger does.
  *
  * Direction-aware so it works both ways:
@@ -211,7 +211,7 @@ export async function detectLedgerDuplicateVoucher(
   const targetOre = toOre(target.amount)
   if (targetOre === 0 || Number.isNaN(targetOre)) return null
   // Vouchers minted earlier in this same bulk run are this batch's own fresh
-  // bookings — a subsequent sibling must not dedupe against them.
+  // bookings: a subsequent sibling must not dedupe against them.
   const excludeJournalEntryIds = new Set(opts?.excludeJournalEntryIds ?? [])
   const targetAmount = roundOre(Math.abs(Number(target.amount)))
   const inbound = targetOre > 0
@@ -293,7 +293,7 @@ export async function detectLedgerDuplicateVoucher(
 
   if (candidates.length === 0) return null
 
-  // Drop vouchers already reconciled to a transaction or an invoice payment —
+  // Drop vouchers already reconciled to a transaction or an invoice payment:
   // those aren't orphans. Both lookups are filtered by company_id (defense in
   // depth alongside RLS).
   const entryIds = candidates.map((l) => l.journal_entry.id)
@@ -332,7 +332,7 @@ export async function detectLedgerDuplicateVoucher(
 
 /**
  * Unified booking-time duplicate guard. Returns the single best already-booked
- * candidate for this bank line — a sibling transaction first (the cheaper,
+ * candidate for this bank line: a sibling transaction first (the cheaper,
  * higher-confidence signal), then a ledger-only voucher. Null when neither
  * fires. This is the function every booking chokepoint should call (web /book +
  * /categorize routes and the agent commit executors) so all paths reject the

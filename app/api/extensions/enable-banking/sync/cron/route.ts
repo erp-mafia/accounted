@@ -74,7 +74,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   }
 
   const startTime = Date.now()
-  const TIME_BUDGET_MS = 50_000 // 50s — leave 10s margin for Vercel timeout
+  const TIME_BUDGET_MS = 50_000 // 50s: leave 10s margin for Vercel timeout
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
   const results: {
@@ -95,7 +95,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     }
 
     if (!(await hasCapability(supabase, connection.company_id, CAPABILITY.bank_sync))) {
-      ctx.log.info('skip — capability not entitled', { companyId: connection.company_id })
+      ctx.log.info('skip: capability not entitled', { companyId: connection.company_id })
       continue
     }
 
@@ -138,13 +138,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
 
       const toDate = new Date().toISOString().split('T')[0]
       // First sync: 90-day lookback (PSD2 max). Subsequent: 7-day window.
-      // Gate on initial_sync_completed_at, not last_synced_at — manual "Sync now"
+      // Gate on initial_sync_completed_at, not last_synced_at: manual "Sync now"
       // sets last_synced_at without doing the deep backfill, and we want the cron
       // to still fall back to 90 days if the inline activation backfill failed.
       const isFirstSync = !connection.initial_sync_completed_at
       const lookbackDays = isFirstSync ? 90 : 7
       if (isFirstSync) {
-        ctx.log.info('first sync for connection — using 90-day lookback', {
+        ctx.log.info('first sync for connection: using 90-day lookback', {
           connectionId: connection.id,
           lookbackDays,
         })
@@ -160,7 +160,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       const accounts = allAccounts.filter(a => a.enabled !== false)
 
       if (accounts.length === 0) {
-        ctx.log.info('all accounts disabled — skipping sync', {
+        ctx.log.info('all accounts disabled: skipping sync', {
           connectionId: connection.id,
           totalAccounts: allAccounts.length,
         })
@@ -177,7 +177,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         continue
       }
 
-      // Detect SIE overlap — skip auto-categorization if the sync range
+      // Detect SIE overlap: skip auto-categorization if the sync range
       // overlaps with a completed SIE import to prevent double-booking
       const { data: sieOverlap } = await supabase
         .from('sie_imports')
@@ -189,7 +189,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         .maybeSingle()
 
       // First sync uses strategy=longest to pull the deepest history available
-      // from the ASPSP. Incremental syncs skip it — the implicit default is
+      // from the ASPSP. Incremental syncs skip it: the implicit default is
       // faster and we already have the older data.
       const syncOptions = {
         ...(sieOverlap ? { skipAutoCategorization: true } : {}),
@@ -274,7 +274,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       })
 
       // A dead PSD2 session (closed/expired/invalid consent) is a re-auth
-      // condition, not a transient failure — flip it to 'expired' (same state
+      // condition, not a transient failure: flip it to 'expired' (same state
       // the consent-elapsed branch uses) so the UI offers a reconnect instead
       // of a retry. Other errors stay 'error'.
       const isSessionDead = error instanceof SessionExpiredError
@@ -380,7 +380,7 @@ async function sendConsentExpiryNotification(
       .update({ last_expiry_notification_at: new Date().toISOString() })
       .eq('id', connection.id as string)
   } catch (error) {
-    // Notification failure must not break the cron job — log only.
+    // Notification failure must not break the cron job: log only.
     // eslint-disable-next-line no-console
     console.error('[bank-sync-cron] failed to send consent expiry notification:', error)
   }

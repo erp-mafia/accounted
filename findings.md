@@ -296,7 +296,7 @@ Per-agent non-critical breakdown:
 
 ### SRU agent
 
-**SR1. NE-bilaga amount formatter uses Math.round — violates SFL 22:1** [high]
+**SR1. NE-bilaga amount formatter uses Math.round: violates SFL 22:1** [high]
 - File: `lib/reports/ne-bilaga/sru-generator.ts:166-168`
 - SFL 22 kap. 1 § mandates öre truncated toward zero (INK2 generator correctly uses `Math.trunc`).
 - Fix: Replace with `Math.trunc(amount).toString()`.
@@ -313,7 +313,7 @@ Per-agent non-critical breakdown:
 
 **SR4. NE-bilaga #IDENTITET missing timestamp, wrong format** [high]
 - File: `lib/reports/ne-bilaga/sru-generator.ts:67-75`
-- Spec requires `#IDENTITET <OrgNr> <YYYYMMDD> <HHMMSS>`; org number not guaranteed 12-digit. NE-bilaga is typically filed by a fysisk person — format should be YYYYMMDDNNNK (personnummer without hyphen), not century-prefixed.
+- Spec requires `#IDENTITET <OrgNr> <YYYYMMDD> <HHMMSS>`; org number not guaranteed 12-digit. NE-bilaga is typically filed by a fysisk person: format should be YYYYMMDDNNNK (personnummer without hyphen), not century-prefixed.
 - Fix: Emit proper format with date + time; don't prepend century 16 for EF; add `formatPersonOrPJuridNumber(orgNumber, entityType)` helper.
 
 **SR5. NE-bilaga block is missing #NAMN and #FIL_SLUT** [high]
@@ -336,12 +336,12 @@ Per-agent non-critical breakdown:
 - Code commits to 7511 while comment claims the opposite. BAS recommends 7513 for sidokostnader.
 - Fix: Split into 7513 if sidoposter; document choice explicitly; warn in INK2 view on non-zero balances.
 
-**SR9. BAS 2300-2319 mapped to 7350 (Obligationslån) — over-broad** [medium]
+**SR9. BAS 2300-2319 mapped to 7350 (Obligationslån): over-broad** [medium]
 - File: `lib/reports/ink2/ink2-engine.ts:317-319`
 - 7350 should only cover 2320-2329; 2300-2319 are kreditinstitutskulder → 7352.
 - Fix: Move range to new 7352 entry alongside existing 2340-2359.
 
-**SR10. BAS 2100-2109 folded into 7321 (Periodiseringsfonder) — may overlap säkerhetsreserv** [medium]
+**SR10. BAS 2100-2109 folded into 7321 (Periodiseringsfonder): may overlap säkerhetsreserv** [medium]
 - File: `lib/reports/ink2/ink2-engine.ts:268-271`
 - 2100-2109 can be custom obeskattad reserv (säkerhetsreserv i försäkringsbolag); spec maps such reserves to 7323.
 - Fix: Remove 2100-2109 from 7321; fold into existing 7323 entry (with 2130-2149 and 2160-2199).
@@ -352,7 +352,7 @@ Per-agent non-critical breakdown:
 - Fix: Expose editable INK2S form with fields 7650-7770 OR surface blocking warning listing unhandled adjustments before SRU download.
 - 🔁 Possibly tracked by [#193 INKS2 balanserar inte](https://github.com/erp-mafia/gnubok/issues/193)
 
-**SR12. INK2 7113/7114 derived from bookkeeping result + tax — missing INK2S round-trip** [medium]
+**SR12. INK2 7113/7114 derived from bookkeeping result + tax: missing INK2S round-trip** [medium]
 - File: `lib/reports/ink2/ink2-engine.ts:883-891`
 - Per spec 7113/7114 must equal INK2S 8020/8021; computed independently; future divergence risk.
 - Fix: Compute taxableResult once in INK2S; derive 7113/7114 FROM ink2s['8020']/['8021']. Test asserting equality.
@@ -365,7 +365,7 @@ Per-agent non-critical breakdown:
 **SR14. No validation of company postal_code / org_number before SRU generation** [medium]
 - File: `lib/reports/ink2/sru-generator.ts:99-120`
 - Silently writes '000000000000' or '00000'; SKV rejects Level 2 with no UI warning.
-- Fix: Validate at generation time; return 400 Swedish: "Organisationsnummer saknas — fyll i under Inställningar > Företag".
+- Fix: Validate at generation time; return 400 Swedish: "Organisationsnummer saknas: fyll i under Inställningar > Företag".
 
 **SR15. No parsing/handling of Skatteverket validation response** [medium]
 - File: `app/api/reports/ink2/route.ts`; entire repo
@@ -422,15 +422,15 @@ Per-agent non-critical breakdown:
 
 **YE6. Periodiseringsfond cap is not enforced and not calculated** [high]
 - File: (no implementation)
-- AB 25% cap, EF 30%, 6-year reversal — all absent. BAS accounts exist but no validation.
+- AB 25% cap, EF 30%, 6-year reversal: all absent. BAS accounts exist but no validation.
 - Fix: Add `periodiseringsfonder` table keyed by year; validate 25% cap at year-end; emit 6-year reversal deadlines.
 
-**YE7. executeYearEndClosing is not transactional — half-closed state on failure** [high]
+**YE7. executeYearEndClosing is not transactional: half-closed state on failure** [high]
 - File: `lib/core/bookkeeping/year-end-service.ts:403-523`
 - 8-step sequence across separate DB calls; mid-flight failure leaves partial state (revaluation committed but no closing entry; period locked with no next period; OB in next period with failed continuity check).
 - Fix: Wrap sequence in single RPC; advisory lock on fiscal period; atomic rollback on continuity failure.
 
-**YE8. entity_type defaults silently to 'aktiebolag' — wrong closing account for EF** [high]
+**YE8. entity_type defaults silently to 'aktiebolag': wrong closing account for EF** [high]
 - File: `lib/core/bookkeeping/year-end-service.ts:282`
 - `const entityType = settings?.entity_type ?? 'aktiebolag'`; EF with missing settings would post to non-existent 2099.
 - Fix: Fall back to `companies.entity_type` (NOT NULL) if settings missing; throw if both null.
@@ -485,12 +485,12 @@ Per-agent non-critical breakdown:
 - Misskapad bokslut requires manual SQL intervention; `enforce_opening_balance_immutability` + `enforce_journal_entry_immutability` block ordinary recovery.
 - Fix: Provide "öppna om bokslut" admin action: storno closing entry + unlock period + delete OB entry in next period + audit log.
 
-**YE19. createNextPeriod always forces 12-month periods — no fiscal-year change support** [low]
+**YE19. createNextPeriod always forces 12-month periods: no fiscal-year change support** [low]
 - File: `lib/core/bookkeeping/period-service.ts:152-169`
 - Ignores BFL 3 kap. 3 § (6-18 months transition year after SKV approval).
 - Fix: Accept optional `nextPeriodMonths` parameter (bounded 6-18).
 
-**YE20. Executed year-end closing uses voucher_series 'A' — not a dedicated bokslut series** [low]
+**YE20. Executed year-end closing uses voucher_series 'A': not a dedicated bokslut series** [low]
 - File: `lib/core/bookkeeping/year-end-service.ts:451`
 - Swedish practice uses dedicated series (commonly 'B' or 'I'); mixing complicates voucher-gap analysis.
 - Fix: Use configurable bokslut series (default 'B'); seed voucher_sequences row for (company, period, 'B') before creating closing entry.
@@ -514,12 +514,12 @@ Per-agent non-critical breakdown:
 - ML 15 kap correction unenforceable without asset register (buildings 10yr/≥100k, maskiner 5yr/≥50k).
 - Fix: As part of asset register schema, store `acquisition_input_vat_amount` per asset; offer jämkning posting on disposal or business-use change.
 
-**AA4. equipment_capital template dead-ends — no follow-through** [high]
+**AA4. equipment_capital template dead-ends: no follow-through** [high]
 - File: `lib/bookkeeping/booking-templates.ts:1323-1346`
 - Books `Dr 1250 / Cr 1930` but asset invisible to system afterward; no register entry; no year-end depreciation reminder. `special_rules_sv` mentions 7832 but nothing posts automatically.
 - Fix: Prompt user to create inventarieregister entry (or auto-seed draft from transaction); don't let 12xx grow without linked asset record.
 
-**AA5. No handling of finansiell leasing (K3) — capitalization path missing** [medium]
+**AA5. No handling of finansiell leasing (K3): capitalization path missing** [medium]
 - File: `lib/bookkeeping/booking-templates.ts:204-225`; `app/api/assets/leases/**` (missing)
 - K3 BFNAR 2012:1 kap. 20 IAS 17 classification absent. K3 20.29 juridisk person exemption undocumented. 2024 Skatteverket VAT ställningstagande on finansiell leasing-as-goods not reflected.
 - Fix: Document K2-only scope in templates. For K3 capitalization: add leasingavtal entity with effective-interest payment split, ROU depreciation, and VAT rule change flag.
@@ -533,7 +533,7 @@ Per-agent non-critical breakdown:
 
 **FR1. No årsredovisning document generator (förvaltningsberättelse, noter, signatures)** [high]
 - File: `app/(dashboard)/bookkeeping/year-end/page.tsx:25-27` + absent generators
-- No förvaltningsberättelse, noter, underskriftssida, or fastställelseintyg. PDF is explicitly "Arbetsutkast — ej undertecknat".
+- No förvaltningsberättelse, noter, underskriftssida, or fastställelseintyg. PDF is explicitly "Arbetsutkast: ej undertecknat".
 - Fix: Build template + noter generator + signature manifest (`styrelseledamoter` table prerequisite) OR document scope as "bokföringsverktyg".
 
 **FR2. Balance sheet does not split bundet/fritt eget kapital** [high]
@@ -563,8 +563,8 @@ Per-agent non-critical breakdown:
 
 **FR7. No Bolagsverket filing / förseningsavgifter / iXBRL** [medium]
 - File: `lib/tax/deadline-config.ts:242-289` (deadline only)
-- Förseningsavgifter escalation, tvångslikvidation warnings, iXBRL generator, fastställelseintyg, Bolagsverket API — all absent.
-- Fix: Scope decision — document as non-goal OR implement iXBRL + fastställelseintyg + filing flow.
+- Förseningsavgifter escalation, tvångslikvidation warnings, iXBRL generator, fastställelseintyg, Bolagsverket API: all absent.
+- Fix: Scope decision: document as non-goal OR implement iXBRL + fastställelseintyg + filing flow.
 
 **FR8. Kassaflödesanalys generator absent** [medium]
 - File: (absent from `lib/reports/`)
@@ -635,7 +635,7 @@ Per-agent non-critical breakdown:
 
 **TP10. Tax calculator is unused dead code (not wired into any UI or API)** [medium]
 - File: `lib/tax/calculator.ts:69,129`
-- `calculateEFTax` / `calculateABTax` imported nowhere. Also simplistic — ignores arbetsgivaravgifter / periodiseringsfond / estimated slutlig skatt.
+- `calculateEFTax` / `calculateABTax` imported nowhere. Also simplistic: ignores arbetsgivaravgifter / periodiseringsfond / estimated slutlig skatt.
 - Fix: Delete OR wire into "Beräknad skatt" card after filling gaps.
 
 **TP11. No kapitalförsäkring-i-bolaget warning** [low]
@@ -729,7 +729,7 @@ Per-agent non-critical breakdown:
 - ReDoS on every categorization; `mapping_rules` is user-writable.
 - Fix: Validate at rule-create time (reject nested quantifiers) OR use safe regex engine OR cap execution via worker with timeout.
 
-**BE8. Mapping rule priority tie results in "first row returned" — not deterministic** [low]
+**BE8. Mapping rule priority tie results in "first row returned": not deterministic** [low]
 - File: `lib/bookkeeping/mapping-engine.ts:64`
 - Two rules with equal priority return in Postgres storage order; can produce different categorizations across calls.
 - Fix: `.order('priority', asc).order('created_at', asc)` as tiebreaker.
@@ -743,7 +743,7 @@ Per-agent non-critical breakdown:
 
 ### Provider-connections agent
 
-**PC1. Invoice reminder cron has no idempotency — duplicate reminders on retry** [high]
+**PC1. Invoice reminder cron has no idempotency: duplicate reminders on retry** [high]
 - File: `app/api/invoices/reminders/cron/route.ts:6-45`, `lib/invoices/reminder-processor.ts`
 - Vercel retry duplicates reminders; level-3 "Tredje påminnelse" doubled destroys trust.
 - Fix: Write reminder record before sending with `status: 'pending'`; idempotency key `reminder-{invoiceId}-{level}`; pass Resend `Idempotency-Key` header.
@@ -786,7 +786,7 @@ Per-agent non-critical breakdown:
 **PC9. Enable Banking retry on POST /sessions is not retried** [medium]
 - File: `extensions/general/enable-banking/lib/api-client.ts:340-360`
 - Transient network failure forces user to restart 90-day BankID consent flow.
-- Fix: Single retry on pure network failure (AbortError / TypeError thrown before any response). Don't retry on HTTP errors — `code` is one-time.
+- Fix: Single retry on pure network failure (AbortError / TypeError thrown before any response). Don't retry on HTTP errors: `code` is one-time.
 
 **PC10. Riksbanken currency API fallback rates are stale and silent** [medium]
 - File: `lib/currency/riksbanken.ts:107-122`
@@ -865,7 +865,7 @@ Per-agent non-critical breakdown:
 - Self-hosted reverse-proxy misconfigurations allow spoofing; unlimited billable BankID sessions.
 - Fix: Document self-hosted reverse-proxy requirement; use `CF-Connecting-IP` behind Cloudflare or platform-provided peer address.
 
-**SEC11. middleware.ts config does not run on /api — per-route auth is the only line of defense** [low]
+**SEC11. middleware.ts config does not run on /api: per-route auth is the only line of defense** [low]
 - File: `middleware.ts:8-22`
 - New route forgetting `requireAuth()` gets no protection.
 - Fix: CI check / grep that every `app/api/**/route.ts` calls `requireAuth()`/`verifyCronSecret()`/`validateApiKey()` or is in an allowlist.
@@ -897,7 +897,7 @@ Per-agent non-critical breakdown:
 - persistEvent omits company_id; RLS excludes; /api/events returns zero events. (Also filed as event-bus critical.)
 - Fix: Extract companyId from payload; backfill NULLs via user_id → active_company_id mapping if TTL hasn't swept.
 
-**RLS5. notification_log_select policy reads company_id IS NULL rows — any authenticated user sees them** [medium]
+**RLS5. notification_log_select policy reads company_id IS NULL rows: any authenticated user sees them** [medium]
 - File: `supabase/migrations/20260330130000_multi_tenant_company_refactor.sql:775-776`
 - `OR company_id IS NULL` legitimate for shared BAS mappings only; push-notifications currently broken writer creates NULL rows.
 - Fix: Remove `OR company_id IS NULL` from notification_log_select; backfill or purge NULL rows; fix push-notifications sender.
@@ -934,12 +934,12 @@ Per-agent non-critical breakdown:
 - AAL1 attacker (stolen password, no TOTP) can grant themselves full-scope API key that bypasses MFA forever (API key auth doesn't check AAL).
 - Fix: `requireAuth()` in both GET and POST; require AAL2 on hosted for any flow that issues long-lived credential.
 
-**AM4. /auth/callback honours unvalidated next query parameter — open redirect via protocol-relative URL** [medium]
+**AM4. /auth/callback honours unvalidated next query parameter: open redirect via protocol-relative URL** [medium]
 - File: `app/(auth)/auth/callback/route.ts:10,55,173`
 - `new URL('//evil.com/path', origin)` resolves to `https://evil.com/path`; phishing vector after genuine email confirmation.
 - Fix: Apply same `startsWith('/') && !startsWith('//')` allowlist as MFA enroll page; reject data:/javascript:.
 
-**AM5. MFA verify rate-limit is client-side React state — direct-API attacker faces no throttle** [medium]
+**AM5. MFA verify rate-limit is client-side React state: direct-API attacker faces no throttle** [medium]
 - File: `app/(auth)/mfa/verify/page.tsx:82-90`
 - Brute-force over an hour is practical without server-side throttle.
 - Fix: Server-side `mfa_verify_failures` table keyed by user_id; enforce in API route wrapping `supabase.auth.mfa.verify()`. Verify Supabase project-level rate limits.
@@ -949,12 +949,12 @@ Per-agent non-critical breakdown:
 - Only validates `code_challenge_method === 'S256'` (default passes with empty challenge); today close but future verifyPkce change could bypass.
 - Fix: Return `invalid_request` when code_challenge is missing or <43 base64url chars.
 
-**AM7. OAuth consent CSRF-reachable — no CSRF token on POST /authorize** [medium]
+**AM7. OAuth consent CSRF-reachable: no CSRF token on POST /authorize** [medium]
 - File: `app/api/mcp-oauth/authorize/route.ts:140-147,161-211`
 - SameSite=Lax allows top-level POST via window.open auto-submit. Combined with ALL_SCOPES + no AAL2 gate silently exfiltrates API key.
 - Fix: CSRF token in GET stored in HttpOnly cookie; validate in POST; SameSite=Strict on OAuth cookies.
 
-**AM8. Anonymous sandbox users are not exempt from shouldEnforceMfa — trapped on /mfa/enroll** [medium]
+**AM8. Anonymous sandbox users are not exempt from shouldEnforceMfa: trapped on /mfa/enroll** [medium]
 - File: `lib/auth/mfa.ts:17-21`
 - Sandbox flow breaks on hosted production.
 - Fix: `if (user.is_anonymous) return false` in shouldEnforceMfa(). Lock-in test in `lib/auth/__tests__/mfa.test.ts`.
@@ -984,7 +984,7 @@ Per-agent non-critical breakdown:
 - WHATWG URL parser percent-encodes dangerous chars so practically safe, but escapeHtml is available and inconsistent with companyName treatment.
 - Fix: Wrap `url.pathname + url.search` in `escapeHtml()`.
 
-**AM14. Invite acceptance endpoint has no rate limit — status leak** [low]
+**AM14. Invite acceptance endpoint has no rate limit: status leak** [low]
 - File: `app/api/team/accept/route.ts:11-48`
 - 256-bit entropy; brute-force infeasible today but no throttle; 404/410 distinction leaks lifecycle state.
 - Fix: IP-based rate limit (20 req/min); uniform response for not-found / expired / used.
@@ -1009,11 +1009,11 @@ Per-agent non-critical breakdown:
 **EH3. 31 'Failed to X' API error strings displayed to users** [high]
 - File: `app/api/transactions/[id]/match-invoice/route.ts:69` and many
 - Hardcoded English user-facing business errors displayed raw on categorize/match/book pages.
-- Fix: Translate each at source — these are user-facing business-logic errors, not engine internals.
+- Fix: Translate each at source: these are user-facing business-logic errors, not engine internals.
 
 **EH4. Only one route segment has an error boundary** [high]
 - File: `app/(dashboard)/error.tsx` exists; /(auth), /(onboarding), /(public), /companies, /invite, /sandbox do not
-- Render errors fall through to `app/global-error.tsx` — full-page white screen with generic "Något gick fel".
+- Render errors fall through to `app/global-error.tsx`: full-page white screen with generic "Något gick fel".
 - Fix: Add error.tsx to (auth), (onboarding), companies at minimum. Pattern from (dashboard)/error.tsx.
 
 **EH5. global-error.tsx and (dashboard)/error.tsx don't capture to Sentry** [high]
@@ -1024,16 +1024,16 @@ Per-agent non-critical breakdown:
 **EH6. Silent swallowed errors in non-blocking operations** [medium]
 - File: `app/api/invoices/[id]/send/route.ts:198,216`, `lib/bookkeeping/handlers/supplier-invoice-handler.ts:42,72`, `app/api/transactions/[id]/categorize/route.ts:318,328,349,378`, `app/api/transactions/[id]/match-invoice/route.ts:115`, `lib/bookkeeping/engine.ts:314-316`
 - Background journal entry / document upload failures only log to stderr; user sees success but books incomplete.
-- Fix: Enqueue failures in `pending_operations` with visible "1 operation failed — retry" indicator, OR return `warnings: [{ type, message }]` array in success response.
+- Fix: Enqueue failures in `pending_operations` with visible "1 operation failed: retry" indicator, OR return `warnings: [{ type, message }]` array in success response.
 
 **EH7. Zod validation messages are mostly English** [medium]
-- File: `lib/api/schemas.ts:11,14,20,149,150,151,168,193,195,215,244,256,305,310,314,335,336,406,428,444,474,494,504,551` — ~60%
+- File: `lib/api/schemas.ts:11,14,20,149,150,151,168,193,195,215,244,256,305,310,314,335,336,406,428,444,474,494,504,551`, ~60%
 - Messages like "Expected YYYY-MM-DD date format" propagate via validateBody through getErrorMessage as English field-prefixed strings.
 - Fix: Convert every Zod message to Swedish; set global error map via `z.setErrorMap` for defaults like "Expected string, received number"; translate `'Validation failed'` + `'Invalid JSON'` + `'Invalid query parameters'` in `lib/api/validate.ts`.
 
 **EH8. Correction dialog fallback is English** [medium]
 - File: `components/bookkeeping/CorrectionEntryDialog.tsx:112`
-- `throw new Error(result.error || 'Failed to create correction')` — fallback displayed in Swedish toast.
+- `throw new Error(result.error || 'Failed to create correction')`: fallback displayed in Swedish toast.
 - Fix: Change to `'Kunde inte skapa ändringsverifikation'`. Same pattern in `components/deadlines/UpcomingDeadlinesWidget.tsx:74`, `TaxTodoWidget.tsx:85`, transactions/page.tsx:255.
 
 **EH9. Bank callback error messages redirect with English URL params** [medium]
@@ -1108,7 +1108,7 @@ Per-agent non-critical breakdown:
 - Can't tell which handler in a 4-subscriber chain failed; bypasses structured logger.
 - Fix: Track handler ids via wrapper; log via `createLogger('event-bus')` with structured fields `{ eventType, handlerId, error }`.
 
-**EB7. No per-handler timeout — slow handler blocks HTTP response** [medium]
+**EB7. No per-handler timeout: slow handler blocks HTTP response** [medium]
 - File: `lib/events/bus.ts:44-60`
 - `await Promise.allSettled` means single slow extension delays every API route that emits; Vercel 10s limit risk.
 - Fix: Optional `timeoutMs` per handler via `Promise.race`; `emitAsync()` variant (no await) for non-critical events; document which must block response.
@@ -1187,7 +1187,7 @@ Per-agent non-critical breakdown:
 
 ### Rate-limits agent
 
-**RL1. MFA verify lockout is client-side only — brute force not prevented server-side** [high]
+**RL1. MFA verify lockout is client-side only: brute force not prevented server-side** [high]
 - File: `app/(auth)/mfa/verify/page.tsx:85-90` (dupe of Auth #AM5)
 - Suggested fix same as AM5.
 
@@ -1209,7 +1209,7 @@ Per-agent non-critical breakdown:
 - Parse has 50 MB cap but execute re-accepts FormData without check; direct POST blows memory.
 - Fix: Apply same 50 MB guard at top of execute. Extract to `lib/import/validate-upload.ts` shared with parse.
 
-**RL6. API key rate limit window is fixed (1 minute) — allows 2x burst** [medium]
+**RL6. API key rate limit window is fixed (1 minute): allows 2x burst** [medium]
 - File: `supabase/migrations/20260326130000_api_key_scopes.sql:27-42`
 - 200 requests across minute boundary with precise timing.
 - Fix: Sliding window or token bucket; OR document effective "up to 2x RPM across minute boundaries".
@@ -1248,7 +1248,7 @@ Per-agent non-critical breakdown:
 
 ### UI-UX agent
 
-**UX1. Saturated blue/purple/gray badges on supplier-invoice and expense status — off-brand** [high]
+**UX1. Saturated blue/purple/gray badges on supplier-invoice and expense status: off-brand** [high]
 - File: `app/(dashboard)/supplier-invoices/[id]/page.tsx:23-31`; `app/(dashboard)/expenses/[id]/page.tsx:19-26`; `suppliers/[id]/page.tsx:125-131`
 - Raw Tailwind `bg-blue-100 text-blue-800` / `bg-purple-100` / `bg-orange-100` / `bg-gray-100` outside palette.
 - Fix: Replace with token-based: registered → `bg-muted` / `variant="secondary"`; disputed/partially_paid → `bg-warning/15 text-warning-foreground`; credited → `bg-secondary`.
@@ -1258,14 +1258,14 @@ Per-agent non-critical breakdown:
 - `STATUS_COLORS` uses bg-blue-100 / bg-emerald-100 / bg-green-100 / bg-amber-100 instead of design tokens.
 - Fix: Swap to tokens: approved → primary/10; paid → success/10; booked → success/15; review → warning/15.
 
-**UX3. font-bold on financial totals — should be font-semibold or font-medium** [high]
+**UX3. font-bold on financial totals: should be font-semibold or font-medium** [high]
 - File: `app/(dashboard)/reports/page.tsx:666,694,808,1177,1182` and 6 others
 - Design baseline documents `font-medium` default, `font-semibold` for emphasis, `font-bold` rare.
 - Fix: Replace `font-bold` with `font-semibold` on totals; reserve `font-bold` only for net-result card.
 
 **UX4. Supplier-invoice table amounts use font-mono instead of tabular-nums** [high]
 - File: `app/(dashboard)/supplier-invoices/page.tsx:174-175`
-- Applies monospace (Geist Mono) vs body Geist Sans — inconsistent with invoices/journal entries/transactions/KPI.
+- Applies monospace (Geist Mono) vs body Geist Sans: inconsistent with invoices/journal entries/transactions/KPI.
 - Fix: Replace `font-mono` with `tabular-nums`.
 
 **UX5. Reports page financial amounts missing tabular-nums in ReportSectionTable** [high]
@@ -1273,12 +1273,12 @@ Per-agent non-critical breakdown:
 - Income statement, balance sheet, NE-bilaga render without fixed-width numerals.
 - Fix: Add `tabular-nums` to amount `<td>` + subtotal `<span>`; also IncomeStatementView and BalanceSheetView totals.
 
-**UX6. VAT declaration result badge uses bg-orange-100 — raw Tailwind, not a token** [high]
+**UX6. VAT declaration result badge uses bg-orange-100: raw Tailwind, not a token** [high]
 - File: `app/(dashboard)/reports/page.tsx:1032,1184`
 - Orange not in palette; should be ochre warning token.
 - Fix: Replace with `bg-warning/15 text-warning-foreground` and `text-warning-foreground`.
 
-**UX7. Public pages use font-bold text-gray-900 and slate gradient — off-brand** [high]
+**UX7. Public pages use font-bold text-gray-900 and slate gradient: off-brand** [high]
 - File: `app/(public)/dpa/page.tsx:14`, `privacy/page.tsx:13`, `invoice-action/[token]/page.tsx:147,151,186`
 - Headings bypass `font-display` / `font-medium` / `foreground` token; `bg-gradient-to-b from-slate-50 to-white` is raw Tailwind slate palette.
 - Fix: Change headings to `font-display text-3xl font-medium tracking-tight text-foreground`; replace gradient with `bg-background`.
@@ -1288,17 +1288,17 @@ Per-agent non-critical breakdown:
 - Blue not a design system semantic.
 - Fix: `border-warning/30 bg-warning/5 text-foreground` OR `border-border bg-muted text-muted-foreground` for neutral info.
 
-**UX9. Help page category badges use blue, purple, cyan, pink, orange — Tailwind rainbow** [medium]
+**UX9. Help page category badges use blue, purple, cyan, pink, orange: Tailwind rainbow** [medium]
 - File: `app/(dashboard)/help/page.tsx:203-208`
 - Five saturated hues on single page violates "restrained palette".
 - Fix: Collapse to 2-3 token-based tints (primary/success/warning); vary icon shape if differentiation needed.
 
-**UX10. MFA/2FA "enabled" banner uses bg-green-50 border-green-200 text-green-* — raw green** [medium]
+**UX10. MFA/2FA "enabled" banner uses bg-green-50 border-green-200 text-green-*: raw green** [medium]
 - File: `components/settings/SecuritySettings.tsx:215-223`
 - `--success` token exists (sage green) exactly for this purpose.
 - Fix: `bg-success/8 border-success/20 text-success`.
 
-**UX11. viewportThemeColor is #304D83 — saturated indigo blue** [medium]
+**UX11. viewportThemeColor is #304D83: saturated indigo blue** [medium]
 - File: `app/layout.tsx:37`
 - Brand is grayscale foundation; blue bar in mobile chrome/PWA splash is off-brand.
 - Fix: Change to primary dark (~#3f3f46 zinc-700) or foreground (~#171717).
@@ -1318,17 +1318,17 @@ Per-agent non-critical breakdown:
 - Ad-hoc `<div>` with bare icon + `<h3>`; inconsistent with shared EmptyState pattern (muted circle background + action).
 - Fix: Replace with `<EmptyState icon={Receipt} title="Inga fakturor..." description="Prova att byta flik..." />`.
 
-**UX15. Supplier-invoice table row not fully clickable — inconsistent with invoices/expenses** [medium]
+**UX15. Supplier-invoice table row not fully clickable: inconsistent with invoices/expenses** [medium]
 - File: `app/(dashboard)/supplier-invoices/page.tsx:160-183`
 - Invoice-number link is inside cell; clicking row outside link has no action.
 - Fix: `<tr onClick>` + `cursor-pointer` OR extract to card-list pattern.
 
-**UX16. Dashboard income/expense detail cards use p-5 — off rhythm** [low]
+**UX16. Dashboard income/expense detail cards use p-5: off rhythm** [low]
 - File: `components/dashboard/DashboardContent.tsx:519,538`
 - Other cards use p-4; 4/6/8 step rhythm documented.
 - Fix: Change to p-4 or p-6.
 
-**UX17. InvoiceInboxWorkspace uses border-red-500 text-red-700 — raw red, not destructive token** [low]
+**UX17. InvoiceInboxWorkspace uses border-red-500 text-red-700: raw red, not destructive token** [low]
 - File: `components/extensions/general/InvoiceInboxWorkspace.tsx:212,221,235`
 - Confidence level badges should use design-system `--destructive`.
 - Fix: `border-destructive/25 bg-destructive/5 text-destructive`.
@@ -1350,7 +1350,7 @@ Per-agent non-critical breakdown:
 - JS-driven animations bypass CSS `@media (prefers-reduced-motion: reduce)` override.
 - Fix: Import `useReducedMotion` from framer-motion. `transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.25 }}`. Disable drag on SwipeCategorizationView.
 
-**A3. Progress bars lack accessible label — loading invisible to SR** [high]
+**A3. Progress bars lack accessible label: loading invisible to SR** [high]
 - File: `components/import/SIEUploadStep.tsx:97`, `BankFileUploadStep.tsx:166`, `BatchCategorySelector.tsx:56`, `ArcimMigrationWorkspace.tsx:988`, `app/(dashboard)/import/page.tsx:239`
 - "progress bar, 0 percent" with no context.
 - Fix: Pass `aria-label="Importerar SIE-fil"` etc. Consider outer `<div role="status" aria-live="polite">` for dynamic updates.
@@ -1392,7 +1392,7 @@ Per-agent non-critical breakdown:
 
 **A11. Status badges use raw Tailwind colors without icon/text pairing check** [medium]
 - File: `app/(dashboard)/supplier-invoices/[id]/page.tsx:23`, `suppliers/[id]/page.tsx:124`
-- `bg-blue-100 text-blue-800` ≈ 4.3:1; `bg-yellow-100 text-yellow-800` ≈ 3.5:1 — likely fails 4.5:1 for normal text.
+- `bg-blue-100 text-blue-800` ≈ 4.3:1; `bg-yellow-100 text-yellow-800` ≈ 3.5:1: likely fails 4.5:1 for normal text.
 - Fix: Use design system Badge with semantic variants (success/warning/destructive/secondary). Also fixes dark-mode.
 
 **A12. Skip-to-content link absent on 2 layout fallback branches** [medium]
@@ -1412,7 +1412,7 @@ Per-agent non-critical breakdown:
 
 **A15. Dialog close button label is "Close" (English) not "Stäng"** [low]
 - File: `components/ui/dialog.tsx:48`
-- Jarring in sv-lang app. SandboxBanner and ApiKeysPanel close buttons use Swedish — this one is inconsistent.
+- Jarring in sv-lang app. SandboxBanner and ApiKeysPanel close buttons use Swedish: this one is inconsistent.
 - Fix: Change `<span className="sr-only">Close</span>` to `Stäng`.
 
 **A16. MFA enroll copy-secret button has no aria-label** [low]
@@ -1438,8 +1438,8 @@ Per-agent non-critical breakdown:
 - Fix: `style={{ bottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}`.
 
 **M2. Multiple financial number inputs missing inputMode="decimal"** [high]
-- File: Key sites — `app/(dashboard)/expenses/new/page.tsx:492,601,700`, `expenses/[id]/page.tsx:478`, `supplier-invoices/new/page.tsx:343`, `CorrectionEntryDialog.tsx:245,254`, `CustomerForm.tsx:293`, `InvoiceSettingsForm.tsx:34,42`, `salary/employees/new/page.tsx:174,202,207,255,264`, `salary/runs/new/page.tsx:76,80`, `TransactionForm.tsx:116`
-- iOS shows default alphanumeric keyboard instead of numeric/decimal pad. Invoice-new does this correctly — apply same pattern.
+- File: Key sites: `app/(dashboard)/expenses/new/page.tsx:492,601,700`, `expenses/[id]/page.tsx:478`, `supplier-invoices/new/page.tsx:343`, `CorrectionEntryDialog.tsx:245,254`, `CustomerForm.tsx:293`, `InvoiceSettingsForm.tsx:34,42`, `salary/employees/new/page.tsx:174,202,207,255,264`, `salary/runs/new/page.tsx:76,80`, `TransactionForm.tsx:116`
+- iOS shows default alphanumeric keyboard instead of numeric/decimal pad. Invoice-new does this correctly: apply same pattern.
 - Fix: Add `inputMode="decimal"` to currency fields, `inputMode="numeric"` to integer fields (invoice numbers, payment terms).
 
 **M3. Inline badge-button touch targets below 44px in transaction history** [high]
@@ -1504,7 +1504,7 @@ Per-agent non-critical breakdown:
 - Security-sensitive; no server trace of auth callback outcomes.
 - Fix: `createLogger('auth/callback')`; `log.info({ userId }, 'Auth callback success')` and `log.warn({ type, error }, 'Auth callback failed')`.
 
-**L6. Logger missing debug level — all verbose logs forced to console.log** [medium]
+**L6. Logger missing debug level: all verbose logs forced to console.log** [medium]
 - File: `lib/logger.ts:9`
 - `LogLevel = 'info' | 'warn' | 'error'`; no debug. Hot-path files promote trace to info (noise) or fall back to console.log.
 - Fix: Add `debug(message, ...args)` gated by `NODE_ENV === 'development'` or `LOG_LEVEL` env var.
@@ -1524,27 +1524,27 @@ Per-agent non-critical breakdown:
 - Errors lose company/entry context.
 - Fix: `const log = createLogger('storno')` with structured `{ entryId, error }`.
 
-**L10. document-matcher — 15+ chatty console.log calls at info-equivalent level** [medium]
+**L10. document-matcher: 15+ chatty console.log calls at info-equivalent level** [medium]
 - File: `lib/documents/document-matcher.ts:55-309`
 - Per-document-per-candidate lines; hundreds per sweep in production.
 - Fix: Move to debug level once L6 added; use `createLogger('document-matcher')`.
 
-**L11. batch-match.ts — console.log sweep progress at info level** [medium]
+**L11. batch-match.ts: console.log sweep progress at info level** [medium]
 - File: `lib/documents/batch-match.ts:47-107`
 - Per-item skip logs noise; summary at line 107 correctly info.
 - Fix: `createLogger('batch-match')`; promote summary; demote per-item to debug.
 
-**L12. sie-import.ts — console.log/info/error throughout** [medium]
+**L12. sie-import.ts: console.log/info/error throughout** [medium]
 - File: `lib/import/sie-import.ts:863,939,1368,1844,1856,1935,1938,1965`
 - console.info bypasses module prefix + env filtering. Error cases lack structured context.
 - Fix: `createLogger('sie-import')`; pass `{ companyId, batchNumber, attempt }` to error calls.
 
-**L13. Cron jobs — console.log/error without module prefix** [medium]
+**L13. Cron jobs: console.log/error without module prefix** [medium]
 - File: `app/api/invoices/reminders/cron/route.ts:12,20,24,39`; `events/cleanup/cron/route.ts:31,35`; `deadlines/status/cron/route.ts:33,45`; `sandbox/cleanup/cron/route.ts:34,38`; `tax-deadlines/cron/route.ts:33,41`
 - Reminders cron has no module tag; errors lack `durationMs` for performance audit.
 - Fix: `createLogger` per cron; `{ durationMs, processed, sent, failed }`.
 
-**L14. enable-banking/lib/sync.ts — console.log for sync start/result** [medium]
+**L14. enable-banking/lib/sync.ts: console.log for sync start/result** [medium]
 - File: `extensions/general/enable-banking/lib/sync.ts:52,66,94,112`
 - Critical operational path unfilterable.
 - Fix: `createLogger('enable-banking/sync')`; log.info/log.error.
@@ -1564,12 +1564,12 @@ Per-agent non-critical breakdown:
 - Unauthenticated; malicious actor can flood logs. `JSON.stringify(extra)` on Error returns `{}` (non-enumerable props).
 - Fix: Add auth check + rate limiting; use `createLogger('onboarding-log')` with structured context.
 
-**L18. Settings tax deadline logs — no module prefix** [low]
+**L18. Settings tax deadline logs: no module prefix** [low]
 - File: `app/api/settings/route.ts:136,138`
 - Indistinguishable in logs from other routes.
 - Fix: `createLogger('api/settings')`; include companyId.
 
-**L19. provider-data-fetcher.ts — logs object keys (potential data leak)** [low]
+**L19. provider-data-fetcher.ts: logs object keys (potential data leak)** [low]
 - File: `lib/providers/provider-data-fetcher.ts:153,251`
 - Diagnostic dead debug code.
 - Fix: Remove or gate behind debug with `createLogger('provider-data-fetcher')`.
@@ -1583,7 +1583,7 @@ Per-agent non-critical breakdown:
 
 **T1. Fiscal period lifecycle API routes have no route-level tests** [high]
 - File: `app/api/bookkeeping/fiscal-periods/[id]/close/route.ts:1` + 4 others (`lock`, `year-end`, `opening-balances`, `currency-revaluation`)
-- Most sensitive operations; 401/400/500 unvalidated. year-end GET runs validate+preview in parallel — untested.
+- Most sensitive operations; 401/400/500 unvalidated. year-end GET runs validate+preview in parallel: untested.
 - Fix: Add `__tests__/route.test.ts` for each: 401 unauth, 400 service throw, 200 success. `vi.mock` period/year-end services.
 
 **T2. All report API routes (/api/reports/*) have no route-level tests** [high]
@@ -1593,7 +1593,7 @@ Per-agent non-critical breakdown:
 
 **T3. All salary API routes except /agi/submit have no tests** [high]
 - File: `app/api/salary/runs/[id]/book/route.ts:1` + ~20 others
-- `/book` integrates salary-entries producing multi-line journal entries — zero coverage at any level.
+- `/book` integrates salary-entries producing multi-line journal entries: zero coverage at any level.
 - Fix: Unit test salary-entries.ts; route tests for book/approve/calculate: 401, 400 (wrong status), 200.
 
 **T4. lib/salary/salary-entries.ts has zero tests despite bookkeeping integration** [high]
@@ -1643,7 +1643,7 @@ Per-agent non-critical breakdown:
 
 **T13. booking-templates.test.ts weak toBeDefined assertions** [low]
 - File: `lib/bookkeeping/__tests__/booking-templates.test.ts:92,491,499,506,514,523,532,538,545`
-- `expect(t).toBeDefined()` then `t!.debit_account` — safe but confusing TypeError on failure.
+- `expect(t).toBeDefined()` then `t!.debit_account`: safe but confusing TypeError on failure.
 - Fix: `if (!t) throw new Error('Template not found: ...')` OR use `expect(t?.debit_account).toBe(...)` optional chaining.
 
 **T14. makeBankConnection fixture listed in CLAUDE.md but absent** [low]
@@ -1673,7 +1673,7 @@ Per-agent non-critical breakdown:
 - Uncategorized count on every page load scans all company transactions.
 - Fix: `CREATE INDEX idx_transactions_company_uncategorized ON transactions (company_id) WHERE is_business IS NULL`.
 
-**PE4. journal_entry_lines lacks company_id — RLS join required for every report query** [high]
+**PE4. journal_entry_lines lacks company_id: RLS join required for every report query** [high]
 - File: `supabase/migrations/20240101000002_bookkeeping.sql:135-186`
 - Every report nested-loop joins across millions of lines; no composite index on (journal_entry_id, account_number).
 - Fix: Add company_id with backfill from journal_entries; composite index (company_id, account_number) OR covering index on (journal_entry_id, account_number, debit_amount, credit_amount).
@@ -1688,7 +1688,7 @@ Per-agent non-critical breakdown:
 - Entire BAS 2026 chart (8 files, 14,274 lines) serialized into import-page JS bundle.
 - Fix: API endpoint `/api/bookkeeping/accounts/reference` + lazy fetch; OR `dynamic(() => import('./OpeningBalanceEditStep'), { ssr: false })`.
 
-**PE7. TransactionHistoryList — no useMemo, no virtualization** [medium]
+**PE7. TransactionHistoryList: no useMemo, no virtualization** [medium]
 - File: `components/transactions/TransactionHistoryList.tsx:33-40`
 - `filter()` every render; 200+ row Cards in DOM.
 - Fix: `useMemo([transactions, searchTerm, filter])`. For 200+ items: `@tanstack/react-virtual`. React.memo on row component.
@@ -1706,7 +1706,7 @@ Per-agent non-critical breakdown:
 **PE10. Dashboard layout runs 5 sequential DB queries (2 chained)** [medium]
 - File: `app/(dashboard)/layout.tsx:48-63`
 - team_members then teams (if team_id exists). Every page load for consultant accounts.
-- Fix: Join via `.select('team_id, role, teams:team_id(*)').eq('user_id', user.id).limit(1).maybeSingle()` — single query.
+- Fix: Join via `.select('team_id, role, teams:team_id(*)').eq('user_id', user.id).limit(1).maybeSingle()`: single query.
 
 **PE11. VIES VAT validation has no cache** [low] (dupe of Rate-limits RL3)
 - File: `lib/vat/vies-client.ts:112-119`

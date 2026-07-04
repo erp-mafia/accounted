@@ -12,7 +12,7 @@
  *     to scrape that string to produce a structured error envelope.
  *   - More importantly, an INSERT that takes both `company_id` (from URL)
  *     and `fiscal_period_id` (from body) without verifying they belong
- *     together creates a broken-link state — the row persists with a
+ *     together creates a broken-link state: the row persists with a
  *     pointer at another company's period. Downstream queries return
  *     garbage even though no data was leaked. See:
  *     - voucher_gap_explanations: detect_voucher_gaps would never match.
@@ -29,7 +29,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * structured NOT_FOUND or VALIDATION_ERROR envelope as appropriate.
  *
  * Cross-period checks that need additional state (is_closed, locked_at)
- * should still go through `checkPeriodLock` — this helper only answers the
+ * should still go through `checkPeriodLock`; this helper only answers the
  * ownership question.
  */
 export async function ownsFiscalPeriod(

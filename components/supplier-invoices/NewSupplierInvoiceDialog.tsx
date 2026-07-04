@@ -22,7 +22,7 @@ interface Props {
 }
 
 /**
- * "Registrera leverantörsfaktura" as a modal — mirrors NewJournalEntryDialog.
+ * "Registrera leverantörsfaktura" as a modal: mirrors NewJournalEntryDialog.
  * Wraps the bare NewSupplierInvoiceForm; the form's own review/confirm,
  * supplier-create, bank-picker, and conflict dialogs stack on top of this one.
  */
@@ -40,7 +40,7 @@ export default function NewSupplierInvoiceDialog({
         className="sm:max-w-4xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
         // A half-typed invoice must survive an accidental backdrop click or a
         // stray Escape (nested comboboxes and date pickers portal outside the
-        // dialog). Closing is explicit — the header X or Avbryt. Same
+        // dialog). Closing is explicit: the header X or Avbryt. Same
         // convention as NewJournalEntryDialog.
         onEscapeKeyDown={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}

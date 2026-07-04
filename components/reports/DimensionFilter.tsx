@@ -33,10 +33,10 @@ interface Props {
  * resultaträkning, huvudbok, KPI). Mounted by FocusedReport next to
  * ReportDateRange, only for catalog entries flagged `dimensions: true`.
  *
- * Renders nothing unless company_settings.dimensions_enabled — companies
+ * Renders nothing unless company_settings.dimensions_enabled: companies
  * that never activated dimensions see literally nothing changed.
  *
- * When active it shows a persistent "Filtrerad … — ej fullständig rapport"
+ * When active it shows a persistent "Filtrerad …, ej fullständig rapport"
  * chip: a dimension-scoped view is a partial view and must never be read as
  * the complete report. Strings are hardcoded Swedish per the report-surface
  * convention (same as DimensionCombobox).
@@ -78,7 +78,7 @@ export function DimensionFilter({ value, onChange }: Props) {
         <Select
           value={activeDimNo}
           onValueChange={(dimNo) => {
-            // Switching dimension clears the picked value — codes are
+            // Switching dimension clears the picked value: codes are
             // namespaced per dimension.
             if (value) onChange(null)
             setPendingDimNo(dimNo)
@@ -117,7 +117,7 @@ export function DimensionFilter({ value, onChange }: Props) {
       </div>
       {value && (
         <Badge variant="warning" className="w-fit">
-          Filtrerad: {activeDim?.name ?? `Dim ${value.dimNo}`} {value.code} — ej fullständig rapport
+          Filtrerad: {activeDim?.name ?? `Dim ${value.dimNo}`} {value.code}, ej fullständig rapport
         </Badge>
       )}
     </div>

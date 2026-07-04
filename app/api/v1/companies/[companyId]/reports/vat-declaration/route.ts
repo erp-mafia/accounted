@@ -24,7 +24,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/vat-declaration',
   summary: 'Swedish VAT declaration (momsdeklaration) for a period.',
   description:
-    'Computes momsdeklaration rutor for the given period_type / year / period. The result includes ruta 05 (domestic taxable sales), 10-12 (output VAT 25/12/6%), 20-24 (EU acquisitions of goods + tax on services from EU/non-EU), 30-32 (reverse-charge output VAT 25/12/6%), 39 (export), 40 (EU-services / momsfri försäljning), 48 (input VAT), 50 (import beskattningsunderlag), 60-62 (calculated output VAT on imports 25/12/6%), and 49 (moms att betala/återfå — the bottom line). Mapping rules match SKV 4700.',
+    'Computes momsdeklaration rutor for the given period_type / year / period. The result includes ruta 05 (domestic taxable sales), 10-12 (output VAT 25/12/6%), 20-24 (EU acquisitions of goods + tax on services from EU/non-EU), 30-32 (reverse-charge output VAT 25/12/6%), 39 (export), 40 (EU-services / momsfri försäljning), 48 (input VAT), 50 (import beskattningsunderlag), 60-62 (calculated output VAT on imports 25/12/6%), and 49 (moms att betala/återfå: the bottom line). Mapping rules match SKV 4700.',
   useWhen:
     'Submitting momsdeklaration to Skatteverket, reconciling VAT balances at month/quarter end, or building a VAT-payable dashboard.',
   doNotUseFor:
@@ -32,7 +32,7 @@ registerEndpoint({
   pitfalls: [
     '`period_type` (monthly|quarterly|yearly), `year`, and `period` are all required.',
     'For monthly: period is 1-12. For quarterly: period is 1-4. For yearly: period is 1.',
-    '`accounting_method` defaults to accrual (faktureringsmetoden); pass cash for kontantmetoden to honor the VAT-on-payment rule per ML 15 kap 8–11 §§ (ML 2023:200, which replaced ML 1994:200 on 1 July 2023 — the prior ML 13 kap reference is outdated).',
+    '`accounting_method` defaults to accrual (faktureringsmetoden); pass cash for kontantmetoden to honor the VAT-on-payment rule per ML 15 kap 8-11 §§ (ML 2023:200, which replaced ML 1994:200 on 1 July 2023: the prior ML 13 kap reference is outdated).',
     'Output ruta 49 = (10+11+12+30+31+32+60+61+62) − 48. Positive = pay; negative = refund.',
   ],
   example: {

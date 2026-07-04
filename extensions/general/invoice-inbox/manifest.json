@@ -16,7 +16,7 @@
     "dataPattern": "both",
     "hasOwnData": true,
     "readsCoreTables": ["document_attachments", "suppliers"],
-    "description": "Vidarebefordra leverantörsfakturor till en unik adress – dokumenten landar här med extraherade fält",
+    "description": "Vidarebefordra leverantörsfakturor till en unik adress: dokumenten landar här med extraherade fält",
     "longDescription": "Varje bolag får en unik fakturainkorg-adress. Fakturor som skickas dit fångas automatiskt och fält som org.nr, OCR, bankgiro, belopp och förfallodatum läses av med AI (kräver AI-funktionen). Utan AI lagras dokumentet ändå och fälten fylls i manuellt."
   }
 }

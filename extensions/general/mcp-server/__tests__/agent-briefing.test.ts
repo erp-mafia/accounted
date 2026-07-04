@@ -1,5 +1,5 @@
 /**
- * Tests for gnubok_get_agent_briefing — session-bootstrap context for the
+ * Tests for gnubok_get_agent_briefing: session-bootstrap context for the
  * specialized accountant agent over MCP.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -260,7 +260,7 @@ describe('gnubok_get_agent_briefing tool', () => {
     expect(result.company.accounting_method).toBeNull()
   })
 
-  it('returns only the first name (tilltalsnamn) — data minimisation, not the full legal name', async () => {
+  it('returns only the first name (tilltalsnamn): data minimisation, not the full legal name', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
     const supabase = mockSupabase({ profile: null, userFullName: 'Peter Bennet' })
     const result = (await tool.execute(

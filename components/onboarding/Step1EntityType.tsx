@@ -19,7 +19,7 @@ export default function Step1EntityType({ initialData, onNext, isSaving }: Step1
   const t = useTranslations('onboarding')
   const [selected, setSelected] = useState<EntityType | undefined>(initialData.entity_type)
 
-  // "Enskild firma" and "Aktiebolag" are statutory legal entity types — kept
+  // "Enskild firma" and "Aktiebolag" are statutory legal entity types: kept
   // in Swedish in both locales.
   const entityOptions: {
     value: EntityType | string

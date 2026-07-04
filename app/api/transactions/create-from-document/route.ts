@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     )
   }
 
-  // Allowlist the currency — extracted_data.invoice.currency comes from the
+  // Allowlist the currency: extracted_data.invoice.currency comes from the
   // (deterministic, but still untrusted) PDF extractor, so an arbitrary
   // string like "XYZ" or '"SEK\'"' could otherwise be persisted directly to
   // the transactions table and break later formatCurrency / journal-entry
@@ -112,18 +112,18 @@ export async function POST(request: Request) {
   if (linkError) {
     console.error('[create-from-document] Failed to link inbox item:', linkError)
     // Transaction was created; surface a 200 with a warning so the user can
-    // still find it under Transaktioner — the inbox-link orphan is recoverable.
+    // still find it under Transaktioner: the inbox-link orphan is recoverable.
     return NextResponse.json({
       data: { transaction_id: newTx.id, inbox_link_failed: true },
     })
   }
 
   if (!linked || linked.length === 0) {
-    // Lost a race — another concurrent request linked the inbox item first.
+    // Lost a race: another concurrent request linked the inbox item first.
     // Roll back our newly-created transaction (only safe because we own it
     // and it has no journal_entry_id yet) and return 409 so the client can
     // refetch and reuse the winning transaction instead of creating a dupe.
-    // Re-assert company_id on the delete (defence in depth — newTx.id is a
+    // Re-assert company_id on the delete (defence in depth: newTx.id is a
     // fresh UUID from a company-scoped insert above, but scoping the rollback
     // makes the invariant explicit).
     await supabase.from('transactions').delete().eq('id', newTx.id).eq('company_id', companyId)

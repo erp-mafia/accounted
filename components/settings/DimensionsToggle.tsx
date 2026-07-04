@@ -14,7 +14,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 /**
  * Company-level toggle for the dimensions register (kostnadsställen &
  * projekt). Persists company_settings.dimensions_enabled through the standard
- * settings PUT — the flag gates UI visibility only (nav row + register),
+ * settings PUT: the flag gates UI visibility only (nav row + register),
  * never correctness (dimensions plan §2).
  *
  * Toggling ON runs the "Importera befintliga koder" scan
@@ -53,7 +53,7 @@ export function DimensionsToggle() {
 
       if (next) {
         // Import scan: registry rows for codes already used on lines. Failure
-        // is non-fatal — the toggle stays on and the scan can be re-run by
+        // is non-fatal: the toggle stays on and the scan can be re-run by
         // toggling again.
         try {
           const importRes = await fetch('/api/dimensions/import-existing', {

@@ -32,7 +32,7 @@ export function ResultStep({ result }: ResultStepProps) {
   const discrepancies = continuity?.discrepancies ?? []
 
   // If the wizard reached ResultStep, executeYearEndClosing already enforced
-  // that no per-account diff exceeded ORE_TOLERANCE — but surface a panel
+  // that no per-account diff exceeded ORE_TOLERANCE: but surface a panel
   // grouped by BAS class so the user can confirm visually before leaving.
   return (
     <div className="space-y-6">
@@ -92,7 +92,7 @@ export function ResultStep({ result }: ResultStepProps) {
               Bokslutet och de ingående balanserna är klara, men konto 2099 “Årets
               resultat” bär fortfarande föregående års resultat in i den nya perioden.
               Det måste flyttas till 2098 innan balansräkningen stämmer. Kör om bokslutet
-              eller kontakta support — felet är loggat.
+              eller kontakta support: felet är loggat.
             </p>
           </CardContent>
         </Card>
@@ -231,7 +231,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
               return (
                 <div key={klass}>
                   <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">
-                    Klass {klass} – {klass === 1 ? 'Tillgångar' : 'Skulder & eget kapital'}
+                    Klass {klass}: {klass === 1 ? 'Tillgångar' : 'Skulder & eget kapital'}
                   </h3>
                   <Table>
                     <TableHeader>

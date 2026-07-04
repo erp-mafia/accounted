@@ -31,7 +31,7 @@ export const SKATTEKONTO_BANKGIRO = '5050-1055'
  * ("556012-3456", "5560123456", "19880225-1234", "198802251234").
  *
  * For 12-digit personnummer (with century prefix), the leading century digits
- * are stripped — Skatteverket's Skattekonto-OCR uses the 10-digit form.
+ * are stripped: Skatteverket's Skattekonto-OCR uses the 10-digit form.
  */
 export function generateSkattekontoOcr(orgOrPersonnummer: string): string {
   const digits = orgOrPersonnummer.replace(/\D/g, '')

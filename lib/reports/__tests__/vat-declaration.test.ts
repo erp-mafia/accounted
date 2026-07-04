@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue
+// Mock: sequential result queue
 // ============================================================
 
 let resultIdx: number
@@ -43,7 +43,7 @@ beforeEach(() => {
 })
 
 // ============================================================
-// Pure function tests — no mocks needed
+// Pure function tests: no mocks needed
 // ============================================================
 
 describe('calculatePeriodDates', () => {
@@ -392,10 +392,10 @@ describe('calculateVatDeclaration', () => {
 })
 
 // ============================================================
-// Reverse charge — purchase bases (ruta 20-24) sourced from cost accounts
+// Reverse charge: purchase bases (ruta 20-24) sourced from cost accounts
 // ============================================================
 
-describe('calculateVatDeclaration — reverse charge', () => {
+describe('calculateVatDeclaration: reverse charge', () => {
   it('maps 2614/2624/2634 credit balances to ruta30/31/32', async () => {
     results = [
       {
@@ -624,7 +624,7 @@ describe('calculateVatDeclaration — reverse charge', () => {
 // Import (ruta 50, 60-62) and Ruta 06 (uttag) and Ruta 42 (exempt)
 // ============================================================
 
-describe('calculateVatDeclaration — import, uttag, exempt', () => {
+describe('calculateVatDeclaration: import, uttag, exempt', () => {
   it('maps import VAT accounts (2615/2625/2635) to ruta60/61/62', async () => {
     results = [
       {
@@ -663,7 +663,7 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
 
-    // Ruta 50 (base) and Ruta 60 (output VAT) BOTH non-zero — required by SKV §4.1.1.4
+    // Ruta 50 (base) and Ruta 60 (output VAT) BOTH non-zero: required by SKV §4.1.1.4
     // ERROR rule "Det måste finnas ett belopp i fält 50, eftersom det finns ett belopp i 60-62"
     expect(result.rutor.ruta50).toBe(10000)
     expect(result.rutor.ruta60).toBe(2500)
@@ -797,14 +797,14 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 // ============================================================
 
 describe('SKV §4.1.1.4 cross-field contracts', () => {
-  it('ERROR — taxable sales base requires output VAT (rule 1)', async () => {
+  it('ERROR: taxable sales base requires output VAT (rule 1)', async () => {
     // SKV: if any of momspliktigForsaljning/momspliktigaUttag/vinstmarginal/hyresInkomst > 0,
     //      at least one of momsForsaljningUtgaende{Hog,Medel,Lag} must be > 0.
     results = [
       {
         data: [
           { account_number: '3001', debit_amount: 0, credit_amount: 10000 },
-          // No 2611/2621/2631 booked — would trigger SKV ERROR
+          // No 2611/2621/2631 booked: would trigger SKV ERROR
         ],
         error: null,
       },
@@ -819,17 +819,17 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     expect(hasBase).toBe(true)
     expect(hasOutput).toBe(false)
     // Local invariant: this combination would fail SKV kontrollera with ERROR.
-    // The calculator does not auto-correct — the ledger must be fixed upstream.
+    // The calculator does not auto-correct: the ledger must be fixed upstream.
   })
 
-  it('ERROR — reverse-charge purchase base requires output VAT (rule 3)', async () => {
+  it('ERROR: reverse-charge purchase base requires output VAT (rule 3)', async () => {
     // If any of inkopVarorEU/inkopTjansterEU/inkopTjansterUtanforEU/inkopVarorSE/inkopTjansterSE > 0,
     // at least one of momsInkopUtgaende{Hog,Medel,Lag} must be > 0.
     results = [
       {
         data: [
           { account_number: '4535', debit_amount: 5000, credit_amount: 0 },
-          // No 2614/2624/2634 booked — would trigger SKV ERROR
+          // No 2614/2624/2634 booked: would trigger SKV ERROR
         ],
         error: null,
       },
@@ -845,13 +845,13 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     expect(hasRcOutput).toBe(false)
   })
 
-  it('ERROR — import base requires import output VAT (rule 5)', async () => {
+  it('ERROR: import base requires import output VAT (rule 5)', async () => {
     // If import (ruta50) > 0, at least one of momsImportUtgaende{Hog,Medel,Lag} must be > 0.
     results = [
       {
         data: [
           { account_number: '4545', debit_amount: 10000, credit_amount: 0 },
-          // No 2615/2625/2635 booked — would trigger SKV ERROR
+          // No 2615/2625/2635 booked: would trigger SKV ERROR
         ],
         error: null,
       },
@@ -865,7 +865,7 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     expect(r.ruta60 + r.ruta61 + r.ruta62).toBe(0)
   })
 
-  it('ERROR — import output VAT requires import base (rule 6)', async () => {
+  it('ERROR: import output VAT requires import base (rule 6)', async () => {
     // If any of momsImportUtgaende{Hog,Medel,Lag} > 0, import (ruta50) must be > 0.
     // This is the BLOCKER scenario the Phase 1b refactor fixes: previously ruta50 was
     // never populated, so any import VAT booking would fail SKV's contract.
@@ -884,12 +884,12 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
     const r = result.rutor
 
-    // Both populated — passes SKV's rule 6
+    // Both populated: passes SKV's rule 6
     expect(r.ruta50).toBe(10000)
     expect(r.ruta60).toBe(2500)
   })
 
-  it('ERROR — summaMoms must equal (ruta10+11+12+30+31+32+60+61+62) − ruta48 (rule 7)', async () => {
+  it('ERROR: summaMoms must equal (ruta10+11+12+30+31+32+60+61+62) − ruta48 (rule 7)', async () => {
     // The calculator computes ruta49 from the formula directly, so this invariant
     // holds by construction. This test is the canary that catches drift if anyone
     // ever adds an extra term or rate to the form.
@@ -921,7 +921,7 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
 })
 
 // ============================================================
-// Parent/summary BAS accounts — 2610/2620/2630 (output),
+// Parent/summary BAS accounts: 2610/2620/2630 (output),
 // 2618/2628/2638 (vilande), 2640 (input parent).
 //
 // Users who post directly to the group account (manual entries, SIE imports,
@@ -929,7 +929,7 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
 // because only the leaf accounts were mapped.
 // ============================================================
 
-describe('calculateVatDeclaration — parent/summary accounts', () => {
+describe('calculateVatDeclaration: parent/summary accounts', () => {
   it('maps 2610 (parent) to ruta10 when posted directly', async () => {
     results = [
       {
@@ -993,7 +993,7 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
   it('sums parent and sub-account balances on the same ruta', async () => {
     // If a ledger has activity on both the parent and the sub-accounts (mixed
     // bookkeeping practice, SIE imports, etc.), the ruta reflects the literal
-    // ledger total — accounting truth wins.
+    // ledger total: accounting truth wins.
     results = [
       {
         data: [
@@ -1052,9 +1052,9 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
   })
 })
 
-describe('calculateVatDeclaration — annual VAT spans the räkenskapsår', () => {
+describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
   it('uses the fiscal period bounds for yearly when a fiscalPeriodId is given', async () => {
-    // Förlängt räkenskapsår (extended first year, 18 months) — annual VAT
+    // Förlängt räkenskapsår (extended first year, 18 months): annual VAT
     // (helårsmoms) must cover the whole period, not the calendar year that
     // period_start falls in. The first queued result feeds the fiscal_periods
     // lookup, the second the journal lines, the third the entry counts.
@@ -1099,7 +1099,7 @@ describe('calculateVatDeclaration — annual VAT spans the räkenskapsår', () =
 
   it('ignores fiscalPeriodId for monthly periods (calendar month, no lookup)', async () => {
     // No fiscal_periods lookup is made for monthly, so the first queued result
-    // is the journal lines — proving the räkenskapsår path is yearly-only.
+    // is the journal lines: proving the räkenskapsår path is yearly-only.
     results = [
       { data: [], error: null }, // journal lines
       { data: [], error: null }, // entry counts

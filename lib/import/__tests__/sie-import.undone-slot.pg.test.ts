@@ -6,7 +6,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // Migration 20260529120000_sie_imports_undone_release_slot.sql extends
 // the partial unique index sie_imports_company_id_file_hash_active_idx
 // to also exclude 'undone'. Without this, undo_sie_import marks a row
-// 'undone' but the slot stays held — the caller cannot re-import the
+// 'undone' but the slot stays held: the caller cannot re-import the
 // same file.
 
 async function insertSIEImport(params: {
@@ -62,7 +62,7 @@ describe('sie_imports partial unique index: undone status releases the slot', ()
       fiscalPeriodId,
     })
 
-    // Mimic undo_sie_import's terminal write (we don't run the RPC here —
+    // Mimic undo_sie_import's terminal write (we don't run the RPC here:
     // the RPC also detaches docs + deletes JEs which need richer setup).
     await getPool().query(
       `UPDATE public.sie_imports SET status = 'undone', replaced_at = now() WHERE id = $1`,

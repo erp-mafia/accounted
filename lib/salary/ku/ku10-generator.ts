@@ -2,7 +2,7 @@ import { decryptPersonnummer } from '../personnummer'
 import { getBranding } from '@/lib/branding/service'
 
 /**
- * KU10 (Kontrolluppgift) — Annual employee income statement.
+ * KU10 (Kontrolluppgift): Annual employee income statement.
  *
  * Per Skatteförfarandelagen 15 kap: Every employer must file KU10 for each
  * employee by January 31 of the following year. Reports total income, tax
@@ -16,7 +16,7 @@ import { getBranding } from '@/lib/branding/service'
  */
 
 export interface KU10EmployeeData {
-  personnummer: string        // Encrypted — will be decrypted
+  personnummer: string        // Encrypted, will be decrypted
   specificationNumber: number // FK570
   totalGross: number          // Ruta 011: Total kontant bruttolön for year
   totalTax: number            // Ruta 001: Total avdragen skatt for year

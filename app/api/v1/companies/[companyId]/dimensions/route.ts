@@ -3,7 +3,7 @@
  *
  * List the dimension registry (SIE #DIM) with nested values (#OBJEKT).
  * Ensures the system dims (1 = Kostnadsställe, 6 = Projekt) exist via the
- * ensure_company_dimensions RPC before reading — lazy seeding, so the list is
+ * ensure_company_dimensions RPC before reading: lazy seeding, so the list is
  * never empty even for companies that have not touched dimensions.
  */
 import { z } from 'zod'
@@ -40,15 +40,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/dimensions',
   summary: 'List dimensions (kostnadsställe/projekt) with their values.',
   description:
-    'Returns the company\'s dimension registry — SIE #DIM entries keyed by sie_dim_no (1 = Kostnadsställe, 6 = Projekt; both always exist) — with the registered values (#OBJEKT) nested under each dimension. Dimensions are ordered by sort_order, values by code. Line-level tags on journal entries reference these values as {"<sie_dim_no>":"<code>"} in the `dimensions` map.',
+    'Returns the company\'s dimension registry: SIE #DIM entries keyed by sie_dim_no (1 = Kostnadsställe, 6 = Projekt; both always exist): with the registered values (#OBJEKT) nested under each dimension. Dimensions are ordered by sort_order, values by code. Line-level tags on journal entries reference these values as {"<sie_dim_no>":"<code>"} in the `dimensions` map.',
   useWhen:
     'You need the valid dimension value codes before tagging journal-entry lines with a cost centre or project, or you are rendering a dimension picker.',
   doNotUseFor:
     'Filtering reports (pass the dimension filter to the report endpoints once available) or reading which lines carry a tag (read the journal entries themselves).',
   pitfalls: [
-    'Dimension value codes are STRINGS and case-sensitive — "P001", not 1.',
+    'Dimension value codes are STRINGS and case-sensitive: "P001", not 1.',
     'sie_dim_no is the key used in journal_entry_lines.dimensions, NOT the dimension row id.',
-    'is_active=false values are historical (archived) — do not tag new lines with them.',
+    'is_active=false values are historical (archived): do not tag new lines with them.',
     'resets_annually=true (dim 1) means balances reset each fiscal year; dim 6 (projekt) accumulates across years.',
   ],
   example: {

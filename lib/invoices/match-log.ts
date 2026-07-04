@@ -10,7 +10,7 @@ type MatchAction =
 
 /**
  * Log a payment match event to the append-only audit trail.
- * Fire-and-forget — never throws, never blocks the caller.
+ * Fire-and-forget: never throws, never blocks the caller.
  */
 export async function logMatchEvent(
   supabase: SupabaseClient,
@@ -39,6 +39,6 @@ export async function logMatchEvent(
       new_state: opts?.newState ?? null,
     })
   } catch {
-    // Non-critical — audit log insert must never break the main flow
+    // Non-critical: audit log insert must never break the main flow
   }
 }

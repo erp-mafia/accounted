@@ -84,7 +84,7 @@ function seedCommon() {
   }
 }
 
-describe('generateTrialBalance — dimensions option', () => {
+describe('generateTrialBalance: dimensions option', () => {
   it('pushes the filter down as jsonb containment on the line query', async () => {
     seedCommon()
     mockOpeningBalances.mockResolvedValue({ balances: new Map(), obEntryId: null })
@@ -116,7 +116,7 @@ describe('generateTrialBalance — dimensions option', () => {
     expect(containsCalls).toEqual([])
   })
 
-  it('drops company-wide opening balances when filtered — amounts are dimension-scoped activity only', async () => {
+  it('drops company-wide opening balances when filtered: amounts are dimension-scoped activity only', async () => {
     seedCommon()
     // Company-wide IB on 1930 that CANNOT be dimension-scoped.
     mockOpeningBalances.mockResolvedValue({

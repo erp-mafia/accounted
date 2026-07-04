@@ -182,7 +182,7 @@ export function mapBokioToAccountingAccount(raw: Record<string, unknown>): Accou
   const rawNum = raw['account'] ?? raw['accountNumber'] ?? raw['number'];
   const num = Number(rawNum);
 
-  // Bokio returns accountType: 'basePlanAccount' — derive type from BAS plan number range
+  // Bokio returns accountType: 'basePlanAccount': derive type from BAS plan number range
   let type: AccountType | undefined;
   if (num >= 1000 && num < 2000) type = 'asset';
   else if (num >= 2000 && num < 3000) type = 'liability';

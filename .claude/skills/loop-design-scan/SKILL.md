@@ -1,13 +1,13 @@
 ---
 name: loop-design-scan
-description: Local loop that scans a given area of the Accounted UI against the locked design system (.claude/rules/design.md) for UX friction, visual inconsistency, missing states, motion gaps, and accessibility issues — rendering pages in Chrome — then files GitHub issues for approved findings. Run locally (needs npm run dev + Chrome). Usage: /loop-design-scan <area> (e.g. bookkeeping, invoices, settings).
+description: Local loop that scans a given area of the Accounted UI against the locked design system (.claude/rules/design.md) for UX friction, visual inconsistency, missing states, motion gaps, and accessibility issues (rendering pages in Chrome), then files GitHub issues for approved findings. Run locally (needs npm run dev + Chrome). Usage: /loop-design-scan <area> (e.g. bookkeeping, invoices, settings).
 ---
 
 # loop-design-scan
 
 **Goal:** for one area of the app, surface concrete, design-system-grounded UI/UX improvements and file
 them as GitHub issues (deduped). This is the GitHub-Issues sibling of the `scout-design` skill (which
-targets Linear). Read `.claude/loops.md` first. **Runs locally** — it needs to render the UI.
+targets Linear). Read `.claude/loops.md` first. **Runs locally**: it needs to render the UI.
 
 ## Why local
 A headless cloud session can't see the UI. This loop starts `npm run dev` and drives Chrome to render
@@ -39,12 +39,12 @@ Prefer the **`.claude/workflows/design-scan.js`** workflow: it fans out one agen
 skeptic agent per finding ("is this a real regression against the locked design system, or a nitpick?").
 Only findings that survive get filed. Cap **6 findings/run**; log the rest.
 
-## 5. File issues (deduped — see loops.md)
+## 5. File issues (deduped: see loops.md)
 ```
 Title: [design] <area>: <short problem>
 Labels: loop:auto, loop:design, enhancement
 Body: what's wrong (with file:line) · which design rule it breaks · concrete before→after · screenshot ref
       <!-- loop-fingerprint: <area>:<file>:<rule> -->
 ```
-Dedupe against existing `loop:design` issues before filing. Do not auto-fix UI here — design changes
+Dedupe against existing `loop:design` issues before filing. Do not auto-fix UI here: design changes
 want human taste; file the ticket. (If asked to fix, use `/frontend-design` on an approved ticket.)

@@ -21,7 +21,7 @@ const RATE_LIMIT = { maxRequests: 5, windowMs: 60 * 60 * 1000 }
  */
 export async function POST(request: Request) {
   // Per-request logger so seed-failure entries are correlatable in the SIEM.
-  // Cannot reuse withRouteContext here — it requires an active company, but
+  // Cannot reuse withRouteContext here: it requires an active company, but
   // the sandbox seed runs *before* a company exists for the user.
   const requestId = `req_${crypto.randomUUID()}`
   const log = createLogger('sandbox:seed', { requestId })
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
   const fwd = request.headers.get('x-forwarded-for')
   const rawIp = fwd ? fwd.split(',')[0]?.trim() : request.headers.get('x-real-ip') ?? undefined
   // Fall back to a shared 'unknown' bucket when the proxy doesn't surface a
-  // client IP — keeps the limit enforced under a misconfigured deploy rather
+  // client IP: keeps the limit enforced under a misconfigured deploy rather
   // than failing open. Truncated /24 elsewhere is the normal path.
   const ipIdentifier = truncateIp(rawIp || undefined) ?? 'unknown'
   if (rawIp && ipIdentifier === 'unknown') {
@@ -43,13 +43,13 @@ export async function POST(request: Request) {
   })
   if (!rl.ok) return rl.response!
 
-  // Can't use withRouteContext (see above — no company yet), so call requireAuth
+  // Can't use withRouteContext (see above, no company yet), so call requireAuth
   // directly: the documented stopgap that still enforces MFA. A no-op for the
   // anonymous users this route serves (they have no second factor), but keeps
   // the route on the same auth path as the rest of the API.
   //
   // GDPR Art.32 compensating controls for this anonymous, low-auth write path:
-  // (1) anonymous-only — authenticated users are rejected below (403); (2) the
+  // (1) anonymous-only: authenticated users are rejected below (403); (2) the
   // /24 rate limit above (5/h); (3) all seeded data is synthetic demo content
   // (fabricated names, example.com emails, documentation-reserved org numbers),
   // not real personal data; (4) writes are scoped to the caller's own freshly
@@ -93,7 +93,7 @@ export async function POST(request: Request) {
   // Idempotency: if the core seed already ran (company_settings exists), skip
   // the bulk insert path. We still TOP UP the newer surfaces (agent_profile,
   // suppliers, asset, pending operations) afterwards so an old sandbox session
-  // — created before those were added to the seed — picks them up on the next
+  // (created before those were added to the seed) picks them up on the next
   // call instead of being stuck without a verified assistant.
   const { data: existing } = await supabase
     .from('company_settings')
@@ -146,7 +146,7 @@ export async function POST(request: Request) {
         onboarding_step: 6,
         onboarding_complete: true,
         is_sandbox: true,
-        // Dimensions demo — the register/pickers render out of the box.
+        // Dimensions demo: the register/pickers render out of the box.
         dimensions_enabled: true,
       })
 
@@ -309,7 +309,7 @@ export async function POST(request: Request) {
           total: 20000,
           vat_treatment: 'reverse_charge',
           vat_rate: 0,
-          reverse_charge_text: 'Reverse charge — buyer is liable for VAT',
+          reverse_charge_text: 'Reverse charge: buyer is liable for VAT',
           document_type: 'invoice',
         },
         {
@@ -357,7 +357,7 @@ export async function POST(request: Request) {
       .insert([
         {
           invoice_id: invoiceMap['F-2026001'],
-          description: 'Webbutveckling — mars 2026',
+          description: 'Webbutveckling, mars 2026',
           quantity: 30,
           unit: 'tim',
           unit_price: 500,
@@ -366,7 +366,7 @@ export async function POST(request: Request) {
         },
         {
           invoice_id: invoiceMap['F-2026002'],
-          description: 'IT-konsulting — internationellt projekt',
+          description: 'IT-konsulting, internationellt projekt',
           quantity: 40,
           unit: 'tim',
           unit_price: 500,
@@ -422,7 +422,7 @@ export async function POST(request: Request) {
         voucher_number: voucherNum1 ?? 1,
         voucher_series: 'A',
         entry_date: toDateStr(thirtyDaysAgo),
-        description: 'Faktura F-2026001 — Björk & Partner AB',
+        description: 'Faktura F-2026001, Björk & Partner AB',
         source_type: 'invoice_created',
         source_id: invoiceMap['F-2026001'],
         status: 'posted',
@@ -448,7 +448,7 @@ export async function POST(request: Request) {
         voucher_number: voucherNum2 ?? 2,
         voucher_series: 'A',
         entry_date: toDateStr(fifteenDaysAgo),
-        description: 'Betalning faktura F-2026001 — Björk & Partner AB',
+        description: 'Betalning faktura F-2026001, Björk & Partner AB',
         source_type: 'invoice_paid',
         source_id: invoiceMap['F-2026001'],
         status: 'posted',
@@ -463,13 +463,13 @@ export async function POST(request: Request) {
     // ({"1":"BUTIK","6":"P001"}) so the register's "antal taggade rader",
     // voucher-detail badges, and the dimension P&L report light up in the
     // sandbox. cost_center/project are GENERATED from the bag since the PR9
-    // cutover — writing them explicitly would error.
+    // cutover: writing them explicitly would error.
     const revenueDims = { '1': 'BUTIK', '6': 'P001' }
     const { error: jelError } = await supabase
       .from('journal_entry_lines')
       .insert([
-        // JE1: Invoice creation — Debit AR, Credit Revenue + VAT
-        // NB: `dimensions` must be set explicitly on EVERY row — same PostgREST
+        // JE1: Invoice creation, Debit AR, Credit Revenue + VAT
+        // NB: `dimensions` must be set explicitly on EVERY row: same PostgREST
         // bulk-insert normalization as paid_amount below: omitting it on some
         // rows while one row sets it sends null (violating NOT NULL) instead
         // of falling through to the schema default '{}'.
@@ -500,7 +500,7 @@ export async function POST(request: Request) {
           sort_order: 2,
           dimensions: {},
         },
-        // JE2: Invoice payment — Debit Bank, Credit AR
+        // JE2: Invoice payment, Debit Bank, Credit AR
         {
           journal_entry_id: je2.id,
           account_number: '1930',
@@ -555,7 +555,7 @@ export async function POST(request: Request) {
           description: 'SJ BILJETT',
           // > 4 000 kr categorized business expense with no attached underlag,
           // so gnubok_vat_close_check surfaces a non-empty blocker list.
-          // (BFL 5 kap 6–7§ require every affärshändelse to be documented with
+          // (BFL 5 kap 6-7§ require every affärshändelse to be documented with
           // underlag; the 4 000 kr cut-off is the tool's own high-value
           // heuristic, not a statutory threshold.)
           amount: -4500,
@@ -709,11 +709,11 @@ export async function POST(request: Request) {
     if (supError) throw supError
     const supplierMap = Object.fromEntries(suppliers.map(s => [s.name, s.id]))
 
-    // Supplier invoice #1 — Telia, paid 15 days ago (mobile + bredband, 25% VAT).
+    // Supplier invoice #1, Telia, paid 15 days ago (mobile + bredband, 25% VAT).
     const sevenDaysFromNow = new Date(today)
     sevenDaysFromNow.setDate(today.getDate() + 7)
 
-    // Hardcode 1 and 2 — get_next_arrival_number is MAX+1 against the same
+    // Hardcode 1 and 2: get_next_arrival_number is MAX+1 against the same
     // table we're about to insert into, so calling it twice before the first
     // insert lands gives the same value for both rows and violates the
     // (company_id, arrival_number) unique index. The company is brand new
@@ -770,13 +770,13 @@ export async function POST(request: Request) {
     // Supplier invoice line items. Note: supplier_invoice_items.vat_rate is
     // stored as a decimal (0.25 = 25%); invoice_items.vat_rate above uses
     // integer percent (25). Two different conventions inherited from earlier
-    // migrations — don't try to "fix" it here.
+    // migrations: don't try to "fix" it here.
     const { error: supItemsError } = await supabase
       .from('supplier_invoice_items')
       .insert([
         {
           supplier_invoice_id: supInvoiceMap['4711-2026-03'],
-          description: 'Mobil + bredband — mars',
+          description: 'Mobil + bredband, mars',
           quantity: 1,
           unit_price: 480,
           line_total: 480,
@@ -821,7 +821,7 @@ export async function POST(request: Request) {
         bas_asset_account: '1250',
         bas_accumulated_account: '1259',
         bas_expense_account: '7831',
-        notes: 'Demo-tillgång — visar planenlig avskrivning över 5 år.',
+        notes: 'Demo-tillgång: visar planenlig avskrivning över 5 år.',
       })
 
     if (assetError) throw assetError
@@ -880,7 +880,7 @@ export async function POST(request: Request) {
     // These are the kind of operation the AI agent would stage; pre-seeded
     // here so the user can see the approval queue UI (preview, period
     // status, risk level) without having to invoke the disabled AI. Each
-    // params blob must be executor-complete — the commit executors in
+    // params blob must be executor-complete: the commit executors in
     // lib/pending-operations/commit.ts validate required fields on "Godkänn",
     // so a display-only preview with a hollow params object fails to save.
     // actor_type='agent_chat' + risk_level on the row itself is required by
@@ -899,8 +899,8 @@ export async function POST(request: Request) {
           // Uses a distinct supplier_invoice_number so approving this
           // pending operation creates a NEW supplier_invoices row instead
           // of colliding with the Demokafé '88245' already booked above
-          // (BFL 5 kap — each affärshändelse must be recorded exactly once).
-          title: 'Registrera leverantörsfaktura — Demokafé (representation, nytt underlag)',
+          // (BFL 5 kap: each affärshändelse must be recorded exactly once).
+          title: 'Registrera leverantörsfaktura, Demokafé (representation, nytt underlag)',
           // Mirrors what gnubok_create_supplier_invoice_from_inbox would stage:
           // every field commitCreateSupplierInvoiceFromInbox requires
           // (inbox_item_id, supplier_id, supplier_invoice_number, invoice_date,
@@ -918,7 +918,7 @@ export async function POST(request: Request) {
             subtotal: 240,
             vat_amount: 28.80,
             total: 268.80,
-            notes: 'Representation – kundmöte (demo)',
+            notes: 'Representation, kundmöte (demo)',
             items: [
               {
                 line_number: 1,
@@ -938,7 +938,7 @@ export async function POST(request: Request) {
             // a single attendee. The avdragsrätt cap is 25% × 300 SEK ×
             // antal_personer = 75 SEK / person (ML 8 kap. 9 §); since the
             // VAT here is 28.80 SEK the full amount is deductible and the
-            // cost lands in 5810 — no split needed.
+            // cost lands in 5810: no split needed.
             preview_lines: [
               { account: '5810', description: 'Representation (12% moms, ≤ 75 SEK moms/pers)', debit: 240, credit: 0 },
               { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
@@ -953,7 +953,7 @@ export async function POST(request: Request) {
           status: 'pending',
           actor_type: 'agent_chat',
           risk_level: 'low',
-          title: 'Bokför insättning — bankgiro',
+          title: 'Bokför insättning, bankgiro',
           // commitCategorizeTransaction needs a real uncategorized
           // transaction_id + a category that resolves to an account mapping.
           // income_services → 3001 (Försäljning tjänster 25%), matching the

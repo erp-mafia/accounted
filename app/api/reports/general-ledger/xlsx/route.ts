@@ -67,7 +67,7 @@ export async function GET(request: Request) {
 
     // Flatten accounts + their lines into a single sheet. Each account contributes
     // an opening-balance row, its lines (with running balance), and a closing
-    // row — matching how huvudbok is read in Fortnox/Visma.
+    // row: matching how huvudbok is read in Fortnox/Visma.
     const rows: FlatRow[] = []
     for (const acc of report.accounts) {
       rows.push({
@@ -108,7 +108,7 @@ export async function GET(request: Request) {
     }
 
     // Partial-view disclosure: a filtered huvudbok starts balance accounts
-    // at zero IB (opening balances cannot be dimension-scoped) — the export
+    // at zero IB (opening balances cannot be dimension-scoped): the export
     // must say so or a project-filtered ledger reads as a full one.
     const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
     if (disclosure) {

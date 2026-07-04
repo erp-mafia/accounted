@@ -5,7 +5,7 @@
  * Reference: Tjänstebeskrivning Momsdeklaration v1.5
  */
 
-/** Momsuppgift payload — maps 1:1 to SKV 4700 boxes */
+/** Momsuppgift payload: maps 1:1 to SKV 4700 boxes */
 export interface SkatteverketMomsuppgift {
   momspliktigForsaljning?: number       // Box 05
   momspliktigaUttag?: number            // Box 06
@@ -40,7 +40,7 @@ export interface SkatteverketMomsuppgift {
 
 /**
  * Validation result from Skatteverket /kontrollera or /utkast.
- * Field names match Momsdeklaration v1.0.24 RAML — note SKV's mixed casing
+ * Field names match Momsdeklaration v1.0.24 RAML: note SKV's mixed casing
  * on `kontrollResultat` and `signeringsLank`.
  */
 export interface SkatteverketKontrollResultat {
@@ -101,7 +101,7 @@ export type DeclarationStatus =
 // The types below describe only the JSON responses the extension reads back.
 
 /**
- * Response from POST /underlag — Skatteverket assigns an inlämningsId we
+ * Response from POST /underlag: Skatteverket assigns an inlämningsId we
  * then use to poll kontrollresultat and to spara/avbryta.
  */
 export interface SkatteverketAGIUnderlagResponse {
@@ -112,10 +112,10 @@ export interface SkatteverketAGIUnderlagResponse {
  * Response from GET /underlag/{inlamningId}/kontrollresultat.
  * Status flow: PROCESSING → DONE_SUCCESS | DONE_FAILED | DONE_REJECTED.
  *
- * DONE_SUCCESS  — XML accepted, no stop-errors. Caller may proceed to spara.
- * DONE_REJECTED — stoppande fel; caller can spara to keep it in Eget utrymme
+ * DONE_SUCCESS : XML accepted, no stop-errors. Caller may proceed to spara.
+ * DONE_REJECTED: stoppande fel; caller can spara to keep it in Eget utrymme
  *                 for the user to fix in Mina Sidor, or DELETE /underlag/{id}.
- * DONE_FAILED   — system failure; nothing was saved.
+ * DONE_FAILED  : system failure; nothing was saved.
  */
 export interface SkatteverketAGIKontrollresultat {
   status: 'PROCESSING' | 'DONE_SUCCESS' | 'DONE_FAILED' | 'DONE_REJECTED'
@@ -274,7 +274,7 @@ export interface SkatteverketSaldoResponse {
 
 /** Booked transaction (tidigareTransaktioner) */
 export interface SkatteverketBookedTransaction {
-  /** Stable identity from Skatteverket — primary dedup key */
+  /** Stable identity from Skatteverket: primary dedup key */
   transaktionsidentitet: number
   /** Booking date (YYYY-MM-DD) */
   transaktionsdatum: string
@@ -302,7 +302,7 @@ export interface SkatteverketUpcomingTransaction {
   beloppSkatteverket: number
   /** Amount at Kronofogden */
   beloppKronofogden: number | null
-  /** Often null on kommande — fall back to dedup_key */
+  /** Often null on kommande: fall back to dedup_key */
   transaktionsidentitet: number | null
 }
 
@@ -312,7 +312,7 @@ export interface SkatteverketTransaktionerResponse {
   kommandeTransaktioner: SkatteverketUpcomingTransaction[]
 }
 
-/** Skatteverket error envelope (felkod 1–5) */
+/** Skatteverket error envelope (felkod 1-5) */
 export interface SkatteverketFel {
   felkod: number
   felmeddelande: string

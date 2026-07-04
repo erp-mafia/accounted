@@ -19,11 +19,11 @@ describe('gnubok_create_transactions', () => {
   it('stages one pending_operation per input item and returns operation ids', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Each staged op now also runs resolvePeriodStatusForDate (company_settings + fiscal_periods).
-    enqueue({ data: null, error: null }) // op 1 — company_settings
-    enqueue({ data: null, error: null }) // op 1 — fiscal_periods
+    enqueue({ data: null, error: null }) // op 1: company_settings
+    enqueue({ data: null, error: null }) // op 1: fiscal_periods
     enqueue({ data: { id: 'op-1' }, error: null }) // first insert
-    enqueue({ data: null, error: null }) // op 2 — company_settings
-    enqueue({ data: null, error: null }) // op 2 — fiscal_periods
+    enqueue({ data: null, error: null }) // op 2: company_settings
+    enqueue({ data: null, error: null }) // op 2: fiscal_periods
     enqueue({ data: { id: 'op-2' }, error: null }) // second insert
 
     const result = (await tool.execute(

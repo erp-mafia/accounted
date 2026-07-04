@@ -1,6 +1,6 @@
 /**
  * Tests for POST /api/bookkeeping/journal-entry-lines/[lineId]/retag
- * (dimensions plan PR6 — Tier-2 retro-tagging via the audited RPC).
+ * (dimensions plan PR6: Tier-2 retro-tagging via the audited RPC).
  *
  * Covers: 401, validation 400 (bad bag / short reason), the rule-violation
  * 409 passthrough (Swedish RPC errors surface verbatim), unexpected RPC
@@ -81,7 +81,7 @@ describe('POST /api/bookkeeping/journal-entry-lines/[lineId]/retag', () => {
   it('passes rule violations through as 409 with the Swedish message', async () => {
     rpcMock.mockResolvedValue({
       data: null,
-      error: { code: 'P0001', message: 'Perioden är stängd — använd rättelseverifikat (storno) för att ändra dimensioner.' },
+      error: { code: 'P0001', message: 'Perioden är stängd: använd rättelseverifikat (storno) för att ändra dimensioner.' },
     })
 
     const response = await POST(

@@ -174,7 +174,7 @@ export default function ChartOfAccounts() {
                                     setSruValue(account.sru_code || '')
                                   }}
                                 >
-                                  {account.sru_code || '—'}
+                                  {account.sru_code || '-'}
                                 </button>
                               )}
                             </td>

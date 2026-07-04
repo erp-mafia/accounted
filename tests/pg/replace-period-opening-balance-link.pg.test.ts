@@ -17,7 +17,7 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
  * The critical property: enforce_opening_balance_immutability blocks any direct
  * UPDATE that changes opening_balance_entry_id while opening_balances_set is
  * true. The RPC's two-step (flip the flag off, change the FK, flip it on) must
- * therefore be the sanctioned path — a plain UPDATE must still be rejected.
+ * therefore be the sanctioned path: a plain UPDATE must still be rejected.
  */
 
 async function insertPostedOpeningBalance(params: {

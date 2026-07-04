@@ -9,7 +9,7 @@ interface PageProps {
   params: Promise<{ id: string }>
 }
 
-// /chat/[id] — server-renders the conversation row + ordered messages, then
+// /chat/[id]: server-renders the conversation row + ordered messages, then
 // hydrates the client AgentChat with them so the user can continue typing
 // against the existing conversation_id. The agent loop on the server picks
 // up via /api/agent/invoke with conversation_id supplied.

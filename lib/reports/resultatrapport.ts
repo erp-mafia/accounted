@@ -17,14 +17,14 @@ const CLASS_LABELS: Record<number, string> = {
 }
 
 /**
- * Resultatrapport — operational P&L report.
+ * Resultatrapport: operational P&L report.
  *
- * Lists every account in classes 3–8 with current-period and prior-period
+ * Lists every account in classes 3-8 with current-period and prior-period
  * values side by side. Unlike Resultaträkning (formal, ÅRL Bilaga 2), this
  * keeps account numbers and is meant for ongoing reconciliation, not for
  * årsbokslut/årsredovisning.
  *
- * Account 8999 is excluded — it's the year-end closing account that moves
+ * Account 8999 is excluded: it's the year-end closing account that moves
  * årets resultat into equity (2099). Including its balance would double-count
  * the result. Same exclusion as generateIncomeStatement.
  */
@@ -66,7 +66,7 @@ export async function generateResultatrapport(
   // drop the prior column entirely when the user narrows the range.
   // Same rule for a dimension filter: project codes are time-limited under
   // K2/K3 (registry start/end dates), so "this code last year" may be a
-  // different project entirely — drop the column rather than compare
+  // different project entirely: drop the column rather than compare
   // unrelated activity (#862 review).
   let priorRows: TrialBalanceRow[] = []
   let priorPeriodInfo: { start: string; end: string } | null = null
@@ -74,7 +74,7 @@ export async function generateResultatrapport(
   if (isFullPeriod) {
     // Prefer the explicit continuity chain; fall back to the period that ends
     // immediately before this one. The fallback keeps the comparison working
-    // for companies whose chain was never linked — e.g. multi-year SIE imports
+    // for companies whose chain was never linked: e.g. multi-year SIE imports
     // created before the importer started setting previous_period_id.
     let priorPeriodId: string | null = period.previous_period_id ?? null
     if (!priorPeriodId) {
@@ -132,7 +132,7 @@ function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
 
 /**
  * Sign convention: revenue (class 3) has credit normal balance, expenses
- * (class 4–7) have debit. We render every line as `credit - debit` so that
+ * (class 4-7) have debit. We render every line as `credit - debit` so that
  * revenue is positive, expenses are negative, and a positive net result
  * means profit. This matches how Fortnox and Visma present a Resultatrapport.
  */

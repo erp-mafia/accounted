@@ -5,7 +5,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/tax-deadlines/cron — annual on January 2nd 00:00.
+ * GET /api/tax-deadlines/cron: annual on January 2nd 00:00.
  * Generates the next year's tax deadlines for every company.
  */
 export const GET = withCronContext('cron.tax_deadlines', async (_request, ctx) => {

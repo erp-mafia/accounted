@@ -14,7 +14,7 @@ import { createRotRutPayoutEntry } from '@/lib/bookkeeping/rot-rut-entries'
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * The journal entry IS the accounting record here, so engine failure blocks
- * the operation (see .claude/skills/erp-api-route — payment entries block).
+ * the operation (see .claude/skills/erp-api-route, payment entries block).
  * amount defaults to decided_total, falling back to requested_total. If the
  * amount equals requested_total the request completes as 'paid'; anything
  * lower records 'partially_paid' with decided_total = amount.
@@ -63,7 +63,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // A partial settlement must follow a recorded beslut: without this guard a
     // settle with amount < requested_total on an undecided request would flip
     // it to partially_paid while bypassing the PATCH lifecycle rule that
-    // partially_paid requires decided_total — the beslut would never be
+    // partially_paid requires decided_total: the beslut would never be
     // recorded and later PATCH calls would be blocked by ALLOWED_TRANSITIONS.
     if (amount < Number(payoutRequest.requested_total) && payoutRequest.decided_total == null) {
       return errorResponseFromCode('ROT_RUT_SETTLE_INVALID_STATE', log, {
@@ -76,7 +76,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
-    // The voucher is the accounting record — engine failure must block.
+    // The voucher is the accounting record: engine failure must block.
     let journalEntryId: string
     try {
       const entry = await createRotRutPayoutEntry(supabase, companyId!, user.id, {
@@ -115,7 +115,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (updateError) {
       // The voucher exists (immutable per BFL) but the request row didn't
-      // absorb the link — surface loudly, do NOT try to unbook.
+      // absorb the link: surface loudly, do NOT try to unbook.
       log.error('rot/rut payout entry booked but request update failed', updateError, {
         journalEntryId,
         payoutRequestId: id,

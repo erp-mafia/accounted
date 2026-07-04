@@ -3,7 +3,7 @@
  * or partially) a customer invoice against an actual bank transaction.
  *
  * The lines built here are the "Inbetalning kundfaktura" path under
- * faktureringsmetoden (accrual) — Dr 1930 / Cr 1510, with a 3960/7960
+ * faktureringsmetoden (accrual): Dr 1930 / Cr 1510, with a 3960/7960
  * FX-diff line when the invoice and the bank tx are in different currencies.
  *
  * Shared between:
@@ -12,7 +12,7 @@
  *   - POST /api/transactions/[id]/match-invoice (the commit path)
  *
  * Single source of truth so the preview and the committed verifikat are
- * byte-identical. Earlier the two diverged on the cross-currency math —
+ * byte-identical. Earlier the two diverged on the cross-currency math:
  * the preview ran `resolveSekAmount(tx.amount, null, INV.currency, INV.rate)`,
  * treating the SEK tx number as if it were in the invoice's currency and
  * multiplying by the invoice's stored rate. That produced a fictitious
@@ -29,22 +29,22 @@
  *
  * # Currency model
  *
- *   tx.currency       — currency of the bank tx (almost always SEK)
- *   tx.amount         — amount in tx.currency
- *   tx.exchange_rate  — populated at ingest only when tx.currency != SEK
- *   tx.amount_sek     — pre-computed SEK at ingest for non-SEK tx
- *   invoice.currency  — currency the invoice was issued in
- *   invoice.exchange_rate — the rate at which AR was originally booked on 1510
+ *   tx.currency      : currency of the bank tx (almost always SEK)
+ *   tx.amount        : amount in tx.currency
+ *   tx.exchange_rate : populated at ingest only when tx.currency != SEK
+ *   tx.amount_sek    : pre-computed SEK at ingest for non-SEK tx
+ *   invoice.currency : currency the invoice was issued in
+ *   invoice.exchange_rate: the rate at which AR was originally booked on 1510
  *
  *   Bank-leg (1930) = always the actual SEK that hit the bank.
  *   AR-leg (1510)   = the SEK value of the customer-debt reduction at the
  *                     INVOICE's stored rate (capped to bankSek on partials
  *                     to keep 1510 in sync with invoice.remaining_amount).
  *   FX diff         = (AR-leg SEK − Bank-leg SEK); sign drives 3960 vs 7960.
- *                     Per BFL 5 kap 4–5§ every verifikat must balance to the
+ *                     Per BFL 5 kap 4-5§ every verifikat must balance to the
  *                     öre; the FX diff line is what makes the cross-currency
  *                     verifikat balance. Only emitted when the bank tx fully
- *                     clears the invoice's remaining — partials defer the
+ *                     clears the invoice's remaining: partials defer the
  *                     FX adjustment to the final settlement to avoid
  *                     prematurely zeroing 1510 while the AR row still says
  *                     partially_paid.
@@ -81,12 +81,12 @@ export interface PaymentClearingLines {
    * value goes Cr 3960).
    *
    * Sign reading (note this is the OPPOSITE of an intuitive "profit"
-   * orientation — the value here is a balance-adjustment magnitude, not a
+   * orientation: the value here is a balance-adjustment magnitude, not a
    * P&L number, because AR is the side being cleared):
    *   positive → bank received FEWER SEK than AR was booked at → kursförlust → 7960 Dr
    *   negative → bank received MORE  SEK than AR was booked at → kursvinst   → 3960 Cr
    *   |value| ≤ 0.005 → no FX diff line emitted (floating-point tolerance,
-   *                     NOT a rounding allowance per BFL 5 kap 4–5§)
+   *                     NOT a rounding allowance per BFL 5 kap 4-5§)
    *
    * If you want an intuitive "gain" number for UI display, use
    * `bankSek - arSek` (negate this field). Do not consume the raw sign
@@ -106,7 +106,7 @@ export interface PaymentClearingLines {
 
 /**
  * Build the verifikat lines for a customer-invoice payment matched against
- * a bank tx. Pure — no DB calls. Caller decides how to persist.
+ * a bank tx. Pure: no DB calls. Caller decides how to persist.
  *
  * # Same-currency
  *   Bank-leg = AR-leg = bankSek. No FX diff line.
@@ -114,13 +114,13 @@ export interface PaymentClearingLines {
  * # Cross-currency with explicit paidInInvoiceCurrency (preferred path)
  *   The caller supplies how many units of the invoice's currency this bank
  *   payment satisfies (typically computed as `bankSek / today_rate` where
- *   `today_rate` is the Riksbanken spot rate on the payment date — see
+ *   `today_rate` is the Riksbanken spot rate on the payment date: see
  *   `app/api/transactions/[id]/match-invoice/route.ts`). The helper then:
  *     arSek    = paidInInvoiceCurrency × invoice.exchange_rate (booking rate)
  *     fxDiffSek = arSek − bankSek
  *   For a partial cross-currency payment this credits 1510 by the
  *   proportional foreign amount (not the full remaining) and posts the
- *   accurate FX-diff line. The verifikat balances per BFL 5 kap 4–5§ and
+ *   accurate FX-diff line. The verifikat balances per BFL 5 kap 4-5§ and
  *   the GL stays in sync with the AR sub-ledger because both move in step.
  *
  * # Cross-currency without paidInInvoiceCurrency (fallback)
@@ -215,7 +215,7 @@ export function buildInvoicePaymentClearingLines(
   ]
 
   // Tolerance of 0.005 SEK is for floating-point equalisation only, not a
-  // rounding allowance per BFL 5 kap 4–5§. Same rationale as the balance
+  // rounding allowance per BFL 5 kap 4-5§. Same rationale as the balance
   // pre-check in gnubok_bulk_book_transactions.
   if (Math.abs(fxDiffSek) > 0.005) {
     if (fxDiffSek > 0) {
@@ -237,7 +237,7 @@ export function buildInvoicePaymentClearingLines(
     }
   }
 
-  // Öresavrundning (3740) — pure-SEK only, mutually exclusive with an FX diff.
+  // Öresavrundning (3740): pure-SEK only, mutually exclusive with an FX diff.
   // The AR leg above is already the full remaining, so 3740 balances the
   // verifikat: customer paid a sub-krona short → 3740 debit (förlust); over →
   // credit (vinst). Opposite polarity to the supplier side (AP cleared by a Dr).

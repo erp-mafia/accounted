@@ -131,8 +131,8 @@ export interface TransactionsResponse {
 
 /**
  * Strategy for how Enable Banking fetches transactions from the upstream ASPSP.
- * - 'default' — fast path, may return only the most recent window even if date_from is older
- * - 'longest' — fetch the longest available history (up to PSD2 90-day max), slower
+ * - 'default': fast path, may return only the most recent window even if date_from is older
+ * - 'longest': fetch the longest available history (up to PSD2 90-day max), slower
  *
  * When omitted, Enable Banking applies its default strategy.
  */
@@ -158,7 +158,7 @@ export interface BankTransaction {
   counterparty_account?: string
   reference?: string
   merchant_category_code?: string
-  // ISO 20022 / proprietary transaction codes — carried through so the
+  // ISO 20022 / proprietary transaction codes: carried through so the
   // description fallback can derive a meaningful Swedish label when remittance
   // text and a counterparty name are both absent. See deriveTransactionLabel.
   bank_transaction_code?: string
@@ -190,13 +190,13 @@ class TransactionsFetchError extends Error {
 
 /**
  * Normalized signatures (uppercase, non-alphanumerics stripped) of the
- * responses Enable Banking — or the upstream ASPSP via Enable Banking's
- * envelope — returns when the PSD2 session can no longer be used: the consent
+ * responses Enable Banking (or the upstream ASPSP via Enable Banking's
+ * envelope) returns when the PSD2 session can no longer be used: the consent
  * was closed, expired, or invalidated bank-side. Spelling and casing vary by
  * bank (CLOSED_SESSION, EXPIRED_SESSION, SESSION_EXPIRED / session_expired,
  * INVALID_SESSION, SESSION_NOT_FOUND, WRONG_SESSION_STATUS, and the plain
  * "Session is closed" message), so we match the whole family. A dead session
- * is unrecoverable by retrying — the user must re-authorize.
+ * is unrecoverable by retrying: the user must re-authorize.
  */
 const SESSION_DEAD_NEEDLES = [
   'CLOSEDSESSION', // CLOSED_SESSION
@@ -212,7 +212,7 @@ const SESSION_DEAD_NEEDLES = [
 /**
  * Whether a failed transactions response signals a dead PSD2 session (vs. a
  * transient error or a config-level auth failure). Only 401/403 with a
- * session-expiry signal in the body counts — a bare 401 "Unauthorized" is an
+ * session-expiry signal in the body counts: a bare 401 "Unauthorized" is an
  * app-credential problem, not a closed consent, and must NOT be misread as
  * "reconnect the bank". The match is deterministic: normalize the body and
  * test for any known session-dead needle.
@@ -346,7 +346,7 @@ export async function getASPSPs(country: string = 'SE', psuType?: 'personal' | '
  *
  * Why: several Swedish ASPSPs (notably Handelsbanken) expose Mobile BankID only
  * as a DECOUPLED method flagged hidden_method=true. When we send no auth_method,
- * Enable Banking falls back to the visible REDIRECT method — which for
+ * Enable Banking falls back to the visible REDIRECT method, which for
  * Handelsbanken *corporate* PSUs does not support Mobile BankID, so the consent
  * fails right after the user approves in the BankID app ("fel efter BankID").
  * Pinning the decoupled (Mobile BankID) method makes the flow work for both
@@ -726,7 +726,7 @@ const ASPSP_HISTORY_FALLBACK_DAYS = [90, 60, 30] as const
 /**
  * Enable Banking wraps upstream-bank failures in a generic envelope, e.g.
  * {"code":400,"message":"Error interacting with ASPSP","error":"ASPSP_ERROR"}.
- * A too-wide history window is the most common trigger — see the date-narrowing
+ * A too-wide history window is the most common trigger: see the date-narrowing
  * fallback in getAllTransactionsWithRaw.
  */
 function isAspspError(body: string): boolean {
@@ -762,14 +762,14 @@ function nextNarrowerDateFrom(
 /**
  * First-page recovery policy shared by getAllTransactions and
  * getAllTransactionsWithRaw, so the two pagination loops can't drift. Fallbacks
- * apply only to the very first request (page 0, no continuation_key) — a
+ * apply only to the very first request (page 0, no continuation_key): a
  * continuation_key is scoped to the window/strategy that produced it, so the
  * query is never rewritten mid-pagination.
  *
- *  - 'drop-strategy' — an unsupported strategy enum: retry the same window.
- *  - 'narrow'        — the ASPSP rejected the history window: retry with a
+ *  - 'drop-strategy' : an unsupported strategy enum: retry the same window.
+ *  - 'narrow'        : the ASPSP rejected the history window: retry with a
  *                      narrower date_from (the bank caps history below the ask).
- *  - 'give-up'       — nothing left to try; the caller should rethrow.
+ *  - 'give-up'       : nothing left to try; the caller should rethrow.
  */
 type FirstPageRecovery =
   | { type: 'drop-strategy' }
@@ -787,7 +787,7 @@ function planFirstPageRecovery(args: {
 }): FirstPageRecovery {
   const { status, body, page, hasContinuationKey, activeStrategy, activeDateFrom, dateTo } = args
   if (status !== 400 || page !== 0 || hasContinuationKey) return { type: 'give-up' }
-  // Drop an unsupported strategy first — preserves the full requested window.
+  // Drop an unsupported strategy first: preserves the full requested window.
   if (activeStrategy) return { type: 'drop-strategy' }
   // Then handle the ASPSP rejecting the window itself (e.g. Danske past ~90
   // days): step date_from toward date_to so a partial sync survives.

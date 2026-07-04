@@ -288,7 +288,7 @@ describe('detectDuplicatePaymentVoucher', () => {
     })
 
     // Note: while the match-invoice route only handles income, the
-    // detector itself is amount-direction agnostic — it just finds JEs
+    // detector itself is amount-direction agnostic: it just finds JEs
     // that book the same magnitude on the bank side. Callers gate by
     // direction.
     expect(result).not.toBeNull()
@@ -331,7 +331,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       error: null,
     })
     enqueue({ data: [], error: null })
-    // The caller transaction itself links the JE (defensive — shouldn't happen
+    // The caller transaction itself links the JE (defensive: shouldn't happen
     // in normal flow because we call this before the link, but a retry could).
     enqueue({ data: [{ id: 'tx-caller', journal_entry_id: 'je-caller' }], error: null })
 

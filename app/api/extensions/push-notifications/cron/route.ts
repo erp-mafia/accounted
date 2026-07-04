@@ -10,7 +10,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/extensions/push-notifications/cron — daily 09:00 UTC.
+ * GET /api/extensions/push-notifications/cron: daily 09:00 UTC.
  * Sends due tax, invoice and missing-underlag push notifications.
  */
 export const GET = withCronContext('cron.push_notifications', async (_request, ctx) => {

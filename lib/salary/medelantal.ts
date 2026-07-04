@@ -1,5 +1,5 @@
 /**
- * Medelantal anställda — time-weighted FTE average across a fiscal period.
+ * Medelantal anställda: time-weighted FTE average across a fiscal period.
  *
  * Per ÅRL 5:20 § the medelantal disclosure is the average number of
  * full-time-equivalent employees over the räkenskapsår, not a snapshot
@@ -10,7 +10,7 @@
  *
  * Inputs come from public.employees:
  *   - employment_start: required (DATE NOT NULL)
- *   - employment_end: optional (DATE) — when null, employee is still active
+ *   - employment_end: optional (DATE), when null, employee is still active
  *     on the period end date
  *   - employment_degree: 0 < degree <= 100, default 100
  *

@@ -31,7 +31,7 @@ interface Props {
 }
 
 /**
- * "Ny verifikat" as a modal — the dialog you type a manual voucher into,
+ * "Ny verifikat" as a modal: the dialog you type a manual voucher into,
  * instead of an inline tab. Wraps the standalone JournalEntryForm; the form's
  * own review/confirm dialogs stack on top of this one.
  */
@@ -51,7 +51,7 @@ export default function NewJournalEntryDialog({
         className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
         // A half-typed verifikat must survive an accidental backdrop click or a
         // stray Escape (easy to hit across multiple windows/screens, or when you
-        // only meant to dismiss a combobox dropdown). Closing is explicit — the
+        // only meant to dismiss a combobox dropdown). Closing is explicit: the
         // header X. This also stops nested popovers (AccountCombobox, date
         // pickers) and the form's own confirm dialogs from collapsing the parent
         // when they portal outside it.
@@ -66,7 +66,7 @@ export default function NewJournalEntryDialog({
         {identity.isVerified && !copyPrefill && (
           // Hand off to the assistant: it reads the underlag (the figures the
           // user often can't see), suggests accounts, and stages a balanced
-          // verifikat to approve — no copy-paste. Close the modal first so its
+          // verifikat to approve: no copy-paste. Close the modal first so its
           // focus trap doesn't fight the (non-modal) agent sheet.
           <button
             type="button"

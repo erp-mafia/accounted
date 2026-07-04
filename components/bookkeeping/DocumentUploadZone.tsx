@@ -112,7 +112,7 @@ export default function DocumentUploadZone({
         error: err,
         fileName: file.fileName,
       })
-      return { ...file, status: 'error', error: 'Uppladdning misslyckades — nätverksfel' }
+      return { ...file, status: 'error', error: 'Uppladdning misslyckades: nätverksfel' }
     }
   }, [journalEntryId])
 

@@ -5,7 +5,7 @@
  * GL-side journal lines that pair up by amount + date proximity, then apply
  * the matches (set `transactions.journal_entry_id` for confirmed pairs).
  *
- * Dry-run returns the proposed matches without applying any of them — the
+ * Dry-run returns the proposed matches without applying any of them: the
  * canonical way to preview a reconciliation before letting it write to the
  * ledger. Idempotent via mandatory Idempotency-Key.
  */
@@ -56,7 +56,7 @@ const RunResponse = z.object({
   matches: z.array(MatchOut),
   applied: z.number().int(),
   // Count of matches that failed to apply (DB error or lost an optimistic-lock
-  // race). Documented as z.array(z.string()) until 2026-07 — the lib has always
+  // race). Documented as z.array(z.string()) until 2026-07: the lib has always
   // returned a number.
   errors: z.number().int(),
 })
@@ -69,14 +69,14 @@ registerEndpoint({
   description:
     'Walks all unbooked bank transactions in the requested date range and pairs them with open GL lines (1930-side) by amount + date proximity. Applies confirmed matches by setting transactions.journal_entry_id (the GL row already exists). Dry-runnable.',
   useWhen:
-    'You want to auto-match outstanding bank transactions against existing journal entries — typically as the closing step of a sync. Dry-run first to inspect proposed matches.',
+    'You want to auto-match outstanding bank transactions against existing journal entries: typically as the closing step of a sync. Dry-run first to inspect proposed matches.',
   doNotUseFor:
-    'Creating new journal entries — this only links bank transactions to existing GL lines. Matching to invoices — use `:match-invoice` or `:match-supplier-invoice` for explicit invoice payments.',
+    'Creating new journal entries: this only links bank transactions to existing GL lines. Matching to invoices: use `:match-invoice` or `:match-supplier-invoice` for explicit invoice payments.',
   pitfalls: [
     'date_from / date_to default to the company\'s full bank history if omitted. Specify a window for predictable performance.',
     'account_number defaults to 1930. Multi-account companies must pass the BAS code of the account they are reconciling (e.g. 1932 for a EUR account), or it silently reconciles 1930.',
     'Idempotency-Key is mandatory.',
-    'A non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75 — there is no internal confidence threshold. Dry-run first and review matches.confidence before applying.',
+    'A non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75: there is no internal confidence threshold. Dry-run first and review matches.confidence before applying.',
     'The 366-day window bound only applies when BOTH date_from and date_to are set; a single-sided or absent window scans full history.',
   ],
   example: {
@@ -102,7 +102,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     try {
       rawBody = await request.json()
     } catch {
-      // Body is optional — an empty body is fine.
+      // Body is optional: an empty body is fine.
       rawBody = {}
     }
     const parsed = RunRequest.safeParse(rawBody)
@@ -121,7 +121,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Resolve the settlement account to its cash account (currency + id) so the
     // matcher scopes transactions to this exact account, not every same-currency
-    // account. The default '1930' is exempt from the existence check — it falls
+    // account. The default '1930' is exempt from the existence check: it falls
     // back to currency-only scoping, matching the status endpoint and the
     // pre-feature behaviour. A non-default unknown account is rejected.
     const accountNumber = body.account_number ?? '1930'

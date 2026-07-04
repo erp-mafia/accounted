@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
 })
 
 function fmt(amount: number): string {
-  // sv-SE thousands grouping, no decimals — typical for K2 ÅR.
+  // sv-SE thousands grouping, no decimals: typical for K2 ÅR.
   return Math.round(amount).toLocaleString('sv-SE')
 }
 
@@ -134,7 +134,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <View>
           <Text style={styles.title}>Årsredovisning</Text>
           <Text style={styles.subtitle}>
-            för räkenskapsåret {data.fiscal_period.period_start} — {data.fiscal_period.period_end}
+            för räkenskapsåret {data.fiscal_period.period_start} till {data.fiscal_period.period_end}
           </Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
           <Text style={styles.paragraph}>Organisationsnummer: {data.company.org_number}</Text>
@@ -177,7 +177,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
             <Text style={styles.colAmount}>{fmt(row.net_revenue)}</Text>
             <Text style={styles.colAmount}>{fmt(row.result_after_financial)}</Text>
             <Text style={styles.colAmount}>
-              {row.soliditet_pct === null ? '—' : row.soliditet_pct.toFixed(1)}
+              {row.soliditet_pct === null ? '-' : row.soliditet_pct.toFixed(1)}
             </Text>
           </View>
         ))}
@@ -253,7 +253,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         {data.noter.map((note) => (
           <View key={note.number} style={{ marginBottom: 16 }}>
             <Text style={{ fontFamily: 'Helvetica-Bold', marginBottom: 4 }}>
-              Not {note.number} — {note.title}
+              Not {note.number}: {note.title}
             </Text>
             <Text style={styles.noteBody}>{note.body}</Text>
           </View>
@@ -285,20 +285,20 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
       </Page>
 
       {/*
-        Fastställelseintyg — required by ÅRL 8 kap 3 § for Bolagsverket
+        Fastställelseintyg: required by ÅRL 8 kap 3 § for Bolagsverket
         filing. The intyg confirms that the income statement and balance
         sheet have been adopted at the AGM (årsstämma) and reports the
         AGM's resolution on resultatdisposition. Without this page the
-        document cannot be filed as-is — Bolagsverket rejects submissions
+        document cannot be filed as-is: Bolagsverket rejects submissions
         that lack the intyg.
 
         Signer label is "Styrelseledamot (närvarande vid stämman)" per
-        ÅRL 8:3 → 6:6-7 §§ — a VD who is not also a styrelseledamot cannot
+        ÅRL 8:3 → 6:6-7 §§: a VD who is not also a styrelseledamot cannot
         sign the fastställelseintyg. Conflating the two roles ("VD") would
         render the certificate defective.
 
         Body refers to the AGM's RESOLUTION (stämmobeslut), not the board's
-        proposal — the board proposes in förvaltningsberättelsen but the
+        proposal; the board proposes in förvaltningsberättelsen but the
         AGM votes, and it is the vote that must be certified.
       */}
       <Page size="A4" style={styles.page}>

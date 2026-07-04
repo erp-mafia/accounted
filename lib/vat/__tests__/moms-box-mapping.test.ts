@@ -147,7 +147,7 @@ describe('ACCOUNT_TO_BOX ↔ ACCOUNT_RUTA alignment', () => {
     for (const account of Object.keys(ACCOUNT_TO_BOX)) {
       if (allowedExtras.has(account)) continue
       if (!ACCOUNT_RUTA[account]) {
-        drift.push(`extra in ACCOUNT_TO_BOX: ${account} (not in ACCOUNT_RUTA — consider adding to declaration mapping or to allowedExtras)`)
+        drift.push(`extra in ACCOUNT_TO_BOX: ${account} (not in ACCOUNT_RUTA: consider adding to declaration mapping or to allowedExtras)`)
       }
     }
     expect(drift).toEqual([])

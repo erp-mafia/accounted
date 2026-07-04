@@ -71,7 +71,7 @@ export default function QuickReviewDialog({
   const [showUploadZone, setShowUploadZone] = useState(false)
   const [showVatDropdown, setShowVatDropdown] = useState(false)
   // Mirror of `transaction` so we can patch in a freshly-fetched SEK conversion
-  // before the user confirms — the verifikation must always be in SEK and the
+  // before the user confirms: the verifikation must always be in SEK and the
   // engine reads these fields straight off the transaction row.
   const [enrichedTx, setEnrichedTx] = useState<TransactionWithInvoice | null>(transaction)
   const [rateLoading, setRateLoading] = useState(false)
@@ -79,7 +79,7 @@ export default function QuickReviewDialog({
 
   const preAttachedDocumentId = transaction?.document_id ?? null
 
-  // Handle account changes — clear VAT for liability/equity accounts (class 2)
+  // Handle account changes: clear VAT for liability/equity accounts (class 2)
   const handleAccountChange = useCallback((account: string) => {
     setAccountOverride(account)
     if (account.startsWith('2')) {
@@ -162,7 +162,7 @@ export default function QuickReviewDialog({
   const isTemplateBooking = !!templateId || isCounterpartyTemplate
   const isLiabilityAccount = accountOverride.startsWith('2')
   // For non-SEK transactions, the verifikation and the headline must show
-  // the SEK-converted total — the mall/category booking always posts in SEK.
+  // the SEK-converted total: the mall/category booking always posts in SEK.
   const sekAmount = resolveSekAmount(
     tx.amount,
     tx.amount_sek,
@@ -173,7 +173,7 @@ export default function QuickReviewDialog({
   const sekConversionMissing = isForeign && (tx.amount_sek == null || tx.exchange_rate == null)
 
   // Dimensions carried by the counterparty template's line pattern (dimensions
-  // PR7). Business lines may each carry a {sie_dim_no: code} bag — merge them
+  // PR7). Business lines may each carry a {sie_dim_no: code} bag: merge them
   // into one compact display label ("KS01 · P001", dim-number order). This is
   // display-only: booking applies the pattern's bags server-side.
   const patternDims: Record<string, string> = {}
@@ -229,7 +229,7 @@ export default function QuickReviewDialog({
     } catch {
       setError(t('generic_error'))
     } finally {
-      // Always reset isProcessing — without this, an onConfirm that resolves
+      // Always reset isProcessing: without this, an onConfirm that resolves
       // with null (e.g. server returned a structured 4xx error like
       // ACCOUNTS_NOT_IN_CHART) leaves the dialog frozen because the
       // <Dialog onOpenChange> below disables backdrop/ESC while processing.
@@ -378,7 +378,7 @@ export default function QuickReviewDialog({
           </div>
         )}
 
-        {/* Journal entry preview — hidden until we have a SEK conversion;
+        {/* Journal entry preview: hidden until we have a SEK conversion;
             otherwise we'd render a verifikation in the wrong currency. */}
         {!sekConversionMissing && !rateLoading && (
           <JournalEntryPreview
@@ -399,7 +399,7 @@ export default function QuickReviewDialog({
           />
         )}
 
-        {/* Account & VAT — hidden for template bookings (accounts defined by the template) */}
+        {/* Account & VAT: hidden for template bookings (accounts defined by the template) */}
         {!isTemplateBooking && (
           <>
             <div>
@@ -446,7 +446,7 @@ export default function QuickReviewDialog({
           </>
         )}
 
-        {/* No pre-attached document — let the user upload one. (When a document
+        {/* No pre-attached document: let the user upload one. (When a document
             IS pre-attached it's shown in the left preview column instead.) */}
         {!preAttachedDocumentId && (
           <div className="rounded-lg border">

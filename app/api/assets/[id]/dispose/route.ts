@@ -32,7 +32,7 @@ const DisposeAssetSchema = z
     jamkning_remaining_months: z.number().int().nonnegative().optional(),
     jamkning_total_months: z.number().int().positive().optional(),
     jamkning_original_input_vat: z.number().nonnegative().optional(),
-    // accumulated_depreciation is intentionally NOT accepted from the client —
+    // accumulated_depreciation is intentionally NOT accepted from the client:
     // disposeAsset sums depreciation_schedules server-side so callers cannot
     // inflate the book-value calculation.
   })

@@ -13,12 +13,12 @@
  * output. UI callers should pass the active locale from useLocale() / getLocale().
  *
  * Specific domain phrases (locked period, unbalanced voucher, etc.) remain
- * Swedish for now — those refer to statutory accounting concepts and English
+ * Swedish for now: those refer to statutory accounting concepts and English
  * users will still see them on Skatteverket-bound surfaces.
  */
 
 import { formatCurrency } from '@/lib/utils'
-// Pure module (no next/server) — safe for the client bundles this file lives in.
+// Pure module (no next/server): safe for the client bundles this file lives in.
 import { formatDimensionValidationIssues } from '@/lib/bookkeeping/dimension-errors'
 import { getErrorEntry } from './structured-errors'
 
@@ -124,11 +124,11 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   ],
   [
     /Cannot delete voucher in a closed fiscal period/i,
-    'Verifikationen kan inte raderas — räkenskapsåret är stängt.',
+    'Verifikationen kan inte raderas: räkenskapsåret är stängt.',
   ],
   [
     /Cannot delete voucher in a locked fiscal period/i,
-    'Verifikationen kan inte raderas — perioden är låst.',
+    'Verifikationen kan inte raderas: perioden är låst.',
   ],
   [
     /Cannot delete: other entries reference this voucher/i,
@@ -289,7 +289,7 @@ export function getErrorMessage(
 
       // For English UI, return the registry's English message for any known
       // code instead of falling through to the Swedish branches below (which
-      // ignored locale — English users were shown Swedish prose). The Swedish
+      // ignored locale: English users were shown Swedish prose). The Swedish
       // path is left entirely unchanged; codes absent from the registry still
       // fall through. The dynamic branches (amounts / lock date / reason) keep
       // owning Swedish display.
@@ -375,10 +375,10 @@ export function getErrorMessage(
       if (structured.code === 'MEANINGLESS_CORRECTION') {
         const details = structured.details as { reason?: string } | undefined
         if (details?.reason === 'no_date_change') {
-          return 'Det nya datumet är samma som det nuvarande — det finns inget att flytta.'
+          return 'Det nya datumet är samma som det nuvarande: det finns inget att flytta.'
         }
         if (details?.reason === 'identical_to_original') {
-          return 'Rättelsen är identisk med originalverifikationen — inget har ändrats.'
+          return 'Rättelsen är identisk med originalverifikationen: inget har ändrats.'
         }
         return 'Rättelsen saknar ekonomisk innebörd: varje konto netto till noll. En rättelse måste beskriva en faktisk affärshändelse (BFL 5 kap. 5 §).'
       }
@@ -405,7 +405,7 @@ export function getErrorMessage(
     // Accumulated per-item validation list from routes that collect several
     // problems before responding, e.g. the salary approve route:
     //   { error: 'Valideringsfel …', details: ['Tomas Tysén: Bankuppgifter saknas …', …] }
-    // Surface the specific reasons — otherwise this shape falls all the way
+    // Surface the specific reasons: otherwise this shape falls all the way
     // through to the generic HTTP-400 message and the user learns nothing.
     if (
       Array.isArray(obj.details) &&

@@ -15,7 +15,7 @@ export type CustomDomainResult<T> =
   | { ok: false; status: number; error: string }
 
 // Public mailbox providers a company can never own. DNS verification is the
-// real ownership gate — this list only exists to fail fast with a clear
+// real ownership gate: this list only exists to fail fast with a clear
 // message instead of a claim that can never verify.
 const PUBLIC_EMAIL_DOMAINS = new Set([
   'gmail.com',
@@ -41,8 +41,8 @@ const PUBLIC_EMAIL_DOMAINS = new Set([
   'passagen.se',
 ])
 
-// Accepts what users actually paste — "Faktura.Hansbolag.SE.", a full URL, or
-// an email address — and reduces it to a lowercased, punycoded hostname.
+// Accepts what users actually paste ("Faktura.Hansbolag.SE.", a full URL, or
+// an email address) and reduces it to a lowercased, punycoded hostname.
 // Returns null when no valid hostname can be extracted.
 export function normalizeInboundDomain(raw: string): string | null {
   let value = String(raw ?? '').trim().toLowerCase()
@@ -66,7 +66,7 @@ function isValidHostname(domain: string): boolean {
   const labels = domain.split('.')
   if (labels.length < 2) return false
   if (!labels.every((l) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(l))) return false
-  // TLD must contain a letter — rejects IP addresses and all-numeric TLDs.
+  // TLD must contain a letter: rejects IP addresses and all-numeric TLDs.
   return /[a-z]/.test(labels[labels.length - 1])
 }
 
@@ -85,7 +85,7 @@ export function validateClaimableDomain(domain: string): string | null {
     const appHost = new URL(process.env.NEXT_PUBLIC_APP_URL ?? '').hostname.toLowerCase()
     if (appHost) reserved.push(appHost)
   } catch {
-    // No parseable app URL — nothing extra to reserve.
+    // No parseable app URL: nothing extra to reserve.
   }
 
   for (const r of reserved) {
@@ -97,7 +97,7 @@ export function validateClaimableDomain(domain: string): string | null {
 }
 
 // `temporary_failure` is a runtime status the Resend API can still return but
-// which the SDK's DomainStatus type dropped in 6.16.0 — accept it explicitly.
+// which the SDK's DomainStatus type dropped in 6.16.0: accept it explicitly.
 export function mapResendDomainStatus(
   status: DomainStatus | 'temporary_failure',
 ): CompanyInboundDomainStatus {
@@ -120,7 +120,7 @@ export function mapResendDomainStatus(
 // A freshly-created domain has no DNS yet, so it is always unverified. An
 // ADOPTED orphan (left by a crashed earlier claim, or freed by a deleted
 // company whose Resend domain was never cleaned up) may still report 'verified'
-// from a previous owner — NEVER inherit that. Force the new claimant to re-prove
+// from a previous owner: NEVER inherit that. Force the new claimant to re-prove
 // DNS control via checkCustomDomainVerification() before any mail routes;
 // otherwise a different tenant could re-claim a freed domain and silently
 // inherit routing for mail the original owner's MX still delegates to Resend.
@@ -159,7 +159,7 @@ export async function getCustomDomain(
 
 // A claim that crashed between the Resend create and the row update leaves an
 // orphan domain in our Resend account. On the next claim attempt the create
-// fails ("already exists") — adopt the existing Resend domain instead of
+// fails ("already exists"): adopt the existing Resend domain instead of
 // dead-ending the user. Safe because removeCustomDomain() never deletes the
 // DB row while the domain still exists in Resend, so an adoptable domain can
 // never belong to another live company_inbound_domains row.
@@ -170,7 +170,7 @@ async function findExistingResendDomain(resend: Resend, domain: string): Promise
       after ? { limit: 100, after } : { limit: 100 }
     )
     if (error || !data) return null
-    // `domain` is already normalized (lowercased, punycoded) — run Resend's
+    // `domain` is already normalized (lowercased, punycoded): run Resend's
     // name through the same normalization so an IDN stored in unicode form
     // still matches.
     const hit = data.data.find((d) => (normalizeInboundDomain(d.name) ?? d.name.toLowerCase()) === domain)
@@ -229,7 +229,7 @@ export async function claimCustomDomain(
   try {
     const resend = getResend()
 
-    // Receiving only — we never send from the customer's domain, and skipping
+    // Receiving only: we never send from the customer's domain, and skipping
     // the sending capability keeps the DNS record list minimal.
     let resendDomainId: string
     let wasAdopted = false
@@ -249,7 +249,7 @@ export async function claimCustomDomain(
           error: `Kunde inte registrera domänen hos e-postleverantören: ${created.error?.message ?? 'okänt fel'}`,
         }
       }
-      // Never adopt a domain this feature didn't create — e.g. the platform's
+      // Never adopt a domain this feature didn't create: e.g. the platform's
       // own outbound (sending) domains, which live in the same Resend account.
       if (!isReceivingOnlyProfile(adopted.capabilities)) {
         await rollback()
@@ -278,7 +278,7 @@ export async function claimCustomDomain(
       }
     }
 
-    // Adopted orphans never inherit 'verified' — see resolveClaimedDomainStatus.
+    // Adopted orphans never inherit 'verified': see resolveClaimedDomainStatus.
     const status = resolveClaimedDomainStatus(wasAdopted, fetched.data.status)
     const { data: updated, error: updateError } = await supabase
       .from('company_inbound_domains')
@@ -335,7 +335,7 @@ export async function checkCustomDomainVerification(
       }
     }
 
-    // A domain without the receiving capability can never take inbound mail —
+    // A domain without the receiving capability can never take inbound mail:
     // Resend's 'verified' there only reflects sending records. Fail loudly
     // instead of ever flipping such a row to verified (guards legacy rows
     // bound to a sending domain before the adopt-profile check existed).
@@ -376,7 +376,7 @@ export async function checkCustomDomainVerification(
 }
 
 // Remove the custom domain: delete it from Resend first, then the row.
-// Order matters — the row is only deleted once the domain is confirmed gone
+// Order matters: the row is only deleted once the domain is confirmed gone
 // from Resend (or was never there). Deleting the row while a verified domain
 // lingers in our Resend account would let a later claim adopt a domain whose
 // MX still receives someone else's mail.
@@ -393,7 +393,7 @@ export async function removeCustomDomain(
       // Only delete Resend domains this feature created (receiving-only). A
       // row bound to anything else (pre-guard legacy, e.g. an outbound
       // sending domain) must never take production infrastructure down with
-      // it — skip the Resend removal and just drop the row. Safe, because
+      // it: skip the Resend removal and just drop the row. Safe, because
       // the adopt path refuses non-receiving-only domains, so the leftover
       // Resend domain is not adoptable by another company.
       const fetched = await resend.domains.get(row.resend_domain_id)
@@ -435,7 +435,7 @@ export async function removeCustomDomain(
 
 // Webhook-side lookup: given the recipient domains of an inbound email,
 // return the owning company for the first verified match (recipient order
-// preserved). Catch-all by design — any local part on a verified domain
+// preserved). Catch-all by design: any local part on a verified domain
 // routes to the company, so a supplier typing fakturor@ instead of faktura@
 // still lands instead of silently vanishing (Resend has already accepted the
 // message at SMTP; there is no bounce path).
@@ -481,12 +481,12 @@ export async function applyDomainStatusFromWebhook(
 
   const status = mapResendDomainStatus(event.status as DomainStatus)
 
-  // The event's 'verified' is the domain's mixed sending/receiving status —
+  // The event's 'verified' is the domain's mixed sending/receiving status:
   // it carries no capability breakdown, so it can reflect sending-only
   // records. Mirror checkCustomDomainVerification: confirm the receiving
   // capability with Resend before ever flipping a row to verified. On a
   // failed lookup or a sending-only profile, keep the stored status (the
-  // manual "Kontrollera igen" path remains available) — fail closed, never
+  // manual "Kontrollera igen" path remains available): fail closed, never
   // route inbound mail off an unproven capability.
   if (status === 'verified') {
     let receivingConfirmed = false

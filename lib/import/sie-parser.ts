@@ -26,7 +26,7 @@ import type {
   ValidationResult,
 } from './types'
 
-// CP437 to UTF-8 mapping — full 0x80-0x9F range
+// CP437 to UTF-8 mapping: full 0x80-0x9F range
 // CP437 was the standard encoding for DOS/early Windows (used by SIE #FORMAT PC8)
 const CP437_MAP: Record<number, string> = {
   // 0x80-0x8F
@@ -139,7 +139,7 @@ export function detectEncoding(buffer: ArrayBuffer): SIEEncoding {
   if (cp437Count > win1252Count) return 'cp437'
   if (win1252Count > 0) return 'windows1252'
 
-  // Pure ASCII (no high bytes) — UTF-8 is a superset of ASCII
+  // Pure ASCII (no high bytes): UTF-8 is a superset of ASCII
   return 'utf8'
 }
 
@@ -346,7 +346,7 @@ function splitSIELine(line: string): string[] {
 }
 
 /**
- * Parse a #TRANS object list — `{1 "KS01" 6 "P001"}` — into an SIE dim
+ * Parse a #TRANS object list (`{1 "KS01" 6 "P001"}`) into an SIE dim
  * number → object code map. The list arrives as ONE field thanks to the
  * brace-aware splitter; the inner content is itself space-separated with
  * SIE quoting, so it re-runs through splitSIELine. Returns undefined for an
@@ -374,7 +374,7 @@ function parseObjectList(
       addIssue(issues, 'warning', lineNum, `Ogiltigt objektpar i objektlista: ${dimNoRaw} ${code}`, 'TRANS')
       continue
     }
-    // Canonical numeric key ('01' → '1') — matches normalizeLineDimensions.
+    // Canonical numeric key ('01' → '1'): matches normalizeLineDimensions.
     dims[String(dimNo)] = code
   }
   return Object.keys(dims).length > 0 ? dims : undefined
@@ -580,7 +580,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           const amountStr = fields[3]
 
           if (!amountStr || amountStr.trim() === '') {
-            addIssue(issues, 'warning', lineNum, 'Belopp saknas i #IB — raden hoppas över', tag)
+            addIssue(issues, 'warning', lineNum, 'Belopp saknas i #IB: raden hoppas över', tag)
             break
           }
 
@@ -600,7 +600,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           const amountStr = fields[3]
 
           if (!amountStr || amountStr.trim() === '') {
-            addIssue(issues, 'warning', lineNum, 'Belopp saknas i #UB — raden hoppas över', tag)
+            addIssue(issues, 'warning', lineNum, 'Belopp saknas i #UB: raden hoppas över', tag)
             break
           }
 
@@ -620,7 +620,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           const amountStr = fields[3]
 
           if (!amountStr || amountStr.trim() === '') {
-            addIssue(issues, 'warning', lineNum, 'Belopp saknas i #RES — raden hoppas över', tag)
+            addIssue(issues, 'warning', lineNum, 'Belopp saknas i #RES: raden hoppas över', tag)
             break
           }
 
@@ -658,7 +658,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
               currentVoucher.signature = parseStringField(fields[6])
             }
           } else {
-            addIssue(issues, 'error', lineNum, 'Ogiltig verifikationsdefinition — nummer eller datum kunde inte tolkas', tag)
+            addIssue(issues, 'error', lineNum, 'Ogiltig verifikationsdefinition: nummer eller datum kunde inte tolkas', tag)
           }
           break
         }
@@ -675,11 +675,11 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           // supplementary history. We skip RTRANS/BTRANS to avoid double-counting
           // which would make balanced vouchers appear unbalanced.
           if (!currentVoucher) {
-            addIssue(issues, 'error', lineNum, `#${tag} utanför verifikationsblock (#VER) — filen kan vara skadad`, tag)
+            addIssue(issues, 'error', lineNum, `#${tag} utanför verifikationsblock (#VER): filen kan vara skadad`, tag)
             break
           }
 
-          // Skip RTRANS/BTRANS — they are correction audit trail, not final state
+          // Skip RTRANS/BTRANS: they are correction audit trail, not final state
           if (tag === 'RTRANS' || tag === 'BTRANS') {
             break
           }
@@ -688,7 +688,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           let fieldIndex = 1
           const account = parseStringField(fields[fieldIndex++])
 
-          // Object list (single field thanks to brace-aware splitting) —
+          // Object list (single field thanks to brace-aware splitting):
           // dimension tags like {1 "KS01" 6 "P001"}. Parsed onto the line so
           // import is lossless (dimensions plan PR5).
           let objectListRaw: string | null = null
@@ -699,7 +699,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
           const transAmountStr = fields[fieldIndex]
           if (!transAmountStr || transAmountStr.trim() === '') {
-            addIssue(issues, 'warning', lineNum, `Belopp saknas i #${tag} — raden hoppas över`, tag)
+            addIssue(issues, 'warning', lineNum, `Belopp saknas i #${tag}: raden hoppas över`, tag)
             break
           }
 
@@ -742,7 +742,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           if (!isNaN(dimNo) && dimNo >= 1) {
             dimensions.push({ sieDimNo: dimNo, name: name || '' })
           } else {
-            addIssue(issues, 'warning', lineNum, 'Ogiltig dimensionsdefinition — numret kunde inte tolkas', tag)
+            addIssue(issues, 'warning', lineNum, 'Ogiltig dimensionsdefinition: numret kunde inte tolkas', tag)
           }
           break
         }
@@ -755,7 +755,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           if (!isNaN(dimNo) && dimNo >= 1 && !isNaN(parent) && parent >= 1) {
             dimensions.push({ sieDimNo: dimNo, name: name || '', parentSieDimNo: parent })
           } else {
-            addIssue(issues, 'warning', lineNum, 'Ogiltig underdimension — nummer eller överdimension kunde inte tolkas', tag)
+            addIssue(issues, 'warning', lineNum, 'Ogiltig underdimension: nummer eller överdimension kunde inte tolkas', tag)
           }
           break
         }
@@ -768,7 +768,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           if (!isNaN(dimNo) && dimNo >= 1 && code) {
             dimensionValues.push({ sieDimNo: dimNo, code, name: name || code })
           } else {
-            addIssue(issues, 'warning', lineNum, 'Ogiltigt objekt — dimension eller kod kunde inte tolkas', tag)
+            addIssue(issues, 'warning', lineNum, 'Ogiltigt objekt: dimension eller kod kunde inte tolkas', tag)
           }
           break
         }
@@ -776,13 +776,13 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         default:
           // Unknown tag - add info issue for notable ones. OIB/OUB (per-object
           // opening/closing balances) are counted and surfaced as ONE info
-          // issue below — dimension reporting is P&L-only in v1, so
+          // issue below: dimension reporting is P&L-only in v1, so
           // object-level balance records have no consumer yet, but dropping
           // them must never be silent (#866 review).
           if (tag === 'OIB' || tag === 'OUB') {
             objectBalanceCount++
           } else if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
-            addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag} — ignoreras`, tag)
+            addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag}, ignoreras`, tag)
           }
       }
     } catch (error) {
@@ -823,7 +823,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   // look empty. Historically a tab-separator or encoding mismatch could swallow
   // all balance/voucher records without any visible signal.
   //
-  // Suppressed when per-record 'error' issues already exist for the same tag —
+  // Suppressed when per-record 'error' issues already exist for the same tag:
   // in that case the parser already pinpointed the root cause (e.g. malformed
   // verification definition), so the generic "check separator/encoding" hint
   // would be misleading.
@@ -836,7 +836,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       issues,
       'warning',
       0,
-      `${rawIBCount} #IB-rader hittades men inga ingående saldon kunde tolkas — kontrollera fältavskiljare och teckenkodning`,
+      `${rawIBCount} #IB-rader hittades men inga ingående saldon kunde tolkas: kontrollera fältavskiljare och teckenkodning`,
       'IB'
     )
   }
@@ -845,7 +845,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       issues,
       'warning',
       0,
-      `${rawVERCount} #VER-rader hittades men inga verifikationer kunde tolkas — kontrollera fältavskiljare och teckenkodning`,
+      `${rawVERCount} #VER-rader hittades men inga verifikationer kunde tolkas: kontrollera fältavskiljare och teckenkodning`,
       'VER'
     )
   }
@@ -857,7 +857,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       issues,
       'info',
       0,
-      `${objectBalanceCount} objektbalansrader (#OIB/#OUB) hoppades över — balanser per objekt stöds inte ännu`,
+      `${objectBalanceCount} objektbalansrader (#OIB/#OUB) hoppades över: balanser per objekt stöds inte ännu`,
       'OIB'
     )
   }
@@ -870,7 +870,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       issues,
       'info',
       0,
-      `Filen innehåller dimensionsdata (kostnadsställen/projekt): ${taggedLineCount} taggade rader — dimensionerna följer med importen`,
+      `Filen innehåller dimensionsdata (kostnadsställen/projekt): ${taggedLineCount} taggade rader, dimensionerna följer med importen`,
       'DIM'
     )
   }
@@ -908,7 +908,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 export const OPENING_BALANCE_DESCRIPTION_RE = /ing[åa]ende balans|ing[åa]ende saldo|opening balance/i
 
 /**
- * Vouchers mentioning share capital are never treated as opening balances —
+ * Vouchers mentioning share capital are never treated as opening balances:
  * a share-capital deposit dated on the FY start is a real bank movement.
  */
 export const SHARE_CAPITAL_DESCRIPTION_RE = /aktiekapital/i
@@ -924,7 +924,7 @@ export function isBalanceSheetAccount(accountNumber: string): boolean {
 /**
  * Format a Date to "YYYY-MM-DD" using LOCAL components.
  * parseSIEDate() builds local-time Dates, so toISOString() would shift the
- * day across the UTC boundary in non-UTC timezones — never use it here.
+ * day across the UTC boundary in non-UTC timezones: never use it here.
  */
 function formatLocalDate(date: Date): string {
   const year = date.getFullYear()
@@ -943,7 +943,7 @@ function formatLocalDate(date: Date): string {
  * source account numbers with no knowledge of account mappings, so a
  * candidate containing an unmapped line still counts here even though the
  * importer would later skip that voucher as unmapped. In that residual case
- * no IB is created at all — the user falls back to the manual
+ * no IB is created at all: the user falls back to the manual
  * "Märk som ingående balans" action in Bankavstämning.
  */
 export function hasOpeningBalanceVoucherCandidate(parsed: ParsedSIEFile): boolean {
@@ -963,19 +963,19 @@ export function hasOpeningBalanceVoucherCandidate(parsed: ParsedSIEFile): boolea
 /**
  * Resolve the opening balances the import should actually book (issue #675).
  *
- * Some systems export no #IB 0 records at all — the current year's IB exists
+ * Some systems export no #IB 0 records at all: the current year's IB exists
  * only implicitly via the SIE continuity invariant IB(year 0) = UB(year -1).
  * Every IB consumer goes through this helper so the precedence below is the
  * single source of truth:
  *
- *   1. Explicit #IB 0 records — trusted as-is, never merged with #UB -1.
- *   2. An opening-balance #VER candidate — the voucher itself serves as IB
+ *   1. Explicit #IB 0 records: trusted as-is, never merged with #UB -1.
+ *   2. An opening-balance #VER candidate: the voucher itself serves as IB
  *      during voucher import (tagged source_type 'opening_balance');
  *      deriving from #UB -1 as well would double-count every
  *      balance-sheet account.
  *   3. #UB -1 records, re-labeled to yearIndex 0 and filtered to
  *      balance-sheet accounts (result accounts must always open at zero).
- *   4. Nothing — the file genuinely carries no opening balances.
+ *   4. Nothing: the file genuinely carries no opening balances.
  */
 export function getEffectiveOpeningBalances(parsed: ParsedSIEFile): {
   balances: SIEBalance[]
@@ -1011,17 +1011,17 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
 
   // Check for SIE type
   if (!parsed.header.sieType) {
-    errors.push('SIE-typ saknas (#SIETYP). Filen kanske inte är en giltig SIE-fil — kontrollera att du exporterat i rätt format.')
+    errors.push('SIE-typ saknas (#SIETYP). Filen kanske inte är en giltig SIE-fil: kontrollera att du exporterat i rätt format.')
   }
 
   // Check for company info
   if (!parsed.header.companyName) {
-    warnings.push('Företagsnamn saknas (#FNAMN) — vanligtvis ofarligt men bör kontrolleras')
+    warnings.push('Företagsnamn saknas (#FNAMN): vanligtvis ofarligt men bör kontrolleras')
   }
 
   // Check for fiscal year
   if (parsed.header.fiscalYears.length === 0) {
-    errors.push('Inget räkenskapsår definierat (#RAR). Filen saknar information om vilken period bokföringen gäller — kontrollera att exporten inkluderar räkenskapsårsdata.')
+    errors.push('Inget räkenskapsår definierat (#RAR). Filen saknar information om vilken period bokföringen gäller: kontrollera att exporten inkluderar räkenskapsårsdata.')
   }
 
   // Check for accounts
@@ -1029,13 +1029,13 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
     warnings.push('Inga konton hittades (#KONTO). Om filen bara innehåller saldon (SIE1) är detta normalt.')
   }
 
-  // Warn if non-BAS kontoplan declared — mapping logic assumes BAS number ranges
+  // Warn if non-BAS kontoplan declared: mapping logic assumes BAS number ranges
   if (parsed.header.kontoPlanType) {
     const planType = parsed.header.kontoPlanType.toUpperCase()
     const isBAS = planType.startsWith('BAS') || planType === 'EUBAS' || planType === 'EU-BAS'
     if (!isBAS) {
       warnings.push(
-        `Kontoplanstyp "${parsed.header.kontoPlanType}" är inte BAS-baserad. Automatisk kontomappning kan bli felaktig — granska alla mappningar manuellt i nästa steg.`
+        `Kontoplanstyp "${parsed.header.kontoPlanType}" är inte BAS-baserad. Automatisk kontomappning kan bli felaktig: granska alla mappningar manuellt i nästa steg.`
       )
     }
   }
@@ -1087,13 +1087,13 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   }
 
   // Check opening balance is balanced (for balance sheet accounts).
-  // Uses the effective set so files without #IB 0 — where IB is derived from
-  // #UB -1 (issue #675) — still get the 2099-adjustment heads-up.
+  // Uses the effective set so files without #IB 0 (where IB is derived from
+  // #UB -1, issue #675) still get the 2099-adjustment heads-up.
   const effectiveIB = getEffectiveOpeningBalances(parsed)
 
   if (effectiveIB.derivedFromPriorYearUB) {
     warnings.push(
-      'Filen saknar ingående balanser (#IB) för aktuellt räkenskapsår — de härleds från föregående års utgående balans (#UB -1) vid import.'
+      'Filen saknar ingående balanser (#IB) för aktuellt räkenskapsår: de härleds från föregående års utgående balans (#UB -1) vid import.'
     )
   }
 

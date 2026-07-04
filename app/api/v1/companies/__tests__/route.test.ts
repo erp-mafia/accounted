@@ -1,5 +1,5 @@
 /**
- * Integration tests for GET /api/v1/companies — the list-companies endpoint.
+ * Integration tests for GET /api/v1/companies: the list-companies endpoint.
  *
  * Regression coverage for #781: this is the only AUTHENTICATED static route on
  * the v1 surface (no `[companyId]` segment), so Next.js 16 invokes its handler
@@ -104,7 +104,7 @@ beforeEach(() => {
 })
 
 describe('GET /api/v1/companies', () => {
-  it('returns 200 (not 500) for a static-route context where params is undefined — regression #781', async () => {
+  it('returns 200 (not 500) for a static-route context where params is undefined: regression #781', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }),
     )

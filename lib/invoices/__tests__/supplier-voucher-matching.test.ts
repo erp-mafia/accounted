@@ -10,7 +10,7 @@ import {
 import { eventBus } from '@/lib/events/bus'
 
 // ============================================================
-// validateVoucherForSupplierInvoiceLink — happy path + rejects
+// validateVoucherForSupplierInvoiceLink: happy path + rejects
 // ============================================================
 
 describe('validateVoucherForSupplierInvoiceLink', () => {
@@ -34,7 +34,7 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
         currency: 'SEK',
       }),
     )
-    enqueue({ data: null }) // unused — short-circuits before any query
+    enqueue({ data: null }) // unused, short-circuits before any query
     const result = await validateVoucherForSupplierInvoiceLink(
       supabase as never,
       'company-1',
@@ -102,7 +102,7 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
         company_id: 'company-1',
       },
     })
-    // journal_entry_lines — no 2440 line
+    // journal_entry_lines: no 2440 line
     enqueue({
       data: [
         { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
@@ -142,7 +142,7 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
         company_id: 'company-1',
       },
     })
-    // 5 000 debit on 2440 — overshoots a 1 000 invoice
+    // 5 000 debit on 2440: overshoots a 1 000 invoice
     enqueue({
       data: [
         { account_number: '2440', debit_amount: 5000, credit_amount: 0, currency: 'SEK' },
@@ -192,7 +192,7 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
         { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
       ],
     })
-    // existingLinks lookup — none
+    // existingLinks lookup: none
     enqueue({ data: [], error: null })
     const result = await validateVoucherForSupplierInvoiceLink(
       supabase as never,
@@ -294,7 +294,7 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
 })
 
 // ============================================================
-// linkSupplierInvoiceToVoucher — end-to-end advancement
+// linkSupplierInvoiceToVoucher: end-to-end advancement
 // ============================================================
 
 describe('linkSupplierInvoiceToVoucher', () => {

@@ -6,7 +6,7 @@ import {
   type SearchableAccount,
 } from '../account-search'
 
-// Synthetic fixtures — `active` is a minimal chart, `catalog` is the full BAS
+// Synthetic fixtures: `active` is a minimal chart, `catalog` is the full BAS
 // superset (and includes the active rows, as the real catalog does).
 const active: SearchableAccount[] = [
   { account_number: '1930', account_name: 'Företagskonto', account_class: 1, description: 'Företagets huvudsakliga bankkonto.' },

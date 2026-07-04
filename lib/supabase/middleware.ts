@@ -53,7 +53,7 @@ export async function updateSession(request: NextRequest) {
   // verified (AAL1) cookie session could reach them on the hosted product.
   // Gate ONLY cookie sessions. Bearer-auth SURFACES (/api/v1, the MCP
   // endpoint) and the AAL1 escape-hatch / OAuth routes pass straight through
-  // (see apiPathSkipsMfaGate) — header presence alone never skips the gate,
+  // (see apiPathSkipsMfaGate): header presence alone never skips the gate,
   // since the header is attacker-controlled and cookie-authenticated routes
   // ignore it. Pure Bearer callers (cron, webhooks) carry no cookie session,
   // so the `user` guard below already excludes them. Everything else about
@@ -75,12 +75,12 @@ export async function updateSession(request: NextRequest) {
 
   // If the refresh token is stale/invalid, clear the session cookies
   // so the browser stops sending them on every request.
-  // Skip on auth routes — the callback needs PKCE cookies intact.
+  // Skip on auth routes: the callback needs PKCE cookies intact.
   if (authError && !user && !pathname.startsWith('/auth')) {
     await supabase.auth.signOut()
   }
 
-  // Invite pages — accessible to everyone, signed in or not. A user who
+  // Invite pages: accessible to everyone, signed in or not. A user who
   // already has an account and is signed in should still be able to land on
   // /invite/[token] to accept the invite with one click (see
   // app/invite/[token]/page.tsx). If we bounce them to '/', they never see
@@ -94,12 +94,12 @@ export async function updateSession(request: NextRequest) {
   // precisely so the user can call supabase.auth.updateUser({ password }). If
   // we bounce authenticated users to '/', the recovery email link silently
   // fails. An already-logged-in user typing /reset-password directly just gets
-  // the same "change password" experience as in settings — no security loss.
+  // the same "change password" experience as in settings: no security loss.
   if (pathname.startsWith('/reset-password')) {
     return supabaseResponse
   }
 
-  // Public auth routes — allow access
+  // Public auth routes: allow access
   if (
     pathname.startsWith('/login') ||
     pathname.startsWith('/register') ||
@@ -121,7 +121,7 @@ export async function updateSession(request: NextRequest) {
   }
 
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
-  // page can lock themselves out — Supabase requires AAL2 to change password
+  // page can lock themselves out: Supabase requires AAL2 to change password
   // or unenroll MFA, and AAL2 needs a prior password sign-in. Force them to
   // set a password first. The /account/set-password page does that and routes
   // back here via ?returnTo. Thread the inner returnTo through so the user
@@ -142,7 +142,7 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Other MFA pages — accessible to authenticated users (AAL1+), skip MFA enforcement
+  // Other MFA pages: accessible to authenticated users (AAL1+), skip MFA enforcement
   if (pathname.startsWith('/mfa/')) {
     return supabaseResponse
   }
@@ -214,7 +214,7 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith('/api/account/') ||
     pathname.startsWith('/api/company')
 
-  // No companies — redirect to the picker if we have BankID enrichment for
+  // No companies: redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
   // routes to pass through.
   if (!companyId) {
@@ -260,7 +260,7 @@ export async function updateSession(request: NextRequest) {
  * the active company on both the Next.js and Postgres RLS side. The
  * `gnubok-company-id` cookie is still refreshed for legacy read paths
  * but it is no longer READ here, because RLS (via
- * `current_active_company_id()`) cannot see cookies — so letting the
+ * `current_active_company_id()`) cannot see cookies: so letting the
  * cookie override the database would re-introduce the divergence this
  * entire migration exists to fix.
  *
@@ -311,7 +311,7 @@ async function resolveCompanyForMiddleware(
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
   // Non-fatal on failure: resolution for this request already succeeded,
-  // the write-back is an optimization — but log it so silent persistence
+  // the write-back is an optimization, but log it so silent persistence
   // failures (#701) are observable.
   const { error: writeBackError } = await supabase
     .from('user_preferences')

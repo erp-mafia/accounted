@@ -11,7 +11,7 @@
  * For Enable Banking (PSD2 / Berlin Group) the previous scheme keyed
  * `external_id` off the bank's `entry_reference` / `transaction_id`
  * (`eb_{account}_{tx.id}`). Many Swedish ASPSPs do NOT return those fields
- * stably across requests — a later "synka nu" can return the same underlying
+ * stably across requests: a later "synka nu" can return the same underlying
  * transaction with a different id, which produced a *new* `external_id` and
  * therefore a duplicate row (including for transactions the user had already
  * booked). See `buildStableExternalIds` for the content-derived replacement.
@@ -43,8 +43,8 @@ export const FALLBACK_DESCRIPTION = 'Okänd transaktion'
  * Normalize an imported transaction title for storage and display.
  *
  * Maps both an empty/whitespace title AND the legacy English 'Unknown'
- * sentinel — still emitted by the bank-file format parsers and as the Enable
- * Banking converter's last resort — to a Swedish-first neutral. Applied once at
+ * sentinel (still emitted by the bank-file format parsers and as the Enable
+ * Banking converter's last resort) to a Swedish-first neutral. Applied once at
  * the ingest boundary so every source (PSD2 sync + CSV/CAMT import) inherits
  * it; the bank's verbatim text is preserved separately in
  * `transactions.original_description`. Match on the exact 'unknown' sentinel
@@ -61,15 +61,15 @@ export function normalizeImportedDescription(raw: string | null | undefined): st
  * Build stable, collision-safe `external_id`s for a batch of bank transactions
  * whose provider does not supply a reliable stable id (e.g. Enable Banking).
  *
- * The id is derived from content — `{prefix}_{accountScope}_{date}_{öre}_{n}`
- * — where `n` is an occurrence index that disambiguates genuinely identical
+ * The id is derived from content: `{prefix}_{accountScope}_{date}_{öre}_{n}`,
+ * where `n` is an occurrence index that disambiguates genuinely identical
  * transactions (same account, date and amount) within the batch.
  *
  * ⚠️ THE FORMAT STRING IS A STORED KEY. It is persisted to
  * `transactions.external_id` and dedup compares incoming ids against the stored
  * ones byte-for-byte. Changing this template silently orphans every prior row
  * (its stored id no longer matches the new scheme) and re-imports them all on
- * the next sync — this is exactly what happened in the June 2026 fleet-wide
+ * the next sync: this is exactly what happened in the June 2026 fleet-wide
  * incident. Any format change MUST ship a coordinated backfill of existing rows
  * and is locked by a frozen-format test (see `external-id.test.ts`).
  *
@@ -77,7 +77,7 @@ export function normalizeImportedDescription(raw: string | null | undefined): st
  * - **Re-sync dedupe**: the same set of transactions produces the same *set*
  *   of ids regardless of the order the ASPSP returns them in, so a repeat sync
  *   collides with the existing rows on `(company_id, external_id)` and is
- *   skipped — even after the user has booked them. (The id *set* is what the
+ *   skipped, even after the user has booked them. (The id *set* is what the
  *   unique index enforces; which physical row maps to `..._0` vs `..._1` need
  *   not be stable, only the set.)
  * - **No false dedupe**: two legitimately distinct transactions that share a
@@ -87,11 +87,11 @@ export function normalizeImportedDescription(raw: string | null | undefined): st
  *
  * Why description is NOT an input here (but IS in the content bridge): the
  * `external_id` must be a *stable unique key*, so it cannot depend on a field
- * that drifts — PSD2 enriches/reorders descriptions between a transaction's
+ * that drifts: PSD2 enriches/reorders descriptions between a transaction's
  * pending and booked states. The occurrence index gives uniqueness without
  * that fragility. The content bridge (`contentBucketKey` + `descriptionsBridge`)
- * has the opposite job — it is a best-effort *bridge* that must avoid dropping
- * real transactions — so it keeps the description (see those for the trade-off).
+ * has the opposite job: it is a best-effort *bridge* that must avoid dropping
+ * real transactions, so it keeps the description (see those for the trade-off).
  *
  * @param prefix       Source tag, e.g. `'eb'` for Enable Banking.
  * @param accountScope Stable per-account scope (prefer IBAN, fall back to the
@@ -116,7 +116,7 @@ export function buildStableExternalIds(
 }
 
 /**
- * Bucket key for the content-dedup bridge: `{date}|{öre}` — deliberately NO
+ * Bucket key for the content-dedup bridge: `{date}|{öre}`, deliberately NO
  * description. Transactions that share a date and amount fall into the same
  * bucket; `descriptionsBridge` then decides, per pair, whether two rows in that
  * bucket are the same transaction. Splitting bucketing (date+öre) from matching
@@ -132,7 +132,7 @@ export function contentBucketKey(date: string, amount: number | string): string 
 
 /**
  * Decide whether two normalized descriptions (same date+öre bucket) describe the
- * same underlying transaction — the matching half of the content-dedup bridge.
+ * same underlying transaction, the matching half of the content-dedup bridge.
  *
  * Returns true when either description is a prefix of the other. PSD2 enrichment
  * is **prefix-preserving**: the same transaction's title grows between syncs
@@ -140,7 +140,7 @@ export function contentBucketKey(date: string, amount: number | string): string 
  * "UTBETALNING Insättning"), so prefix-containment bridges the two where a
  * fixed-length prefix *equality* check (the pre-June-2026 scheme) missed and
  * re-imported. A blank description carries no signal, so it never bridges a
- * *described* row — otherwise an empty title would wildcard-match any
+ * *described* row: otherwise an empty title would wildcard-match any
  * same-(date,öre) transaction and could silently consume a real one; only two
  * blanks bridge each other (date+öre identity). In practice every caller
  * normalizes blanks to FALLBACK_DESCRIPTION upstream (see
@@ -167,7 +167,7 @@ export function descriptionsBridge(
 
 /**
  * Shift an ISO `YYYY-MM-DD` date by a whole number of days, returning a new
- * `YYYY-MM-DD` string. Deterministic and INPUT-ONLY — it does the arithmetic
+ * `YYYY-MM-DD` string. Deterministic and INPUT-ONLY: it does the arithmetic
  * with `Date.UTC` on the parsed components and `new Date(ms)`, never the wall
  * clock (`Date.now()` / argless `new Date()`), so it is safe in dedup code that
  * must not depend on the current time. Correctly crosses month, year and

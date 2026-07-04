@@ -116,7 +116,7 @@ async function main() {
     fiscalPeriod = newPeriod
   }
 
-  console.log(`Fiscal period: ${fiscalPeriod.name} (${fiscalPeriod.period_start} – ${fiscalPeriod.period_end})`)
+  console.log(`Fiscal period: ${fiscalPeriod.name} (${fiscalPeriod.period_start} to ${fiscalPeriod.period_end})`)
 
   // 4. Create EU customers
   const customers = [
@@ -182,7 +182,7 @@ async function main() {
   const nextNum = company.next_invoice_number || 1
 
   const invoices = [
-    // Invoice 1: SEK reverse_charge to German customer (for EU Sales List — goods)
+    // Invoice 1: SEK reverse_charge to German customer (for EU Sales List: goods)
     {
       id: randomId(),
       user_id: userId,
@@ -203,9 +203,9 @@ async function main() {
       total_sek: 85000,
       exchange_rate: null,
       moms_ruta: '35',
-      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge: VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
-    // Invoice 2: EUR reverse_charge to Finnish customer (for EU Sales List — services + Currency Receivables)
+    // Invoice 2: EUR reverse_charge to Finnish customer (for EU Sales List: services + Currency Receivables)
     {
       id: randomId(),
       user_id: userId,
@@ -227,9 +227,9 @@ async function main() {
       exchange_rate: 11.50,
       exchange_rate_date: daysAgo(15),
       moms_ruta: '39',
-      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge: VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
-    // Invoice 3: EUR reverse_charge to Dutch customer — goods (for EU Sales List + Currency Receivables)
+    // Invoice 3: EUR reverse_charge to Dutch customer: goods (for EU Sales List + Currency Receivables)
     {
       id: randomId(),
       user_id: userId,
@@ -251,9 +251,9 @@ async function main() {
       exchange_rate: 11.50,
       exchange_rate_date: daysAgo(10),
       moms_ruta: '35',
-      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge: VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
-    // Invoice 4: USD to Dutch customer — overdue (for Currency Receivables)
+    // Invoice 4: USD to Dutch customer: overdue (for Currency Receivables)
     {
       id: randomId(),
       user_id: userId,
@@ -275,7 +275,7 @@ async function main() {
       exchange_rate: 10.80,
       exchange_rate_date: daysAgo(45),
       moms_ruta: '35',
-      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge: VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
     // Invoice 5: Paid SEK reverse_charge to Finnish customer (for EU Sales List history)
     {
@@ -298,7 +298,7 @@ async function main() {
       total_sek: 42000,
       exchange_rate: null,
       moms_ruta: '39',
-      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge: VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
   ]
 
@@ -311,7 +311,7 @@ async function main() {
 
   for (const inv of invoices) {
     const cust = customers.find(c => c.id === inv.customer_id)
-    console.log(`  ✓ ${inv.invoice_number} — ${cust.name} — ${inv.currency} ${inv.total} (${inv.status})`)
+    console.log(`  ✓ ${inv.invoice_number}, ${cust.name}, ${inv.currency} ${inv.total} (${inv.status})`)
   }
 
   // 6. Create invoice items
@@ -374,7 +374,7 @@ async function main() {
       voucher_number: voucherNum++,
       voucher_series: 'A',
       entry_date: inv.invoice_date,
-      description: `Faktura ${inv.invoice_number} — ${customers.find(c => c.id === inv.customer_id).name}`,
+      description: `Faktura ${inv.invoice_number}: ${customers.find(c => c.id === inv.customer_id).name}`,
       source_type: 'invoice_created',
       source_id: inv.id,
       status: 'posted',
@@ -408,7 +408,7 @@ async function main() {
     })
   }
 
-  // Add a payment entry for invoice 5 (paid) — debit 1930, credit 1510
+  // Add a payment entry for invoice 5 (paid): debit 1930, credit 1510
   const paymentEntryId = randomId()
   journalEntries.push({
     id: paymentEntryId,
@@ -417,7 +417,7 @@ async function main() {
     voucher_number: voucherNum++,
     voucher_series: 'A',
     entry_date: daysAgo(25),
-    description: `Betalning ${invoices[4].invoice_number} — Suomen Softworks Oy`,
+    description: `Betalning ${invoices[4].invoice_number}: Suomen Softworks Oy`,
     source_type: 'invoice_paid',
     source_id: invoices[4].id,
     status: 'posted',
@@ -499,7 +499,7 @@ async function main() {
   }
 
   for (const je of journalEntries) {
-    console.log(`  ✓ A${je.voucher_number} — ${je.description}`)
+    console.log(`  ✓ A${je.voucher_number}: ${je.description}`)
   }
 
   // 8. Add Intrastat product metadata via extension_data
@@ -532,7 +532,7 @@ async function main() {
     console.log('  (Export extensions will still work, just Intrastat product registry will be empty)')
   } else {
     for (const ed of extensionData) {
-      console.log(`  ✓ ${ed.key} — ${ed.value.description} (CN: ${ed.value.cn_code})`)
+      console.log(`  ✓ ${ed.key}: ${ed.value.description} (CN: ${ed.value.cn_code})`)
     }
   }
 
@@ -541,10 +541,10 @@ async function main() {
   console.log('  Seed data created successfully!')
   console.log('════════════════════════════════════════════════════')
   console.log('\nYou should now see data in:')
-  console.log('  • Periodisk sammanställning (EU Sales List) — 3 EU customers, 5 invoices')
-  console.log('  • Exportmoms-monitor (VAT Monitor) — journal entries on 3305/3308')
-  console.log('  • Intrastat — goods invoices + product registry')
-  console.log('  • Valutafordringar (Currency Receivables) — 3 open EUR/USD invoices')
+  console.log('  • Periodisk sammanställning (EU Sales List): 3 EU customers, 5 invoices')
+  console.log('  • Exportmoms-monitor (VAT Monitor): journal entries on 3305/3308')
+  console.log('  • Intrastat: goods invoices + product registry')
+  console.log('  • Valutafordringar (Currency Receivables): 3 open EUR/USD invoices')
   console.log('\nSelect the current month/quarter to see the data.')
 }
 

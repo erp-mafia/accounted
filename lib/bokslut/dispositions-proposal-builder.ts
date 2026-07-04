@@ -49,12 +49,12 @@ export async function buildDispositionsProposal(
 
   if (entityType !== 'aktiebolag') {
     // Non-AB entities (enskild firma, handelsbolag, etc.) do not produce
-    // bookable bokslutsdispositioner — bolagsskatt, periodiseringsfond and
+    // bookable bokslutsdispositioner: bolagsskatt, periodiseringsfond and
     // SLP are AB-only mechanisms. EF tax mechanisms (egenavgifter,
     // räntefördelning, periodiseringsfond-EF, expansionsfond) are
     // declaration-only and surface through the dedicated
     // /api/bookkeeping/fiscal-periods/[id]/ef-declaration endpoint and the
-    // EfDeclarationSection in the wizard — they never produce journal
+    // EfDeclarationSection in the wizard: they never produce journal
     // entries, so they have no place in this list.
     const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
     return {
@@ -65,7 +65,7 @@ export async function buildDispositionsProposal(
     }
   }
 
-  // Look up the accounting framework — K3 (BFNAR 2012:1) triggers the
+  // Look up the accounting framework: K3 (BFNAR 2012:1) triggers the
   // uppskjuten-skatt provision step; K2 skips it.
   const { data: companyRow } = await supabase
     .from('companies')
@@ -105,7 +105,7 @@ export async function buildDispositionsProposal(
 
   // Bolagsskatt must be computed on the result AFTER the dispositions above.
   // In preview mode nothing is posted yet, so the income statement still shows
-  // the pre-disposition result — we mirror each proposal's effect on resultat
+  // the pre-disposition result: we mirror each proposal's effect on resultat
   // före skatt and hand the post-disposition base to the calculator:
   //   + återföring (8819, intäkt)
   //   − avsättning (8811, kostnad)
@@ -127,7 +127,7 @@ export async function buildDispositionsProposal(
   // K3 only: split obeskattade reserver into the 79.4 % equity portion and
   // the 20.6 % uppskjuten skatteskuld. We sum the projected 21xx balance
   // AFTER the dispositions above have been applied so the latent-tax
-  // amount reflects the closing position — anything else would diverge
+  // amount reflects the closing position: anything else would diverge
   // from the BR the user sees in the preview.
   if (accountingFramework === 'k3') {
     const latentTax = await buildLatentTaxProposal({
@@ -160,7 +160,7 @@ export async function buildLatentTaxProposal(params: {
   supabase: SupabaseClient
   companyId: string
   fiscalPeriodId: string
-  /** Optional — additional 21xx-touching dispositions that have NOT yet been
+  /** Optional: additional 21xx-touching dispositions that have NOT yet been
    *  posted but will be in the same batch. The TB already reflects everything
    *  posted, so leave this empty if the latent-tax run is sequenced after the
    *  21xx postings (the API route's case). */
@@ -170,7 +170,7 @@ export async function buildLatentTaxProposal(params: {
 
   const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
 
-  // 21xx — obeskattade reserver (credit-normal, so we measure credit − debit).
+  // 21xx: obeskattade reserver (credit-normal, so we measure credit − debit).
   let untaxedReserves = tb.rows
     .filter((r) => r.account_number.startsWith('21'))
     .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
@@ -189,7 +189,7 @@ export async function buildLatentTaxProposal(params: {
     }
   }
 
-  // Current 2240 balance — credit-normal. Equal to existing latent tax.
+  // Current 2240 balance: credit-normal. Equal to existing latent tax.
   const current2240 = tb.rows
     .filter((r) => r.account_number === LATENT_TAX_LIABILITY_ACCOUNT)
     .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)

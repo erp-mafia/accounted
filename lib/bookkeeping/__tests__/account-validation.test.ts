@@ -4,7 +4,7 @@ import {
   findUnresolvableAccounts,
 } from '../account-validation'
 
-// Sequential thenable builder — each awaited query pops the next result.
+// Sequential thenable builder: each awaited query pops the next result.
 let resultIdx: number
 let results: Array<{ data?: unknown; error?: unknown }>
 
@@ -76,7 +76,7 @@ describe('findUnresolvableAccounts', () => {
 
   it('blocks numbers with no BAS reference without an extra existence read', async () => {
     results = [
-      // only the active-accounts read — '9999' has no BAS reference
+      // only the active-accounts read: '9999' has no BAS reference
       { data: [], error: null },
     ]
     const supabase = makeClient()

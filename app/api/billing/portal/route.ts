@@ -7,7 +7,7 @@ import { getStripe } from '@/lib/stripe/client'
 /**
  * Create a Stripe Billing Customer Portal session so the user can manage,
  * upgrade/downgrade, or cancel their subscription. Stripe handles all the
- * compliance/PCI surface — we never build those flows ourselves.
+ * compliance/PCI surface: we never build those flows ourselves.
  */
 export async function POST() {
   const { user, supabase, error } = await requireAuth()

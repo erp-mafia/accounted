@@ -2,10 +2,10 @@ import { getAnthropic, SONNET_MODEL } from './client'
 
 // Cache pre-warm after composition: fire a max_tokens: 1 request with the
 // assembled atom bodies so the Block 1 cache prefix lands warm before the
-// user's first chat turn. Best-effort — if this fails, the loop still works,
+// user's first chat turn. Best-effort: if this fails, the loop still works,
 // just with a cold first turn.
 //
-// Bodies come from the DB (agent_atom_registry.body), not disk — so pre-warm
+// Bodies come from the DB (agent_atom_registry.body), not disk, so pre-warm
 // no longer depends on .claude/skills being present at runtime. In dev before
 // `npm run skills:generate` has seeded bodies, the list is empty and pre-warm
 // simply no-ops (a cold first turn, which is acceptable for a dev convenience).
@@ -40,6 +40,6 @@ export async function preWarmAtomCache(opts: {
       messages: [{ role: 'user', content: 'warmup' }],
     })
   } catch {
-    // Fire-and-forget — pre-warm failure must never block the composer.
+    // Fire-and-forget: pre-warm failure must never block the composer.
   }
 }

@@ -29,7 +29,7 @@ import {
   SHARE_CAPITAL_DESCRIPTION_RE,
 } from './sie-parser'
 
-// Re-export from the parser (moved there to avoid an import cycle —
+// Re-export from the parser (moved there to avoid an import cycle:
 // getEffectiveOpeningBalances needs it) so existing importers keep working.
 export { isBalanceSheetAccount } from './sie-parser'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -56,7 +56,7 @@ export function generateImportPreview(
   parsed: ParsedSIEFile,
   mappings: AccountMapping[]
 ): ImportPreview {
-  // Calculate opening balance totals from the effective set — for files
+  // Calculate opening balance totals from the effective set: for files
   // without #IB 0 this is the IB derived from #UB -1 (issue #675), so the
   // preview (and the IB toggle in ImportReviewStep, keyed off
   // openingBalanceTotal > 0) reflects what the import will actually book.
@@ -103,7 +103,7 @@ export function generateImportPreview(
             severity: 'info',
             line: 0,
             message:
-              'Ingående balanser härleds från föregående års utgående balans (#UB -1) — filen saknar #IB-poster för aktuellt räkenskapsår.',
+              'Ingående balanser härleds från föregående års utgående balans (#UB -1): filen saknar #IB-poster för aktuellt räkenskapsår.',
           },
         ]
       : parsed.issues,
@@ -135,7 +135,7 @@ export async function checkDuplicateImport(
  * Check if a completed SIE import already exists for the same fiscal year period.
  * Prevents importing two different SIE files that cover the same accounting period,
  * which would create duplicate verifikationer violating BFL 4:1 (löpande bokföring).
- * Only blocks on status='completed' — failed/pending imports don't prevent retries.
+ * Only blocks on status='completed': failed/pending imports don't prevent retries.
  */
 export async function checkDuplicatePeriodImport(
   supabase: SupabaseClient,
@@ -165,7 +165,7 @@ export async function checkDuplicatePeriodImport(
  * The authenticated role carries statement_timeout=8s on hosted Supabase,
  * and deleting a large import (thousands of journal_entries, each firing
  * write_audit_log with a JSONB old_state snapshot, plus cascading lines)
- * does not finish inside that budget — the RPC dies with "canceling
+ * does not finish inside that budget: the RPC dies with "canceling
  * statement due to statement timeout" and rolls back. The service role has
  * no statement_timeout, so the RPC runs on it instead.
  *
@@ -174,7 +174,7 @@ export async function checkDuplicatePeriodImport(
  * DEFINER) re-filters every statement on p_company_id.
  *
  * Falls back to the caller's client when the service key is absent
- * (unit tests, misconfigured self-hosted) — same behavior as before.
+ * (unit tests, misconfigured self-hosted), same behavior as before.
  */
 async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<SupabaseClient> {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return fallback
@@ -236,7 +236,7 @@ export async function replaceSIEImport(
   }
 
   // 3. Atomically delete entries and mark import as replaced via DB RPC.
-  // Runs on the service client — see rpcClientForBulkDelete.
+  // Runs on the service client: see rpcClientForBulkDelete.
   const rpcClient = await rpcClientForBulkDelete(supabase)
   const { data: deletedCount, error: rpcError } = await rpcClient.rpc('replace_sie_import', {
     p_company_id: companyId,
@@ -257,11 +257,11 @@ export async function replaceSIEImport(
  *
  * Pre-flight checks mirror replaceSIEImport so the user gets a Swedish
  * error message before the RPC raises. The RPC itself is idempotent on
- * status — calling twice surfaces the "not in completed status" error.
+ * status: calling twice surfaces the "not in completed status" error.
  *
  * `userId` is the authorising user. It is passed to the RPC as p_user_id
  * because the RPC may run on the service client (see rpcClientForBulkDelete),
- * where auth.uid() is NULL — without it the RPC's owner/admin gate can never
+ * where auth.uid() is NULL: without it the RPC's owner/admin gate can never
  * match and always raises. The RPC enforces owner/admin against this id.
  */
 export async function undoSIEImport(
@@ -298,7 +298,7 @@ export async function undoSIEImport(
     }
   }
 
-  // Runs on the service client — see rpcClientForBulkDelete. Pass the
+  // Runs on the service client: see rpcClientForBulkDelete. Pass the
   // authorising user explicitly: on the service client auth.uid() is NULL,
   // so the RPC's owner/admin gate resolves against p_user_id instead.
   const rpcClient = await rpcClientForBulkDelete(supabase)
@@ -318,7 +318,7 @@ export async function undoSIEImport(
 /**
  * Clean up orphan in-flight import records for a given file hash.
  *
- * Targets rows in status='pending' — left behind when a prior import
+ * Targets rows in status='pending', left behind when a prior import
  * crashed (or short-circuited at checkDuplicatePeriodImport) before
  * reaching finalizeImportRecord. They hold the slot in the partial
  * unique index `sie_imports_company_id_file_hash_active_idx`, so a
@@ -383,7 +383,7 @@ export async function ensureFiscalPeriod(
   //   - The period has any real content (posted entries, opening balances set,
   //     closed, or locked): refuse. Silently reusing it would stamp imported
   //     vouchers with a fiscal_period_id whose date window doesn't match the
-  //     voucher's own date — breaking the SIE invariant that #VER dates fall
+  //     voucher's own date: breaking the SIE invariant that #VER dates fall
   //     inside #RAR and BFL 5 kap. (verifikationsnummer per räkenskapsår).
   //   - The period is empty (onboarding-seeded with the default calendar year
   //     but never used): replace it. The user has a förlängt räkenskapsår per
@@ -419,8 +419,8 @@ export async function ensureFiscalPeriod(
 
     if (!replaceableGateOpen || hasEntries) {
       throw new Error(
-        `SIE-filens räkenskapsår (${startDate} – ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ` +
-          `(${existing.name}: ${existing.period_start} – ${existing.period_end}). ` +
+        `SIE-filens räkenskapsår (${startDate} till ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ` +
+          `(${existing.name}: ${existing.period_start} till ${existing.period_end}). ` +
           `Justera räkenskapsåret i Inställningar → Företag så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`
       )
     }
@@ -449,7 +449,7 @@ export async function ensureFiscalPeriod(
 
     if (earlier && earlier.length > 0) {
       throw new Error(
-        `SIE-filens räkenskapsår börjar ${startDate} — endast företagets kronologiskt första räkenskapsår får börja mitt i månaden. Efterföljande räkenskapsår måste börja den 1:a i en månad (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`
+        `SIE-filens räkenskapsår börjar ${startDate}: endast företagets kronologiskt första räkenskapsår får börja mitt i månaden. Efterföljande räkenskapsår måste börja den 1:a i en månad (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`
       )
     }
   }
@@ -459,12 +459,12 @@ export async function ensureFiscalPeriod(
   const lastDayOfEndMonth = new Date(endParts.year, endParts.month, 0).getDate()
   if (endParts.day !== lastDayOfEndMonth) {
     throw new Error(
-      `SIE-filens räkenskapsår slutar ${endDate} — räkenskapsår måste sluta på månadens sista dag (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`
+      `SIE-filens räkenskapsår slutar ${endDate}: räkenskapsår måste sluta på månadens sista dag (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`
     )
   }
 
   // All date validation passed. If we identified an empty seeded period above,
-  // delete it now — deferring the destructive step until after every check
+  // delete it now, deferring the destructive step until after every check
   // keeps the seeded period intact when an SIE has malformed dates.
   // FK cascades: account_balances, voucher_sequences, voucher_gap_explanations
   // are ON DELETE CASCADE (all empty for a seeded period); sie_imports is
@@ -492,7 +492,7 @@ export async function ensureFiscalPeriod(
   // Link the BFNAR 2013:2 continuity chain so the resultatrapport can find the
   // prior year for its comparison column. Mirrors the manual fiscal-periods
   // route: point this period at its closest predecessor, then relink the
-  // immediate successor (if any) to follow this one — so multi-year SIE files
+  // immediate successor (if any) to follow this one, so multi-year SIE files
   // chain correctly regardless of the order #RAR years are processed in.
   const { data: predecessors } = await supabase
     .from('fiscal_periods')
@@ -574,7 +574,7 @@ export function validateIBBalance(
   for (const balance of currentYearBalances) {
     const targetAccount = accountMap.get(balance.account)
     if (!targetAccount) {
-      // Account not in mapping (system account or unmapped) — track its IB contribution
+      // Account not in mapping (system account or unmapped): track its IB contribution
       excludedTotal += balance.amount
       continue
     }
@@ -682,7 +682,7 @@ async function createOpeningBalanceEntry(
   const entry = await createJournalEntry(supabase, companyId, userId, {
     fiscal_period_id: fiscalPeriodId,
     entry_date: entryDate,
-    // When derived, say so on the voucher itself — permanent documentation
+    // When derived, say so on the voucher itself: permanent documentation
     // of where the amounts came from (BFNAR 2013:2 behandlingshistorik).
     description: derivedFromPriorYearUB
       ? 'Ingående balanser från SIE-import (härledda från föregående års utgående balans)'
@@ -697,7 +697,7 @@ async function createOpeningBalanceEntry(
 
 /**
  * Returns true when the company already has at least one posted (or reversed)
- * non-IB journal entry — i.e. this is a continuation import, not the first
+ * non-IB journal entry, i.e. this is a continuation import, not the first
  * ever SIE upload for the company.
  *
  * Used to gate IB-entry creation: when a company is already live, each year's
@@ -729,7 +729,7 @@ export async function companyHasPriorActivity(
  * Link an opening-balance journal entry to its fiscal period so balance-sheet
  * reports use the explicit IB path in getOpeningBalances() (reads only that
  * entry's lines for IB) instead of falling through to summing all prior
- * journal lines — which inflates multi-year imports, because each year's IB
+ * journal lines, which inflates multi-year imports, because each year's IB
  * is double-counted against the prior year's UB.
  *
  * Mirrors the pattern used by the Excel-based OB import at
@@ -760,7 +760,7 @@ export async function linkOpeningBalanceEntryToPeriod(
  *
  * Backfill scenario: user already imported 2026 (or set its IB manually),
  * then later imports 2025. The previously-set 2026 IB no longer matches
- * the 2025 UB we just computed — resync it by stornoing the old IB and
+ * the 2025 UB we just computed: resync it by stornoing the old IB and
  * creating a fresh one from the just-imported #UB.
  *
  * Returns:
@@ -801,7 +801,7 @@ export async function resyncNextPeriodOpeningBalance(
   }
 
   if (!nextPeriod.opening_balance_entry_id) {
-    // No existing IB on the next period — caller has nothing to resync; the
+    // No existing IB on the next period: caller has nothing to resync; the
     // user's first IB for the next period will be derived from the import
     // we just completed via getOpeningBalances() fallback.
     return { resynced: false, reason: 'next_period_has_no_ib', nextPeriodName: nextPeriod.name }
@@ -872,7 +872,7 @@ export async function resyncNextPeriodOpeningBalance(
 
   // Ordering note: create the new IB FIRST, then storno the old one. If we
   // stornoed first and the createJournalEntry call failed, the next period
-  // would be left with a reversed IB and nothing to replace it — and
+  // would be left with a reversed IB and nothing to replace it, and
   // executeSIEImport swallows our error as a non-fatal warning. By creating
   // first we guarantee the worst case is "new IB exists but not yet linked",
   // which getOpeningBalances() can still reason about.
@@ -900,7 +900,7 @@ export async function resyncNextPeriodOpeningBalance(
   }
 
   // Now that the period points at the new IB, storno the old one. If this
-  // throws, the period is already on the correct entry — the orphaned old
+  // throws, the period is already on the correct entry: the orphaned old
   // entry shows up as a stray verifikat but the FK stays consistent.
   const storno = await reverseEntry(
     supabase,
@@ -1033,7 +1033,7 @@ export async function importVouchers(
   // either of the first two paths, detect a clearly-labelled IB voucher and
   // tag it opening_balance so bank reconciliation excludes it from the period
   // movement (otherwise it lands as 'import' and surfaces as a phantom
-  // difference equal to the IB). Deliberately conservative — requires the IB
+  // difference equal to the IB). Deliberately conservative: requires the IB
   // wording AND a balance-sheet-only voucher on FY start, and never a
   // share-capital deposit. A missed IB still falls back to the manual "Märk som
   // ingående balans" action in Bankavstämning, so we never risk hiding a real
@@ -1130,12 +1130,12 @@ export async function importVouchers(
       continue
     }
 
-    // Validate balance — Fix 2: Tiered rounding with öresutjämning (3741)
+    // Validate balance, Fix 2: Tiered rounding with öresutjämning (3741)
     const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
     const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
     const balanceDiff = Math.round(Math.abs(totalDebit - totalCredit) * 100) / 100
     if (balanceDiff > 1.00) {
-      // More than 1 SEK off — incomplete voucher in source system, skip
+      // More than 1 SEK off: incomplete voucher in source system, skip
       results.skippedDetails.push({
         voucherId,
         date: voucherDate,
@@ -1151,7 +1151,7 @@ export async function importVouchers(
       results.skippedUnbalanced++
       continue
     } else if (balanceDiff > 0.005) {
-      // Rounding difference <= 1 SEK — add explicit öresutjämning line (never modify existing lines)
+      // Rounding difference <= 1 SEK: add explicit öresutjämning line (never modify existing lines)
       const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
       if (roundedDiff > 0) {
         lines.push({
@@ -1355,7 +1355,7 @@ export async function importVouchers(
       const assignedNumber = currentVoucherNumber + batchStart + i
       voucher.lines.forEach((line, lineIndex) => {
         // dimensions jsonb is the source of truth; cost_center/project are
-        // derived mirrors — the same dual-write every sanctioned writer uses
+        // derived mirrors: the same dual-write every sanctioned writer uses
         // (see lib/bookkeeping/dimension-resolver.ts). SIE object-list codes
         // survive verbatim on lines (legacy free-text is a documented
         // exception to the registry format rules).
@@ -1439,7 +1439,7 @@ export async function importVouchers(
         )
       }
     } else {
-      // No lines to insert — still count movements for vouchers with entries
+      // No lines to insert: still count movements for vouchers with entries
       for (let i = 0; i < batch.length; i++) {
         const voucher = batch[i]
         for (const line of voucher.lines) {
@@ -1556,38 +1556,38 @@ async function createMigrationAdjustmentEntry(
   // For P&L accounts (class 3-8): expectedMovement = RES (ignore IB/UB)
   const expectedMovements = new Map<string, number>()
 
-  // Process IB — only for balance sheet accounts. Effective set: explicit
-  // #IB 0, or IB derived from #UB -1 (issue #675) — so the expected BS
+  // Process IB: only for balance sheet accounts. Effective set: explicit
+  // #IB 0, or IB derived from #UB -1 (issue #675), so the expected BS
   // movement is UB(0) − UB(-1), the correct one-year movement, instead of
   // treating the whole opening balance as unexplained movement.
   for (const ib of getEffectiveOpeningBalances(parsed).balances) {
     const target = accountMap.get(ib.account)
     if (!target) continue
     if (!isBalanceSheetAccount(target)) {
-      // P&L account appearing in IB — likely malformed SIE
-      warnings.push(`P&L-konto ${ib.account} (→${target}) förekommer i #IB — ignoreras för resultaträkning`)
+      // P&L account appearing in IB: likely malformed SIE
+      warnings.push(`P&L-konto ${ib.account} (→${target}) förekommer i #IB: ignoreras för resultaträkning`)
       continue
     }
     expectedMovements.set(target, (expectedMovements.get(target) || 0) - ib.amount)
   }
 
-  // Process UB — only for balance sheet accounts
+  // Process UB: only for balance sheet accounts
   for (const ub of parsed.closingBalances.filter((b) => b.yearIndex === 0)) {
     const target = accountMap.get(ub.account)
     if (!target) continue
     if (!isBalanceSheetAccount(target)) {
-      warnings.push(`P&L-konto ${ub.account} (→${target}) förekommer i #UB — ignoreras för resultaträkning`)
+      warnings.push(`P&L-konto ${ub.account} (→${target}) förekommer i #UB: ignoreras för resultaträkning`)
       continue
     }
     expectedMovements.set(target, (expectedMovements.get(target) || 0) + ub.amount)
   }
 
-  // Process RES — only for P&L accounts
+  // Process RES: only for P&L accounts
   for (const res of parsed.resultBalances.filter((b) => b.yearIndex === 0)) {
     const target = accountMap.get(res.account)
     if (!target) continue
     if (isBalanceSheetAccount(target)) {
-      warnings.push(`Balanskonto ${res.account} (→${target}) förekommer i #RES — ignoreras för balansräkning`)
+      warnings.push(`Balanskonto ${res.account} (→${target}) förekommer i #RES: ignoreras för balansräkning`)
       continue
     }
     expectedMovements.set(target, (expectedMovements.get(target) || 0) + res.amount)
@@ -1668,7 +1668,7 @@ async function createMigrationAdjustmentEntry(
   const entry = await createJournalEntry(supabase, companyId, userId, {
     fiscal_period_id: fiscalPeriodId,
     entry_date: entryDate,
-    description: `Omföringsverifikation: justering för ${skippedDetails.length} exkluderade verifikationer (${firstId}–${lastId}, ${firstDate}–${lastDate}) vid SIE-import`,
+    description: `Omföringsverifikation: justering för ${skippedDetails.length} exkluderade verifikationer (${firstId}-${lastId}, ${firstDate}-${lastDate}) vid SIE-import`,
     source_type: 'import',
     voucher_series: 'M',
     lines,
@@ -1824,7 +1824,7 @@ export async function finalizeImportRecord(
     result.success = false
     if (result.errors.length === 0) {
       result.errors.push(
-        'Importen skapade 0 verifikationer — markerar som misslyckad så filen ' +
+        'Importen skapade 0 verifikationer: markerar som misslyckad så filen ' +
         'kan importeras om utan replace/undo. Granska varningarna för att se ' +
         'vilka konton som behöver mappas.',
       )
@@ -1937,7 +1937,7 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  *     proceed. Used by the Fortnox re-sync flow so the user can pull
  *     updated data from Fortnox without manual cleanup.
  *
- * Replace only cancels journal entries with source_type='import' — entries
+ * Replace only cancels journal entries with source_type='import'; entries
  * the user created natively in Accounted (categorized transactions, invoices,
  * etc.) are left alone. See the replace_sie_import RPC.
  *
@@ -2089,7 +2089,7 @@ export async function executeSIEImport(
       }
     }
 
-    // Create pending import record early — ensures tracking even if later steps fail
+    // Create pending import record early: ensures tracking even if later steps fail
     result.importId = await createPendingImportRecord(
       supabase,
       companyId,
@@ -2102,7 +2102,7 @@ export async function executeSIEImport(
     // Dimension registry (#DIM/#UNDERDIM/#OBJEKT + object-list references):
     // upsert missing rows and auto-enable the toggle with a notice. Runs
     // before vouchers so tagged lines land with their registry rows present.
-    // Files without dimension data return null — nothing changes.
+    // Files without dimension data return null: nothing changes.
     const dimensionSummary = await importDimensionRegistry(
       supabase,
       companyId,
@@ -2123,7 +2123,7 @@ export async function executeSIEImport(
     const accountMap = mappingsToMap(mappings)
 
     // Ensure all mapped target accounts exist in chart_of_accounts and,
-    // unless disabled, carry the SIE file's #KONTO names into the chart —
+    // unless disabled, carry the SIE file's #KONTO names into the chart:
     // customized names from the source system (e.g. Fortnox) would otherwise
     // be lost to the BAS defaults.
     const accountSync = await syncMappedAccounts(
@@ -2160,7 +2160,7 @@ export async function executeSIEImport(
     }
 
     // Safety net: reject if a completed import already exists for this period.
-    // Skipped in replace mode — any overlapping prior import was already
+    // Skipped in replace mode: any overlapping prior import was already
     // marked 'replaced' at the top of executeSIEImport.
     if (onExistingPeriod === 'block') {
       const periodDuplicate = await checkDuplicatePeriodImport(
@@ -2168,7 +2168,7 @@ export async function executeSIEImport(
       )
       if (periodDuplicate) {
         result.errors.push(
-          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} – ${periodDuplicate.fiscal_year_end}) finns redan`
+          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan`
         )
         return result
       }
@@ -2223,14 +2223,14 @@ export async function executeSIEImport(
     // IB imbalance is NORMAL in Swedish SIE files for two common reasons:
     // 1. Excluded system accounts (Fortnox 0099 etc.) carry IB balances
     // 2. Previous year's result (årets resultat) hasn't been allocated to equity
-    //    yet — the profit/loss is implicit, not an explicit IB on 2099
+    //    yet: the profit/loss is implicit, not an explicit IB on 2099
     //
     // In both cases, the correct treatment is to book the diff to 2099 with
-    // explicit documentation. We never reject based on IB imbalance — the
+    // explicit documentation. We never reject based on IB imbalance: the
     // original goal was to stop SILENT equity alteration, not prevent it.
     //
     // Gate on the EFFECTIVE set: for files without #IB 0, the IB derived
-    // from #UB -1 (issue #675) must still open this block — gating on raw
+    // from #UB -1 (issue #675) must still open this block: gating on raw
     // parsed.openingBalances would silently skip the derived IB entirely.
     const effectiveIB = getEffectiveOpeningBalances(parsed)
     if (options.importOpeningBalances && effectiveIB.balances.length > 0 && result.fiscalPeriodId) {
@@ -2242,13 +2242,13 @@ export async function executeSIEImport(
         .single()
 
       if (period?.opening_balances_set || period?.opening_balance_entry_id) {
-        result.warnings.push('Ingående balanser finns redan för denna period — hoppar över IB-import')
+        result.warnings.push('Ingående balanser finns redan för denna period: hoppar över IB-import')
       } else {
         // Continuation-import guard: if the company already has any posted
         // non-IB journal entries from a prior import or manual bookkeeping,
         // do NOT create a new IB entry. Each year's #IB equals the prior
         // year's UB, which is already the sum of the prior year's posted
-        // transactions — so importing another IB entry double-counts one
+        // transactions, so importing another IB entry double-counts one
         // year of activity against every balance-sheet account. The
         // first-ever import creates the legitimate pre-system IB; subsequent
         // imports must rely on the prior entries to derive opening balances
@@ -2279,14 +2279,14 @@ export async function executeSIEImport(
 
             // Produce a descriptive warning explaining the source of the imbalance
             if (Math.abs(ibValidation.excludedAccountsTotal) > 0.01 && ibValidation.fileImbalance <= 1.00) {
-              // File-level IB is balanced — imbalance is entirely from excluded system accounts
+              // File-level IB is balanced: imbalance is entirely from excluded system accounts
               ibExplanation = 'excluded_accounts'
               result.warnings.push(
                 `Exkluderade systemkonton har IB-saldon på totalt ${ibValidation.excludedAccountsTotal} SEK. ` +
                 `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`
               )
             } else if (ibValidation.fileImbalance > 1.00) {
-              // File-level IB doesn't balance — likely unallocated årets resultat from previous year
+              // File-level IB doesn't balance: likely unallocated årets resultat from previous year
               ibExplanation = 'unallocated_result'
               result.warnings.push(
                 `Ingående balanser obalanserade med ${ibValidation.roundingAdjustment} SEK ` +
@@ -2334,7 +2334,7 @@ export async function executeSIEImport(
       // Without this guard, a SIE file whose #VER dates extend beyond #RAR (or
       // a fiscal period whose shape doesn't match the file's #RAR) would
       // produce journal entries stamped to a period that doesn't cover their
-      // own entry_date — breaking the SIE invariant and BFL 5 kap.
+      // own entry_date: breaking the SIE invariant and BFL 5 kap.
       //
       // Fail closed if the period fetch errors: a silent skip would leave the
       // exact data-corruption path this guard exists to close.
@@ -2351,7 +2351,7 @@ export async function executeSIEImport(
         return result
       }
 
-      // Date-only string comparison — sidesteps any latent off-by-one if the
+      // Date-only string comparison: sidesteps any latent off-by-one if the
       // SIE parser ever attaches a time component to v.date. SIE per spec is
       // YYYYMMDD and our parser normalizes to midnight, but a string compare
       // matches the underlying DATE columns exactly and is cheap.
@@ -2366,8 +2366,8 @@ export async function executeSIEImport(
         const sample = outOfRange.slice(0, 3).map(v => `${v.series}${v.number} (${formatDate(v.date)})`).join(', ')
         result.errors.push(
           `${outOfRange.length} verifikation${outOfRange.length === 1 ? '' : 'er'} har datum utanför räkenskapsåret ` +
-            `${periodStart} – ${periodEnd}. Exempel: ${sample}${outOfRange.length > 3 ? '…' : ''}. ` +
-            `Importera varje räkenskapsår som en egen SIE-fil — flera år i samma fil stöds inte.`
+            `${periodStart} till ${periodEnd}. Exempel: ${sample}${outOfRange.length > 3 ? '…' : ''}. ` +
+            `Importera varje räkenskapsår som en egen SIE-fil: flera år i samma fil stöds inte.`
         )
         return result
       }
@@ -2390,8 +2390,8 @@ export async function executeSIEImport(
 
         if (startGap > 60 * msPerDay || endGap > 60 * msPerDay) {
           result.warnings.push(
-            `SIE-filen verkar innehålla ett ofullständigt räkenskapsår: verifikationer ${formatDate(earliestVoucher)}–${formatDate(latestVoucher)}, ` +
-            `räkenskapsår ${fiscalYearStart}–${fiscalYearEnd}. ` +
+            `SIE-filen verkar innehålla ett ofullständigt räkenskapsår: verifikationer ${formatDate(earliestVoucher)}-${formatDate(latestVoucher)}, ` +
+            `räkenskapsår ${fiscalYearStart}-${fiscalYearEnd}. ` +
             `Omföringsverifikationen kan bli felaktig om #UB/#RES avser hela året men verifikationerna bara täcker en del.`
           )
         }
@@ -2488,18 +2488,18 @@ export async function executeSIEImport(
         } catch (adjustmentError) {
           console.error('[sie-import] Failed to create migration adjustment entry:', adjustmentError)
           result.warnings.push(
-            'Kunde inte skapa migreringsjustering — kontrollera saldon manuellt mot källsystemet'
+            'Kunde inte skapa migreringsjustering: kontrollera saldon manuellt mot källsystemet'
           )
         }
       }
     }
 
-    // Save account mappings for future use (non-fatal — import data is already committed)
+    // Save account mappings for future use (non-fatal, import data is already committed)
     try {
       await saveMappings(supabase, companyId, mappings)
     } catch (mappingError) {
       console.error('[sie-import] Failed to save mappings (non-fatal):', mappingError)
-      result.warnings.push('Kunde inte spara kontomappningar — påverkar inte importerade data')
+      result.warnings.push('Kunde inte spara kontomappningar: påverkar inte importerade data')
     }
 
     // Pragmatic IB resync: if a chronologically-later fiscal period already
@@ -2534,7 +2534,7 @@ export async function executeSIEImport(
             nextPeriodName: resync.nextPeriodName,
           }
           result.warnings.push(
-            `Nästa räkenskapsår (${resync.nextPeriodName}) är låst — ingående balanser kunde inte synkas om automatiskt. Lås upp perioden och importera igen för att synka.`,
+            `Nästa räkenskapsår (${resync.nextPeriodName}) är låst: ingående balanser kunde inte synkas om automatiskt. Lås upp perioden och importera igen för att synka.`,
           )
         }
       } catch (resyncError) {
@@ -2566,7 +2566,7 @@ export async function executeSIEImport(
         unmapped: mappingStats.unmapped,
       },
       // Behandlingshistorik for #KONTO renames applied by this import
-      // (BFNAR 2013:2 — the warnings array only carries the count).
+      // (BFNAR 2013:2, the warnings array only carries the count).
       accountRenames:
         accountSync.renamedAccounts.length > 0 ? accountSync.renamedAccounts : undefined,
       vouchers: voucherStats,
@@ -2648,7 +2648,7 @@ export async function executeSIEImport(
       } catch (exemptError) {
         console.error('[sie-import] Failed to mark imported entries no-doc-required (non-fatal):', exemptError)
         result.warnings.push(
-          'Kunde inte markera importerade verifikat som "Inget underlag krävs" — du kan markera dem manuellt i bokföringslistan.',
+          'Kunde inte markera importerade verifikat som "Inget underlag krävs": du kan markera dem manuellt i bokföringslistan.',
         )
       }
     }

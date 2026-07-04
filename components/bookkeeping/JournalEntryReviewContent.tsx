@@ -99,7 +99,7 @@ export function JournalEntryReviewContent({
         </div>
       )}
 
-      {/* Debit/Credit — table on desktop, cards on mobile */}
+      {/* Debit/Credit: table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">

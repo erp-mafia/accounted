@@ -53,7 +53,7 @@ describe('generateK2IxbrlDocument', () => {
     expect(xhtml).toContain('se-cd-base:RakenskapsarSistaDag')
   })
 
-  it('emits the fastställelseintyg with checksum-exclusion wrapper and the magic date id (TA §4.4–4.5)', () => {
+  it('emits the fastställelseintyg with checksum-exclusion wrapper and the magic date id (TA §4.4-4.5)', () => {
     expect(xhtml).toContain('id="id-innehall-faststallelseintyg"')
     expect(xhtml).toContain('id="ID_DATUM_UNDERTECKNANDE_FASTSTALLELSEINTYG"')
     expect(xhtml).toContain('se-bol-base:ArsstammaIntygande')
@@ -137,7 +137,7 @@ describe('generateK2IxbrlDocument', () => {
   })
 })
 
-describe('generateK2IxbrlDocument — dividend + first year variants', () => {
+describe('generateK2IxbrlDocument: dividend + first year variants', () => {
   it('tags förslag till utdelning when proposed (TA §2.9.2 BÖR)', () => {
     const input = makeInput()
     input.forvaltningsberattelse.resultatdisposition.utdelning = 50_000
@@ -146,7 +146,7 @@ describe('generateK2IxbrlDocument — dividend + first year variants', () => {
     expect(xhtml).toMatch(/name="se-gen-base:ForslagDispositionUtdelning"[^>]*>50 000/)
   })
 
-  it('tags fri överkursfond as its own concept in the disposition — identical to BR (TA §2.7.3)', () => {
+  it('tags fri överkursfond as its own concept in the disposition: identical to BR (TA §2.7.3)', () => {
     const input = makeInput()
     input.br['Overkursfond'] = { current: 50_000, previous: 50_000 }
     input.forvaltningsberattelse.resultatdisposition.overkursfond = 50_000
@@ -170,7 +170,7 @@ describe('generateK2IxbrlDocument — dividend + first year variants', () => {
 
   it('renders a deviating cost row WITHOUT the presentational minus (sign="-" carries the deviation)', () => {
     const input = makeInput()
-    // Net income on a cost line (credit balance on 5xxx) — deviating sign.
+    // Net income on a cost line (credit balance on 5xxx): deviating sign.
     input.rr['OvrigaExternaKostnader'] = { current: -5_000, previous: null }
     const { xhtml } = generateK2IxbrlDocument(input)
     expect(xhtml).toMatch(/name="se-gen-base:OvrigaExternaKostnader"[^>]*sign="-"/)
@@ -218,7 +218,7 @@ describe('generateK2IxbrlDocument — dividend + first year variants', () => {
   it('throws on unknown concepts instead of emitting invalid facts', () => {
     const input = makeInput()
     input.rr['PahittatBegrepp'] = { current: 1, previous: null }
-    // Unknown keys in rr are ignored (only mapped posts are rendered) — the
+    // Unknown keys in rr are ignored (only mapped posts are rendered): the
     // throw-path is covered via the writer itself in fact-writer tests.
     expect(() => generateK2IxbrlDocument(input)).not.toThrow()
   })

@@ -13,7 +13,7 @@ import type {
  *   - A separate "Uppskjutna skatter" note showing the latent-tax balance
  *     movement (2240 ingående/utgående saldo + årets förändring posted to 8940).
  *   - "Förändring av eget kapital" presented as a SEPARATE statement (not just
- *     a förvaltningsberättelse line — see ÅRL 6:5 + BFNAR 2012:1 ch.6).
+ *     a förvaltningsberättelse line: see ÅRL 6:5 + BFNAR 2012:1 ch.6).
  *   - When component depreciation is used, the materiella anläggnings-not must
  *     break out anskaffningsvärden, avskrivningar och bokfört värde per
  *     huvudkomponent.
@@ -27,13 +27,13 @@ import type {
 // ─── Redovisningsprinciper ────────────────────────────────────────────────
 
 /**
- * K3 redovisningsprinciper note body. More verbose than K2 — K3 punkt 2.6 +
+ * K3 redovisningsprinciper note body. More verbose than K2: K3 punkt 2.6 +
  * ch.3 require disclosure of each accounting policy that affects the
  * reporting, including measurement bases for fixed assets, depreciation
  * approach, deferred tax treatment, revenue recognition, leasing och
  * financial instruments.
  *
- * @param hasComponents — when true, includes the komponentavskrivning
+ * @param hasComponents: when true, includes the komponentavskrivning
  *   paragraph. K3 ch.17.4 makes component depreciation mandatory when the
  *   components have meaningfully different useful lives; otherwise the
  *   paragraph would be misleading and is omitted.
@@ -83,7 +83,7 @@ export function buildUppskjutenSkattNot(params: {
 }): NoteEntry {
   const { noteNumber, latentTaxOpening, latentTaxChange, latentTaxClosing } =
     params
-  // sv-SE thousand separator, no decimals — typical for ÅR notes.
+  // sv-SE thousand separator, no decimals: typical for ÅR notes.
   const fmt = (n: number) =>
     Math.round(n).toLocaleString('sv-SE')
   const lines: string[] = [
@@ -106,7 +106,7 @@ export interface EquityChangesSummary {
   /** Opening balances per equity component. */
   opening: {
     aktiekapital: number
-    /** Övriga bundna reserver — reservfond, uppskrivningsfond. */
+    /** Övriga bundna reserver: reservfond, uppskrivningsfond. */
     bundna_reserver: number
     balanserade_vinstmedel: number
   }
@@ -114,7 +114,7 @@ export interface EquityChangesSummary {
   changes: {
     nyemission: number
     utdelning: number
-    /** Årets resultat — added to balanserade vinstmedel next year, shown on
+    /** Årets resultat: added to balanserade vinstmedel next year, shown on
      *  its own line in the change statement. */
     arets_resultat: number
   }
@@ -122,18 +122,18 @@ export interface EquityChangesSummary {
 
 export interface EquityChangesStatement {
   rows: EgenKapitalRow[]
-  /** Closing total — derived from opening + changes for invariant testing. */
+  /** Closing total: derived from opening + changes for invariant testing. */
   closing_total: number
 }
 
 /**
  * Build a "Förändring av eget kapital" statement. K3 requires this as a
- * separate financial statement (not buried in the förvaltningsberättelse —
+ * separate financial statement (not buried in the förvaltningsberättelse,
  * BFNAR 2012:1 ch.6 + ÅRL 6:5). Each component is shown with its opening
  * balance, year movements, and closing balance.
  *
- * Note: returns an EgenKapitalRow[] sequence rather than a structured table
- * — the PDF renderer in arsredovisning-k3-pdf.tsx draws the rows in order.
+ * Note: returns an EgenKapitalRow[] sequence rather than a structured table:
+ * the PDF renderer in arsredovisning-k3-pdf.tsx draws the rows in order.
  * Keeping the shape compatible with the existing EgenKapitalRow type avoids
  * touching the PDF template for additional row variants.
  */
@@ -168,7 +168,7 @@ export function buildEquityChangesNote(
   }
   rows.push({ label: 'Årets resultat', amount: changes.arets_resultat })
 
-  // Closing balance — uses standard accounting roll-forward.
+  // Closing balance: uses standard accounting roll-forward.
   const closingTotal =
     openingTotal +
     changes.nyemission +
@@ -187,7 +187,7 @@ export function buildEquityChangesNote(
 /**
  * Per-component breakdown for an asset under K3 komponentavskrivning.
  * Shape mirrors what we expect to find on Asset.k3_components when item
- * 18c lands — kept loose here so the field can evolve without breaking
+ * 18c lands: kept loose here so the field can evolve without breaking
  * this builder. We accept anything with the four fields we need.
  */
 export interface K3ComponentBreakdown {
@@ -285,7 +285,7 @@ export function buildMateriellaAnlaggningsNot(params: {
   for (const [cat, yearsSet] of byCategory.entries()) {
     const yrs = Array.from(yearsSet).sort((a, b) => a - b)
     const yrsLabel =
-      yrs.length === 1 ? `${yrs[0]} år` : `${yrs[0]}–${yrs[yrs.length - 1]} år`
+      yrs.length === 1 ? `${yrs[0]} år` : `${yrs[0]}-${yrs[yrs.length - 1]} år`
     linesOut.push(`  • ${categoryLabels[cat] ?? cat}: ${yrsLabel}`)
   }
 

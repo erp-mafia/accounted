@@ -10,7 +10,7 @@
  *   - non-recoverable / SKV business error → rejected
  *
  * A FAKE extension is registered in the registry so no real SKV/extension
- * code runs — this isolates the core wiring (registry resolution + lifecycle).
+ * code runs: this isolates the core wiring (registry resolution + lifecycle).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'

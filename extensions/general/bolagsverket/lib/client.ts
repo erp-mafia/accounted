@@ -10,7 +10,7 @@
  *
  * mTLS uses an Expisoft/Steria organisationscertifikat whose SERIALNUMBER is
  * `16` + the supplier's 10-digit orgnr (ANSLUTNINGSANVISNING §5.3). Cert/key
- * come from env vars ONLY (BOLAGSVERKET_CLIENT_CERT/_KEY/_CA) — never from
+ * come from env vars ONLY (BOLAGSVERKET_CLIENT_CERT/_KEY/_CA): never from
  * extension settings; extension_data is readable by every company member, so
  * private-key material must not be stored there. Implemented with node:https
  * (undici fetch has no portable client-cert support inside Next.js route
@@ -69,11 +69,11 @@ export const BOLAGSVERKET_ERROR_MESSAGES: Record<string, string> = {
   '5006': 'Dokumentet överstiger tillåten maxstorlek (5 MB).',
   '5008': 'Dokumentet är inte kodat i UTF-8.',
   '5009': 'Dokumentet saknar taggning av programvara och/eller programversion.',
-  '7003': 'Felaktig token — skapa en ny inlämningstoken och försök igen.',
+  '7003': 'Felaktig token: skapa en ny inlämningstoken och försök igen.',
   '7004': 'Dokumentet innehåller skadlig kod.',
   '7006': 'Årsredovisningen kan inte skickas in eftersom företaget är avvecklat.',
   '7007': 'Tjänsten stödjer inte digital inlämning för den här företagsformen.',
-  '9003': 'Icke godkänd användare av tjänsten — kontrollera certifikat och avtal med Bolagsverket.',
+  '9003': 'Icke godkänd användare av tjänsten: kontrollera certifikat och avtal med Bolagsverket.',
 }
 
 export class BolagsverketApiError extends Error {
@@ -89,7 +89,7 @@ export class BolagsverketApiError extends Error {
 
 export interface BolagsverketClientConfig {
   environment: BolagsverketEnvironment
-  /** PEM strings — required for accept/prod, ignored for test. */
+  /** PEM strings: required for accept/prod, ignored for test. */
   clientCertPem?: string | null
   clientKeyPem?: string | null
   /** Extra CA chain (TeliaSonera root is normally in the system store). */
@@ -103,7 +103,7 @@ export interface BolagsverketClientConfig {
 /**
  * Resolve config from env vars; the extension may override the environment
  * per install (validated + capped against BOLAGSVERKET_ENV in index.ts).
- * Certificate material is ENV-ONLY — never read from extension settings.
+ * Certificate material is ENV-ONLY: never read from extension settings.
  */
 export function configFromEnv(
   overrides: Partial<BolagsverketClientConfig> = {},
@@ -112,7 +112,7 @@ export function configFromEnv(
   if (!isBolagsverketEnvironment(rawEnvironment)) {
     // Fail fast with a clear message instead of HOSTS[env] → opaque TypeError.
     throw new BolagsverketApiError(
-      `Ogiltig Bolagsverket-miljö '${String(rawEnvironment)}' — tillåtna värden: ${BOLAGSVERKET_ENVIRONMENTS.join(', ')}.`,
+      `Ogiltig Bolagsverket-miljö '${String(rawEnvironment)}', tillåtna värden: ${BOLAGSVERKET_ENVIRONMENTS.join(', ')}.`,
       0,
       '',
     )
@@ -164,7 +164,7 @@ function rawRequest(
       if (!config.clientCertPem || !config.clientKeyPem) {
         rejectPromise(
           new BolagsverketApiError(
-            'Organisationscertifikat saknas — miljövariablerna BOLAGSVERKET_CLIENT_CERT/BOLAGSVERKET_CLIENT_KEY krävs för acceptans- och produktionsmiljön.',
+            'Organisationscertifikat saknas: miljövariablerna BOLAGSVERKET_CLIENT_CERT/BOLAGSVERKET_CLIENT_KEY krävs för acceptans- och produktionsmiljön.',
             0,
             '',
           ),
@@ -183,7 +183,7 @@ function rawRequest(
       fn()
     }
     // Overall deadline: the socket-inactivity `timeout` above never fires for
-    // a server that trickles bytes forever — destroy the request outright.
+    // a server that trickles bytes forever: destroy the request outright.
     const deadline = setTimeout(() => {
       req.destroy(new Error('tidsgränsen för hela anropet överskreds'))
     }, config.deadlineMs ?? 90_000)
@@ -231,7 +231,7 @@ function rawRequest(
 /**
  * Pull a felkod out of an error body. Error bodies carry "NNNN=text" lines or
  * {"felkod":"NNNN", ...}-style JSON (GUIDE Appendix A §6.2). Anchored to those
- * two shapes — a bare \bNNNN\b match would false-positive on years and other
+ * two shapes: a bare \bNNNN\b match would false-positive on years and other
  * four-digit numbers inside prose.
  */
 export function extractFelkod(body: string): string | null {
@@ -245,7 +245,7 @@ export function extractFelkod(body: string): string | null {
       }
     }
   } catch {
-    // not JSON — fall through to the "NNNN=text" shape
+    // not JSON: fall through to the "NNNN=text" shape
   }
   const match = body.match(/(?:^|[\r\n])\s*([4579]\d{3})\s*=/)
   return match ? match[1] : null
@@ -258,7 +258,7 @@ function mapError(status: number, body: string): BolagsverketApiError {
     status === 404
       ? 'Ingen träff hos Bolagsverket (404).'
       : status === 503 || status === 504
-        ? 'Bolagsverkets tjänst är tillfälligt otillgänglig — försök igen om en stund.'
+        ? 'Bolagsverkets tjänst är tillfälligt otillgänglig: försök igen om en stund.'
         : `Bolagsverket svarade med fel (HTTP ${status}).`
   return new BolagsverketApiError(known ?? fallback, status, body.slice(0, 2_000))
 }

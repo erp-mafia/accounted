@@ -16,7 +16,7 @@ export const POST = withRouteContext(
     } catch (err) {
       opLog.error('failed to unlock period', err as Error)
       // unlockPeriod() throws plain Error with messages like "Fiscal period not
-      // found", "Cannot unlock a closed period" or "Period is not locked" —
+      // found", "Cannot unlock a closed period" or "Period is not locked":
       // translate to envelope codes, mirroring the sibling lock route.
       const message = err instanceof Error ? err.message : ''
       if (/not found/i.test(message)) {

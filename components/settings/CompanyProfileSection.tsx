@@ -21,11 +21,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   persist_failed: 'Något gick fel. Försök igen.',
 }
 
-// Företagsprofil — the cached TIC company snapshot (Bolagsuppgifter), rendered
+// Företagsprofil: the cached TIC company snapshot (Bolagsuppgifter), rendered
 // as a read-only section on the Företag tab. Fetched client-side (low-traffic
 // settings) so it sits alongside the client-rendered company form. RLS scopes
 // the read to the user's own company. The "Hämta" form lets the user (re)fetch
-// live when the snapshot is missing or wrong — the recovery path for an enskild
+// live when the snapshot is missing or wrong: the recovery path for an enskild
 // firma whose personnummer previously resolved to the wrong entity.
 export function CompanyProfileSection() {
   const { company } = useCompany()

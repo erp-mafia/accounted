@@ -143,7 +143,7 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
 
   it('sorts lines by entry_date ASC then voucher_number ASC regardless of DB return order', async () => {
     // Regression: this endpoint relied on `.order({ foreignTable })`, which
-    // sorts the embedded resource — not the parent — so lines came back in
+    // sorts the embedded resource (not the parent) so lines came back in
     // arbitrary order and the drill-down showed "different rows on reload".
     const linesData = [
       {

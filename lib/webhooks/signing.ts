@@ -102,7 +102,7 @@ export function verifySignature(args: {
     .update(`${parsed.t}.${args.body}`)
     .digest('hex')
 
-  // timingSafeEqual requires equal-length buffers — return false (not throw)
+  // timingSafeEqual requires equal-length buffers: return false (not throw)
   // for length mismatch, the common case for a forged signature.
   //
   // Compare buffer lengths AFTER decoding rather than hex-string lengths:
@@ -125,7 +125,7 @@ export function verifySignature(args: {
  *
  * **Documented Security Decision (OWASP V14.2 / ISO 27001:2022 A.8.24):**
  * `webhooks.secret` is stored in plaintext rather than hashed. This is
- * unavoidable for outbound HMAC signing — the signing operation needs the
+ * unavoidable for outbound HMAC signing: the signing operation needs the
  * original byte sequence on every delivery, so a one-way hash would
  * preclude signing. Stripe, GitHub, Slack, and Twilio all follow the same
  * pattern for the same reason. Defense-in-depth comes from the

@@ -9,14 +9,14 @@ import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplic
 /**
  * Soft warning shown when the booking-time duplicate guard fires
  * (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): another already-booked transaction
- * shares this one's date + amount + bank account. Never a hard block —
+ * shares this one's date + amount + bank account. Never a hard block:
  * genuinely repeated same-day payments (e.g. several identical Swish transfers)
  * are legitimate, so the user can review the existing verifikat or book anyway.
  *
  * Shared by the /transactions list (runCategorize) and the manual booking
  * dialog (JournalEntryForm → /api/transactions/[id]/book). The caller owns the
  * retry: "Bokför ändå" must re-issue the request with force=true bound to
- * `candidate.journal_entry_id` via `expected_duplicate_journal_entry_id` — it
+ * `candidate.journal_entry_id` via `expected_duplicate_journal_entry_id`: it
  * is present on both candidate kinds (a sibling-transaction candidate and a
  * ledger-only voucher candidate, which has no transaction_id), and the server
  * re-detects it so a stale id can't wave the guard away.

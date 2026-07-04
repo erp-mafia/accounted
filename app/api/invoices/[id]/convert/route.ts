@@ -17,7 +17,7 @@ ensureInitialized()
  *
  * Ordering note: ensureInvoiceNumber() is the LAST side effect. The F-series
  * counter only advances after items are inserted and the proforma is marked
- * cancelled — so a partial failure in any earlier step rolls back the orphan
+ * cancelled, so a partial failure in any earlier step rolls back the orphan
  * row without leaking a number.
  */
 export async function POST(
@@ -124,7 +124,7 @@ export async function POST(
   }
 
   // Cancel the proforma. If this fails, the new (still unnumbered) invoice
-  // is an orphan — delete it so the user can retry without ending up with
+  // is an orphan: delete it so the user can retry without ending up with
   // two active invoices for the same proforma. invoice_items cascade.
   const previousProformaStatus = proforma.status
   const { error: cancelError } = await supabase

@@ -1,10 +1,10 @@
 /**
- * Worklist — the unified "Att göra" pending-work model.
+ * Worklist: the unified "Att göra" pending-work model.
  *
  * One source of truth for what the user still has to do, shared by the
  * dashboard "Att göra" section, the sidebar badges, and (eventually) the
  * MCP list tools. Every surface that shows a pending-work count MUST read
- * it from lib/worklist so the numbers can never diverge — divergent counts
+ * it from lib/worklist so the numbers can never diverge: divergent counts
  * are exactly the "vampire transactions" problem this module exists to fix.
  *
  * Each category documents its "done" condition: the status field or link
@@ -16,8 +16,8 @@ export const WORKLIST_CATEGORIES = [
    * Unbooked bank transactions ("N st att bokföra").
    * Pending:  is_business IS NULL AND is_ignored = false.
    * Done:     any booking flow (categorize, match-invoice, bulk-book RPC,
-   *           manual booking) sets is_business = true — including the
-   *           multi-tx flows, whose RPCs set is_business on every linked tx —
+   *           manual booking) sets is_business = true: including the
+   *           multi-tx flows, whose RPCs set is_business on every linked tx:
    *           or the user ignores the transaction (is_ignored = true).
    * This is the canonical "unbooked" predicate. Do NOT count bare
    * journal_entry_id IS NULL: multi-allocation and bulk-booked transactions
@@ -39,7 +39,7 @@ export const WORKLIST_CATEGORIES = [
    * Pending:  unbooked transactions (see book_transaction) carrying a
    *           potential_invoice_id or potential_supplier_invoice_id hint.
    * Done:     the match is confirmed (booking clears is_business) or the
-   *           hint column is cleared. NOTE: a subset of book_transaction —
+   *           hint column is cleared. NOTE: a subset of book_transaction:
    *           excluded from `total` to avoid double-counting.
    */
   'suggested_match',
@@ -66,7 +66,7 @@ export const WORKLIST_CATEGORIES = [
   /**
    * Tax/VAT deadlines needing attention.
    * Pending:  deadlines.is_completed = false AND status IN
-   *           ('action_needed', 'overdue') — same predicate as
+   *           ('action_needed', 'overdue'): same predicate as
    *           lib/deadlines/status-engine.ts getDeadlinesNeedingAttention().
    * Done:     submitted/confirmed (is_completed or status transition).
    */

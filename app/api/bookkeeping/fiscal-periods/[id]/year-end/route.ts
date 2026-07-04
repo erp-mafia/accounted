@@ -48,7 +48,7 @@ export const POST = withRouteContext(
       const message = err instanceof Error ? err.message : ''
       // The downstream errors below are matched on stable English keywords
       // emitted by year-end-service. Do NOT include the raw message in
-      // details — it may contain DB-sourced names; UI surfacing relies on
+      // details: it may contain DB-sourced names; UI surfacing relies on
       // the structured message_sv / message_en pair.
       if (/Next fiscal period already has opening balance/i.test(message)) {
         return errorResponseFromCode('YEAR_END_NEXT_PERIOD_HAS_IB', opLog, { requestId })

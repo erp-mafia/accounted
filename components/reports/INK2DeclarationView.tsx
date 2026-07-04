@@ -241,7 +241,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
           {/* INK2S summary */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">INK2S — Skattemässiga justeringar</CardTitle>
+              <CardTitle className="text-lg">INK2S: Skattemässiga justeringar</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-start gap-2 mb-4 p-3 bg-primary/10 rounded-md">

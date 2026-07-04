@@ -17,7 +17,7 @@
  *
  * Mirrors the suppliers vertical test pattern: a Proxy-backed Supabase
  * mock returns whatever the route awaits, keyed by table name. Focus is
- * on outcome (status / body shape) rather than query mechanics — the
+ * on outcome (status / body shape) rather than query mechanics: the
  * wrapper already validates auth, scope, idempotency, and company
  * membership.
  */
@@ -193,7 +193,7 @@ describe('POST /api/v1/companies/:companyId/webhooks', () => {
     const body = await res.json()
     expect(body.data.id).toBe(WEBHOOK_ID)
     // Secret is returned EXACTLY ONCE on create. We don't pin the prefix
-    // shape too tightly — the contract is "non-empty string with whsec_
+    // shape too tightly: the contract is "non-empty string with whsec_
     // prefix" and the schema documents the exact length elsewhere.
     expect(typeof body.data.secret).toBe('string')
     expect(body.data.secret).toMatch(/^whsec_/)
@@ -328,7 +328,7 @@ describe('GET /api/v1/companies/:companyId/webhooks', () => {
     const body = await res.json()
     expect(body.data.webhooks).toHaveLength(1)
     expect(body.data.webhooks[0].id).toBe(WEBHOOK_ID)
-    // Secret MUST never be in a list response — surfaced only on create.
+    // Secret MUST never be in a list response: surfaced only on create.
     expect(body.data.webhooks[0]).not.toHaveProperty('secret')
   })
 
@@ -727,7 +727,7 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret', () => {
 // Cross-tenant URL guard (wrapper level)
 // ──────────────────────────────────────────────────────────────────────
 
-describe('webhook routes — cross-tenant URL guard', () => {
+describe('webhook routes: cross-tenant URL guard', () => {
   it('returns 404 NOT_FOUND when the caller is not a member of the company in the URL', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

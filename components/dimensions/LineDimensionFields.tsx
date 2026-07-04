@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 
 interface LineDimensionFieldsProps {
-  /** Current dimensions map ({sie_dim_no: object_code}) — a line's map or the header default. */
+  /** Current dimensions map ({sie_dim_no: object_code}), a line's map or the header default. */
   dimensions: Record<string, string> | undefined
   /** Fired per dimension; `code === null` clears the value. */
   onChange: (sieDimNo: string, code: string | null) => void
@@ -18,7 +18,7 @@ interface LineDimensionFieldsProps {
 /**
  * The Kostnadsställe + Projekt combobox pair (SIE dims 1/6) used by the
  * voucher form's header default, the per-row tag popover, and the mobile line
- * cards. Labels are the seeded system-dimension names and hardcoded Swedish —
+ * cards. Labels are the seeded system-dimension names and hardcoded Swedish:
  * the component mounts on the voucher editor, a stays-Swedish surface per
  * .claude/rules/i18n.md (same convention as DimensionCombobox).
  */

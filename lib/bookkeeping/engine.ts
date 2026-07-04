@@ -80,7 +80,7 @@ export async function getNextVoucherNumber(
 /**
  * Resolve account IDs from account numbers for a company.
  *
- * By default only active accounts are returned — inactive / never-added
+ * By default only active accounts are returned: inactive / never-added
  * accounts surface as "missing" so callers throw AccountsNotInChartError.
  *
  * Pass `{ includeInactive: true }` for reversals: the accounts on an already-
@@ -192,7 +192,7 @@ function buildLineInserts(
   return lines.map((line, index) => {
     // dimensions JSONB is the single source of truth; cost_center/project
     // are GENERATED columns derived from keys '1'/'6' since the PR9 cutover
-    // (20260702230000) — writing them explicitly would error.
+    // (20260702230000): writing them explicitly would error.
     const dimensions = normalizeLineDimensions(line)
     return {
       journal_entry_id: entryId,
@@ -231,7 +231,7 @@ export async function createDraftEntry(
   // entries; free-text passthrough unless company_settings.dimensions_enabled;
   // enabled companies get registry validation with a typed Swedish rejection.
   // Runs before any insert so a rejection leaves no orphan rows. Reversal/
-  // storno/correction paths bypass this — they copy posted data verbatim.
+  // storno/correction paths bypass this: they copy posted data verbatim.
   await validateEntryDimensions(supabase, companyId, input.lines)
 
   // Validate that entry_date falls within the selected fiscal period
@@ -371,12 +371,12 @@ export async function createDraftEntry(
 }
 
 /**
- * Update an existing DRAFT journal entry in place — header + lines. Only drafts
+ * Update an existing DRAFT journal entry in place: header + lines. Only drafts
  * are editable; committed entries (posted/reversed/cancelled) are immutable per
  * BFL 5 kap. and rejected with CannotEditNonDraftError (the DB immutability
  * trigger is the backstop). Mirrors createDraftEntry's validate-everything-first
  * order so an unbalanced set, a bad period, or a locked period fails before any
- * row is mutated — the header UPDATE is the first write, so a locked period
+ * row is mutated: the header UPDATE is the first write, so a locked period
  * aborts cleanly with the draft untouched.
  */
 export async function updateDraftEntry(
@@ -407,7 +407,7 @@ export async function updateDraftEntry(
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
   }
 
-  // Same soft dimension validation as createDraftEntry — before any write, so
+  // Same soft dimension validation as createDraftEntry: before any write, so
   // a rejection leaves both the header and the existing lines untouched.
   await validateEntryDimensions(supabase, companyId, input.lines)
 
@@ -432,7 +432,7 @@ export async function updateDraftEntry(
   }
 
   // Resolve account IDs (seeding standard BAS accounts on demand) up front, so
-  // the line insert below cannot fail on a missing account — same as create.
+  // the line insert below cannot fail on a missing account: same as create.
   const accountIdMap = await resolveAccountIds(supabase, companyId, input.lines)
   const allAccountNumbers = [...new Set(input.lines.map((l) => l.account_number))]
   let missingAccounts = allAccountNumbers.filter((num) => !accountIdMap.has(num))
@@ -450,7 +450,7 @@ export async function updateDraftEntry(
 
   const resolvedSeries = input.voucher_series || (existing.voucher_series as string) || 'A'
 
-  // All validation passed — mutate. Update the header first; a locked/closed
+  // All validation passed: mutate. Update the header first; a locked/closed
   // period blocks this write (enforce_period_lock) before any line is touched.
   // source_type / source_id / status are intentionally preserved.
   const { error: headerError } = await supabase
@@ -510,10 +510,10 @@ export async function updateDraftEntry(
  * Commit a draft entry: assigns voucher number and transitions to 'posted'
  * Uses the atomic commit_journal_entry RPC so the voucher number increment
  * and status update happen in one transaction. If the balance trigger rejects
- * the entry, the sequence increment rolls back — no burned numbers.
+ * the entry, the sequence increment rolls back: no burned numbers.
  *
  * Actor attribution: the surrounding runWithActor() scope (set by the
- * approval entry points — commitPendingOperation, web approve routes) is
+ * approval entry points: commitPendingOperation, web approve routes) is
  * forwarded to the RPC, which stamps journal_entries.committed_actor_* and
  * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs,
  * identical to pre-attribution behaviour.
@@ -579,7 +579,7 @@ export async function commitEntry(
  *
  * If commitEntry fails (e.g. balance trigger rejection, period lock, RPC error),
  * the orphan draft is cancelled so callers don't leave an undeletable stuck draft.
- * The commit RPC is atomic — no voucher number is burned on failure.
+ * The commit RPC is atomic: no voucher number is burned on failure.
  */
 export async function createJournalEntry(
   supabase: SupabaseClient,
@@ -595,7 +595,7 @@ export async function createJournalEntry(
   } catch (commitError) {
     // CAS guard: only cancel if still in draft. If the RPC actually posted
     // before failing downstream, immutability trigger blocks draft→cancelled
-    // on a posted row anyway — the filter just avoids firing the trigger.
+    // on a posted row anyway: the filter just avoids firing the trigger.
     try {
       const { error: cancelError } = await supabase
         .from('journal_entries')
@@ -697,7 +697,7 @@ export async function reverseEntry(
     original.voucher_series || 'A'
   )
 
-  // Resolve account IDs — include inactive rows. The accounts on the
+  // Resolve account IDs: include inactive rows. The accounts on the
   // original committed entry were active at commit time; if the user has
   // since toggled one off, the storno must still be allowed to go through
   // (BFL 5 kap 5§). Only a truly missing chart row (rare: would require
@@ -770,7 +770,7 @@ export async function reverseEntry(
     .select('id')
 
   if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Another concurrent reversal already changed the status — mark the orphaned
+    // Another concurrent reversal already changed the status: mark the orphaned
     // reversal as cancelled so it's excluded from reports but remains traceable.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
@@ -780,7 +780,7 @@ export async function reverseEntry(
   // Unlink any bank transactions booked by the reversed entry so they return
   // to "Att bokföra" and can be booked again from the transactions view.
   // Without this the row keeps pointing at a status='reversed' entry, reads
-  // as bokförd forever, and has no re-booking affordance — the agent paths
+  // as bokförd forever, and has no re-booking affordance: the agent paths
   // (lib/pending-operations/commit.ts) already did this manually after every
   // reverseEntry call; the dashboard reverse route did not.
   const { error: unlinkError } = await supabase

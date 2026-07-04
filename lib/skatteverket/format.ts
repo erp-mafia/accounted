@@ -22,7 +22,7 @@ export function formatRedovisare(
 
   if (entityType === 'aktiebolag') return `16${clean}`
 
-  // Enskild firma — personnummer
+  // Enskild firma: personnummer
   const yearDigits = parseInt(clean.substring(0, 2), 10)
   const currentTwoDigitYear = new Date().getFullYear() % 100
   const prefix = yearDigits > currentTwoDigitYear ? '19' : '20'

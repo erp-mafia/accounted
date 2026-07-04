@@ -1,12 +1,12 @@
 /**
- * POST /api/dimensions/[id]/values — create a dimension value (SIE #OBJEKT).
+ * POST /api/dimensions/[id]/values: create a dimension value (SIE #OBJEKT).
  *
  * Codes are validated against the strict Fortnox format
- * (^[A-Za-z0-9ÅÄÖåäö_+\-]{1,20}$) for user-created values — the DB CHECK is
+ * (^[A-Za-z0-9ÅÄÖåäö_+\-]{1,20}$) for user-created values: the DB CHECK is
  * looser by design so legacy free-text codes survive the backfill/SIE import,
  * but new registry codes minted here stay portable. Duplicate codes within the
  * dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE with a Swedish message.
- * `code` is immutable after creation (v1: no rename — retag instead).
+ * `code` is immutable after creation (v1: no rename, retag instead).
  */
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
@@ -32,7 +32,7 @@ export const POST = withRouteContext(
     const body = result.data
 
     // The dimension must exist and belong to the active company (defense in
-    // depth alongside the composite FK — a foreign dimension id 404s here).
+    // depth alongside the composite FK: a foreign dimension id 404s here).
     const { data: dimension, error: dimError } = await supabase
       .from('dimensions')
       .select('id, resets_annually')

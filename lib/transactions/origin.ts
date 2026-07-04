@@ -1,5 +1,5 @@
 /**
- * Transaction origin helpers — distinguish rows the user created INSIDE the app
+ * Transaction origin helpers: distinguish rows the user created INSIDE the app
  * from rows that were fetched/imported from an external feed (bank sync or a
  * bank-file upload).
  *
@@ -27,12 +27,12 @@
  *   - MCP / agent create                          → `import_source = 'mcp'`
  *
  * Safe-by-default: this is an ALLOWLIST of known user-created sources. Any other
- * `import_source` tag — including an import feed added in the future — is
+ * `import_source` tag (including an import feed added in the future) is
  * treated as imported (ignore-only), so a new feed can never accidentally
  * become user-deletable before someone consciously adds it here.
  */
 
-/** Minimal shape — the two columns that record where a transaction came from. */
+/** Minimal shape: the two columns that record where a transaction came from. */
 export type TransactionOrigin = {
   bank_connection_id?: string | null
   import_source?: string | null
@@ -40,14 +40,14 @@ export type TransactionOrigin = {
 
 /**
  * `import_source` values produced by in-app creation flows. A `null` source
- * (with no bank connection) is also user-created — that's the plain manual-add
+ * (with no bank connection) is also user-created: that's the plain manual-add
  * path. Anything NOT in this set is considered an external import feed.
  */
 const USER_CREATED_IMPORT_SOURCES: ReadonlySet<string> = new Set(['manual', 'mcp'])
 
 /**
  * True when the transaction was fetched via bank sync or uploaded via a
- * bank-file import — i.e. NOT created by the user inside the app. Such rows are
+ * bank-file import, i.e. NOT created by the user inside the app. Such rows are
  * ignore-only and can never be deleted (booked or not).
  */
 export function isImportedTransaction(tx: TransactionOrigin): boolean {

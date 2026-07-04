@@ -241,7 +241,7 @@ export default function CustomerForm({
         </div>
       </div>
 
-      {/* Identification — depends on customer type */}
+      {/* Identification: depends on customer type */}
       {customerType === 'individual' ? (
         <div className="space-y-4 pt-4 border-t">
           <h3 className="font-medium">{t('individual_section')}</h3>

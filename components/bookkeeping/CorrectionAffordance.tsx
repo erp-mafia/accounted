@@ -11,7 +11,7 @@
  *   - /transactions row menu when transaction.journal_entry_id is set
  *
  * Surfacing the storno+rättelse flow at the point where users notice the
- * mistake matters — the dialog itself was already correct (it pre-fills
+ * mistake matters: the dialog itself was already correct (it pre-fills
  * lines and emits the storno+correction pair per BFL), but it was hidden
  * behind a deep-link the customer never reached.
  */

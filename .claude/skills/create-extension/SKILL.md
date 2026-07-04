@@ -16,11 +16,11 @@ npx tsx scripts/create-extension.ts \
 Sectors: `general`, `restaurant`, `construction`, `hotel`, `tech`, `ecommerce`, `export`
 Categories: `import`, `operations`, `reports`, `accounting`
 
-**2. Enable** — add `"my-extension"` to `extensions.config.json`
+**2. Enable**: add `"my-extension"` to `extensions.config.json`
 
-**3. Regenerate** — `npm run setup:extensions` (auto-runs on `dev`/`build`)
+**3. Regenerate**: `npm run setup:extensions` (auto-runs on `dev`/`build`)
 
-**4. Implement** — edit `index.ts` to add surfaces
+**4. Implement**: edit `index.ts` to add surfaces
 
 ---
 
@@ -100,7 +100,7 @@ interface ExtensionContext {
   userId: string; extensionId: string
   supabase: SupabaseClient         // Pre-authenticated
   emit(event: CoreEvent): void     // Publish core events
-  settings: ExtensionSettings      // get<T>(key?) / set<T>(key, value) — stored in extension_data table
+  settings: ExtensionSettings      // get<T>(key?) / set<T>(key, value): stored in extension_data table
   storage: ExtensionStorage        // download / upload / getPublicUrl
   log: ExtensionLogger             // info / warn / error (scoped)
   services: ExtensionServices      // Core services (e.g., ingestTransactions)
@@ -111,17 +111,17 @@ interface ExtensionContext {
 
 | Surface | Reference |
 |---------|-----------|
-| `eventHandlers` — react to core events | [Event Handlers](references/event-handlers.md) |
-| `apiRoutes` — HTTP endpoints | [API Routes](references/api-routes.md) |
-| `services` — named functions for core | [Services](references/services-patterns.md) |
+| `eventHandlers`: react to core events | [Event Handlers](references/event-handlers.md) |
+| `apiRoutes`: HTTP endpoints | [API Routes](references/api-routes.md) |
+| `services`: named functions for core | [Services](references/services-patterns.md) |
 | `settingsPanel` / workspace UI | [Workspace & UI](references/workspace-ui.md) |
 | `mappingRuleTypes`, `onInstall`/`onUninstall` | [Extension Interface](references/extension-interface.md) |
 
 ## Common Mistakes
 
-1. **Forgetting `npm run setup:extensions`** after config change — extension won't load
-2. **Editing `_generated/` files** — overwritten on next setup
-3. **Not handling `ctx = undefined`** — context is undefined in cron jobs; always fallback
-4. **Wrong export name** — must match `exportName` in manifest exactly
-5. **Importing from other extensions** — only import from core (`@/lib/`, `@/types`)
-6. **Lazy imports in module scope** — static imports for extension code; `await import()` only inside handler functions
+1. **Forgetting `npm run setup:extensions`** after config change: extension won't load
+2. **Editing `_generated/` files**: overwritten on next setup
+3. **Not handling `ctx = undefined`**: context is undefined in cron jobs; always fallback
+4. **Wrong export name**: must match `exportName` in manifest exactly
+5. **Importing from other extensions**: only import from core (`@/lib/`, `@/types`)
+6. **Lazy imports in module scope**: static imports for extension code; `await import()` only inside handler functions

@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 
-// Resultat per projekt/kostnadsställe — value-as-column P&L matrix over one
+// Resultat per projekt/kostnadsställe: value-as-column P&L matrix over one
 // SIE dimension. ?dim_no picks the dimension (default 6, projekt).
 export const GET = withRouteContext(
   'report.dimension_pnl',
@@ -39,7 +39,7 @@ export const GET = withRouteContext(
     }
 
     try {
-      // Only toDate — the matrix is cumulative from period_start by design
+      // Only toDate: the matrix is cumulative from period_start by design
       // (closing-balance semantics; see lib/reports/dimension-pnl.ts).
       const data = await generateDimensionPnl(supabase, companyId!, periodId, dimNo, {
         toDate: parsed.range.toDate,

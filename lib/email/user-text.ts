@@ -15,7 +15,7 @@ export function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;')
 }
 
-// Escape FIRST, then convert newlines — order matters: a '<br>' typed by the
+// Escape FIRST, then convert newlines, order matters: a '<br>' typed by the
 // user must arrive escaped; only OUR <br> survives.
 export function userTextToHtml(input: string): string {
   return escapeHtml(input).replace(/\r\n|\r|\n/g, '<br>')

@@ -34,7 +34,7 @@ function round2(n: number): number {
 /**
  * True when every account's (debit − credit) sum across the proposed lines is
  * zero. Such a rättelse describes no real affärshändelse and would erase the
- * original posting without representing anything in its place — disallowed by
+ * original posting without representing anything in its place: disallowed by
  * BFL 5 kap. 5 § / BFNAR 2013:2.
  */
 function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
@@ -107,7 +107,7 @@ type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
  * The storno (reversal) is always created in the original entry's period and
  * date, so the original nets to zero where it was booked. The corrected entry
  * defaults to the original's date/period too, but `options.newEntryDate` /
- * `options.newFiscalPeriodId` let a caller re-book it elsewhere — used to move
+ * `options.newFiscalPeriodId` let a caller re-book it elsewhere: used to move
  * a verifikation booked on the wrong year to its correct period (see
  * recordateEntry). When the date/period is the correction, identical lines are
  * allowed (the move itself is the meaningful change).
@@ -125,7 +125,7 @@ export async function correctEntry(
     newFiscalPeriodId?: string
     /**
      * The original entry (with lines) already loaded by the caller. When
-     * provided, we skip the redundant re-fetch — recordateEntry reads the
+     * provided, we skip the redundant re-fetch: recordateEntry reads the
      * original to copy its lines and hands it through here. This also closes
      * the small TOCTOU window a second independent read would open.
      */
@@ -140,12 +140,12 @@ export async function correctEntry(
 
   // Reject a rättelse with no economic effect (e.g. 1930 debit 100 / 1930
   // credit 100). Such an entry would erase the original posting without
-  // representing any affärshändelse — disallowed by BFL 5 kap. 5 §.
+  // representing any affärshändelse: disallowed by BFL 5 kap. 5 §.
   if (netsToZeroPerAccount(correctedLines)) {
     throw new MeaninglessCorrectionError('net_zero_per_account')
   }
 
-  // Fetch original entry with lines — unless the caller already loaded it.
+  // Fetch original entry with lines: unless the caller already loaded it.
   let original = options?.preloadedOriginal ?? null
   if (!original) {
     const { data, error: fetchError } = await supabase
@@ -175,7 +175,7 @@ export async function correctEntry(
   const dateOrPeriodChanged =
     correctedDate !== original.entry_date || correctedPeriodId !== original.fiscal_period_id
 
-  // Reject when the proposed lines are identical to the original entry — a
+  // Reject when the proposed lines are identical to the original entry: a
   // rättelse must actually change something. Skip this when the date/period is
   // the change (moving a verifikation to the right year keeps the same lines).
   if (!dateOrPeriodChanged && isIdenticalToOriginal(correctedLines, originalLines)) {
@@ -330,7 +330,7 @@ export async function correctEntry(
     )
 
     // Account IDs were resolved (and standard BAS accounts seeded) in Step 0,
-    // before the storno existed — nothing to clean up if we got this far.
+    // before the storno existed: nothing to clean up if we got this far.
     const { data: newEntry, error: correctedError } = await supabase
       .from('journal_entries')
       .insert({
@@ -396,7 +396,7 @@ export async function correctEntry(
     }
   } catch (err) {
     // Cancel the reversal entry (posted → cancelled). Original was never
-    // modified so no rollback needed — it's still 'posted'.
+    // modified so no rollback needed: it's still 'posted'.
     await cancelEntry(supabase, reversalEntry.id)
     throw err
   }
@@ -413,7 +413,7 @@ export async function correctEntry(
     .select('id')
 
   if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Concurrent reversal beat us — cancel both our entries
+    // Concurrent reversal beat us: cancel both our entries
     await cancelEntry(supabase, reversalEntry.id)
     await cancelEntry(supabase, correctedEntry!.id)
     throw new EntryAlreadyReversedError()
@@ -423,7 +423,7 @@ export async function correctEntry(
   // entry. The original is now status 'reversed'; the corrected entry is the
   // live representation of the affärshändelse, so the transaction row should
   // keep reading as booked against it (and stay correctable/uncategorizable),
-  // and the underlag should travel with it. Best-effort — the correction_of_id
+  // and the underlag should travel with it. Best-effort: the correction_of_id
   // chain preserves traceability even if either relink fails.
   await relinkTransactionsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
   await relinkDocumentsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
@@ -461,8 +461,8 @@ export async function correctEntry(
 }
 
 /**
- * Move a posted verifikation to a different date — and thereby a different
- * fiscal period — without changing its lines. Fixes a booking entered with the
+ * Move a posted verifikation to a different date, and thereby a different
+ * fiscal period: without changing its lines. Fixes a booking entered with the
  * wrong date/year (e.g. 2026-07-03 that should have been 2025-07-03).
  *
  * A posted verifikation is immutable (BFL), so this is a storno + re-book under
@@ -511,11 +511,11 @@ export async function recordateEntry(
     throw new TargetPeriodLockedError(newDate, target.lock_date)
   }
   if (!target.period_id) {
-    // 'open' but no covering period — we do not auto-create periods on a fix.
+    // 'open' but no covering period: we do not auto-create periods on a fix.
     throw new NoOpenPeriodForDateError(newDate)
   }
 
-  // Copy the original lines verbatim — they were correct; only the date was
+  // Copy the original lines verbatim: they were correct; only the date was
   // wrong. correctEntry rebuilds the storno from the original anyway.
   const originalLines = (original.lines as JournalEntryLine[]) || []
   const copiedLines: CreateJournalEntryLineInput[] = originalLines
@@ -551,7 +551,7 @@ export async function recordateEntry(
     }
   )
 
-  // Underlag and bank-transaction links follow the corrected entry —
+  // Underlag and bank-transaction links follow the corrected entry:
   // correctEntry handles both relinks for every correction flavour.
   return result
 }
@@ -560,7 +560,7 @@ export async function recordateEntry(
  * Re-point every bank transaction from one entry to another. Used when a
  * verifikation is corrected so the transaction row keeps reading as booked
  * against the live (corrected) entry instead of the reversed original.
- * Failures are logged, not thrown — the correction chain stays traceable.
+ * Failures are logged, not thrown: the correction chain stays traceable.
  */
 async function relinkTransactionsToEntry(
   supabase: SupabaseClient,
@@ -585,7 +585,7 @@ async function relinkTransactionsToEntry(
  * Re-point every document_attachment from one entry to another. Used when a
  * verifikation is moved to a different period so its underlag travels with the
  * live (corrected) entry. The line-level link is cleared because the corrected
- * entry has new line ids. Failures are logged, not thrown — the entry-level
+ * entry has new line ids. Failures are logged, not thrown: the entry-level
  * correction chain is the source of truth for traceability.
  */
 async function relinkDocumentsToEntry(

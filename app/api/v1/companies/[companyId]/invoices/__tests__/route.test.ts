@@ -39,7 +39,7 @@ vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
   ensureInvoiceNumber: vi.fn().mockResolvedValue(undefined),
 }))
 
-// Riksbanken exchange-rate fetcher — return null by default (treats as
+// Riksbanken exchange-rate fetcher: return null by default (treats as
 // SEK-only). Individual tests can override.
 vi.mock('@/lib/currency/riksbanken', async () => {
   const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
@@ -441,7 +441,7 @@ function makePatchInvoice(url: string, body: unknown, extraHeaders: Record<strin
   })
 }
 
-// A swedish_business customer with VAT validated — picks up 25% as the
+// A swedish_business customer with VAT validated: picks up 25% as the
 // only allowed rate (vat_treatment: standard_25). Reduced rates (12 / 6)
 // would need a wider VAT-rule fixture; SEK + standard 25% is enough for
 // the route-level tests here.

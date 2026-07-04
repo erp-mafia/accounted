@@ -1,12 +1,12 @@
 /**
- * PATCH  /api/dimensions/[id]/values/[valueId] — update a dimension value
+ * PATCH  /api/dimensions/[id]/values/[valueId]: update a dimension value
  *         (name / is_active / start_date / end_date; `code` is immutable in v1).
- * DELETE /api/dimensions/[id]/values/[valueId] — delete an UNREFERENCED value.
+ * DELETE /api/dimensions/[id]/values/[valueId]: delete an UNREFERENCED value.
  *
  * Deleting a value referenced by posted/reversed lines is blocked by the DB
  * retention trigger (enforce_dimension_value_retention, BFL 7-year
  * philosophy). Its Swedish message ("Värdet "X" används på bokförda verifikat
- * och kan inte tas bort — arkivera det istället.") is surfaced verbatim as a
+ * och kan inte tas bort: arkivera det istället.") is surfaced verbatim as a
  * 409 DIMENSION_VALUE_REFERENCED so the register UI can toast it and offer
  * archive instead.
  */
@@ -58,7 +58,7 @@ export const PATCH = withRouteContext(
       }
     }
 
-    // Sparse update — only the fields the caller actually sent. `code` is
+    // Sparse update: only the fields the caller actually sent. `code` is
     // deliberately absent from the schema: renaming a code would silently
     // orphan every line tagged with it.
     const updateData: Record<string, unknown> = {}
@@ -107,7 +107,7 @@ export const DELETE = withRouteContext(
       .select('id')
 
     if (error) {
-      // P0001 = plpgsql RAISE EXCEPTION — the retention trigger refusing the
+      // P0001 = plpgsql RAISE EXCEPTION: the retention trigger refusing the
       // delete. Surface its Swedish message verbatim (it names the code).
       if (error.code === 'P0001') {
         return errorResponseFromCode('DIMENSION_VALUE_REFERENCED', opLog, {

@@ -3,9 +3,9 @@
  *
  * `bulkBookMatchedInboxItems` is shared by the direct UI route
  * (POST /items/bulk-book) and the `bulk_book_inbox_items` pending-operation
- * executor. These tests pin the "Bokför valda hoppar över" contract — items
+ * executor. These tests pin the "Bokför valda hoppar över" contract: items
  * that aren't matched / already booked / linked to a leverantörsfaktura are
- * SKIPPED, never errored — and the happy path where a matched item is booked
+ * SKIPPED, never errored, and the happy path where a matched item is booked
  * against its transaction via the shared categorize core.
  *
  * The single-item categorize core itself (createJE, duplicate guard, VAT
@@ -145,7 +145,7 @@ describe('BulkBookInboxSchema', () => {
   })
 })
 
-describe('bulkBookMatchedInboxItems — skip classification (never errors)', () => {
+describe('bulkBookMatchedInboxItems: skip classification (never errors)', () => {
   const base = { category: 'expense_software' as const }
 
   it('skips an item that is not found', async () => {
@@ -190,7 +190,7 @@ describe('bulkBookMatchedInboxItems — skip classification (never errors)', () 
   })
 })
 
-describe('bulkBookMatchedInboxItems — booking', () => {
+describe('bulkBookMatchedInboxItems: booking', () => {
   it('books a matched, unbooked item against its transaction', async () => {
     const supabase = queuedSupabase([
       // 1. inbox item fetch → bookable
@@ -251,7 +251,7 @@ describe('bulkBookMatchedInboxItems — booking', () => {
   })
 })
 
-describe('bulkBookMatchedInboxItems — intra-batch duplicate handling', () => {
+describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
   /** Six queued from() results for one successfully-booked item. */
   const bookableItem = (itemId: string, txId: string, amount: number) => [
     { data: { id: itemId, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null } },
@@ -264,7 +264,7 @@ describe('bulkBookMatchedInboxItems — intra-batch duplicate handling', () => {
 
   it('books BOTH distinct transactions that share (date, amount) in one bulk run', async () => {
     // Model the reviewer-reported bug: the guard WOULD flag the second tx as a
-    // duplicate of the first tx's freshly-created verifikat — but only when the
+    // duplicate of the first tx's freshly-created verifikat, but only when the
     // first tx is NOT excluded as a same-batch sibling. The fix must pass tx-1
     // in as an exclusion so tx-2 books instead of being skipped 409.
     mockDetectDup.mockImplementation(

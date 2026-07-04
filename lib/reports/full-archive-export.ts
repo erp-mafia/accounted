@@ -65,7 +65,7 @@ interface DocumentRow {
   // Joined from journal_entries via journal_entry_id. May be null when the
   // entry is a draft (no voucher_number yet) or when the doc is orphaned.
   // PostgREST returns a single row as an object, not an array, when the FK
-  // is many-to-one — but we tolerate both shapes defensively.
+  // is many-to-one, but we tolerate both shapes defensively.
   journal_entries?:
     | { voucher_number: number | null; voucher_series: string | null; entry_date: string | null }
     | { voucher_number: number | null; voucher_series: string | null; entry_date: string | null }[]
@@ -299,7 +299,7 @@ async function generatePeriodReports(
   try {
     const startDate = new Date(period.period_start)
     // Annual VAT for an archive must cover the whole räkenskapsår, which may be
-    // extended/shortened — pass the fiscal period so the span isn't truncated to
+    // extended/shortened: pass the fiscal period so the span isn't truncated to
     // the calendar year that period_start happens to fall in.
     vatDeclaration = await calculateVatDeclaration(
       supabase,
@@ -311,7 +311,7 @@ async function generatePeriodReports(
       { fiscalPeriodId: period.id }
     )
   } catch {
-    // VAT declaration may fail if no relevant entries exist — skip gracefully
+    // VAT declaration may fail if no relevant entries exist, skip gracefully
   }
 
   return { trialBalance, incomeStatement, balanceSheet, generalLedger, journalRegister, vatDeclaration }
@@ -406,7 +406,7 @@ async function writeDocuments(
 
           const buffer = await fileData.arrayBuffer()
           // zipPath is fully qualified (`dokument/<year>/<voucher>_<file>` etc.),
-          // so write at the archive root — calling `dokument.file(zipPath)`
+          // so write at the archive root: calling `dokument.file(zipPath)`
           // would double-prefix to `dokument/dokument/...`.
           zip.file(zipPath, buffer)
           manifest.push({ ...baseManifest, status: 'downloaded' })
@@ -420,7 +420,7 @@ async function writeDocuments(
       }
     }
   } catch {
-    // Document fetch failed — archive will still contain reports and audit trail
+    // Document fetch failed: archive will still contain reports and audit trail
   }
 
   dokument.file('manifest.json', JSON.stringify(manifest, null, 2))
@@ -485,7 +485,7 @@ function buildDocumentZipPath(
     return candidate
   }
 
-  // Collision — disambiguate with a short id suffix before the extension.
+  // Collision: disambiguate with a short id suffix before the extension.
   const dotIdx = safeName.lastIndexOf('.')
   const stem = dotIdx > 0 ? safeName.slice(0, dotIdx) : safeName
   const ext = dotIdx > 0 ? safeName.slice(dotIdx) : ''
@@ -534,7 +534,7 @@ interface SieSourceManifestEntry {
  * the current journal entries).
  *
  * `sie/imports.json` and `sie/account_mappings.json` are written regardless of
- * `includeFiles` — they're small and critical for reconstructing the import
+ * `includeFiles`: they're small and critical for reconstructing the import
  * history. Blob download is gated behind `includeFiles` since the files can be
  * large and share the documents opt-out.
  */
@@ -650,14 +650,14 @@ async function writeSieSourceFiles(
     )
     sieFolder.file('account_mappings.json', JSON.stringify(mappings, null, 2))
   } catch {
-    // SIE metadata fetch failed — archive will still contain the re-generated SIE files
+    // SIE metadata fetch failed: archive will still contain the re-generated SIE files
   }
 }
 
 /**
  * Dump structured master data as JSON under `data/`. These records are implicit
  * in the SIE export (as journal entries) but not recoverable as domain objects
- * without this dump — critical for disaster recovery of a company's state.
+ * without this dump, critical for disaster recovery of a company's state.
  */
 async function writeMasterData(
   zip: JSZip,
@@ -693,7 +693,7 @@ async function writeMasterData(
           }
           // Always end on the unique PK so paging has a stable TOTAL order. A
           // non-unique display order (e.g. created_at) or no order at all
-          // silently SKIPS/DUPLICATES rows across page boundaries — data loss in
+          // silently SKIPS/DUPLICATES rows across page boundaries: data loss in
           // a statutory 7-year retention archive. (All these tables have an
           // `id uuid` PK.) dedupeBy is defense-in-depth against the duplicate case.
           return q.order('id', { ascending: true }).range(from, to)

@@ -1,5 +1,5 @@
 /**
- * PATCH /api/dimensions/[id] — update a dimension (name / is_active / sort_order).
+ * PATCH /api/dimensions/[id]: update a dimension (name / is_active / sort_order).
  *
  * Guard rails:
  *   - Renaming an is_system dimension (1 = Kostnadsställe, 6 = Projekt) is
@@ -50,7 +50,7 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('DIMENSION_SYSTEM_RENAME', opLog, { requestId })
     }
 
-    // Sparse update — only the fields the caller actually sent.
+    // Sparse update: only the fields the caller actually sent.
     const updateData: Record<string, unknown> = {}
     for (const key of ['name', 'is_active', 'sort_order'] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]

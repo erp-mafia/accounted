@@ -37,7 +37,7 @@ async function commitPostedEntryAsIB(params: {
     [entryId, params.userId, params.companyId, params.fiscalPeriodId, series],
   )
   await insertBalancedLines(entryId, 5000)
-  // flip to posted directly — bypass commit_journal_entry to keep this
+  // flip to posted directly: bypass commit_journal_entry to keep this
   // test focused on the deletion RPC. voucher_sequences needs a row so the
   // delete RPC's FOR UPDATE lookup succeeds.
   await getPool().query(
@@ -87,7 +87,7 @@ describe('delete_last_voucher with IB link', () => {
     expect(pre.rows[0]!.ob_set).toBe(true)
 
     // withUserContext rolls back at the end, so all assertions about the
-    // RPC's effects must be observed inside the same transaction — a fresh
+    // RPC's effects must be observed inside the same transaction: a fresh
     // getPool() connection would only see pre-RPC state.
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ delete_last_voucher: { deleted: boolean; was_period_ib: boolean } }>(
@@ -115,7 +115,7 @@ describe('delete_last_voucher with IB link', () => {
       // Two audit rows land on the DELETE: the generic one from the
       // write_audit_log() trigger and the RPC's explicit "was period IB"
       // entry. They share statement_timestamp(), so ordering by created_at
-      // is non-deterministic — assert against the specific marker directly.
+      // is non-deterministic: assert against the specific marker directly.
       const audit = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM public.audit_log
            WHERE table_name = 'journal_entries' AND record_id = $1 AND action = 'DELETE'
@@ -144,7 +144,7 @@ describe('delete_last_voucher with IB link', () => {
       [importId, userId, companyId, randomUUID().replace(/-/g, ''), fiscalPeriodId, ibEntryId],
     )
 
-    // Same caveat as the previous test — assert inside the tx, not after.
+    // Same caveat as the previous test: assert inside the tx, not after.
     await withUserContext(userId, async (client) => {
       await client.query(`SELECT delete_last_voucher($1, $2)`, [companyId, ibEntryId])
       const imp = await client.query<{ ob_id: string | null }>(

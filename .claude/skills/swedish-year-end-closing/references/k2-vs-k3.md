@@ -19,7 +19,7 @@
 
 ## Internally developed intangible assets
 
-**K3**: May be capitalized using **1010–1019** (Utvecklingsutgifter), also [Ej K2].
+**K3**: May be capitalized using **1010-1019** (Utvecklingsutgifter), also [Ej K2].
 
 **K2**: All development costs must be expensed immediately. Only acquired intangibles may be recognized.
 
@@ -63,7 +63,7 @@
 ## Accounts to hide/disable in K2 mode
 
 The following BAS accounts are marked [Ej K2] and should be hidden or disabled:
-- **1010–1019** (Utvecklingsutgifter)
+- **1010-1019** (Utvecklingsutgifter)
 - **1081** (Pågående projekt, immateriella)
 - **1260** (Leasade tillgångar)
 - **1269** (Ack. avskrivningar leasade tillgångar)

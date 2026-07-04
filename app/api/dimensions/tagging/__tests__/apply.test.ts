@@ -4,7 +4,7 @@
  *
  * Covers: 401, body validation (400 for empty line_ids / short reason / bad
  * dimensions bag), the happy path (per-line RPC fan-out with p_user_id and
- * changed/unchanged aggregation) and partial failure — the route returns 200
+ * changed/unchanged aggregation) and partial failure: the route returns 200
  * with the raw Swedish RPC message per failed line.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -157,7 +157,7 @@ describe('POST /api/dimensions/tagging/apply', () => {
     enqueue({
       error: {
         message:
-          'Perioden är låst — använd rättelseverifikat (storno) för att ändra dimensioner.',
+          'Perioden är låst: använd rättelseverifikat (storno) för att ändra dimensioner.',
       },
     })
 
@@ -172,7 +172,7 @@ describe('POST /api/dimensions/tagging/apply', () => {
         line_id: LINE_B,
         // Raw Swedish RPC message passes through untouched.
         error:
-          'Perioden är låst — använd rättelseverifikat (storno) för att ändra dimensioner.',
+          'Perioden är låst: använd rättelseverifikat (storno) för att ändra dimensioner.',
       },
     ])
   })

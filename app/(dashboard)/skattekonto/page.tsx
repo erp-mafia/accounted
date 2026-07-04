@@ -361,7 +361,7 @@ function BalanceHero({
     return (
       <Card>
         <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          Inget saldo hämtat ännu — klicka på &quot;Synkronisera nu&quot;.
+          Inget saldo hämtat ännu: klicka på &quot;Synkronisera nu&quot;.
         </CardContent>
       </Card>
     )
@@ -449,7 +449,7 @@ function BalanceHero({
             <span className="tabular-nums">
               {new Date(saldo.lastSyncedAt).toLocaleString('sv-SE')}
             </span>
-            . Skatteverket uppdaterar saldot periodvis — datumet ovan ändras
+            . Skatteverket uppdaterar saldot periodvis: datumet ovan ändras
             inte varje gång du synkroniserar.
           </p>
         )}
@@ -510,7 +510,7 @@ function TransactionTable({
             <TableRow key={row.id}>
               <TableCell className="tabular-nums">{row.transaktionsdatum}</TableCell>
               {showForfallodatum && (
-                <TableCell className="tabular-nums">{row.forfallodatum ?? '–'}</TableCell>
+                <TableCell className="tabular-nums">{row.forfallodatum ?? '-'}</TableCell>
               )}
               <TableCell>
                 {row.transaktionstext}

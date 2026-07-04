@@ -7,7 +7,7 @@ import {
 } from '@/tests/helpers'
 
 // The route is wrapped in withRouteContext (auth via requireAuth, company via
-// getActiveCompanyId, write gate via requireWritePermission) — mock those.
+// getActiveCompanyId, write gate via requireWritePermission): mock those.
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({
@@ -56,7 +56,7 @@ function runEmp(opts: {
   }
 }
 
-describe('POST /api/salary/runs/[id]/approve — bank-detail guard', () => {
+describe('POST /api/salary/runs/[id]/approve: bank-detail guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -124,7 +124,7 @@ describe('POST /api/salary/runs/[id]/approve — bank-detail guard', () => {
             clearing_number: '8327',
             bank_account_number: '1234567',
           }),
-          // Zero payout, no bank details — should not block.
+          // Zero payout, no bank details: should not block.
           runEmp({ first_name: 'Test', last_name: 'Testsson', net_salary: 0 }),
         ],
       },

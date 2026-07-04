@@ -41,7 +41,7 @@ function validPayload() {
   }
 }
 
-describe('gnubok_set_inbox_extracted_data — registration', () => {
+describe('gnubok_set_inbox_extracted_data: registration', () => {
   it('is registered with the right scope', () => {
     expect(tool).toBeDefined()
     expect(TOOL_SCOPE_MAP['gnubok_set_inbox_extracted_data']).toBe('suppliers:write')
@@ -52,17 +52,17 @@ describe('gnubok_set_inbox_extracted_data — registration', () => {
   })
 })
 
-describe('gnubok_set_inbox_extracted_data — happy path', () => {
+describe('gnubok_set_inbox_extracted_data: happy path', () => {
   it('validates the payload, fetches the item, matches supplier, and updates', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // fetch inbox item — must include company_id so the defense-in-depth
+    // fetch inbox item: must include company_id so the defense-in-depth
     // tenant check passes.
     enqueue({
       data: { id: 'inbox-1', company_id: 'company-1', created_supplier_invoice_id: null },
       error: null,
     })
-    // supplier match by orgNumber — payload has none, skipped
-    // supplier match by name (ILIKE) — found
+    // supplier match by orgNumber: payload has none, skipped
+    // supplier match by name (ILIKE): found
     enqueue({ data: { id: 'sup-1' }, error: null })
     // update inbox_items
     enqueue({ data: null, error: null })
@@ -83,7 +83,7 @@ describe('gnubok_set_inbox_extracted_data — happy path', () => {
   })
 })
 
-describe('gnubok_set_inbox_extracted_data — validation & guards', () => {
+describe('gnubok_set_inbox_extracted_data: validation & guards', () => {
   it('rejects malformed extracted_data with a Zod error', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(

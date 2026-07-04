@@ -80,7 +80,7 @@ describe('POST /api/dimensions/import-existing', () => {
     })
     // Existing values: BUTIK is already registered under dim 1.
     enqueue({ data: [{ dimension_id: 'dim-1', code: 'BUTIK' }] })
-    // Upsert of the two missing values succeeds — created counts returned rows.
+    // Upsert of the two missing values succeeds: created counts returned rows.
     enqueue({ data: [{ id: 'nv1' }, { id: 'nv2' }] })
 
     const response = await POST(request(), noParams)
@@ -114,7 +114,7 @@ describe('POST /api/dimensions/import-existing', () => {
     expect(body.created).toBe(2)
   })
 
-  it('tolerates duplicates in the batch — created counts only the rows the upsert returned', async () => {
+  it('tolerates duplicates in the batch: created counts only the rows the upsert returned', async () => {
     enqueue({ data: null }) // ensure RPC
     enqueue({
       data: [
@@ -125,7 +125,7 @@ describe('POST /api/dimensions/import-existing', () => {
     enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
     enqueue({ data: [] }) // existing-values snapshot missed a raced KS02
     // ignoreDuplicates upsert skips the conflicting row instead of aborting
-    // the batch — only KS01 comes back.
+    // the batch: only KS01 comes back.
     enqueue({ data: [{ id: 'nv1' }] })
 
     const response = await POST(request(), noParams)
@@ -138,7 +138,7 @@ describe('POST /api/dimensions/import-existing', () => {
   it('creates a registry dimension for an unregistered dim number found on lines', async () => {
     enqueue({ data: null }) // ensure RPC
     enqueue({ data: [{ id: 'l1', dimensions: { '7': 'AVD-A' } }] }) // lines
-    // Registry only has the system dims — dim 7 is missing.
+    // Registry only has the system dims: dim 7 is missing.
     enqueue({
       data: [
         { id: 'dim-1', sie_dim_no: 1 },

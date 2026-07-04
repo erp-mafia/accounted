@@ -12,12 +12,12 @@ interface MatchTransactionInvoicePreviewProps {
  * AttachDocumentPreview's layout so reviewers learn one matching idiom.
  */
 export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoicePreviewProps) {
-  const txDescription = (data.transaction_description as string) || '—'
+  const txDescription = (data.transaction_description as string) || '-'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
   const txDate = data.transaction_date as string | undefined
 
-  const invoiceNumber = (data.invoice_number as string) || '—'
+  const invoiceNumber = (data.invoice_number as string) || '-'
   const invoiceTotal = data.invoice_total as number | undefined
   const invoiceCurrency = (data.invoice_currency as string) || txCurrency
   const invoiceDate = data.invoice_date as string | undefined
@@ -26,7 +26,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
   // BFL 5 kap 4§ requires bookings to be made "so soon as possible" relative
   // to the affärshändelse, so a transaction and invoice that diverge by more
   // than a calendar month deserve a second look before the reviewer approves
-  // the match. The threshold is editorial, not legislated — it just nudges
+  // the match. The threshold is editorial, not legislated: it just nudges
   // the reviewer; it doesn't block.
   const showDateDriftHint =
     txDate &&
@@ -41,7 +41,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
           <Row label="Beskrivning" value={txDescription} />
           <Row
             label="Belopp"
-            value={typeof txAmount === 'number' ? formatCurrency(txAmount, txCurrency) : '—'}
+            value={typeof txAmount === 'number' ? formatCurrency(txAmount, txCurrency) : '-'}
             tabular
           />
         </PreviewCard>
@@ -63,7 +63,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
       {showDateDriftHint && (
         <p className="text-xs text-muted-foreground">
-          Transaktionsdatum och fakturadatum skiljer sig med mer än en månad — kontrollera att
+          Transaktionsdatum och fakturadatum skiljer sig med mer än en månad: kontrollera att
           matchningen avser rätt affärshändelse.
         </p>
       )}

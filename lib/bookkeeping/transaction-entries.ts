@@ -75,14 +75,14 @@ export async function createTransactionJournalEntry(
     transaction.exchange_rate
   )
   const lines: CreateJournalEntryLineInput[] = []
-  // Dimensions PR7: the bag tags the business (expense/revenue) lines only —
+  // Dimensions PR7: the bag tags the business (expense/revenue) lines only:
   // bank/settlement and VAT lines stay untagged. In the multi-line template
   // path each pattern line carries its own bag instead (LinePatternEntry).
-  // The private path books to a balance account (2013/2893) — never tagged.
+  // The private path books to a balance account (2013/2893): never tagged.
   const businessDimensions = coerceDimensionsBag(mappingResult.dimensions)
 
   if (mappingResult.default_private) {
-    // Private expense — use entity-specific account from mappingResult
+    // Private expense: use entity-specific account from mappingResult
     lines.push(
       {
         account_number: mappingResult.debit_account,
@@ -106,7 +106,7 @@ export async function createTransactionJournalEntry(
 
     if (isExpense) {
       // All non-settlement lines (business, VAT, tax, rounding). Per-line bags
-      // are authoritative here — the pattern marks business lines only, so no
+      // are authoritative here: the pattern marks business lines only, so no
       // fallback to the categorize-level bag (it would mis-tag VAT/tax lines).
       for (const line of mappingResult.vat_lines) {
         lines.push({
@@ -134,7 +134,7 @@ export async function createTransactionJournalEntry(
         line_description: transaction.description,
         ...(isForeign ? currencyMeta : {}),
       })
-      // All non-settlement lines — per-line bags authoritative (see above).
+      // All non-settlement lines: per-line bags authoritative (see above).
       for (const line of mappingResult.vat_lines) {
         lines.push({
           account_number: line.account_number,
@@ -252,9 +252,9 @@ export async function createTransactionJournalEntry(
   }
 
   // Compose the verifikation's description (verifikationstext). journal_entries
-  // has no separate notes column — the description IS the BFL audit field, so
+  // has no separate notes column: the description IS the BFL audit field, so
   // representation deltagare/syfte etc. belong here. Separate the bank text
-  // and the note with a middle dot (never an em-dash — house style), and only
+  // and the note with a middle dot (never an em-dash: house style), and only
   // append when the note isn't already implied by the bank text.
   const trimmedNotes = notes?.trim()
   const baseDescription = (transaction.description ?? '').trim()

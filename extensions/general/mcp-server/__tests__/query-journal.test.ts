@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { tools } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
-describe('gnubok_query_journal — registration', () => {
+describe('gnubok_query_journal: registration', () => {
   it('is registered and read-only', () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')
     expect(tool).toBeDefined()
@@ -67,7 +67,7 @@ function makeChainMock(lines: unknown[], count: number) {
  * successive .from() calls and records every .ilike(column, pattern) call so
  * tests can assert what was actually sent to PostgREST.
  *
- * The text branch issues TWO parallel .from('journal_entry_lines') queries —
+ * The text branch issues TWO parallel .from('journal_entry_lines') queries:
  * one filtered by line_description, one by journal_entries.description. The
  * first .from() call gets `results[0]`, the second gets `results[1]`.
  */
@@ -120,7 +120,7 @@ function makeQueueMock(results: Array<{ data: unknown[]; count: number }>) {
   return { supabase, ilikeCalls, eqCallsByLeg, callCount: () => callIndex }
 }
 
-/** Build a LineRow fixture inline — keeps the per-test data dense and readable. */
+/** Build a LineRow fixture inline: keeps the per-test data dense and readable. */
 function makeLineRow(opts: {
   id: string
   account_number?: string
@@ -153,11 +153,11 @@ function makeLineRow(opts: {
   }
 }
 
-describe('gnubok_query_journal — execute', () => {
+describe('gnubok_query_journal: execute', () => {
   it('applies amount_min filter and computes totals on the filtered set', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
     const lines = [
-      // Line 1: large debit — should pass amount_min: 1000
+      // Line 1: large debit: should pass amount_min: 1000
       {
         id: 'l1', account_number: '4010',
         debit_amount: 5000, credit_amount: 0,
@@ -168,7 +168,7 @@ describe('gnubok_query_journal — execute', () => {
           source_type: 'supplier_invoice', status: 'posted',
         },
       },
-      // Line 2: small debit — should fail amount_min: 1000
+      // Line 2: small debit: should fail amount_min: 1000
       {
         id: 'l2', account_number: '4010',
         debit_amount: 50, credit_amount: 0,
@@ -232,7 +232,7 @@ describe('gnubok_query_journal — execute', () => {
     ]
 
     // .from() call order: display query first, then the aggregate pass
-    // (single page — 3 rows < PAGE_SIZE ends the fetchAllRows loop).
+    // (single page: 3 rows < PAGE_SIZE ends the fetchAllRows loop).
     const { supabase, callCount } = makeQueueMock([
       { data: displaySlice, count: 1 },
       { data: fullMatchSet, count: 3 },
@@ -341,7 +341,7 @@ describe('gnubok_query_journal — execute', () => {
   })
 })
 
-describe('gnubok_query_journal — free-text search', () => {
+describe('gnubok_query_journal: free-text search', () => {
   it('merges non-overlapping results from line_description and journal_entries.description', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
     const byLineHit = makeLineRow({
@@ -375,7 +375,7 @@ describe('gnubok_query_journal — free-text search', () => {
     expect(result.returned_lines).toBe(2)
     const ids = result.lines.map((l) => l.line_id).sort()
     expect(ids).toEqual(['L1', 'L2'])
-    // Free-text path never runs the full aggregate pass — the output says so.
+    // Free-text path never runs the full aggregate pass: the output says so.
     expect(result.totals_scope).toBe('returned_slice')
   })
 

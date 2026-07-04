@@ -114,7 +114,7 @@ export default function CloudBackupCard() {
             : null
           throw new Error(
             mb
-              ? `Arkivet är ${mb} MB — större än nuvarande gräns. Minska omfattning eller avvakta bakgrundssynk.`
+              ? `Arkivet är ${mb} MB, större än nuvarande gräns. Minska omfattning eller avvakta bakgrundssynk.`
               : 'Arkivet är för stort för direktsynk.'
           )
         }

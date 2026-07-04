@@ -41,7 +41,7 @@ describe('roundOre', () => {
 
     // Half-up rounding doesn't preserve sums exactly: each part can shift
     // by up to half an öre, so cumulative drift over N parts is bounded by
-    // N * ORE_TOLERANCE. The pathological case is [1.005, 2.005, 3.005] —
+    // N * ORE_TOLERANCE. The pathological case is [1.005, 2.005, 3.005]:
     // three exact-half values that all round up to .01, drifting the sum
     // by one öre versus summing then rounding.
     for (const parts of cases) {

@@ -20,18 +20,18 @@ import {
 import type { BolagsverketEnvironment, HandelseMeddelande } from './types'
 
 /**
- * Bolagsverket integration — digital inlämning av årsredovisning.
+ * Bolagsverket integration: digital inlämning av årsredovisning.
  *
- * Generates iXBRL in core (lib/bokslut/ixbrl — works without this extension),
+ * Generates iXBRL in core (lib/bokslut/ixbrl: works without this extension),
  * and adds the Bolagsverket leg: grunduppgifter prefill, kontrollera,
  * inlämning till eget utrymme, händelseprenumerationer + webhook receiver.
  *
  * Requires an avtal with Bolagsverket and an Expisoft/Steria
  * organisationscertifikat for acceptans/produktion (ANSLUTNINGSANVISNING
- * §5–6). The static test environment (BOLAGSVERKET_ENV=test) runs without a
+ * §5-6). The static test environment (BOLAGSVERKET_ENV=test) runs without a
  * certificate but needs a firewall opening (orgnr 1234567890/1234567891).
  *
- * Environment variables (certificate material is ENV-ONLY — see clientFor):
+ * Environment variables (certificate material is ENV-ONLY: see clientFor):
  * - BOLAGSVERKET_ENV          test | accept | prod (default test). Also acts
  *                             as the CEILING for the per-company `environment`
  *                             setting: members may select an environment at or
@@ -46,7 +46,7 @@ import type { BolagsverketEnvironment, HandelseMeddelande } from './types'
  * and file manually with the downloaded .xhtml.
  */
 
-/** Roles allowed to file/poll — the dispatcher itself only authenticates. */
+/** Roles allowed to file/poll: the dispatcher itself only authenticates. */
 const WRITE_ROLES = new Set(['owner', 'admin', 'member'])
 
 const ENV_ORDER: Record<BolagsverketEnvironment, number> = { test: 0, accept: 1, prod: 2 }
@@ -68,8 +68,8 @@ function environmentCeiling(): BolagsverketEnvironment {
  *
  * The generic extension settings endpoint
  * (app/api/extensions/[sector]/[slug]/settings) PATCHes ONE JSON blob into
- * extension_data under extension_id 'general/bolagsverket', key 'settings' —
- * not per-key rows under this extension's dispatcher id — so read that row
+ * extension_data under extension_id 'general/bolagsverket', key 'settings':
+ * not per-key rows under this extension's dispatcher id: so read that row
  * directly rather than via ctx.settings.
  *
  * Validation: the value must be one of test|accept|prod and must not exceed
@@ -110,7 +110,7 @@ async function resolveEnvironment(ctx: ExtensionContext): Promise<BolagsverketEn
  * Build a client for the company's resolved environment.
  *
  * SECURITY: certificate material is ENV-ONLY (BOLAGSVERKET_CLIENT_CERT/_KEY/
- * _CA). It must NEVER be read from extension settings — extension_data rows
+ * _CA). It must NEVER be read from extension settings: extension_data rows
  * are readable by every company member through the extension_data SELECT RLS
  * policy, which would hand the mTLS private key to any viewer.
  */
@@ -133,7 +133,7 @@ async function companyOrgnr(ctx: ExtensionContext): Promise<string> {
 /**
  * Defense-in-depth RBAC for write endpoints. The extension dispatcher only
  * authenticates and resolves a company; it does NOT check the member's role.
- * Filing an årsredovisning is a write operation — viewer members are blocked.
+ * Filing an årsredovisning is a write operation: viewer members are blocked.
  * Mirrors requireAgiWriteRole in the skatteverket extension.
  *
  * Returns null on success, a 403/500 NextResponse on failure.
@@ -188,9 +188,9 @@ const noContextResponse = () =>
 
 const SubmitSchema = z.object({
   fiscal_period_id: z.string().uuid(),
-  avsandare_pnr: z.string().regex(/^\d{10,12}$/, 'Personnummer anges med 10–12 siffror'),
+  avsandare_pnr: z.string().regex(/^\d{10,12}$/, 'Personnummer anges med 10-12 siffror'),
   undertecknare: z.object({
-    pnr: z.string().regex(/^\d{10,12}$/, 'Personnummer anges med 10–12 siffror'),
+    pnr: z.string().regex(/^\d{10,12}$/, 'Personnummer anges med 10-12 siffror'),
     fornamn: z.string().min(1).max(100),
     efternamn: z.string().min(1).max(100),
     roll: z.string().min(1).max(100),
@@ -208,7 +208,7 @@ const PollSchema = z.object({
 
 export const bolagsverketExtension: Extension = {
   id: 'bolagsverket',
-  name: 'Bolagsverket — digital årsredovisning',
+  name: 'Bolagsverket: digital årsredovisning',
   version: '1.0.0',
   settingsPanel: { label: 'Bolagsverket', path: '/settings/extensions' },
   apiRoutes: [
@@ -308,7 +308,7 @@ export const bolagsverketExtension: Extension = {
             details: { message },
           })
         }
-        // The webhook subscription registers this URL with Bolagsverket — a
+        // The webhook subscription registers this URL with Bolagsverket: a
         // missing/relative base would register a broken endpoint externally.
         const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
         if (!/^https?:\/\//.test(appUrl)) {

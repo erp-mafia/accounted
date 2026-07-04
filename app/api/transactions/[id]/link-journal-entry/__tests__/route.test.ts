@@ -165,7 +165,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBe(JE_UUID)
-    // Canonical format from formatVoucherLabel — series-number with hyphen,
+    // Canonical format from formatVoucherLabel: series-number with hyphen,
     // matches gnubok_link_invoice_to_voucher and SIE #VER cross-references.
     expect(body.voucher_label).toBe('A-12')
     expect(body.invoice_id).toBeNull()

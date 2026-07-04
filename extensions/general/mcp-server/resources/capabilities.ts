@@ -39,7 +39,7 @@ export const capabilitiesResource: McpResource = {
     const stateBlockers: Record<string, string | null> = {
       // Scope → reason it's blocked by current state, or null
       'transactions:write': periodMissing
-        ? 'No fiscal period covers today\'s date — open a period first'
+        ? 'No fiscal period covers today\'s date: open a period first'
         : periodIsLocked
           ? 'Active period is closed/locked'
           : companyLocked

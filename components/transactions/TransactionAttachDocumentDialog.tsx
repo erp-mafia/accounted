@@ -28,7 +28,7 @@ interface TransactionAttachDocumentDialogProps {
 }
 
 /**
- * Standalone "Matcha mot underlag" dialog for the /transactions view — the
+ * Standalone "Matcha mot underlag" dialog for the /transactions view: the
  * mirror of the Documents view's TransactionMatchPicker (doc → tx direction).
  * Pick an unconsumed inbox document or upload a new file, then pin it to the
  * transaction via POST /api/transactions/[id]/attach-document. The pin is
@@ -52,7 +52,7 @@ export default function TransactionAttachDocumentDialog({
 
   const isIncome = transaction.amount > 0
 
-  // Single selection — transactions.document_id pins exactly one doc, so an
+  // Single selection: transactions.document_id pins exactly one doc, so an
   // inbox pick replaces any upload and vice versa.
   const selectedDocumentId =
     pickedDoc?.document_id ??
@@ -77,7 +77,7 @@ export default function TransactionAttachDocumentDialog({
       if (!res.ok) {
         const json = (await res.json().catch(() => ({}))) as { error?: unknown }
         // The route returns Swedish domain messages (immutability, locked
-        // period) as a plain string — surface them verbatim.
+        // period) as a plain string: surface them verbatim.
         toast({
           title: t('error_toast'),
           description: typeof json.error === 'string' ? json.error : undefined,
@@ -86,7 +86,7 @@ export default function TransactionAttachDocumentDialog({
         return
       }
       toast({ title: t('success_toast') })
-      // Same event AgentChat and the booking dialog dispatch — flips the inbox
+      // Same event AgentChat and the booking dialog dispatch: flips the inbox
       // card's indicator optimistically without a refetch.
       window.dispatchEvent(
         new CustomEvent('Accounted:transaction-document-linked', {
@@ -97,7 +97,7 @@ export default function TransactionAttachDocumentDialog({
       reset()
       onOpenChange(false)
     } catch {
-      // Network-level failure — fetch rejected before a response existed.
+      // Network-level failure: fetch rejected before a response existed.
       toast({ title: t('error_toast'), variant: 'destructive' })
     } finally {
       setIsAttaching(false)
@@ -118,7 +118,7 @@ export default function TransactionAttachDocumentDialog({
           <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
 
-        {/* Transaction summary — same block as TransactionBookingDialog */}
+        {/* Transaction summary: same block as TransactionBookingDialog */}
         <div className="flex items-center gap-3 rounded-lg border p-3">
           <div
             className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${

@@ -64,7 +64,7 @@ export const POST = withRouteContext(
     if (paidPrivately && body.reverse_charge) {
       // RC invoices come from registered businesses with formal invoices and
       // go through normal AP. "Privately paid" only makes sense for
-      // out-of-pocket kvitton — combining the two is a UI bug. 400, not 500.
+      // out-of-pocket kvitton: combining the two is a UI bug. 400, not 500.
       return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
         requestId,
         details: { reason: 'paid_with_private_funds is not supported with reverse_charge' },
@@ -76,12 +76,12 @@ export const POST = withRouteContext(
     )
     if (hasAccrualItems && body.reverse_charge) {
       // Omvänd skattskyldighet: the expense line IS the VAT base for rutor
-      // 20–32 — deferring the net to a 17xx interim account would corrupt the
+      // 20-32: deferring the net to a 17xx interim account would corrupt the
       // momsdeklaration. Mirrors the customer-side reverse-charge guard.
       return errorResponseFromCode('SI_CREATE_ACCRUAL_REVERSE_CHARGE', log, { requestId })
     }
     if (hasAccrualItems && paidPrivately) {
-      // Eget utlägg books the expense in one verifikat at registration —
+      // Eget utlägg books the expense in one verifikat at registration:
       // there is no interim-account flow to defer. UI hides the combination.
       return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
         requestId,
@@ -129,7 +129,7 @@ export const POST = withRouteContext(
       if (!company?.entity_type) {
         return errorResponseFromCode('SI_CREATE_FAILED', log, {
           requestId,
-          details: { reason: 'company entity_type missing — cannot pick owner account' },
+          details: { reason: 'company entity_type missing, cannot pick owner account' },
         })
       }
       entityType = company.entity_type as 'aktiebolag' | 'enskild_firma'
@@ -196,11 +196,11 @@ export const POST = withRouteContext(
     const payableVat = body.reverse_charge ? 0 : vatAmount
     const total = Math.round((subtotal + payableVat) * 100) / 100
 
-    // Representation (BAS 6070–6079): ingående moms is only deductible up to
+    // Representation (BAS 6070-6079): ingående moms is only deductible up to
     // 300 SEK base/person per ML 8 kap. 1 §, and the income-tax deduction was
     // abolished in 2017 (IL 16 kap. 2 §). The engine debits 2641 for the full
     // VAT; we surface a non-blocking warning so the user can adjust manually.
-    // Only emit on the new private-funds path for now — other AP paths share
+    // Only emit on the new private-funds path for now: other AP paths share
     // the flaw and are tracked separately.
     const warnings: Array<{ code: string; message: string }> = []
     if (paidPrivately) {
@@ -209,7 +209,7 @@ export const POST = withRouteContext(
         warnings.push({
           code: 'REPRESENTATION_VAT_CAP',
           message:
-            'Representation (konto 6070–6079): ingående moms är endast avdragsgill ' +
+            'Representation (konto 6070-6079): ingående moms är endast avdragsgill ' +
             'upp till 300 kr/person (ML 8 kap. 1 §) och kostnaden är inte ' +
             'inkomstskattemässigt avdragsgill (IL 16 kap. 2 §). Justera bokföringen ' +
             'manuellt om beloppet överstiger gränsen.',
@@ -262,7 +262,7 @@ export const POST = withRouteContext(
     if (invoiceError || !invoice) {
       // Special-case the unique-index violation on (company_id, supplier_id,
       // supplier_invoice_number). The UI uses the embedded `existing` object
-      // to offer "undo crediting" — preserve that shape inside `details`.
+      // to offer "undo crediting": preserve that shape inside `details`.
       const pgErr = invoiceError as { code?: string; message?: string } | null
       const isDuplicateNumber =
         pgErr?.code === '23505' &&
@@ -336,7 +336,7 @@ export const POST = withRouteContext(
     }
 
     // Accrual method: create the registration journal entry. JE failure here
-    // is fatal — an orphan supplier_invoices row without a registration JE
+    // is fatal: an orphan supplier_invoices row without a registration JE
     // silently understates leverantörsskuld (2440) and ingående moms (2641)
     // for the momsdeklaration. Roll back instead.
     //
@@ -378,20 +378,20 @@ export const POST = withRouteContext(
             company_id: companyId,
             supplier_invoice_id: invoice.id,
             // For an eget utlägg the actual out-of-pocket date may differ from
-            // the invoice/receipt date — accept an explicit payment_date and
+            // the invoice/receipt date: accept an explicit payment_date and
             // fall back to invoice_date for the common kvitto case.
             payment_date: body.payment_date ?? invoice.invoice_date,
             amount: totalRounded,
             currency: invoice.currency,
             exchange_rate_difference: 0,
             journal_entry_id: journalEntry.id,
-            notes: 'Eget utlägg — betalat privat',
+            notes: 'Eget utlägg, betalat privat',
           })
         } else {
           // createSupplierInvoicePrivatelyPaidEntry returns null ONLY when no
           // fiscal period covers invoice_date (every other failure throws and
           // lands in the catch below). Without this branch the invoice would be
-          // saved as status='paid' with no verifikat — a silent orphan. Roll
+          // saved as status='paid' with no verifikat: a silent orphan. Roll
           // back and surface an actionable error, per the fatal-orphan note above.
           await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
           return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', log, {
@@ -434,7 +434,7 @@ export const POST = withRouteContext(
             .eq('id', invoice.id)
 
           if (hasAccrualItems) {
-            // The registration entry is committed (immutable) — a schedule
+            // The registration entry is committed (immutable): a schedule
             // failure must not roll the invoice back. Surface a warning and
             // let the user retry from the periodiseringar page instead.
             const idBySortOrder = new Map(
@@ -468,7 +468,7 @@ export const POST = withRouteContext(
           // fiscal period covers invoice_date (every other failure throws and
           // lands in the catch below). An orphan supplier_invoices row without a
           // registration JE silently understates leverantörsskuld (2440) and
-          // ingående moms (2641) for the momsdeklaration — exactly the fatal
+          // ingående moms (2641) for the momsdeklaration: exactly the fatal
           // case the note above warns about. Roll back and surface an
           // actionable error instead of returning 200.
           await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)

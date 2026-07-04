@@ -45,12 +45,12 @@ export async function POST(
   }
 
   // Idempotent no-op: an already-uncredited or never-credited invoice just returns the row.
-  // Friendlier than a 409 — the client retry path can blindly call this without checking first.
+  // Friendlier than a 409: the client retry path can blindly call this without checking first.
   if (original.status !== 'credited') {
     return NextResponse.json({ data: original })
   }
 
-  // Filter out already-reversed credits — re-crediting the same original after a prior
+  // Filter out already-reversed credits: re-crediting the same original after a prior
   // uncredit creates a second credit row, so we may find multiple historical matches.
   const { data: creditNote } = await supabase
     .from('supplier_invoices')
@@ -73,13 +73,13 @@ export async function POST(
       )
       reversalEntryId = reversal.id
     } catch (err) {
-      // Already reversed (manually or by another concurrent uncredit) — fine, continue.
+      // Already reversed (manually or by another concurrent uncredit): fine, continue.
       if (err instanceof CannotReverseNonPostedError || err instanceof EntryAlreadyReversedError) {
         // proceed to row cleanup
       } else {
         const typed = bookkeepingErrorResponse(err)
         if (typed) return typed
-        // Period lock and similar trigger errors — surface a clear Swedish message
+        // Period lock and similar trigger errors: surface a clear Swedish message
         // so the user knows WHY the action failed (per project's error-UX guidelines).
         return NextResponse.json(
           { error: getErrorMessage(err, { context: 'supplier_invoice' }) },
@@ -111,7 +111,7 @@ export async function POST(
   }
 
   // Recompute original status from payments. The credit had reduced remaining_amount
-  // to 0 and bumped status to 'credited' — undo both based on what's actually paid.
+  // to 0 and bumped status to 'credited': undo both based on what's actually paid.
   const payments = (original.payments as SupplierInvoicePayment[]) || []
   const paidSum = payments.reduce((sum, p) => sum + (p.amount || 0), 0)
   const total = original.total || 0

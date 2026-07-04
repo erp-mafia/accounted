@@ -68,7 +68,7 @@ export async function PUT(request: Request) {
   if (!validation.success) return validation.response
   const body = validation.data
 
-  // Lock org_number after onboarding is complete (legal identifier — changing it
+  // Lock org_number after onboarding is complete (legal identifier: changing it
   // would orphan vouchers, SIE history, and tax filings). company_name remains
   // editable so users can update their display/brand name (e.g. särskilt företagsnamn).
   if (oldSettings && (oldSettings as Record<string, unknown>).onboarding_complete === true) {

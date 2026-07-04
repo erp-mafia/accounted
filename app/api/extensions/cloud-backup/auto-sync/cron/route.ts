@@ -17,7 +17,7 @@ import type { GoogleDriveSchedule } from '@/extensions/general/cloud-backup/type
  * is either unset or more than 20 hours old. Triggers a full Drive backup for
  * each qualifying company via the shared `performSync()` helper.
  *
- * Uses the service role client — no user session, no RLS. Each row in
+ * Uses the service role client: no user session, no RLS. Each row in
  * `extension_data` carries its own `user_id` (the user who configured the
  * schedule), which we use as the "actor" when writing back the sync result.
  */
@@ -74,7 +74,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
   }
 
   const startTime = Date.now()
-  const TIME_BUDGET_MS = 250_000 // 4m10s — leaves 50s margin below Vercel's 300s Pro limit
+  const TIME_BUDGET_MS = 250_000 // 4m10s: leaves 50s margin below Vercel's 300s Pro limit
 
   const results: {
     companyId: string

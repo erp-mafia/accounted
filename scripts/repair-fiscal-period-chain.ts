@@ -130,7 +130,7 @@ async function validateState() {
 
   if ((gapCount ?? 0) > 0)
     throw new Error(
-      `Gap between ${prior.period_end} and ${SHORT_END} has ${gapCount} entries — repair assumes zero activity in gap`
+      `Gap between ${prior.period_end} and ${SHORT_END} has ${gapCount} entries: repair assumes zero activity in gap`
     )
 
   // Orphan must be empty
@@ -142,7 +142,7 @@ async function validateState() {
     .in('status', ['posted', 'reversed'])
 
   if ((orphanEntries ?? 0) > 0)
-    throw new Error(`Orphan period has ${orphanEntries} posted entries — not safe to repair automatically`)
+    throw new Error(`Orphan period has ${orphanEntries} posted entries: not safe to repair automatically`)
 
   // Short period dates must be contiguous with prior
   const nextAfterPrior = new Date(prior.period_end + 'T12:00:00Z')
@@ -179,7 +179,7 @@ async function step1YearEndPrior(priorEnd: string) {
   console.log(`    ${preview.closingLines.length} closing lines`)
 
   if (preview.closingLines.length === 0) {
-    throw new Error('No result accounts to close — prior period has no activity')
+    throw new Error('No result accounts to close: prior period has no activity')
   }
 
   if (!COMMIT) {
@@ -228,7 +228,7 @@ async function step2InsertShortPeriod() {
     .insert({
       company_id: COMPANY_ID!,
       user_id: USER_ID!,
-      name: `Transition ${SHORT_START.slice(0, 7)}–${SHORT_END.slice(0, 7)}`,
+      name: `Transition ${SHORT_START.slice(0, 7)}-${SHORT_END.slice(0, 7)}`,
       period_start: SHORT_START,
       period_end: SHORT_END,
       previous_period_id: PRIOR_ID!,
@@ -313,7 +313,7 @@ async function step7Continuity() {
 
 async function main() {
   const { prior } = await validateState()
-  console.log(`✓ Validated state — prior '${prior.name}' (${prior.period_start} → ${prior.period_end})`)
+  console.log(`✓ Validated state: prior '${prior.name}' (${prior.period_start} → ${prior.period_end})`)
 
   const { closingEntryId } = await step1YearEndPrior(prior.period_end)
   const shortPeriodId = await step2InsertShortPeriod()

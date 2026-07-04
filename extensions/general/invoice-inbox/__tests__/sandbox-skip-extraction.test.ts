@@ -253,7 +253,7 @@ describe('Sandbox companies skip Bedrock extraction', () => {
 // stored, extraction skipped with reason 'no_ai_entitlement'); retry is an
 // explicit "run AI" action and hard-blocks with 403 capability_blocked.
 describe('Free tier (no ai capability) does not run Bedrock extraction', () => {
-  it('POST /upload — skips extraction with skip_reason=no_ai_entitlement (highest priority)', async () => {
+  it('POST /upload: skips extraction with skip_reason=no_ai_entitlement (highest priority)', async () => {
     vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const captured: { row?: Record<string, unknown> } = {}
     // Not a sandbox: proves the ai gate wins over a passing sandbox check.
@@ -274,7 +274,7 @@ describe('Free tier (no ai capability) does not run Bedrock extraction', () => {
     expect(captured.row?.extraction_skipped).toBe(true)
   })
 
-  it('POST /items/:id/attach-document — skips extraction when the company lacks ai', async () => {
+  it('POST /items/:id/attach-document: skips extraction when the company lacks ai', async () => {
     vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -311,10 +311,10 @@ describe('Free tier (no ai capability) does not run Bedrock extraction', () => {
     expect(body.data.skip_reason).toBe('no_ai_entitlement')
   })
 
-  it('POST /items/:id/retry-extraction — hard-blocks with 403 capability_blocked', async () => {
+  it('POST /items/:id/retry-extraction: hard-blocks with 403 capability_blocked', async () => {
     vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // item lookup — the ai gate fires immediately after, before the sandbox check
+    // item lookup: the ai gate fires immediately after, before the sandbox check
     enqueue({
       data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
       error: null,

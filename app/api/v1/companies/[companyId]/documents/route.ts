@@ -8,22 +8,22 @@
  * is_current_version=true).
  *
  * multipart/form-data parts:
- *   file              (required, binary) — the document; MIME validated
- *   upload_source     (optional)         — 'file_upload' (default) | 'camera' | 'email' | 'api'
- *   journal_entry_id  (optional UUID)    — link the document to a JE at upload time
- *   journal_entry_line_id (optional UUID) — link to a specific JE line
+ *   file              (required, binary): the document; MIME validated
+ *   upload_source     (optional)        : 'file_upload' (default) | 'camera' | 'email' | 'api'
+ *   journal_entry_id  (optional UUID)   : link the document to a JE at upload time
+ *   journal_entry_line_id (optional UUID): link to a specific JE line
  *
- * Idempotent (mandatory Idempotency-Key — the SHA-256 of the bytes is the
+ * Idempotent (mandatory Idempotency-Key: the SHA-256 of the bytes is the
  * deduplication anchor on retry inside the engine's `upsert: false` storage
  * write).
  *
- * Dry-run is NOT supported on this endpoint — the engine hashes + stores +
+ * Dry-run is NOT supported on this endpoint: the engine hashes + stores +
  * inserts atomically; the "dry-run" equivalent is a client-side
  * size+MIME check before submitting. Future iteration may add a header-only
  * preflight; held back to keep the multipart contract minimal.
  *
  * WORM (BFL 7 kap): once inserted, the row cannot be modified or deleted
- * if it is linked to a posted journal entry — the DB trigger blocks both.
+ * if it is linked to a posted journal entry: the DB trigger blocks both.
  * Updating a document means uploading a new VERSION via the dashboard
  * (no v1 endpoint today; bypassing through the dashboard is intentional
  * until the contract is hardened with audit-trail tests).
@@ -75,13 +75,13 @@ registerEndpoint({
   useWhen:
     'You have a receipt, invoice scan, or supporting document for a posted verifikation and want it archived for the 7-year BFL retention period. Optionally link to a journal entry at upload time via journal_entry_id.',
   doNotUseFor:
-    'Updating an existing document (no v1 update endpoint; new versions go through the dashboard). Bulk uploads — call once per file.',
+    'Updating an existing document (no v1 update endpoint; new versions go through the dashboard). Bulk uploads: call once per file.',
   pitfalls: [
     'Idempotency-Key is mandatory; multipart retries with the same key replay the cached response.',
-    `Max size ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB enforced server-side — DOC_UPLOAD_TOO_LARGE on overrun.`,
-    `Only ${ALLOWED_DOCUMENT_TYPES.join(' / ')} accepted — DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.`,
+    `Max size ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun.`,
+    `Only ${ALLOWED_DOCUMENT_TYPES.join(' / ')} accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.`,
     'WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.',
-    'Dry-run is not supported on this endpoint — the engine hashes + stores + inserts in one atomic flow.',
+    'Dry-run is not supported on this endpoint: the engine hashes + stores + inserts in one atomic flow.',
   ],
   example: {
     request: {
@@ -196,7 +196,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // If the caller supplied journal_entry_id, verify it belongs to the
     // caller's company before the upload commits. Otherwise we'd persist a
-    // document whose `journal_entry_id` points at another company's JE —
+    // document whose `journal_entry_id` points at another company's JE:
     // the DB has no FK enforcing cross-table tenancy.
     if (journalEntryId) {
       const { data: jeRow, error: jeErr } = await ctx.supabase
@@ -268,7 +268,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           journal_entry_line_id: journalEntryLineId,
         },
       )
-      // `storage_path` is deliberately omitted from the public response —
+      // `storage_path` is deliberately omitted from the public response:
       // the path encodes internal layout (userId prefix + timestamp) which
       // /download deliberately keeps hidden. Use /download/{id} to fetch
       // the actual bytes via a short-lived signed URL.
@@ -291,7 +291,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown'
       // Magic-byte validation rejections (validateDocumentMagicBytes) are a
-      // client problem, not a storage failure — surface as 400 with an
+      // client problem, not a storage failure: surface as 400 with an
       // accurate message instead of the misleading "kunde inte sparas".
       if (/kunde inte verifieras|matchar inte den angivna filtypen/i.test(message)) {
         opLog.warn('document upload rejected by content validation', { reason: message })

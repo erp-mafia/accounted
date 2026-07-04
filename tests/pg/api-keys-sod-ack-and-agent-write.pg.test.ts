@@ -10,12 +10,12 @@ import { getPool } from '@/tests/pg/setup'
  *   - The two SoD-acknowledgement columns exist with the expected types and
  *     the sod_acknowledged_by FK targets auth.users(id).
  *   - The grandfather UPDATE shipped agent:write onto every non-revoked key
- *     that already carried an explicit scope list (idempotent — running it
+ *     that already carried an explicit scope list (idempotent: running it
  *     again adds no duplicate).
  *   - NULL-scopes (legacy full/default access) and revoked keys were left
  *     untouched.
  *
- * Inserts go through the pool (superuser, RLS-bypassing) — this is a schema /
+ * Inserts go through the pool (superuser, RLS-bypassing): this is a schema /
  * data-migration smoke, not an RLS test.
  */
 
@@ -121,7 +121,7 @@ describe('api_keys SoD-ack columns + agent:write grandfathering', () => {
       scopes: ['invoices:write', 'pending_operations:approve'],
     })
 
-    // Timestamp without acknowledger — the audit pair must be both-or-neither.
+    // Timestamp without acknowledger: the audit pair must be both-or-neither.
     await expect(
       getPool().query(
         `UPDATE public.api_keys SET sod_acknowledged_at = now() WHERE id = $1`,
@@ -129,7 +129,7 @@ describe('api_keys SoD-ack columns + agent:write grandfathering', () => {
       ),
     ).rejects.toMatchObject({ code: '23514' }) // check_violation
 
-    // Acknowledger without timestamp — equally rejected.
+    // Acknowledger without timestamp: equally rejected.
     await expect(
       getPool().query(
         `UPDATE public.api_keys SET sod_acknowledged_by = $2 WHERE id = $1`,

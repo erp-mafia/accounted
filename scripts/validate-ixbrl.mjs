@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Validate a generated iXBRL årsredovisning against the official taxonomy
- * package using Arelle (https://arelle.org) — layer 2 of the validation
+ * package using Arelle (https://arelle.org): layer 2 of the validation
  * stack (layer 1 = pre-flight rules engine, layer 3 = Bolagsverket
  * `kontrollera`).
  *
@@ -105,7 +105,7 @@ if (status === null) {
 
 if (status === null) {
   console.log(
-    'Arelle is not installed — skipping schema validation.\n' +
+    'Arelle is not installed: skipping schema validation.\n' +
       'Install with: pip install arelle-release  (or use the arelle/arelle docker image).',
   )
   process.exit(0)

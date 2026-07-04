@@ -2,7 +2,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * DataList — unified list surface (one bordered container, hairline rows).
+ * DataList: unified list surface (one bordered container, hairline rows).
  *
  * Replaces the per-row Card pattern across Granskning, Transactions, and
  * similar list pages. Visual contract is flat-with-hairlines per CLAUDE.md:

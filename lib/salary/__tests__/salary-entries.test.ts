@@ -18,7 +18,7 @@ import { createSalaryRunEntries } from '../salary-entries'
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 
 // Supabase mock only needs the chart_of_accounts existence check in
-// ensureSalaryAccountsExist — pretend every account already exists.
+// ensureSalaryAccountsExist: pretend every account already exists.
 function makeSupabase() {
   return {
     from: vi.fn(() => ({
@@ -107,7 +107,7 @@ beforeEach(() => {
   mockedCreateEntry.mockClear()
 })
 
-describe('salary entries — dimensions propagation (PR8)', () => {
+describe('salary entries: dimensions propagation (PR8)', () => {
   it('splits the salary expense per employee bag; tax and bank legs stay untagged', async () => {
     const run = makeRun([
       makeEmployee({ employee_id: 'a', default_dimensions: { '1': 'KS01' } }),

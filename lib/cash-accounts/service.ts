@@ -83,7 +83,7 @@ export async function getPrimary(
 
   if (currency) {
     // Fall back to any-currency primary so a company without a SEK account still
-    // resolves the sentinel — rare but possible (manual cash-on-hand only).
+    // resolves the sentinel: rare but possible (manual cash-on-hand only).
     const { data: anyPrimary } = await supabase
       .from('cash_accounts')
       .select('*')
@@ -120,7 +120,7 @@ export async function findByIban(
  * (company_id, bank_connection_id, external_uid). When the row exists, balance
  * and ledger_account are refreshed; the rest of the metadata stays put.
  *
- * Never sets is_primary — that's owned by the user via the AccountPicker or by
+ * Never sets is_primary: that's owned by the user via the AccountPicker or by
  * the initial-backfill migration.
  */
 export async function upsertFromPsd2(
@@ -145,7 +145,7 @@ export async function upsertFromPsd2(
   // create_company_with_owner and the seed_default_cash_account migration plant
   // a manual (bank_connection_id IS NULL) row on the same ledger_account so
   // reconciliation routes work before any PSD2 connection exists. The first
-  // PSD2 sync for that BAS slot has to promote that row in place — a plain
+  // PSD2 sync for that BAS slot has to promote that row in place: a plain
   // upsert on (company_id, bank_connection_id, external_uid) wouldn't match it
   // (NULL ≠ NULL) and the INSERT path then trips the (company_id,
   // ledger_account) UNIQUE constraint.
@@ -168,7 +168,7 @@ export async function upsertFromPsd2(
   }
 
   if (seedRow) {
-    // .select() so we can detect a 0-row UPDATE — Supabase's update().eq() returns
+    // .select() so we can detect a 0-row UPDATE: Supabase's update().eq() returns
     // { error: null, data: [] } if the row was deleted between the SELECT above
     // and this UPDATE (rare but theoretically possible under concurrent ops).
     // If that happens, fall through to the normal upsert path instead of
@@ -190,7 +190,7 @@ export async function upsertFromPsd2(
     if (promoted && promoted.length > 0) {
       return
     }
-    // Seed row vanished between SELECT and UPDATE — fall through to upsert.
+    // Seed row vanished between SELECT and UPDATE: fall through to upsert.
   }
 
   const { error } = await supabase
@@ -228,7 +228,7 @@ export async function setEnabled(
 
 /**
  * Remap a cash account to a different BAS ledger account. Triggers RLS + the
- * (company_id, ledger_account) UNIQUE constraint — surface conflict errors so
+ * (company_id, ledger_account) UNIQUE constraint: surface conflict errors so
  * the UI can prompt the user to resolve.
  */
 export async function setLedgerAccount(
@@ -249,7 +249,7 @@ export async function setLedgerAccount(
  * Mark a cash account as the primary for its company. Delegates to the
  * `set_cash_account_primary` RPC so the clear-old-primary and set-new-primary
  * updates happen inside a single transaction. The intermediate "no primary"
- * state is never visible to concurrent readers — important because
+ * state is never visible to concurrent readers: important because
  * skattekonto-booking's __PRIMARY_SEK__ resolver runs through getPrimary() and
  * would otherwise see null in the gap and mis-route the counter account.
  */

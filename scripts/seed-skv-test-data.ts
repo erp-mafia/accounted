@@ -178,7 +178,7 @@ const scenarios: Scenario[] = [
     ],
   },
   {
-    description: 'Owner uttag in kind (only for EF) — comment out if AB',
+    description: 'Owner uttag in kind (only for EF): comment out if AB',
     expectedRutor: 'Ruta 06 + 10',
     lines: [
       { account: '2013', debit: 1250, description: 'Egna uttag' },

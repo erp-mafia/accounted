@@ -1,4 +1,4 @@
-// Shared display helpers for the agent conversation list — used by both the
+// Shared display helpers for the agent conversation list: used by both the
 // full-page /chat sidebar (ChatSidebar) and the in-sheet "resume conversation"
 // list (AgentSessionList). Pure functions; no React. Keeping them in one place
 // means the Idag / Igår / Denna vecka / Äldre grouping and the relative-time

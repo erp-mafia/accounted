@@ -30,7 +30,7 @@ function SetPasswordContent() {
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/settings/account')
 
-  // Users who already have a password don't belong here — bounce them away.
+  // Users who already have a password don't belong here: bounce them away.
   useEffect(() => {
     let cancelled = false
     ;(async () => {

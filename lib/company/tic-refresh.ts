@@ -19,7 +19,7 @@ export interface RefreshCompanyProfileResult {
  * Fetch Bolagsuppgifter on demand from the settings → Företag panel.
  *
  * The panel normally shows the cached `companies.tic_snapshot`. This action
- * lets the user (re)fetch it live by submitting an org number / personnummer —
+ * lets the user (re)fetch it live by submitting an org number / personnummer:
  * the path that recovers a company whose cached snapshot is missing or wrong
  * (e.g. an enskild firma whose 10-digit personnummer previously fuzzy-matched
  * the wrong entity; `searchCompanyByOrgNumber` now expands it to the 12-digit
@@ -50,7 +50,7 @@ export async function refreshCompanyProfileAction(
     .eq('id', companyId)
   if (updateError) return { error: 'persist_failed' }
 
-  // Keep the settings form (which reads company_settings.org_number) in sync —
+  // Keep the settings form (which reads company_settings.org_number) in sync,
   // best-effort; the TIC fetch reads companies.org_number, updated above.
   await supabase
     .from('company_settings')
@@ -58,7 +58,7 @@ export async function refreshCompanyProfileAction(
     .eq('company_id', companyId)
 
   // Self-fetch needs the caller's session cookie and the current origin so it
-  // reaches this same instance (dev / preview / prod) — see ensureTicSnapshot.
+  // reaches this same instance (dev / preview / prod); see ensureTicSnapshot.
   const cookieStore = await cookies()
   const cookieHeader = cookieStore.getAll().map((c) => `${c.name}=${c.value}`).join('; ')
   const hdrs = await headers()
@@ -77,7 +77,7 @@ export async function refreshCompanyProfileAction(
   })
 
   // 'fetched' = a fresh live fetch was persisted. 'fallback' = TIC returned
-  // nothing / errored — surface it and leave the existing snapshot untouched
+  // nothing / errored: surface it and leave the existing snapshot untouched
   // rather than blanking a good panel on a transient outage.
   if (source !== 'fetched' || !snapshot) {
     return { error: 'not_found' }

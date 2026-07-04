@@ -141,7 +141,7 @@ describe('switchCompany', () => {
   })
 })
 
-describe('createCompanyFromOnboarding — org_number validation', () => {
+describe('createCompanyFromOnboarding: org_number validation', () => {
   it('rejects malformed org_numbers at the guard boundary', async () => {
     const { supabase } = buildSupabase({
       user: { id: 'user-1' },
@@ -164,7 +164,7 @@ describe('createCompanyFromOnboarding — org_number validation', () => {
     })
 
     expect(result.error).toBe('org_number_invalid')
-    // Must NOT have reached the create RPC — otherwise we'd save a malformed
+    // Must NOT have reached the create RPC: otherwise we'd save a malformed
     // org_number and poison SIE/SRU exports.
     const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')
     expect(rpcCreate).toBeUndefined()
@@ -201,7 +201,7 @@ describe('createCompanyFromOnboarding — org_number validation', () => {
   })
 })
 
-describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
+describe('createCompanyFromOnboarding: TIC snapshot persistence', () => {
   it('persists the supplied ticLookup to companies.tic_snapshot', async () => {
     const { supabase, calls } = buildSupabase({
       user: { id: 'user-1' },
@@ -273,7 +273,7 @@ describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
       settings: {
         entity_type: 'aktiebolag',
         company_name: 'Manual AB',
-        // No org_number — exercises the path where the org_number UPDATE also
+        // No org_number: exercises the path where the org_number UPDATE also
         // doesn't run, so we can isolate the no-snapshot guarantee.
       },
       fiscalPeriod: {

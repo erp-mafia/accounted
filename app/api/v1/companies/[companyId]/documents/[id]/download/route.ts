@@ -4,7 +4,7 @@
  * Returns a signed Supabase Storage URL (15-minute expiry) for the
  * document's current version. The signed URL is a direct-download link
  * the caller can fetch from any HTTP client without re-presenting an
- * API key — keep it server-side and don't surface to end-users beyond
+ * API key: keep it server-side and don't surface to end-users beyond
  * the immediate transaction.
  *
  * The endpoint emits a `document.accessed` event (best-effort) so the
@@ -25,8 +25,8 @@ const DocumentDownloadResponse = z.object({
   sha256_hash: z.string(),
   /**
    * False when the requested id is a SUPERSEDED version (a newer version
-   * exists). The signed URL is still issued — old versions are retained
-   * for BFL 7 kap audit — but agents should treat the response as
+   * exists). The signed URL is still issued: old versions are retained
+   * for BFL 7 kap audit, but agents should treat the response as
    * historical and re-resolve the current version via GET /documents
    * if they need the latest bytes.
    */
@@ -39,7 +39,7 @@ const DocumentDownloadResponse = z.object({
 // ISO 27001 A.8.12) when the original 60-minute window was flagged as a
 // bearer-token-equivalent with too wide an exposure window. The dashboard
 // internal route still issues 60min URLs because it's gated by an active
-// session; the v1 surface has no session, only the URL itself — so the
+// session; the v1 surface has no session, only the URL itself: so the
 // shorter window applies. A caller that needs longer than 15 minutes for
 // a single download should re-request the URL.
 const SIGNED_URL_TTL_SECONDS = 15 * 60
@@ -49,11 +49,11 @@ registerEndpoint({
   method: 'GET',
   path: '/api/v1/companies/:companyId/documents/:id/download',
   summary: 'Get a time-limited signed download URL for a document.',
-  description: `Returns a Supabase Storage signed URL valid for ${SIGNED_URL_TTL_SECONDS / 60} minutes. The URL itself is the canonical download — fetch it with any HTTP client; no API key needed on the storage host. Verify file integrity client-side against the returned sha256_hash if your workflow requires it.`,
+  description: `Returns a Supabase Storage signed URL valid for ${SIGNED_URL_TTL_SECONDS / 60} minutes. The URL itself is the canonical download: fetch it with any HTTP client; no API key needed on the storage host. Verify file integrity client-side against the returned sha256_hash if your workflow requires it.`,
   useWhen:
-    'You need the bytes of an archived document (e.g. for OCR, attachment to an email, regulatory export). Always re-fetch the URL before each download — old URLs expire.',
+    'You need the bytes of an archived document (e.g. for OCR, attachment to an email, regulatory export). Always re-fetch the URL before each download: old URLs expire.',
   doNotUseFor:
-    'Persisting the URL anywhere — it expires. Storing the URL in a webhook payload or audit log makes the audit trail dependent on URL state.',
+    'Persisting the URL anywhere: it expires. Storing the URL in a webhook payload or audit log makes the audit trail dependent on URL state.',
   pitfalls: [
     `The signed URL expires after ${SIGNED_URL_TTL_SECONDS / 60} minutes. Don't cache it beyond the immediate transaction.`,
     'The URL leaks the Supabase Storage origin; this is benign (the signature alone authorizes the read) but rate-limit any forwarding so you don\'t reveal the storage layout to untrusted callers.',
@@ -102,7 +102,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     if (docErr) return v1ErrorResponse(docErr, ctx.log, { requestId: ctx.requestId })
     if (!doc) {
-      // Enumeration hardening — wrong id and cross-tenant id are
+      // Enumeration hardening: wrong id and cross-tenant id are
       // indistinguishable from outside.
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,

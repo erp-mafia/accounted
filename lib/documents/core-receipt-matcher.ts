@@ -1,5 +1,5 @@
 /**
- * Core Receipt Matcher — pure matching utility functions extracted from the
+ * Core Receipt Matcher: pure matching utility functions extracted from the
  * receipt-ocr extension so they can be reused by the document matching engine.
  *
  * These are pure functions with no Supabase or extension dependencies.
@@ -88,11 +88,11 @@ export function calculateMerchantSimilarity(name1: string, name2: string): numbe
  * underlag (receipt/invoice) total, currency-aware. Feeds the `amountVariance`
  * argument of calculateMatchConfidence.
  *
- * Returns `null` when the amounts cannot be compared — either there is no
+ * Returns `null` when the amounts cannot be compared: either there is no
  * underlag total, or the two are in different currencies and the underlag has
  * no SEK value (no FX rate). A null result is the signal for
  * calculateMatchConfidence to drop the amount weight entirely instead of
- * comparing raw magnitudes across currencies — that cross-currency raw compare
+ * comparing raw magnitudes across currencies: that cross-currency raw compare
  * is exactly what made a 750 EUR receipt falsely match a 750 SEK transaction.
  *
  * Magnitudes are compared (Math.abs) because a bank expense row is negative
@@ -141,7 +141,7 @@ export function amountVarianceForMatch(
  * `amountVariance` may be `null` when the candidate and the underlag are in
  * different currencies and no FX rate was available to normalise them. In that
  * case the amount signal is dropped entirely (same treatment as a missing
- * merchant) rather than comparing raw magnitudes across currencies — that is
+ * merchant) rather than comparing raw magnitudes across currencies: that is
  * what made a 750 EUR receipt falsely match a 750 SEK transaction.
  */
 export function calculateMatchConfidence(
@@ -163,7 +163,7 @@ export function calculateMatchConfidence(
   weightedScore += dateScore * 0.25
   totalWeight += 0.25
 
-  // Amount score (weight: 40%) — only counted when the amounts are comparable
+  // Amount score (weight: 40%): only counted when the amounts are comparable
   // (same currency, or both normalisable to SEK).
   if (amountVariance != null) {
     const amountScore = Math.max(0, 1 - amountVariance / amountTolerance)
@@ -176,7 +176,7 @@ export function calculateMatchConfidence(
     totalWeight += 0.4
   }
 
-  // Merchant score (weight: 35%) — only counted when there's data
+  // Merchant score (weight: 35%): only counted when there's data
   if (merchantSimilarity > 0) {
     if (merchantSimilarity >= 0.9) {
       matchReasons.push('Handlare matchar')

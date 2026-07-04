@@ -9,7 +9,7 @@ const log = createLogger('skattekonto-drift-email')
 /**
  * Email handler for `skattekonto.drift_detected`. Notifies the company contact
  * that their cached Skatteverket saldo and the bookkeeping have diverged
- * beyond the configured tolerance — without putting the saldo or drift figures
+ * beyond the configured tolerance: without putting the saldo or drift figures
  * in the email body. The actual numbers are surfaced behind authenticated UI
  * (the dashboard SkattekontoDriftTile) so a misdelivered mail doesn't leak
  * financial figures.
@@ -27,7 +27,7 @@ export async function handleSkattekontoDriftDetected(
   ctx?: ExtensionContext,
 ): Promise<void> {
   if (!ctx) {
-    log.warn('drift event fired without ctx — cannot resolve recipient', {
+    log.warn('drift event fired without ctx: cannot resolve recipient', {
       companyId: payload.companyId,
     })
     return
@@ -35,7 +35,7 @@ export async function handleSkattekontoDriftDetected(
 
   const email = getEmailService()
   if (!email.isConfigured()) {
-    log.info('email service not configured — skipping drift alert', {
+    log.info('email service not configured: skipping drift alert', {
       companyId: payload.companyId,
     })
     return
@@ -56,7 +56,7 @@ export async function handleSkattekontoDriftDetected(
 
   const subject = 'Skattekontot stämmer inte med bokföringen'
 
-  // Body intentionally carries no figures — only a notification that the
+  // Body intentionally carries no figures: only a notification that the
   // user should look at the dashboard tile. ISO 27001 A.8.11 / A.5.34: avoid
   // outbound financial data to addresses that may be stale.
   const lines = [
@@ -66,8 +66,8 @@ export async function handleSkattekontoDriftDetected(
     dashboardLink,
     '',
     'Vanliga orsaker att differensen syns redan innan en åtgärd behövs:',
-    '• Anstånd — saldot förskjuts hos Skatteverket men bokföringen påverkas inte.',
-    '• Tidsskillnad — F-skatt debiteras den 12:e men förfaller senare, så Skatteverkets saldo kan ligga före bokföringen.',
+    '• Anstånd: saldot förskjuts hos Skatteverket men bokföringen påverkas inte.',
+    '• Tidsskillnad: F-skatt debiteras den 12:e men förfaller senare, så Skatteverkets saldo kan ligga före bokföringen.',
     '• Obokförda skattekonto-rader som väntar på din kategorisering.',
     '',
     'Skapa inte en rättelseverifikation innan du har granskat raderna i gnubok.',
@@ -79,8 +79,8 @@ export async function handleSkattekontoDriftDetected(
 <p><a href="${escapeHtml(dashboardLink)}">Logga in på Accounted</a> för att se beloppen och granska skattekonto-raderna.</p>
 <p><strong>Vanliga orsaker att differensen syns redan innan en åtgärd behövs:</strong></p>
 <ul>
-  <li>Anstånd — saldot förskjuts hos Skatteverket men bokföringen påverkas inte.</li>
-  <li>Tidsskillnad — F-skatt debiteras den 12:e men förfaller senare, så Skatteverkets saldo kan ligga före bokföringen.</li>
+  <li>Anstånd: saldot förskjuts hos Skatteverket men bokföringen påverkas inte.</li>
+  <li>Tidsskillnad: F-skatt debiteras den 12:e men förfaller senare, så Skatteverkets saldo kan ligga före bokföringen.</li>
   <li>Obokförda skattekonto-rader som väntar på din kategorisering.</li>
 </ul>
 <p>Skapa inte en rättelseverifikation innan du har granskat raderna i gnubok.</p>

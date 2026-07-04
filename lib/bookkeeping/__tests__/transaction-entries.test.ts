@@ -554,13 +554,13 @@ describe('buildDomesticExpenseLines', () => {
   })
 })
 
-describe('createTransactionJournalEntry — dimensions propagation (PR7)', () => {
+describe('createTransactionJournalEntry: dimensions propagation (PR7)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedFindFiscalPeriod.mockResolvedValue('period-1')
   })
 
-  it('expense: tags ONLY the business debit line — bank and VAT lines stay untagged', async () => {
+  it('expense: tags ONLY the business debit line: bank and VAT lines stay untagged', async () => {
     const tx = makeTransaction({ amount: -1250, description: 'Software license' })
     const vatLines: VatJournalLine[] = [
       { account_number: '2641', debit_amount: 250, credit_amount: 0, description: 'Ingående moms 25%' },
@@ -583,7 +583,7 @@ describe('createTransactionJournalEntry — dimensions propagation (PR7)', () =>
     expect(input.lines.find(l => l.account_number === '1930')?.dimensions).toBeUndefined()
   })
 
-  it('income: tags ONLY the revenue credit line — bank and output-VAT lines stay untagged', async () => {
+  it('income: tags ONLY the revenue credit line: bank and output-VAT lines stay untagged', async () => {
     const tx = makeTransaction({ amount: 12500, description: 'Sales income' })
     const vatLines: VatJournalLine[] = [
       { account_number: '2611', debit_amount: 0, credit_amount: 2500, description: 'Utgående moms 25%' },
@@ -608,7 +608,7 @@ describe('createTransactionJournalEntry — dimensions propagation (PR7)', () =>
     const tx = makeTransaction({ amount: -1250, description: 'Multi-line pattern' })
     const vatLines: VatJournalLine[] = [
       { account_number: '5410', debit_amount: 1000, credit_amount: 0, description: 'Kostnad', dimensions: { '6': 'P001' } },
-      // No dimensions on the VAT line — must NOT inherit the categorize-level bag.
+      // No dimensions on the VAT line: must NOT inherit the categorize-level bag.
       { account_number: '2641', debit_amount: 250, credit_amount: 0, description: 'Ingående moms' },
     ]
     const mapping = makeMappingResult({
@@ -655,7 +655,7 @@ describe('createTransactionJournalEntry — dimensions propagation (PR7)', () =>
     expect(input.lines.find(l => l.account_number === '1930')?.dimensions).toBeUndefined()
   })
 
-  it('default_private path never tags — even when a bag is set on the mapping', async () => {
+  it('default_private path never tags: even when a bag is set on the mapping', async () => {
     const tx = makeTransaction({ amount: -500, description: 'Lunch privat' })
     const mapping = makeMappingResult({
       debit_account: '2013',

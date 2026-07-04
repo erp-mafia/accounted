@@ -1,10 +1,10 @@
 /**
- * Dimensions PR4 — gnubok_get_dimension_pnl MCP surface tests.
+ * Dimensions PR4: gnubok_get_dimension_pnl MCP surface tests.
  *
  * Covers registration (schema conventions + scope map) and the execute path:
  * default-period lookup, explicit period + date-window passthrough, and the
  * sie_dim_no guard. The matrix math itself is covered by the generator's own
- * tests in lib/reports/__tests__/ — here generateDimensionPnl is mocked.
+ * tests in lib/reports/__tests__/: here generateDimensionPnl is mocked.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -49,7 +49,7 @@ beforeEach(() => {
 
 // ── Registration ─────────────────────────────────────────────────────────────
 
-describe('gnubok_get_dimension_pnl — registration', () => {
+describe('gnubok_get_dimension_pnl: registration', () => {
   it('is registered, read-only, and mapped to reports:read (unmapped = any key)', () => {
     expect(tool).toBeDefined()
     expect(tool.annotations).toEqual({
@@ -77,7 +77,7 @@ describe('gnubok_get_dimension_pnl — registration', () => {
 
 // ── Execute ──────────────────────────────────────────────────────────────────
 
-describe('gnubok_get_dimension_pnl — execute', () => {
+describe('gnubok_get_dimension_pnl: execute', () => {
   it('passes an explicit period + date window straight to the generator (no period lookup)', async () => {
     const { supabase } = createQueuedMockSupabase()
     const report = makeReport()

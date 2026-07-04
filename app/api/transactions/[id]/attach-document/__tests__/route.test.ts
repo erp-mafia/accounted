@@ -93,7 +93,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     expect(body.data.transaction_id).toBe('tx-1')
     expect(body.data.document_id).toBe('11111111-1111-4111-8111-111111111111')
     expect(body.data.journal_entry_id).toBeNull()
-    // Unbooked tx — document_attachments is only read (doc fetch), never
+    // Unbooked tx: document_attachments is only read (doc fetch), never
     // written: no journal entry to propagate to.
     const fromCalls = mockSupabase.from.mock.calls.map((c) => c[0])
     expect(fromCalls.filter((t) => t === 'document_attachments')).toHaveLength(1)
@@ -128,7 +128,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     )
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(200)
-    // No propagation write — only the doc fetch touched document_attachments.
+    // No propagation write: only the doc fetch touched document_attachments.
     const fromCalls = mockSupabase.from.mock.calls.map((c) => c[0])
     expect(fromCalls.filter((t) => t === 'document_attachments')).toHaveLength(1)
   })
@@ -206,7 +206,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     expect(fromCalls).toContain('invoice_inbox_items')
   })
 
-  it('tolerates a failing inbox-link update — the document attach is the primary effect', async () => {
+  it('tolerates a failing inbox-link update: the document attach is the primary effect', async () => {
     enqueue({ data: { id: 'tx-1', journal_entry_id: null }, error: null }) // tx fetch
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // transactions update (RETURNING)

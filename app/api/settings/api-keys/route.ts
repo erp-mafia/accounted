@@ -9,14 +9,14 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
 
-/** GET /api/settings/api-keys — list the company's API keys (key value never returned). */
+/** GET /api/settings/api-keys: list the company's API keys (key value never returned). */
 export const GET = withRouteContext(
   'api_key.list',
   async (_request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
     // Both live and test keys for the active company. (Test keys are bound to the
-    // active company too — they're simulation-only, so they never write real data.)
+    // active company too: they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
       .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, last_used_at, revoked_at, created_at')
@@ -33,7 +33,7 @@ export const GET = withRouteContext(
 )
 
 /**
- * POST /api/settings/api-keys — create a new API key.
+ * POST /api/settings/api-keys: create a new API key.
  *
  * Returns the full key exactly once; after this the prefix is the only
  * stored representation.
@@ -64,11 +64,11 @@ export const POST = withRouteContext(
         })
       }
     } catch {
-      // Empty body — use defaults.
+      // Empty body: use defaults.
     }
 
     // Both live and test keys bind to the active company. A test key is
-    // simulation-only — the v1 wrapper forces dry-run on every write — so it can
+    // simulation-only (the v1 wrapper forces dry-run on every write) so it can
     // safely point at the real company without ever persisting anything.
 
     // Segregation of duties: warn + require explicit acknowledgement (not block)

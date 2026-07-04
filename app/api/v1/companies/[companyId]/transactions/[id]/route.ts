@@ -36,7 +36,7 @@ const TransactionDetail = z.object({
 })
 
 // Detail endpoint carve-out: a single-row drill-in is the user's intentional
-// request for the full row. Verbose by design — list endpoint stays minimal.
+// request for the full row. Verbose by design: list endpoint stays minimal.
 const TRANSACTION_DETAIL_COLUMNS =
   'id, date, description, amount, currency, amount_sek, reference, merchant_name, ' +
   'counterparty_account, journal_entry_id, invoice_id, supplier_invoice_id, ' +
@@ -52,7 +52,7 @@ registerEndpoint({
   useWhen:
     'You have a transaction id (from the list or a webhook) and need the full record before deciding to categorize, match, or attach a document.',
   doNotUseFor:
-    'Walking the ledger — use the list endpoint with a cursor. Fetching the linked invoice/journal entry — separate endpoints.',
+    'Walking the ledger: use the list endpoint with a cursor. Fetching the linked invoice/journal entry: separate endpoints.',
   pitfalls: [
     'Both invoice_id (matched) and potential_invoice_id (suggested) can be set independently. The matched id is authoritative for accounting.',
     'reconciliation_method is null for transactions that have never been auto-reconciled. journal_entry_id may still be set via manual categorize.',

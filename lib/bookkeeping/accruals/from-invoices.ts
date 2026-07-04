@@ -5,7 +5,7 @@
  *
  * Idempotent per line: lines already covered by a schedule are skipped, so
  * event replays (supplier_invoice.confirmed) can never double-schedule.
- * Failures are logged and counted, never thrown — the origin entry is already
+ * Failures are logged and counted, never thrown: the origin entry is already
  * committed and must not be rolled back by a schedule hiccup; the caller
  * surfaces a warning instead.
  */
@@ -80,7 +80,7 @@ export async function createSchedulesForSupplierInvoice(
         },
         {
           originJournalEntryId,
-          // The registration entry is dated invoice_date — dissolutions may
+          // The registration entry is dated invoice_date: dissolutions may
           // never precede it.
           postingFloorDate: invoice.invoice_date,
         },
@@ -128,7 +128,7 @@ export async function createSchedulesForCustomerInvoice(
     if (item.id && covered.has(item.id)) continue
     const target = resolveRevenueTarget(item, invoice.vat_treatment, entityType)
     // reverse_charge/export lines keep their statutory account (3308/3305) so
-    // ruta 39/40 in the momsdeklaration stay correct — never deferred. The
+    // ruta 39/40 in the momsdeklaration stay correct: never deferred. The
     // generator applies the same exclusion, so the net stays on 3308/3305.
     if (target.special) continue
     try {

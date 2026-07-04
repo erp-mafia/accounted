@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events/bus'
 import { makeDocumentAttachment } from '@/tests/helpers'
 
 // ============================================================
-// Mock — separate client (no .then) from query builder (thenable)
+// Mock: separate client (no .then) from query builder (thenable)
 // ============================================================
 
 let resultIdx: number
@@ -55,7 +55,7 @@ import {
   _resetBucketVerified,
 } from '../document-service'
 
-// A minimal valid PDF byte sequence (header + EOF) — passes magic-byte check.
+// A minimal valid PDF byte sequence (header + EOF): passes magic-byte check.
 function pdfBuffer(payload = 'test'): ArrayBuffer {
   return new TextEncoder().encode(`%PDF-1.4\n${payload}\n%%EOF\n`).buffer as ArrayBuffer
 }
@@ -68,7 +68,7 @@ beforeEach(() => {
   results = []
 })
 
-describe('validateDocumentMagicBytes — application/xhtml+xml', () => {
+describe('validateDocumentMagicBytes: application/xhtml+xml', () => {
   const toBuffer = (text: string, bom = false): ArrayBuffer => {
     const bytes = new TextEncoder().encode(bom ? `﻿${text}` : text)
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
@@ -116,7 +116,7 @@ describe('validateDocumentMagicBytes — application/xhtml+xml', () => {
   })
 })
 
-describe('validateDocumentMagicBytes — PDF header offset tolerance', () => {
+describe('validateDocumentMagicBytes: PDF header offset tolerance', () => {
   const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer =>
     bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 
@@ -163,7 +163,7 @@ describe('validateDocumentMagicBytes — PDF header offset tolerance', () => {
     ).toMatch(/kunde inte verifieras/)
   })
 
-  it('images stay strict at offset 0 — a leading byte still rejects', () => {
+  it('images stay strict at offset 0: a leading byte still rejects', () => {
     const png = new Uint8Array([0x0A, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
     expect(validateDocumentMagicBytes(toArrayBuffer(png), 'image/png')).toMatch(
       /kunde inte verifieras/,

@@ -42,7 +42,7 @@ export async function GET(request: Request) {
 
   // Dimension filter applies to the P&L-side KPIs only (net result, revenue/
   // expenses, months, expense composition). Balance-side KPIs (cash, VAT,
-  // receivables) and supplier/invoice aggregates stay company-wide — a
+  // receivables) and supplier/invoice aggregates stay company-wide: a
   // dimension-scoped "cash position" would be silently wrong, not filtered.
   // The KPI view hides those tiles when a filter is active.
   const dimFilter = parseDimensionFilterParams(searchParams)
@@ -90,15 +90,15 @@ export async function GET(request: Request) {
       .gte('invoice_date', period.period_start)
       .lte('invoice_date', period.period_end)
       .neq('status', 'credited'),
-    // Second, dimension-scoped TB only when filtered — feeds the expense
-    // composition (classes 4–7, P&L) without touching the unfiltered TB the
+    // Second, dimension-scoped TB only when filtered: feeds the expense
+    // composition (classes 4-7, P&L) without touching the unfiltered TB the
     // balance-side KPIs read.
     dimensions
       ? generateTrialBalance(supabase, companyId, periodId, { dimensions })
       : Promise.resolve(null),
   ])
 
-  // Cash position — use account overrides if set
+  // Cash position: use account overrides if set
   const cashOverrides = preferences.accountOverrides['cashPosition']
   let cashPosition: number
   if (cashOverrides && cashOverrides.length > 0) {
@@ -112,7 +112,7 @@ export async function GET(request: Request) {
     cashPosition = calculateCashPosition(trialBalanceResult.rows)
   }
 
-  // VAT liability — use account overrides if set
+  // VAT liability: use account overrides if set
   const vatLiability = calculateVatLiability(
     trialBalanceResult.rows,
     preferences.accountOverrides['vatLiability']
@@ -144,7 +144,7 @@ export async function GET(request: Request) {
 
   // Top suppliers by spend within the fiscal period. Sum total_sek to avoid
   // mixing currencies. Drop FX invoices without a SEK conversion (total_sek
-  // null) — they would otherwise inflate a supplier's total with raw
+  // null): they would otherwise inflate a supplier's total with raw
   // foreign-currency amounts.
   type SupplierInvoiceRow = {
     supplier_id: string | null

@@ -23,7 +23,7 @@ export async function switchCompany(companyId: string): Promise<{ error?: string
 
   try {
     await setActiveCompany(supabase, user.id, companyId)
-    // No revalidatePath — the client performs a hard navigation
+    // No revalidatePath: the client performs a hard navigation
     // (window.location.assign) after this action returns, which wipes
     // every React/router/fetch cache wholesale. revalidatePath would be a
     // no-op and would just race with the hard reload.
@@ -34,7 +34,7 @@ export async function switchCompany(companyId: string): Promise<{ error?: string
       return { error: 'not_member' }
     }
     // persist_failed and anything unexpected: a retryable failure, not a
-    // permissions problem — don't tell the user they lack access.
+    // permissions problem: don't tell the user they lack access.
     return { error: 'persist_failed' }
   }
 }
@@ -100,9 +100,9 @@ async function createCompanyFromOnboardingImpl(params: {
   // uniqueness: the same org number may legitimately appear on multiple
   // companies (a separate test copy of your real company, or a consultant
   // and the owner each tracking the same entity). Tenant isolation
-  // (RLS + company_id) is the real boundary — not org-number uniqueness.
+  // (RLS + company_id) is the real boundary, not org-number uniqueness.
   //
-  // normalizeOrgNumber returns null for malformed input — we refuse rather
+  // normalizeOrgNumber returns null for malformed input: we refuse rather
   // than storing a value that would break SIE/SRU exports later.
   const rawOrgNumber = params.settings.org_number as string | undefined
   const cleanedOrgNumber = normalizeOrgNumber(rawOrgNumber)
@@ -134,7 +134,7 @@ async function createCompanyFromOnboardingImpl(params: {
 
   // Mirror the normalized org_number onto the companies row so future
   // duplicate checks and cross-references are reliable. MUST be error-checked
-  // and rolled back on failure — otherwise the freshly-created company would
+  // and rolled back on failure: otherwise the freshly-created company would
   // exist without an org_number and the duplicate guard would never match it
   // for any future user (the very guard this code is enforcing).
   if (cleanedOrgNumber) {
@@ -149,7 +149,7 @@ async function createCompanyFromOnboardingImpl(params: {
   }
 
   // Persist whatever lookup data the wizard already gathered. Do NOT call
-  // /profile here — that handler fans out to 13 Lens calls and the 5 s
+  // /profile here: that handler fans out to 13 Lens calls and the 5 s
   // timeout in tic-fetch.ts ate ~530 wasted calls in May before yielding
   // zero snapshots (every signup's /profile timed out, but the in-flight
   // upstream fetches still counted against quota). The agent build path

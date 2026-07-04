@@ -11,7 +11,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 //
 // PATCH updates field_overrides (timestamped, merged with existing) and
 // optionally rewrites the atom arrays from the review UI. Does not touch
-// verified_at — that flows through /verify.
+// verified_at: that flows through /verify.
 
 const AtomArrays = z.object({
   horizontal_atoms: z.array(z.string()).optional(),
@@ -24,7 +24,7 @@ const PatchBody = z.object({
   field_overrides: z.record(z.string(), z.unknown()).optional(),
   atoms: AtomArrays.optional(),
   profile_summary: z.string().min(1).max(2000).optional(),
-  // Agent personalization — name shown on the FAB and chat headers, and
+  // Agent personalization: name shown on the FAB and chat headers, and
   // avatar key into the static AVATAR_OPTIONS registry. Both nullable so
   // the user can clear them back to defaults.
   display_name: z.string().min(1).max(60).nullable().optional(),
@@ -41,7 +41,7 @@ export async function GET(request: Request) {
     url.searchParams.get('company_id') ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // Defense in depth alongside RLS — confirm membership before reading.
+  // Defense in depth alongside RLS: confirm membership before reading.
   const { data: membership } = await supabase
     .from('company_members')
     .select('role')
@@ -81,7 +81,7 @@ export async function PATCH(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // RLS guards reads/updates by company_id; defense in depth — confirm membership.
+  // RLS guards reads/updates by company_id; defense in depth: confirm membership.
   const { data: membership } = await supabase
     .from('company_members')
     .select('role')

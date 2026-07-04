@@ -10,7 +10,7 @@ import { tools } from '../server'
  *
  * Bare `id` survives only as a deprecated alias at the GRANDFATHERED paths
  * below, each shipping alongside its qualified sibling. This list may only
- * SHRINK (remove entries as the deprecated aliases are dropped) — a new bare
+ * SHRINK (remove entries as the deprecated aliases are dropped): a new bare
  * `id` anywhere fails this test; add the qualified name instead.
  */
 
@@ -57,7 +57,7 @@ describe('qualified identifiers in tool output schemas', () => {
     const newOffenders = actual.filter((p) => !GRANDFATHERED_BARE_ID_PATHS.includes(p))
     expect(
       newOffenders,
-      `New bare \`id\` in an output schema — use a qualified name (transaction_id, journal_entry_id, …) instead:\n${newOffenders.join('\n')}`,
+      `New bare \`id\` in an output schema: use a qualified name (transaction_id, journal_entry_id, …) instead:\n${newOffenders.join('\n')}`,
     ).toEqual([])
   })
 
@@ -67,7 +67,7 @@ describe('qualified identifiers in tool output schemas', () => {
     )
     expect(
       missingSibling.map((f) => f.path),
-      'bare `id` without a qualified *_id sibling — agents cannot migrate off the deprecated alias',
+      'bare `id` without a qualified *_id sibling: agents cannot migrate off the deprecated alias',
     ).toEqual([])
   })
 
@@ -78,7 +78,7 @@ describe('qualified identifiers in tool output schemas', () => {
     const stale = GRANDFATHERED_BARE_ID_PATHS.filter((p) => !actual.includes(p))
     expect(
       stale,
-      `Grandfathered paths no longer exist — remove them from GRANDFATHERED_BARE_ID_PATHS:\n${stale.join('\n')}`,
+      `Grandfathered paths no longer exist: remove them from GRANDFATHERED_BARE_ID_PATHS:\n${stale.join('\n')}`,
     ).toEqual([])
   })
 })

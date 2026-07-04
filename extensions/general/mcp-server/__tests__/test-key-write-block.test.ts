@@ -90,7 +90,7 @@ describe('MCP test-key write guard', () => {
     eventBus.clear()
   })
 
-  it('blocks a non-simulatable write tool for a test-mode key — before execute()', async () => {
+  it('blocks a non-simulatable write tool for a test-mode key: before execute()', async () => {
     const eventPromise = captureNextToolCalled()
 
     // approve has readOnlyHint:false and no dry_run param → cannot be simulated.
@@ -103,7 +103,7 @@ describe('MCP test-key write guard', () => {
     const event = await eventPromise
     expect(event.errorKind).toBe('test_key_write_blocked')
     expect(event.success).toBe(false)
-    // Exits before tool.execute() — no pending op is ever committed.
+    // Exits before tool.execute(): no pending op is ever committed.
     expect(event.latencyMs).toBe(0)
   })
 

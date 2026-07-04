@@ -64,7 +64,7 @@ export default function OpeningBalancePeriodStep({
           }
         }
       } catch {
-        // Silent — user can still select period
+        // Silent, user can still select period
       } finally {
         setLoadingPeriods(false)
       }
@@ -78,7 +78,7 @@ export default function OpeningBalancePeriodStep({
   const periodIsLocked = !!selectedPeriod?.locked_at
 
   // A period that already has IB can still be corrected, as long as it is open
-  // and unlocked — the existing IB verifikat is stornoed and replaced.
+  // and unlocked: the existing IB verifikat is stornoed and replaced.
   const canExecute =
     !!selectedPeriodId &&
     !periodIsClosed &&
@@ -123,10 +123,10 @@ export default function OpeningBalancePeriodStep({
               <SelectContent>
                 {periods.map((p) => (
                   <SelectItem key={p.id} value={p.id} disabled={p.is_closed || !!p.locked_at}>
-                    {p.name} ({p.period_start} — {p.period_end})
-                    {p.opening_balances_set && ' — har redan IB'}
-                    {p.is_closed && ' — stängd'}
-                    {p.locked_at && !p.is_closed && ' — låst'}
+                    {p.name} ({p.period_start} till {p.period_end})
+                    {p.opening_balances_set && ', har redan IB'}
+                    {p.is_closed && ', stängd'}
+                    {p.locked_at && !p.is_closed && ', låst'}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -134,7 +134,7 @@ export default function OpeningBalancePeriodStep({
           )}
         </div>
 
-        {/* Replace notice — selecting a period that already has IB corrects it */}
+        {/* Replace notice: selecting a period that already has IB corrects it */}
         {periodHasOB && !periodIsClosed && !periodIsLocked && (
           <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
             <AlertCircle className="h-4 w-4 text-warning mt-0.5 shrink-0" />

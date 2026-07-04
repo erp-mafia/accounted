@@ -7,7 +7,7 @@ import {
 const PERIOD_START = '2025-01-01'
 const PERIOD_END = '2025-12-31'
 
-describe('buildAnlaggningstillgangarNote — roll-forward', () => {
+describe('buildAnlaggningstillgangarNote: roll-forward', () => {
   it('returns null when no assets fall in the period', () => {
     expect(
       buildAnlaggningstillgangarNote({

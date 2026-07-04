@@ -63,7 +63,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   reminder_fee: 'Påminnelseavgift',
 }
 
-// Same thresholds as MatchVerifikationPicker's confidenceBadge — the dry-run
+// Same thresholds as MatchVerifikationPicker's confidenceBadge: the dry-run
 // preview must read identically to the per-row picker.
 function confidenceLabel(confidence: number): {
   label: string
@@ -81,12 +81,12 @@ const matchKey = (transactionId: string, journalEntryId: string) =>
   `${transactionId}:${journalEntryId}`
 
 // One-click bookings for transactions with no upstream invoice/voucher to match
-// against — the common "stuck on the unmatched list" cause (small ränteintäkter,
+// against: the common "stuck on the unmatched list" cause (small ränteintäkter,
 // bankavgifter, valutakursdifferenser). These reuse the existing bank_finance
 // booking templates; the categorize endpoint rewrites the bank leg to the
 // transaction's actual settlement account, so they book correctly on ANY cash
 // account (1930, a savings account, a EUR account…), not just 1930.
-// `account` is the non-bank leg (revenue/cost) — the bank leg is the selected
+// `account` is the non-bank leg (revenue/cost): the bank leg is the selected
 // account. Income templates apply to positive amounts, expense to negative.
 const QUICK_BOOK_TEMPLATES: {
   id: string
@@ -109,7 +109,7 @@ interface ReconciliationStatus {
   bank_transaction_total: number
   /**
    * @deprecated Kept on the server response for back-compat. The UI no longer
-   * reads it — `gl_1930_period_movement` is required.
+   * reads it: `gl_1930_period_movement` is required.
    */
   gl_1930_balance: number
   gl_1930_period_movement: number
@@ -163,7 +163,7 @@ interface BankReconciliationViewProps {
   /**
    * The fiscal period to reconcile, from the page-level räkenskapsår selector in
    * the report header (FocusedReport). The view no longer owns a selector of its
-   * own — that duplicate, hidden behind the loading skeleton, deadlocked the page
+   * own: that duplicate, hidden behind the loading skeleton, deadlocked the page
    * (#771).
    */
   periodId: string
@@ -181,12 +181,12 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
   // The window is scoped to a fiscal period (issue #751/#771): a bank
   // reconciliation is inherently per-period, and a "full history" window spans
-  // the fiscal-year boundary — mixing a prior period's movements with the current
+  // the fiscal-year boundary: mixing a prior period's movements with the current
   // year's IB and manufacturing a phantom difference equal to the IB. The period
   // is owned by the page-level FiscalYearSelector in the report header and passed
   // in as props, so the view always mounts with a known window. It used to host
   // its OWN selector inside the action bar and gate the first fetch on a
-  // `periodReady` flag — but that selector lived below the loading-skeleton
+  // `periodReady` flag, but that selector lived below the loading-skeleton
   // early-return, so it never mounted, the flag never flipped, and the page hung
   // on a permanent skeleton (#771). dateFrom/dateTo are seeded from periodBounds
   // here and stay editable as a manual override (applied via "Filtrera").
@@ -200,7 +200,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
   // Date filters apply on demand (the "Filtrera" button or an account switch),
   // never on every keystroke. Editing a date used to re-create fetchAll and
-  // re-trigger its effect — the "switching months reloads automatically"
+  // re-trigger its effect: the "switching months reloads automatically"
   // annoyance. fetchAll reads the live dates from refs so an explicit run always
   // uses the latest typed values without putting them in its dependency array.
   const dateFromRef = useRef(dateFrom)
@@ -231,29 +231,29 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
   // Opt-in: also surface vouchers already matched to a bank transaction as
   // candidates, so a second/third transaction can be attached to the same
-  // verifikat (N:1 — e.g. a salary run paid out in several transfers). Only
+  // verifikat (N:1, e.g. a salary run paid out in several transfers). Only
   // affects the per-row picker candidates; the "Omatchade verifikationer" table
   // below stays unmatched-only (it lists vouchers that still need a transaction).
   const [includeMatched, setIncludeMatched] = useState(false)
 
   const [showMatched, setShowMatched] = useState(false)
   // Default expanded so users discover the undo path. The card itself only
-  // renders when ignoredTx.length > 0 — collapsing it by default hid the
+  // renders when ignoredTx.length > 0: collapsing it by default hid the
   // recovery affordance from anyone who didn't already know it was there.
   const [showIgnored, setShowIgnored] = useState(true)
   const [ignoredTx, setIgnoredTx] = useState<UnmatchedTransaction[]>([])
   const [selectedMatch, setSelectedMatch] = useState<Record<string, string>>({})
-  // True when the unmatched list hit the API's 500-row cap — surfaced so a long
+  // True when the unmatched list hit the API's 500-row cap: surfaced so a long
   // date range doesn't silently hide rows and let the user think they're done.
   const [unmatchedTruncated, setUnmatchedTruncated] = useState(false)
   // Per-transaction ranked match candidates, lazily fetched when the row's
   // picker is first focused. Passing transaction_id to /unmatched-entries makes
-  // the server rank candidates and attach confidence — the same intelligence
+  // the server rank candidates and attach confidence: the same intelligence
   // MatchVoucherDialog gets on the Transactions page. Keyed by transaction id;
   // cleared whenever the lists refetch (the candidate set may have changed).
   const [rankedCandidates, setRankedCandidates] = useState<Record<string, UnlinkedGLLine[]>>({})
   const rankedFetchInFlight = useRef<Set<string>>(new Set())
-  // Bumped whenever fetchAll clears the ranked cache — an in-flight ranked
+  // Bumped whenever fetchAll clears the ranked cache: an in-flight ranked
   // response from before the clear must not repopulate the fresh cache, or
   // that row's picker would show pre-refetch candidates until the next reload.
   const rankedGenerationRef = useRef(0)
@@ -273,7 +273,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
   // glLines feeds the per-row picker (which may include already-matched vouchers
   // when includeMatched is on). The "Omatchade verifikationer" table below must
-  // stay unmatched-only — a voucher with a linked transaction isn't something
+  // stay unmatched-only: a voucher with a linked transaction isn't something
   // that still needs one.
   const unmatchedGlLines = glLines.filter((l) => !(l.linked_transaction_count ?? 0))
 
@@ -291,7 +291,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         if (!cancelled && Array.isArray(j.data)) setCashAccounts(j.data as CashAccount[])
       })
       .catch(() => {
-        // Non-critical — falls back to 'SEK' currency, matches old behaviour.
+        // Non-critical: falls back to 'SEK' currency, matches old behaviour.
       })
     return () => {
       cancelled = true
@@ -299,7 +299,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   }, [])
 
   const fetchAll = useCallback(async (opts?: { silent?: boolean }) => {
-    // Cancel any in-flight load — it may be for a different account. Without
+    // Cancel any in-flight load: it may be for a different account. Without
     // this, switching accounts quickly lets an older response land last and
     // overwrite the current account's data.
     fetchAbortRef.current?.abort()
@@ -308,13 +308,13 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
     const { signal } = controller
 
     // Only wholesale reloads (mount, account/period switch, Filtrera) show the
-    // skeleton. Row mutations refresh silently and update in place — the old
+    // skeleton. Row mutations refresh silently and update in place: the old
     // behaviour unmounted the entire page on EVERY link/unlink/quick-book,
     // losing scroll position and flashing 30 skeletons for 30 matches.
     if (!opts?.silent) {
       setLoading(true)
       // A wholesale reload means the window/account/candidate set may have
-      // changed — a preview computed for the previous window must not leave an
+      // changed: a preview computed for the previous window must not leave an
       // enabled "Tillämpa" button behind. Silent row-mutation refetches keep
       // the preview (same window; the intersection guard on apply covers rows
       // that got linked meanwhile).
@@ -322,7 +322,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       setSelectedPairs(new Set())
     }
     setError(null)
-    // The candidate pool changes with the data — drop stale per-row rankings
+    // The candidate pool changes with the data: drop stale per-row rankings
     // and invalidate any ranked fetch already in flight.
     setRankedCandidates({})
     rankedFetchInFlight.current.clear()
@@ -337,8 +337,8 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       const qs = `?${params}`
 
       // The candidate-lines fetch optionally includes already-matched vouchers
-      // (for N:1); the status endpoint must NOT — its movement/diff is computed
-      // independently — so it keeps the plain qs.
+      // (for N:1); the status endpoint must NOT (its movement/diff is computed
+      // independently) so it keeps the plain qs.
       const glParams = new URLSearchParams(params)
       if (includeMatched) glParams.set('include_matched', 'true')
       const glQs = `?${glParams}`
@@ -365,7 +365,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         matchedRes.json(),
       ])
 
-      // A newer load superseded this one while we awaited — discard these
+      // A newer load superseded this one while we awaited: discard these
       // stale results rather than clobber the current account's data.
       if (signal.aborted) return
 
@@ -374,11 +374,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       setUnmatchedTx(unmatchedData.data || [])
       setMatchedTx(matchedData.data || [])
       setUnmatchedTruncated(Boolean(unmatchedData.has_more))
-      // Record the window these lists represent — preview/apply run against it.
+      // Record the window these lists represent: preview/apply run against it.
       setAppliedDates({ from: fromValue, to: toValue })
 
       // Refresh the ignored list whenever the main lists refresh.
-      // Deliberately NOT filtered by account or currency — if a user ignored
+      // Deliberately NOT filtered by account or currency: if a user ignored
       // a row on 1932 EUR and then switched to 1930 SEK, the recovery card
       // would disappear and the row would feel "stuck". Company-wide scope
       // keeps the Återställ path reachable from any account selection. The
@@ -413,7 +413,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   //
   // We write dateFromRef/dateToRef SYNCHRONOUSLY here, not just the state: fetchAll
   // reads the window from the refs, and the [dateFrom]/[dateTo] sync effects above
-  // only refresh them on the NEXT commit — too late for the fetch effect below,
+  // only refresh them on the NEXT commit: too late for the fetch effect below,
   // which runs on this same period-switch commit. Without the synchronous ref
   // write the first load after a year switch would use the PREVIOUS period's
   // window (off-by-one). This effect MUST stay declared ABOVE the fetch effect so
@@ -437,7 +437,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   // Load on mount, when the bank account / currency / matched-toggle change
   // (fetchAll identity), and when the räkenskapsår switches (periodId). fetchAll
   // reads the window from the refs, which the effect above has already refreshed
-  // for a period switch. Manual date edits intentionally do NOT auto-fetch — that
+  // for a period switch. Manual date edits intentionally do NOT auto-fetch: that
   // stays on the explicit "Filtrera" button (which calls fetchAll() directly).
   useEffect(() => {
     fetchAll()
@@ -445,7 +445,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
   // Reset transient per-account UI state when the selected account changes. A
   // verifikation pick or a dry-run preview computed for the previous account is
-  // meaningless against the new one — and applying it would cross-link.
+  // meaningless against the new one, and applying it would cross-link.
   useEffect(() => {
     setSelectedMatch({})
     setDryRunResults(null)
@@ -461,7 +461,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // The APPLIED window — never the live inputs, which may not match the
+          // The APPLIED window: never the live inputs, which may not match the
           // lists on screen until the user clicks Filtrera.
           date_from: appliedDates?.from || undefined,
           date_to: appliedDates?.to || undefined,
@@ -472,7 +472,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       const result = await res.json()
       if (!res.ok || result.error) {
         // An error envelope parses as JSON, so the catch below never fires for
-        // it — without this check the button just stopped spinning and NOTHING
+        // it: without this check the button just stopped spinning and NOTHING
         // rendered, leaving the user staring at an unchanged page.
         setError(
           typeof result.error === 'string' ? result.error : 'Kunde inte köra förhandsgranskning',
@@ -508,7 +508,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
   // Matches RunReconciliationSchema's selected_matches .max(500). A first
   // reconciliation after a year of imports can preview (and pre-tick) far more
-  // than 500 matches — applied in sequential chunks so the flow never dead-ends
+  // than 500 matches: applied in sequential chunks so the flow never dead-ends
   // on the payload cap. Chunking is safe: the server intersects each chunk with
   // a fresh match run, so pairs applied by an earlier chunk simply drop out of
   // later ones and unselected pairs are never applied.
@@ -553,14 +553,14 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       failed = true
     }
 
-    // Report what actually happened — the old flow cleared the preview and
+    // Report what actually happened: the old flow cleared the preview and
     // said nothing, even when the API had failed outright.
     if (failed) {
       toast({
         variant: 'destructive',
         title:
           applied > 0
-            ? `${applied} av ${requested} matchningar tillämpade — resten misslyckades`
+            ? `${applied} av ${requested} matchningar tillämpade; resten misslyckades`
             : 'Kunde inte tillämpa matchningarna',
         description: failMessage,
       })
@@ -574,7 +574,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         variant: 'destructive',
         title: `${applied} av ${requested} matchningar tillämpade`,
         description:
-          'Resten kunde inte tillämpas — underlaget kan ha ändrats sedan förhandsgranskningen. Kör en ny förhandsgranskning.',
+          'Resten kunde inte tillämpas: underlaget kan ha ändrats sedan förhandsgranskningen. Kör en ny förhandsgranskning.',
       })
     }
     // Refetch whenever anything may have been written; on a clean failure with
@@ -593,7 +593,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   /**
    * Lazily fetch ranked, confidence-scored candidates for one transaction the
    * first time its picker is focused. The endpoint ranks and attaches
-   * confidence when transaction_id is passed — without it every row shows the
+   * confidence when transaction_id is passed: without it every row shows the
    * same unranked list and no Stark/Trolig/Svag badges (the intelligence the
    * Transactions page's MatchVoucherDialog has had all along).
    */
@@ -606,7 +606,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       const generation = rankedGenerationRef.current
       try {
         const params = new URLSearchParams()
-        // The APPLIED window — the same one the lists and preview run against.
+        // The APPLIED window: the same one the lists and preview run against.
         // Reading the live refs here would let a typed-but-not-filtered date
         // silently give this row a different candidate set than the tables on
         // screen. Refs are only the pre-first-load fallback.
@@ -619,13 +619,13 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         if (includeMatched) params.set('include_matched', 'true')
         const res = await fetch(`/api/reconciliation/bank/unmatched-entries?${params}`)
         const json = await res.json()
-        // Discard if fetchAll cleared the cache while we were in flight —
+        // Discard if fetchAll cleared the cache while we were in flight:
         // committing would pin pre-refetch candidates on this row.
         if (res.ok && Array.isArray(json.data) && rankedGenerationRef.current === generation) {
           setRankedCandidates((prev) => ({ ...prev, [transactionId]: json.data }))
         }
       } catch {
-        // Non-critical — the picker falls back to the unranked shared list.
+        // Non-critical: the picker falls back to the unranked shared list.
       } finally {
         rankedFetchInFlight.current.delete(transactionId)
       }
@@ -650,7 +650,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       })
       const result = await res.json()
       if (!res.ok || result.error) {
-        // Row-level failures surface next to where the user is working — the
+        // Row-level failures surface next to where the user is working: the
         // old top-of-page banner was off-screen when acting on row 40.
         toast({
           variant: 'destructive',
@@ -704,7 +704,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
    * source_type='opening_balance'. Such a voucher (common after a migration
    * where the IB was booked as an ordinary verifikat) otherwise stays in the
    * period movement and shows up as a phantom difference equal to the IB. After
-   * re-tagging it drops out of the diff and is surfaced as "IB — räknas inte".
+   * re-tagging it drops out of the diff and is surfaced as "IB: räknas inte".
    */
   const handleMarkOpeningBalance = async (journalEntryId: string) => {
     setMarkLoading(journalEntryId)
@@ -740,7 +740,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
    * voucher to match against (ränteintäkter, bankavgifter, valutakurs-
    * differenser). Calls the standard categorize endpoint with a bank_finance
    * template so the resulting verifikation is identical to the /transactions
-   * flow — no parallel booking path. The categorize endpoint rewrites the bank
+   * flow: no parallel booking path. The categorize endpoint rewrites the bank
    * leg to the transaction's actual settlement account, so this is correct on
    * any cash account.
    */
@@ -784,13 +784,13 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
   const handleIgnore = async (tx: UnmatchedTransaction) => {
     // Even though Ignorera is fully reversible, it's still a state change the
-    // user could miss after a misclick — the row vanishes from the unmatched
+    // user could miss after a misclick: the row vanishes from the unmatched
     // list immediately. Confirmation before the write + an explicit Ångra
     // toast on success gives two recovery affordances. The persistent
     // "Ignorerade transaktioner" card is the third.
     const ok = await confirm({
       title: 'Ignorera transaktionen?',
-      description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från avstämningen utan att bokföras. Du kan återställa den från "Ignorerade transaktioner" nedan när som helst.`,
+      description: `${tx.description}: ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från avstämningen utan att bokföras. Du kan återställa den från "Ignorerade transaktioner" nedan när som helst.`,
       confirmLabel: 'Ignorera',
       cancelLabel: 'Avbryt',
       variant: 'warning',
@@ -814,7 +814,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       await fetchAll({ silent: true })
       toast({
         title: 'Transaktionen ignorerad',
-        description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)}`,
+        description: `${tx.description}: ${formatCurrency(tx.amount, tx.currency)}`,
         action: (
           <ToastAction
             altText="Ångra ignorera"
@@ -903,7 +903,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               )}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              Avstämningen körs mot <AccountNumber number={accountNumber} /> ({accountCurrency}). Övriga bankkonton (t.ex. Plusgiro <AccountNumber number="1920" />, kreditkort <AccountNumber number="1940" /> eller valutakonton) stäms av separat — välj kontot i listan nedan.
+              Avstämningen körs mot <AccountNumber number={accountNumber} /> ({accountCurrency}). Övriga bankkonton (t.ex. Plusgiro <AccountNumber number="1920" />, kreditkort <AccountNumber number="1940" /> eller valutakonton) stäms av separat. Välj kontot i listan nedan.
             </p>
           </CardHeader>
           <CardContent>
@@ -915,7 +915,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                 </span>
               </div>
               {/* GL-side figures (bokfört, IB, rättelser, differens) stay in
-                  SEK — journal entries are booked in SEK regardless of the
+                  SEK: journal entries are booked in SEK regardless of the
                   cash account's currency. Only the bank-feed total above is in
                   the account's own currency. */}
               <div className="flex justify-between">
@@ -940,7 +940,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                   <span className="tabular-nums">
                     {formatCurrency(status.gl_1930_opening_balance)}
                   </span>
-                  {' '}— räknas inte i avstämningen.
+                  , räknas inte i avstämningen.
                 </p>
               )}
               {status.gl_1930_correction_adjustment !== 0 && (
@@ -949,7 +949,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                   <span className="tabular-nums">
                     {formatCurrency(status.gl_1930_correction_adjustment)}
                   </span>
-                  {' '}— ingår i det bokförda beloppet och i avstämningen, precis som i balansräkningen.
+                  , ingår i det bokförda beloppet och i avstämningen, precis som i balansräkningen.
                 </p>
               )}
               <div className="flex gap-4 pt-2 text-xs text-muted-foreground">
@@ -1007,7 +1007,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           </div>
           {datesDirty && (
             <p className="mt-3 text-xs text-muted-foreground">
-              Datumfiltret är ändrat men inte tillämpat — klicka Filtrera för att uppdatera
+              Datumfiltret är ändrat men inte tillämpat: klicka Filtrera för att uppdatera
               listorna innan du förhandsgranskar.
             </p>
           )}
@@ -1019,11 +1019,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">
-              Förhandsgranskning — {dryRunResults.length}{' '}
+              Förhandsgranskning: {dryRunResults.length}{' '}
               {dryRunResults.length === 1 ? 'matchning hittad' : 'matchningar hittade'}
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              Starka träffar är förvalda. Ungefärliga träffar kräver att du bockar i dem själv —
+              Starka träffar är förvalda. Ungefärliga träffar kräver att du bockar i dem själv:
               granska verifikationen först.
             </p>
           </CardHeader>
@@ -1122,7 +1122,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           </div>
           {unmatchedTruncated && (
             <p className="text-xs text-muted-foreground">
-              Visar de senaste 500 transaktionerna — begränsa datumintervallet för att se fler.
+              Visar de senaste 500 transaktionerna: begränsa datumintervallet för att se fler.
             </p>
           )}
           <div className="space-y-3">
@@ -1285,7 +1285,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           </CardHeader>
           <CardContent>
             <p className="mb-3 text-xs text-muted-foreground">
-              Är en manuellt eller importerat bokförd verifikation egentligen en ingående balans? Markera den som IB — då räknas den inte med i avstämningen utan visas separat som ingående balans.
+              Är en manuellt eller importerat bokförd verifikation egentligen en ingående balans? Markera den som IB: då räknas den inte med i avstämningen utan visas separat som ingående balans.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1332,7 +1332,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                               className="h-8 text-xs"
                               disabled={markLoading === line.journal_entry_id}
                               onClick={() => handleMarkOpeningBalance(line.journal_entry_id)}
-                              title="Markera verifikationen som ingående balans — den utesluts då från avstämningen"
+                              title="Markera verifikationen som ingående balans: den utesluts då från avstämningen"
                             >
                               {markLoading === line.journal_entry_id ? 'Markerar…' : 'Märk som IB'}
                             </Button>
@@ -1369,7 +1369,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           {showIgnored && (
             <CardContent>
               <p className="text-xs text-muted-foreground mb-3">
-                Rader du valt att dölja från avstämningen. De påverkar inte saldot på <AccountNumber number={accountNumber} /> — de är bara gömda från listan.
+                Rader du valt att dölja från avstämningen. De påverkar inte saldot på <AccountNumber number={accountNumber} />: de är bara gömda från listan.
               </p>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">

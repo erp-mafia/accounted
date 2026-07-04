@@ -68,7 +68,7 @@ export const POST = withRouteContext(
 
     // Duplicate-payment guard: if a likely-matching unlinked bank transaction
     // exists for this supplier, surface it before booking a new payment entry.
-    // Caller can override with `force: true`. Skipped on partial payments —
+    // Caller can override with `force: true`. Skipped on partial payments:
     // those are an explicit, deliberate action.
     const paidRounded = Math.round(paymentAmount * 100) / 100
     const remainingRounded = Math.round(invoice.remaining_amount * 100) / 100
@@ -77,7 +77,7 @@ export const POST = withRouteContext(
         .supplier?.name
       if (!supplierName) {
         // An invoice without a resolved supplier name is arguably *higher* risk
-        // for duplicate booking, not lower (BFL 5 kap 7 § — motpart should be
+        // for duplicate booking, not lower (BFL 5 kap 7 §: motpart should be
         // identifiable). Log the skip so the gap is visible in audit.
         opLog.warn('duplicate-payment guard skipped', {
           reason: 'missing_supplier_name',
@@ -137,7 +137,7 @@ export const POST = withRouteContext(
     // Route on the supplier invoice's actual booking state, not the current
     // accounting_method. A supplier invoice that was booked at receipt under
     // accrual (Dr expense + 2641 / Cr 2440) must clear 2440 here even if the
-    // company has since switched to kontantmetoden — otherwise the supplier
+    // company has since switched to kontantmetoden: otherwise the supplier
     // debt orphans on 2440 and expense + input VAT double-count.
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
@@ -209,7 +209,7 @@ export const POST = withRouteContext(
 
     // Fail closed: every supplier payment must post a voucher. If a helper
     // returned null without throwing (e.g. a closed/locked fiscal period), do
-    // NOT flip the invoice — that would diverge the GL from the AP sub-ledger.
+    // NOT flip the invoice: that would diverge the GL from the AP sub-ledger.
     if (!journalEntryId) {
       opLog.error('supplier mark-paid produced no journal entry; refusing to mark paid', undefined)
       return errorResponseFromCode('SI_PAID_FAILED', opLog, {
@@ -283,7 +283,7 @@ export const POST = withRouteContext(
       })
 
     if (paymentError) {
-      opLog.error('failed to record supplier_invoice_payments row — rolling back', paymentError)
+      opLog.error('failed to record supplier_invoice_payments row: rolling back', paymentError)
       await supabase
         .from('supplier_invoices')
         .update({
@@ -312,7 +312,7 @@ export const POST = withRouteContext(
     // Under kontantmetoden the cash payment entry is the ONLY booking of the
     // affärshändelse, so its underlag (the document from the inbox) must hang on
     // THIS verifikat per BFL 5 kap 6 §. Under faktureringsmetoden the document
-    // is already linked to the registration verifikat at receipt — re-linking
+    // is already linked to the registration verifikat at receipt: re-linking
     // here would move it off that primary booking, so we attach only for the
     // cash entry. Non-fatal: the payment is already committed and immutable, so
     // a link failure is logged and the invoice stays usable (mirrors the
@@ -340,7 +340,7 @@ export const POST = withRouteContext(
     }
 
     // Remember the chosen payment account so the next dialog can default to it.
-    // Only update when the caller actually picked one — the MCP / agent path
+    // Only update when the caller actually picked one: the MCP / agent path
     // sends no payment_account and shouldn't churn this setting.
     if (paymentAccount && paymentAccount !== settings?.last_supplier_payment_account) {
       const { error: settingsError } = await supabase

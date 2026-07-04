@@ -19,9 +19,9 @@ export interface EgenavgifterInput {
   surplusBeforeEgenavgifter: number
   /** Vilken kategori. Defaults to 'full'. */
   category?: EgenavgiftCategory
-  /** Föregående års schablonavdrag — läggs tillbaka i R40. Defaults to 0. */
+  /** Föregående års schablonavdrag: läggs tillbaka i R40. Defaults to 0. */
   priorYearSchablonavdrag?: number
-  /** Föregående års faktiska egenavgifter — dras av i R41. Defaults to 0. */
+  /** Föregående års faktiska egenavgifter: dras av i R41. Defaults to 0. */
   priorYearActualCharged?: number
 }
 
@@ -36,7 +36,7 @@ export interface EgenavgifterComputation {
   /** R43: schablonavdrag applied to net surplus. */
   schablonavdrag: number
   egenavgifterRate: number
-  /** Estimated egenavgifter for the year — for planning only; the exact
+  /** Estimated egenavgifter for the year: for planning only; the exact
    *  amount is set by Skatteverket. */
   estimatedEgenavgifter: number
 }
@@ -44,7 +44,7 @@ export interface EgenavgifterComputation {
 /**
  * Compute the NE-bilaga R40-R43 series for egenavgifter.
  *
- * NEVER produces a journal entry — egenavgifter for enskild firma are paid
+ * NEVER produces a journal entry: egenavgifter for enskild firma are paid
  * personally by the owner via Inkomstdeklaration 1, not by the business.
  */
 export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationItem {
@@ -91,7 +91,7 @@ export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationIt
 
   return {
     kind: 'egenavgifter',
-    label: 'Egenavgifter — schablonavdrag',
+    label: 'Egenavgifter: schablonavdrag',
     description: `Schablonavdrag ${(rates.schablon * 100).toFixed(0)} % av nettoöverskott. Faktiska avgifter beräknas av Skatteverket.`,
     amount: schablonavdrag,
     ne_ruta: 'R43',

@@ -19,7 +19,7 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
  *   - Direction mismatch rejection.
  *   - Mixed customer + supplier kinds rejection.
  *
- * These tests bypass RLS by writing through the superuser pool — they
+ * These tests bypass RLS by writing through the superuser pool: they
  * exercise the RPC logic + DB constraints, not the policy layer.
  */
 
@@ -238,7 +238,7 @@ describe('match_batch_allocate', () => {
       expect(txRow.rows[0]!.is_business).toBe(true)
 
       // Verify samlingsverifikat carries the supplier-side source_type
-      // (PR #603 compliance fix — was previously 'invoice_paid' for both
+      // (PR #603 compliance fix: was previously 'invoice_paid' for both
       // directions which mis-routed behandlingshistorik filters).
       const je = await client.query<{ source_type: string }>(
         `SELECT source_type FROM public.journal_entries WHERE id = $1`,
@@ -295,7 +295,7 @@ describe('match_batch_allocate', () => {
     })
     const txId = await insertTransaction({ userId, companyId, amount: -1000 })
 
-    // Different user — never added to company_members for companyId. The
+    // Different user: never added to company_members for companyId. The
     // SECURITY DEFINER check (PR #603 compliance) refuses any access.
     const outsiderId = await insertAuthUser()
 
@@ -365,7 +365,7 @@ describe('match_batch_allocate', () => {
       userId, companyId, supplierId: supplier, total: 1000,
     })
 
-    // Positive tx (income) — wrong direction for supplier_invoice allocation.
+    // Positive tx (income): wrong direction for supplier_invoice allocation.
     const txId = await insertTransaction({ userId, companyId, amount: 1000 })
 
     await withUserContext(userId, async (client) => {
@@ -437,7 +437,7 @@ describe('match_batch_allocate', () => {
       [invoiceId, userId, companyId, customerId],
     )
 
-    // Negative tx — direction makes both sides individually plausible, but
+    // Negative tx: direction makes both sides individually plausible, but
     // we reject mixed kinds outright. Actually negative=supplier and we need
     // either income or expense; the mixed check fires before the direction
     // check, so the result code is MIXED_KINDS regardless.
@@ -461,7 +461,7 @@ describe('match_batch_allocate', () => {
     })
   })
 
-  // PR #607 — cross-currency happy path. One USD supplier invoice paid by
+  // PR #607: cross-currency happy path. One USD supplier invoice paid by
   // a single SEK bank transaction. The RPC must book the AP line at the
   // invoice's original SEK value (booked_sek = remaining × exchange_rate)
   // and post the difference between booked_sek and the actual bank
@@ -484,7 +484,7 @@ describe('match_batch_allocate', () => {
       [si],
     )
 
-    // Bank actually withdrew 1050 SEK — rate moved to ~10.5 SEK/USD on
+    // Bank actually withdrew 1050 SEK: rate moved to ~10.5 SEK/USD on
     // payment day. Loss of 50 SEK lands on 7960.
     const txId = await insertTransaction({
       userId, companyId, amount: -1050, date: '2026-06-05', currency: 'SEK',
@@ -521,7 +521,7 @@ describe('match_batch_allocate', () => {
 
       // Expected lines:
       //   Dr 2440 1000  (booked SEK at original rate)
-      //   Dr 7960   50  (FX loss = bank tx — booked SEK)
+      //   Dr 7960   50  (FX loss = bank tx: booked SEK)
       //   Cr 1930 1050  (actual bank withdrawal)
       expect(lines.rows).toHaveLength(3)
 
@@ -538,7 +538,7 @@ describe('match_batch_allocate', () => {
       expect(Number(bank.credit_amount)).toBe(1050)
 
       // Round-1 fix: bank line credit must equal tx_abs, not the AR/AP
-      // total. With FX diff lines this distinction matters — verify it.
+      // total. With FX diff lines this distinction matters: verify it.
       expect(Number(bank.credit_amount)).toBe(1050)
 
       // Supplier invoice settled in full and stored in invoice currency.
@@ -579,7 +579,7 @@ describe('match_batch_allocate', () => {
     })
   })
 
-  // PR #607 round-1 — strict undershoot rejection. The RPC previously
+  // PR #607 round-1: strict undershoot rejection. The RPC previously
   // accepted sum(allocations) < tx_abs and silently underbooked the bank
   // line, breaking reconciliation. Now it must reject with
   // BATCH_AMOUNT_BELOW_TX.

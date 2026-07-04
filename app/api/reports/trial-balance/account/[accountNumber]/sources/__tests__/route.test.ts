@@ -37,7 +37,7 @@ function buildSupabase(
         }
         return chain
       }
-      // journal_entry_lines — terminates on `.range()` (fetchAllRows), which
+      // journal_entry_lines: terminates on `.range()` (fetchAllRows), which
       // resolves to the line result. `data.length < PAGE_SIZE` so a single
       // page is fetched.
       const chain = {
@@ -183,7 +183,7 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
   })
 
   it('sorts lines by entry_date ASC then voucher_number ASC regardless of DB return order', async () => {
-    // DB returns rows in reverse date order (latest first) — the route must
+    // DB returns rows in reverse date order (latest first): the route must
     // sort them, not rely on the database order.
     const linesData = [
       {
@@ -317,7 +317,7 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
 
   it('paginates a >500-line account deterministically regardless of DB return order', async () => {
     // Regression: with no stable parent ORDER BY, a raw `.limit(500)` returned
-    // an arbitrary subset that varied between identical requests — the
+    // an arbitrary subset that varied between identical requests, the
     // "different rows on every reload" bug for high-volume accounts. We now
     // fetch the full set and sort/slice in JS, so the first page is always the
     // 500 chronologically-earliest lines.
@@ -365,7 +365,7 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
     }
 
     // First page is exactly PAGE_LIMIT rows, fully sorted (date ASC, then
-    // voucher_number ASC — numeric, not lexicographic).
+    // voucher_number ASC, numeric, not lexicographic).
     expect(body.data.lines).toHaveLength(500)
     const lines = body.data.lines
     for (let i = 1; i < lines.length; i++) {

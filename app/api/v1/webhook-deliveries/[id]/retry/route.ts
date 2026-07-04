@@ -1,5 +1,5 @@
 /**
- * /api/v1/webhook-deliveries/{id}/retry — POST :retry verb.
+ * /api/v1/webhook-deliveries/{id}/retry: POST :retry verb.
  *
  * Re-enqueues a `dead` delivery by INSERTing a fresh row pointing at the
  * same payload, NOT by mutating the dead row in place (the immutability
@@ -7,14 +7,14 @@
  * picks it up at next-minute boundary.
  *
  * Live (`pending` / `in_flight` / `failed`) deliveries cannot be retried
- * via this endpoint — the dispatcher already retries failed ones, and the
+ * via this endpoint: the dispatcher already retries failed ones, and the
  * other states aren't terminal. Only `dead` (and `delivered`, for callers
  * that explicitly want to redeliver a message) qualify.
  *
  * The route lives outside the /companies/{companyId}/ tree because callers
  * referencing a delivery already have its id; nesting under company would
  * force the receiver-debugging UI to round-trip company resolution from
- * the delivery id. Tenancy is still enforced — the wrapper resolves the
+ * the delivery id. Tenancy is still enforced: the wrapper resolves the
  * delivery's company_id via the row and verifies caller membership.
  */
 
@@ -37,7 +37,7 @@ registerEndpoint({
   useWhen:
     'After a receiver outage you want to replay deliveries that died, or after fixing a receiver-side bug you want to redeliver a successful one.',
   doNotUseFor:
-    'Retrying live deliveries (pending / in_flight / failed) — the dispatcher is already managing them.',
+    'Retrying live deliveries (pending / in_flight / failed): the dispatcher is already managing them.',
   pitfalls: [
     'Retrying a delivered delivery causes the receiver to see the event twice. Receivers MUST be idempotent (check the X-Gnubok-Delivery header).',
   ],
@@ -93,7 +93,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     }
     const o = original as O
 
-    // Tenancy check — the wrapper does not have a companyId from the URL
+    // Tenancy check: the wrapper does not have a companyId from the URL
     // here (deliberate; see file header). Verify the caller is a member of
     // the delivery's company.
     const { data: membership, error: membershipErr } = await ctx.supabase
@@ -122,7 +122,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
 
     // Mirror the create-route elevated-scope gate. A key with only
     // webhooks:manage must NOT be able to re-emit a salary_run.* / agi.*
-    // payload — those carry personnummer, lönesummor, skatteavdrag, and
+    // payload: those carry personnummer, lönesummor, skatteavdrag, and
     // the original create call required webhooks:manage AND payroll:read.
     // Retry checks the SAME pair against the CALLING key's scopes (which
     // may differ from the key that created the webhook in the first place).
@@ -140,7 +140,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     // Re-verify that the parent webhook still exists, still belongs to the
     // delivery's company, and is still active immediately before INSERT.
     // Closes the TOCTOU window between the membership check above and the
-    // INSERT — without this a webhook deleted in between would have its
+    // INSERT: without this a webhook deleted in between would have its
     // retry land in webhook_deliveries with a now-dangling webhook_id, and
     // a webhook re-registered to a different company in between would let
     // the caller redeliver an event to a webhook they never created.
@@ -154,15 +154,15 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     if (webhookErr) return v1ErrorResponse(webhookErr, ctx.log, { requestId: ctx.requestId })
     if (!webhook) {
       // The original webhook no longer exists or is no longer in this
-      // company. There's nothing to redeliver to. 404, not VALIDATION_ERROR
-      // — the resource the caller targeted is genuinely gone.
+      // company. There's nothing to redeliver to. 404, not VALIDATION_ERROR:
+      // the resource the caller targeted is genuinely gone.
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
     const w = webhook as { id: string; webhook_url: string; active: boolean; disabled_at: string | null }
     if (!w.active || w.disabled_at) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
-        details: { field: 'webhook.active', message: 'Webhook is disabled — re-enable before retrying.' },
+        details: { field: 'webhook.active', message: 'Webhook is disabled: re-enable before retrying.' },
       })
     }
 
@@ -171,7 +171,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     // retry call. The dispatch-time guard would catch a malicious URL
     // eventually, but allowing the INSERT first means a poisoned row
     // sits in the queue until the next cron tick. Validating here closes
-    // the window — the retry refuses up-front and the audit trail gets
+    // the window: the retry refuses up-front and the audit trail gets
     // a clean VALIDATION_ERROR rather than a deferred dispatch-time
     // 'dead' row with reason='url_unsafe'.
     const urlCheck = await validateWebhookUrl(w.webhook_url)

@@ -5,7 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
 import { AgentSkillsPanel } from '@/components/settings/AgentSkillsPanel'
 
-// "Assistenten" — what the assistant remembers about this company (Minne,
+// "Assistenten": what the assistant remembers about this company (Minne,
 // editable) and the domain knowledge it ships with (Kompetens, read-only).
 // A toggle keeps both one click away instead of stacked, so the competence
 // view isn't buried below the memory list.
@@ -17,7 +17,7 @@ export function AssistantSettingsContent() {
   const view: View = searchParams.get('view') === 'skills' ? 'skills' : 'memory'
 
   function setView(next: string) {
-    // 'memory' is the default — keep its URL clean (no query string).
+    // 'memory' is the default: keep its URL clean (no query string).
     router.replace(next === 'skills' ? '/settings/assistant?view=skills' : '/settings/assistant', {
       scroll: false,
     })

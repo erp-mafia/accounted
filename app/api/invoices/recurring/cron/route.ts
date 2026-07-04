@@ -16,14 +16,14 @@ ensureInitialized()
 type DueSchedule = RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleItem[] }
 
 /**
- * GET /api/invoices/recurring/cron — daily 06:30 UTC.
+ * GET /api/invoices/recurring/cron: daily 06:30 UTC.
  *
  * Spawns invoices for every active schedule whose next_run_date is today or
  * earlier. Each schedule runs in isolated try/catch so a failure on one
  * doesn't block the rest. On success: bump next_run_date, last_run_at,
  * last_invoice_id, generated_count. On failure: leave next_run_date alone so
  * tomorrow's run retries; pause the schedule only if the same error recurs
- * across days (out of scope for v1 — let the user investigate).
+ * across days (out of scope for v1: let the user investigate).
  */
 export const GET = withCronContext('cron.recurring_invoices', async (_request, ctx) => {
   const supabase = createServiceClient()
@@ -100,7 +100,7 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       // The invoice exists. If we don't mark the schedule as ran, tomorrow's
       // cron would spawn a duplicate. Surface this loudly.
       itemCtx.log.error(
-        'invoice created but failed to update schedule — manual cleanup may be needed',
+        'invoice created but failed to update schedule: manual cleanup may be needed',
         updateError,
         { scheduleId: schedule.id, invoiceId: result.invoiceId },
       )

@@ -11,7 +11,7 @@ export default async function OnboardingLayout({
   const { data: { user } } = await supabase.auth.getUser()
 
   // Only show the settings escape hatch for users who have completed
-  // onboarding at least once — i.e. they have a company_members row, even if
+  // onboarding at least once: i.e. they have a company_members row, even if
   // it points to an archived company. Absolute first-time users don't need
   // it and it clutters the welcome screen.
   //

@@ -61,7 +61,7 @@ const LABELS = {
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
-    // Statutory Swedish phrase — kept verbatim in both locales. F-skatt is a
+    // Statutory Swedish phrase: kept verbatim in both locales. F-skatt is a
     // Swedish tax-authority designation; translating it has no legal standing.
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc} summary:`,
@@ -106,7 +106,7 @@ function resolveLang(customer: Customer): EmailLang {
 }
 
 // Custom texts apply ONLY to standard invoices. Credit notes, proforma and
-// delivery notes always use the stock texts — a custom "Tack för ditt
+// delivery notes always use the stock texts: a custom "Tack för ditt
 // förtroende..." body or "Faktura..." subject would be wrong on those.
 function isStandardInvoice(invoice: Invoice): boolean {
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
@@ -122,7 +122,7 @@ function getDocumentLabel(invoice: Invoice, lang: EmailLang): string {
   return L.docInvoice
 }
 
-// Currency for the customer-facing total — explicit ISO code so a non-Swedish
+// Currency for the customer-facing total: explicit ISO code so a non-Swedish
 // recipient reads "1 234,56 SEK" instead of the Swedish symbol "kr". Use the
 // English locale for digit grouping when the email is in English so the comma
 // thousands separator matches reader expectation.
@@ -163,7 +163,7 @@ interface ResolvedCustomTexts {
 
 // Resolves the company's custom email texts for one language. Per-field
 // fallback: missing / non-string / whitespace-only values return undefined
-// and the caller uses the stock text. Returns RAW substituted strings —
+// and the caller uses the stock text. Returns RAW substituted strings:
 // escaping is the caller's job per output variant (HTML vs text vs subject).
 // Defensive typeof checks: rows can be written outside Zod (scripts, SQL).
 function resolveCustomTexts(data: InvoiceEmailData, lang: EmailLang): ResolvedCustomTexts {
@@ -182,7 +182,7 @@ function resolveCustomTexts(data: InvoiceEmailData, lang: EmailLang): ResolvedCu
   }
 }
 
-// Minimal hex validator — guards against branding values that bypass the
+// Minimal hex validator: guards against branding values that bypass the
 // settings UI and could inject CSS via crafted strings. Anything malformed
 // falls back to the legacy default.
 function safeBrandingColor(value: string | null | undefined, fallback: string): string {
@@ -208,7 +208,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   const custom = resolveCustomTexts(data, lang)
 
   // Primary color drives the heading accent and the highlighted total. The
-  // accent is sanitized to a strict hex pattern — anything else falls back
+  // accent is sanitized to a strict hex pattern: anything else falls back
   // to the legacy dark neutral. Credit notes intentionally use the success
   // green for the total regardless of branding, because the customer's brain
   // is wired to expect "money coming back = green".

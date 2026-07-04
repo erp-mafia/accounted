@@ -29,10 +29,10 @@ import {
  *  - mixed-rate detection, currency → SEK conversion
  *  - the invoice_items row mapping
  *
- * It intentionally does NOT allocate an invoice number or emit events — those
+ * It intentionally does NOT allocate an invoice number or emit events: those
  * differ between create and update and stay in the route handlers. The returned
  * `invoiceFields` exclude `user_id`, `company_id`, `invoice_number` and `status`;
- * the caller merges those. Returned `items` carry no `invoice_id` — the caller
+ * the caller merges those. Returned `items` carry no `invoice_id`: the caller
  * adds it once the invoice row id is known.
  */
 
@@ -140,9 +140,9 @@ export type InvoiceWriteItemRow = {
 
 export type BuildInvoiceWriteResult =
   | { ok: true; invoiceFields: InvoiceWriteFields; items: InvoiceWriteItemRow[] }
-  // Domain validation failure — map via errorResponseFromCode(code, { details }).
+  // Domain validation failure: map via errorResponseFromCode(code, { details }).
   | { ok: false; code: string; details?: Record<string, unknown> }
-  // Unexpected DB error from an internal lookup — map via errorResponse(dbError).
+  // Unexpected DB error from an internal lookup: map via errorResponse(dbError).
   | { ok: false; dbError: unknown }
 
 export async function buildInvoiceWriteData(params: {
@@ -159,7 +159,7 @@ export async function buildInvoiceWriteData(params: {
   const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
   const allowedRates = new Set(availableRates.map((r) => r.rate))
 
-  // VAT registration gate (defense in depth — the invoice form already hides
+  // VAT registration gate (defense in depth: the invoice form already hides
   // the Moms column when vat_registered is false). A non-momsregistrerad
   // company books no output VAT: zero every line rate so the sale lands as
   // momsfri (treatment 'exempt' → revenue 3004/3100, no 2611). 0% is a valid
@@ -259,7 +259,7 @@ export async function buildInvoiceWriteData(params: {
   // ROT/RUT-avdrag: validate prerequisites and compute the per-item +
   // invoice-level deduction. Computed server-side (never trusted from the
   // client) so a tampered request can't expand the 1513 receivable. Skipped
-  // entirely for proformas, delivery notes, and quotes — those documents don't
+  // entirely for proformas, delivery notes, and quotes: those documents don't
   // post journal entries and have no deduction model.
   let deductionTotal = 0
   let deductionPersonnummerEncrypted: string | null = null
@@ -302,7 +302,7 @@ export async function buildInvoiceWriteData(params: {
     }
 
     // Compute and (when present) encrypt the personnummer. The plaintext value
-    // never touches the DB — only the AES-256-GCM ciphertext + the last four
+    // never touches the DB: only the AES-256-GCM ciphertext + the last four
     // digits go into invoices columns.
     deductionTotal = computeInvoiceDeductionTotal(validateInput)
     if (personnummerProvided) {
@@ -354,7 +354,7 @@ export async function buildInvoiceWriteData(params: {
     total,
     total_sek: documentType === 'delivery_note' ? null : totalSek,
     // remaining_amount = total - deduction for real invoices so open-invoice
-    // queries treat them as fully unpaid for the CUSTOMER's share — the
+    // queries treat them as fully unpaid for the CUSTOMER's share: the
     // Skatteverket portion is on 1513 and clears when the agency pays out.
     // Proformas / delivery notes have no payment obligation → keep 0.
     remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
@@ -376,7 +376,7 @@ export async function buildInvoiceWriteData(params: {
   }
 
   const itemRows: InvoiceWriteItemRow[] = items.map((item, index) => {
-    // Free-text / blank rows carry no amounts and never book — store the
+    // Free-text / blank rows carry no amounts and never book: store the
     // description only and zero everything else. Keys must match the product
     // branch exactly so a bulk insert isn't rejected for differing key sets.
     if (item.line_type === 'text') {

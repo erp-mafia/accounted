@@ -39,7 +39,7 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 | `BRANDING_SUPPORT_EMAIL` | `supportEmail` | `support@gnubok.se` |
 | `BRANDING_PRIVACY_EMAIL` | `privacyEmail` | `privacy@gnubok.se` |
 | `BRANDING_SECURITY_EMAIL` | `securityEmail` | `security@arcim.io` |
-| `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom` — From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
+| `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom`: From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
 | `NEXT_PUBLIC_APP_URL` | `appUrl` | `https://app.gnubok.se` |
 | `NEXT_PUBLIC_BRANDING_LOGO_PATH` | `logoPath` | `/gnubokiceon-removebg-preview.png` |
 | `NEXT_PUBLIC_BRANDING_FAVICON_PATH` | `faviconPath` | `/favicon.ico` |
@@ -60,7 +60,7 @@ Resolution order (last wins): **defaults → env vars → extension override**.
 
 | Env var | Purpose |
 |---|---|
-| `RESEND_API_KEY` | Resend API key — required for both outbound mail and the inbox webhook |
+| `RESEND_API_KEY` | Resend API key: required for both outbound mail and the inbox webhook |
 | `RESEND_FROM_EMAIL` | Default `From` address (e.g. `noreply@your-brand.se`); also used as the address you From-spoof through Resend |
 | `RESEND_INBOUND_DOMAIN` | Domain used to compose per-company invoice-inbox addresses: `{local-part}@{RESEND_INBOUND_DOMAIN}` |
 | `RESEND_INBOUND_WEBHOOK_SECRET` | Verifies the `/inbound` webhook signature from Resend |
@@ -71,25 +71,25 @@ These are stable contracts. Renaming them breaks existing data, sessions, or ext
 
 | Identifier | Where | Why |
 |---|---|---|
-| `gnubok-company-id` | cookie | Active company context — renaming breaks logged-in sessions |
-| `gnubok-invite-token` | cookie | Pre-auth invite token holding — renaming drops in-flight invites |
+| `gnubok-company-id` | cookie | Active company context: renaming breaks logged-in sessions |
+| `gnubok-invite-token` | cookie | Pre-auth invite token holding: renaming drops in-flight invites |
 | `gnubok_sk_` | API key prefix | All issued API keys; existing clients fail validation |
 | `gnubok_inv_` | invite token prefix | All sent invite links break |
-| `gnubok_*` | MCP tool names (`gnubok_list_invoices`, etc.) | Published MCP API — Claude clients have these cached |
+| `gnubok_*` | MCP tool names (`gnubok_list_invoices`, etc.) | Published MCP API: Claude clients have these cached |
 | `gnubok-mcp` | npm package name | Whitelabel users still install `npx gnubok-mcp`. Document `GNUBOK_URL=https://app.your-brand.se/api/extensions/ext/mcp-server/mcp` so they hit your endpoint |
-| `GNUBOK_API_KEY` | env var read by `gnubok-mcp` package | Same reason — npm consumer expects this name |
+| `GNUBOK_API_KEY` | env var read by `gnubok-mcp` package | Same reason: npm consumer expects this name |
 
 ## What's outside this branding service
 
 A few things that look brand-related but are configured elsewhere:
 
-- **Supabase auth emails** (password reset, magic link) — set in the Supabase dashboard for your project, not in code.
-- **Resend sending domain** — verify `noreply@your-brand.se` (or wherever) in Resend, set `RESEND_FROM_EMAIL`.
-- **DNS / domain** — point `app.your-brand.se` at your Vercel deployment.
-- **OAuth redirect allowlist for MCP** — `app/api/mcp-oauth/authorize/route.ts` lists `claude.ai/api/*`, `claude.com/api/*`, and localhost. Your domain is the OAuth issuer, not a redirect target — no change needed unless you're integrating with new MCP clients.
-- **iCal feed PRODID** (`lib/calendar/ics-generator.ts`) — defaults to `erp-base.se`, callers may pass their domain.
-- **`NEXT_PUBLIC_APP_URL`** — used as the OAuth issuer. Set this to your domain (e.g. `https://app.your-brand.se`).
-- **Skatteverket submission identity** — `extensions/general/skatteverket/lib/api-client.ts` does not set a custom `User-Agent`; submissions go out with the Node/Vercel runtime default. If your deployment needs to identify itself to Skatteverket under a different brand, that's a future enhancement (env var + header), not something the current branding service covers.
+- **Supabase auth emails** (password reset, magic link): set in the Supabase dashboard for your project, not in code.
+- **Resend sending domain**: verify `noreply@your-brand.se` (or wherever) in Resend, set `RESEND_FROM_EMAIL`.
+- **DNS / domain**: point `app.your-brand.se` at your Vercel deployment.
+- **OAuth redirect allowlist for MCP**: `app/api/mcp-oauth/authorize/route.ts` lists `claude.ai/api/*`, `claude.com/api/*`, and localhost. Your domain is the OAuth issuer, not a redirect target: no change needed unless you're integrating with new MCP clients.
+- **iCal feed PRODID** (`lib/calendar/ics-generator.ts`): defaults to `erp-base.se`, callers may pass their domain.
+- **`NEXT_PUBLIC_APP_URL`**: used as the OAuth issuer. Set this to your domain (e.g. `https://app.your-brand.se`).
+- **Skatteverket submission identity**: `extensions/general/skatteverket/lib/api-client.ts` does not set a custom `User-Agent`; submissions go out with the Node/Vercel runtime default. If your deployment needs to identify itself to Skatteverket under a different brand, that's a future enhancement (env var + header), not something the current branding service covers.
 
 ## Staying in sync with upstream
 
@@ -145,7 +145,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if git diff --quiet origin/main..HEAD; then
-            echo "Up to date with upstream — nothing to do."
+            echo "Up to date with upstream: nothing to do."
             exit 0
           fi
           git push origin "${{ steps.merge.outputs.branch }}"
@@ -170,17 +170,17 @@ jobs:
 
 The fork-friendliness of this design depends on you keeping changes confined to your branding extension folder. Every file you edit in `lib/`, `app/`, or `components/` becomes a potential conflict on the next upstream merge. If you find yourself wanting to override something the branding service doesn't expose, prefer:
 
-1. **Open an upstream issue** — the branding service is intentionally minimal; missing fields can be added.
-2. **PR a hook upstream** — extending the service or adding a registry pattern keeps your fork clean.
+1. **Open an upstream issue**: the branding service is intentionally minimal; missing fields can be added.
+2. **PR a hook upstream**: extending the service or adding a registry pattern keeps your fork clean.
 
 ## Verifying your whitelabel
 
 After deploying:
 
-- [ ] Visit `/` — browser tab title shows your brand.
-- [ ] Visit `/login` and `/register` — your logo renders.
-- [ ] View source of `/manifest.webmanifest` — `name`, `short_name`, `theme_color` reflect your overrides.
-- [ ] Trigger an invite email — From line says `<your-brand> <noreply@...>`, body uses your name.
-- [ ] Visit `/dpa` and `/privacy` — legal entity and contact email are yours.
-- [ ] Open OAuth flow (`/api/mcp-oauth/authorize?...`) from a test MCP client — consent page references your brand.
-- [ ] Submit support form (Settings → Support) — internal subject prefix is `[<your-brand> support]`.
+- [ ] Visit `/`: browser tab title shows your brand.
+- [ ] Visit `/login` and `/register`: your logo renders.
+- [ ] View source of `/manifest.webmanifest`: `name`, `short_name`, `theme_color` reflect your overrides.
+- [ ] Trigger an invite email: From line says `<your-brand> <noreply@...>`, body uses your name.
+- [ ] Visit `/dpa` and `/privacy`: legal entity and contact email are yours.
+- [ ] Open OAuth flow (`/api/mcp-oauth/authorize?...`) from a test MCP client: consent page references your brand.
+- [ ] Submit support form (Settings → Support): internal subject prefix is `[<your-brand> support]`.

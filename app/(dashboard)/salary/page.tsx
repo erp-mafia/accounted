@@ -43,8 +43,8 @@ export default function SalaryPage() {
   const t = useTranslations('salary')
 
   // The "Ny lönekörning" modal is driven by the URL (?new=1) so every entry
-  // point — the header button, the empty state, and the legacy
-  // /salary/runs/new redirect — opens the same dialog, and the browser back
+  // point (the header button, the empty state, and the legacy
+  // /salary/runs/new redirect) opens the same dialog, and the browser back
   // button closes it. Same pattern as /invoices.
   const showNewRun = searchParams.has('new')
   const closeNewRun = () => router.replace('/salary', { scroll: false })

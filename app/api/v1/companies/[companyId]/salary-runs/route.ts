@@ -1,9 +1,9 @@
 /**
- * /api/v1/companies/{companyId}/salary-runs — list + create salary runs.
+ * /api/v1/companies/{companyId}/salary-runs: list + create salary runs.
  *
- * GET   — list with filters (period_year, status). Cursor pagination on
+ * GET   : list with filters (period_year, status). Cursor pagination on
  *         (created_at ASC, id ASC).
- * POST  — create a new monthly salary run. New runs start in `draft` status.
+ * POST  : create a new monthly salary run. New runs start in `draft` status.
  *         The line items and per-employee calculations are populated by
  *         POST /salary-runs/{id}/calculate. Idempotent (mandatory Idempotency-Key).
  *         Dry-runnable.
@@ -61,13 +61,13 @@ registerEndpoint({
   description:
     'Returns salary runs in created-first order with their lifecycle status (draft|review|approved|paid|booked|corrected) and denormalised totals. Filters: ?period_year=YYYY, ?status=draft.',
   useWhen:
-    'You need an overview of payroll activity — for building a list view, finding the current open run, or resolving a salary_run_id before invoking a lifecycle verb.',
+    'You need an overview of payroll activity: for building a list view, finding the current open run, or resolving a salary_run_id before invoking a lifecycle verb.',
   doNotUseFor:
     'Per-employee details (those live on the detail endpoint). Salary journal report (use GET /reports/salary-journal in Phase 5 PR-3).',
   pitfalls: [
     'A company has at most one salary run per (period_year, period_month). The unique constraint is at the DB layer.',
     'Totals are denormalised: they are 0 until POST /calculate runs.',
-    '`corrected` status is reached via the internal /correct route (not yet exposed on v1) — Phase 5 PR-1 ships create/calculate/approve/mark-paid/book/generate-agi only.',
+    '`corrected` status is reached via the internal /correct route (not yet exposed on v1): Phase 5 PR-1 ships create/calculate/approve/mark-paid/book/generate-agi only.',
   ],
   example: {
     response: {
@@ -174,7 +174,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST — create salary run
+// POST: create salary run
 // ──────────────────────────────────────────────────────────────────
 
 const SalaryRunCreated = SalaryRunSummary.extend({
@@ -192,17 +192,17 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs',
   summary: 'Create a salary run.',
   description:
-    'Creates a draft salary run for the given period (period_year, period_month). The run starts empty — add employees via the internal /salary/runs/{id}/employees endpoints, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.',
+    'Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees via the internal /salary/runs/{id}/employees endpoints, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.',
   useWhen:
     'You are starting a new month\'s payroll. Use dry-run first to validate the period + voucher_series choice without committing.',
   doNotUseFor:
-    'Adding employees to an existing run (that is a separate surface — see internal /salary/runs/{id}/employees for Phase 5 PR-1; promoting it to v1 is deferred to a follow-up).',
+    'Adding employees to an existing run (that is a separate surface: see internal /salary/runs/{id}/employees for Phase 5 PR-1; promoting it to v1 is deferred to a follow-up).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.',
-    'period_month is 1–12. The DB CHECK enforces this — a 0 or 13 returns 400 VALIDATION_ERROR before reaching the DB.',
+    'period_month is 1-12. The DB CHECK enforces this: a 0 or 13 returns 400 VALIDATION_ERROR before reaching the DB.',
     'voucher_series defaults to "A". If the company uses a dedicated salary voucher series, set it explicitly.',
-    'A newly-created run has no employees — :calculate without employees returns 400 SALARY_RUN_NO_EMPLOYEES.',
+    'A newly-created run has no employees: :calculate without employees returns 400 SALARY_RUN_NO_EMPLOYEES.',
   ],
   example: {
     request: {

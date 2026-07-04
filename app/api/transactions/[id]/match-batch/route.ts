@@ -52,7 +52,7 @@ interface RpcErr {
  *   4. On success, refetches the per-allocation invoice/supplier_invoice rows
  *      to emit the same per-allocation events the legacy single-tx routes
  *      emit (invoice.match_confirmed, invoice.paid, supplier_invoice.*).
- *      Event emission is best-effort — a failure here does not roll back
+ *      Event emission is best-effort: a failure here does not roll back
  *      the booking; the RPC commit is the source of truth.
  */
 export const POST = withRouteContext(
@@ -69,7 +69,7 @@ export const POST = withRouteContext(
 
     const txLog = log.child({ transactionId })
 
-    // PR #607 round 3: p_user_id removed — RPC resolves caller from
+    // PR #607 round 3: p_user_id removed: RPC resolves caller from
     // auth.uid() directly. Keeps the attack surface off the API boundary.
     const { data, error } = await supabase.rpc('match_batch_allocate', {
       p_tx_id: transactionId,
@@ -93,7 +93,7 @@ export const POST = withRouteContext(
     }
 
     // Re-fetch the transaction row for event payloads (the RPC has already
-    // updated it). Lookup is non-critical — events fail open on miss.
+    // updated it). Lookup is non-critical: events fail open on miss.
     const { data: tx } = await supabase
       .from('transactions')
       .select('*')

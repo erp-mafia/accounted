@@ -3,16 +3,16 @@
  *
  * An entry point fixes three things for a generated instance document:
  *   1. The schemaRefs (the årsredovisning report + the fastställelseintyg
- *      "COA" report — certificate of adoption — exactly as in the official
+ *      "COA" report (certificate of adoption) exactly as in the official
  *      examples; allowed ÅR/FI/RB combinations per
  *      dev_docs/bokslut/kombinationer-taxonomirapporter-v1.4-screenshot.png).
  *   2. The xmlns prefix → namespace URI map. The 2024-09-12 K2 generation
  *      still uses the 2021-10-31 base-concept namespaces (se-gen-base,
- *      se-cd-base, se-mem-base) — verified against the entry-point XSD import
+ *      se-cd-base, se-mem-base): verified against the entry-point XSD import
  *      chain in taxonomi-paket-2024-09-12_rev20250312.zip.
  *   3. Which generated concept registry validates the emitted facts.
  *
- * MVP ships K2 AB `risbs` (full RR + full BR — matches the current PDF
+ * MVP ships K2 AB `risbs` (full RR + full BR: matches the current PDF
  * layout). The other K2 forms and K3 land in M6.
  */
 
@@ -71,7 +71,7 @@ export function getEntryPoint(id: string): TaxonomyEntryPoint {
   const ep = ENTRY_POINTS[id]
   if (!ep) {
     throw new Error(
-      `Unknown taxonomy entry point "${id}" — known: ${Object.keys(ENTRY_POINTS).join(', ')}`,
+      `Unknown taxonomy entry point "${id}": known: ${Object.keys(ENTRY_POINTS).join(', ')}`,
     )
   }
   return ep
@@ -85,6 +85,6 @@ export function getEntryPoint(id: string): TaxonomyEntryPoint {
 export function resolveEntryPoint(framework: 'k2' | 'k3'): TaxonomyEntryPoint {
   if (framework === 'k2') return K2_AB_RISBS_2024_09_12
   throw new Error(
-    'Digital inlämning stöds ännu inte för K3 — generera PDF eller vänta på K3-stödet (M6).',
+    'Digital inlämning stöds ännu inte för K3: generera PDF eller vänta på K3-stödet (M6).',
   )
 }

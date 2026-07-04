@@ -72,7 +72,7 @@ function createMockSupabase(config: {
               const chain: Record<string, unknown> = {}
               chain.eq = vi.fn().mockReturnValue(chain)
               chain.select = vi.fn().mockReturnValue(chain)
-              // Terminal — return count
+              // Terminal: return count
               Object.defineProperty(chain, 'then', {
                 value: (resolve: (val: unknown) => void) => {
                   resolve({
@@ -127,7 +127,7 @@ function buildFilterChain(data: unknown[]) {
     return chain
   })
 
-  // Paging stability order — no-op in the mock (data is already deterministic).
+  // Paging stability order: no-op in the mock (data is already deterministic).
   chain.order = vi.fn().mockImplementation(() => chain)
 
   // fetchAllRows paginates via .range(from, to); slice so pagination terminates
@@ -380,7 +380,7 @@ describe('currency-revaluation', () => {
       expect(preview.netEffect).toBe(-500)
     })
 
-    it('computes payable loss (closing rate > original rate — liability grew)', async () => {
+    it('computes payable loss (closing rate > original rate: liability grew)', async () => {
       const eurSI = makeSupplierInvoice({
         id: 'si-1',
         status: 'registered',
@@ -408,7 +408,7 @@ describe('currency-revaluation', () => {
       expect(credit2440!.credit_amount).toBe(1000)
     })
 
-    it('computes payable gain (closing rate < original rate — liability shrank)', async () => {
+    it('computes payable gain (closing rate < original rate: liability shrank)', async () => {
       const eurSI = makeSupplierInvoice({
         id: 'si-2',
         status: 'approved',

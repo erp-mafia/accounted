@@ -5,7 +5,7 @@ import crypto from 'crypto'
  * The auth code is an AES-256-GCM encrypted JSON payload containing
  * the user ID, PKCE code_challenge, and expiry.
  *
- * The API key is NOT embedded — it gets created at token exchange
+ * The API key is NOT embedded: it gets created at token exchange
  * after PKCE verification, preventing orphaned keys.
  */
 
@@ -24,7 +24,7 @@ export interface AuthCodePayload {
   redirectUri: string
   /**
    * Scopes the user consented to grant the resulting API key. Undefined on
-   * codes minted before this field was added — the token endpoint falls back
+   * codes minted before this field was added: the token endpoint falls back
    * to ALL_SCOPES so existing Claude flows are unaffected.
    */
   scopes?: string[]

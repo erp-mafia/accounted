@@ -25,7 +25,7 @@ const DeleteAccountSchema = z.object({
  *
  * Precondition: the user must own zero non-archived companies. The RPC
  * enforces this at the DB level and raises SQLSTATE P0001 with a message
- * if the precondition fails — we return 409 in that case.
+ * if the precondition fails: we return 409 in that case.
  */
 export async function POST(request: Request) {
   const supabase = await createClient()
@@ -92,16 +92,16 @@ export async function POST(request: Request) {
   // Note: auth.users.email is intentionally NOT scrubbed. The original
   // address is retained as a legitimate-interest tombstone so that:
   //   (1) re-signup with the same email is blocked by Supabase's unique
-  //       constraint — deletion must feel permanent, not trivially
+  //       constraint: deletion must feel permanent, not trivially
   //       reversible by re-registering
   //   (2) support can verify identity when a former user asks to recover
   //       BFL-retained räkenskapsinformation
   // This must be documented in the privacy policy under legitimate
   // interest (GDPR Art. 6(1)(f)). The email is never read by the app
-  // after this point — login is impossible (row is banned) and the
+  // after this point: login is impossible (row is banned) and the
   // profile is anonymized, so no UI ever surfaces it.
   //
-  // user_metadata / app_metadata ARE wiped — they may contain display
+  // user_metadata / app_metadata ARE wiped: they may contain display
   // name, avatar, or provider info that isn't needed for recovery.
   // The admin API replaces (not merges) these, so passing {} clears them.
   const service = createServiceClient()

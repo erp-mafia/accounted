@@ -32,7 +32,7 @@ const UpdateAssetSchema = z
     notes: z.string().nullable().optional(),
     // Acquisition-basis corrections. The service (updateAsset) only permits
     // these while the asset is neither disposed nor depreciated, returning
-    // ASSET_CORRECTION_BLOCKED (409) otherwise — they redefine the
+    // ASSET_CORRECTION_BLOCKED (409) otherwise: they redefine the
     // depreciation basis, so a post-posting change must go through storno.
     category: z
       .enum(ASSET_CATEGORIES as unknown as [AssetCategory, ...AssetCategory[]])

@@ -9,7 +9,7 @@ import type { Transaction } from '@/types'
 /**
  * P2-1 (mcp_optimization_plan): suggestions must carry signal tied to THIS
  * transaction. The old company-wide frequency fallback emitted an identical
- * ~0.5 four-way spread on every transaction — noise agents correctly
+ * ~0.5 four-way spread on every transaction: noise agents correctly
  * distrusted. History is now counterparty-keyed with provenance; when no
  * source matches, the honest answer is an empty list.
  */
@@ -48,7 +48,7 @@ describe('buildMerchantHistory / merchantHistoryFor', () => {
   })
 })
 
-describe('getSuggestedCategories — counterparty history', () => {
+describe('getSuggestedCategories: counterparty history', () => {
   it('returns an empty list (not a fabricated spread) when nothing matches', () => {
     const result = getSuggestedCategories(
       tx({ merchant_name: 'Helt Okänd Motpart', description: 'XYZ 123' }),

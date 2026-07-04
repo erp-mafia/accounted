@@ -55,7 +55,7 @@ describe('GET /api/agent/memory', () => {
       {
         id: 'mem-1',
         kind: 'fact',
-        content: 'Räkenskapsår jan–dec',
+        content: 'Räkenskapsår jan-dec',
         source: 'composer',
         source_ref: null,
         relevance_score: 0.5,

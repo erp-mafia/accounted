@@ -30,7 +30,7 @@ const log = createLogger('invoice-entries')
  * invoice UUID so the verifikation still identifies *vad affärshändelsen avser*
  * per BFL 5 kap 6§ p.3 even if a journal entry is somehow created against an
  * unnumbered invoice. The send path always assigns a number first, so this
- * fallback is defensive — but it leaves no ambiguity if a future caller skips
+ * fallback is defensive, but it leaves no ambiguity if a future caller skips
  * ensureInvoiceNumber.
  */
 function invoiceTag(invoice: Pick<Invoice, 'id' | 'invoice_number'>): string {
@@ -58,12 +58,12 @@ function buildInvoiceDescription(
  *
  * options.deferAccruals: substitute the 29xx interim account for lines with a
  * periodisering period. Only the callers that also create/cancel accrual
- * schedules may pass true (invoice entry + credit note) — the cash-method
+ * schedules may pass true (invoice entry + credit note): the cash-method
  * entry books revenue directly even if a line carries stale accrual fields,
  * since no schedule would ever dissolve the interim balance.
  *
  * options.defaultDimensions (dimensions PR7): the invoice-level bag. Revenue
- * lines carry item.dimensions merged over it (item wins per key) — the merged
+ * lines carry item.dimensions merged over it (item wins per key): the merged
  * bag is part of the aggregation identity, so two items on the same
  * rate+account but different tags stay on separate lines. VAT lines carry
  * the default only (the VAT account is a function of the treatment, never of
@@ -81,7 +81,7 @@ function generatePerRateLines(
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = currency != null && currency !== 'SEK'
 
-  // Free-text / blank rows carry no amounts and never book — drop them before
+  // Free-text / blank rows carry no amounts and never book: drop them before
   // grouping so they can't produce a zero-amount revenue line.
   items = items.filter((item) => item.line_type !== 'text')
 
@@ -99,7 +99,7 @@ function generatePerRateLines(
 
   if (!hasPerLineVat) {
     // Legacy fallback: single rate from invoice level. All items collapse
-    // into one revenue line, so only the invoice default can apply here —
+    // into one revenue line, so only the invoice default can apply here:
     // legacy rows predate per-item tagging anyway.
     const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType)
     const subtotal = items.reduce((sum, item) => sum + item.line_total, 0)
@@ -142,7 +142,7 @@ function generatePerRateLines(
 
   // Group items by vat_rate (preserve first-seen rate order). Within each rate,
   // sub-group revenue by the resolved BAS account + merged dimensions bag so a
-  // per-line/article account override — or a per-item dimension tag — produces
+  // per-line/article account override (or a per-item dimension tag) produces
   // its own credit line. VAT stays aggregated per rate (the VAT account is a
   // function of the treatment, never of the revenue override).
   type RevenueBucket = {
@@ -171,7 +171,7 @@ function generatePerRateLines(
       : getRevenueAccount(treatment, entityType)
     // Periodiserade lines credit the 29xx interim account (förutbetalda
     // intäkter) instead of revenue; the schedule dissolves it monthly. Output
-    // VAT below is untouched — moms is never deferred. Special treatments are
+    // VAT below is untouched. Moms is never deferred. Special treatments are
     // never deferred (ruta 39/40 must reflect the full period's sales).
     const account = isSpecialTreatment || !options?.deferAccruals
       ? plAccount
@@ -194,7 +194,7 @@ function generatePerRateLines(
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
 
-    // The rate-level rounded subtotal is the balance anchor — identical to the
+    // The rate-level rounded subtotal is the balance anchor: identical to the
     // pre-override single-account behaviour. When a rate splits across multiple
     // buckets (account and/or dimensions), distribute that exact total so
     // independent per-bucket rounding can never introduce a 1-öre imbalance
@@ -241,9 +241,9 @@ function generatePerRateLines(
  * Generate ROT/RUT-avdrag debit lines from invoice items.
  *
  * For each item flagged with `deduction_type`, produces a debit on BAS 1513
- * (Övriga kortfristiga fordringar — Skatteverket) for the computed
+ * (Övriga kortfristiga fordringar, Skatteverket) for the computed
  * deduction amount. The caller must REDUCE the 1510 debit (kundfordringar)
- * by the same total — the customer only owes the post-deduction amount;
+ * by the same total: the customer only owes the post-deduction amount;
  * Skatteverket pays the rest via Husavdragstjänsten. Returns both the
  * lines and the total so callers can apply both adjustments atomically.
  *
@@ -290,7 +290,7 @@ function generateRotRutLines(
       debit_amount: amountSek,
       credit_amount: 0,
       line_description: `${kind}-avdrag faktura ${invoiceTagText}`,
-      // Per-item line — carries the item's merged bag like its revenue line.
+      // Per-item line: carries the item's merged bag like its revenue line.
       dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
     })
   }
@@ -403,7 +403,7 @@ export async function createInvoiceJournalEntry(
     ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
     : { lines: [], totalSek: 0 }
 
-  // Debit: Kundfordringar — balance guarantee: debit = sum of all credit
+  // Debit: Kundfordringar, balance guarantee: debit = sum of all credit
   // lines MINUS the ROT/RUT total which goes to 1513 instead.
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const debitAmount = isForeign
@@ -470,7 +470,7 @@ export async function createInvoicePaymentJournalEntry(
     invoice.id,
   )
   // Dimensions PR7: the payment voucher re-propagates the linked invoice's
-  // default bag onto every leg — incl. the FX result lines, so a project's
+  // default bag onto every leg: incl. the FX result lines, so a project's
   // kursvinst/kursförlust stays inside the project P&L.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
@@ -540,7 +540,7 @@ export async function createInvoicePaymentJournalEntry(
   }
 
   if (defaultDimensions) {
-    // Copy per line — a shared bag object would let one line's mutation
+    // Copy per line: a shared bag object would let one line's mutation
     // leak into every other line (same contract as proposal stamping).
     for (const line of lines) line.dimensions = { ...defaultDimensions }
   }
@@ -642,7 +642,7 @@ export async function createCreditNoteJournalEntry(
 
   lines.push(...debitLines)
 
-  // Credit: Kundfordringar — balance guarantee: credit = sum of all debit lines
+  // Credit: Kundfordringar, balance guarantee: credit = sum of all debit lines
   const totalDebits = debitLines.reduce((sum, l) => sum + l.debit_amount, 0)
   lines.push({
     account_number: '1510',
@@ -694,7 +694,7 @@ export async function createInvoiceCashEntry(
   const isForeign = invoice.currency !== 'SEK'
   const tag = invoiceTag(invoice)
   // Dimensions PR7: kontantmetoden books revenue at payment, so this IS the
-  // producer path for cash-method companies — same merge rules as issuance.
+  // producer path for cash-method companies: same merge rules as issuance.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
   // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
@@ -740,7 +740,7 @@ export async function createInvoiceCashEntry(
     ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
     : { lines: [], totalSek: 0 }
 
-  // Debit: Företagskonto — balance guarantee: debit = sum of credit lines
+  // Debit: Företagskonto, balance guarantee: debit = sum of credit lines
   // minus the ROT/RUT total which goes to 1513 instead.
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const cashDebit = isForeign

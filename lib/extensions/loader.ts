@@ -5,7 +5,7 @@ let loaded = false
 
 /**
  * Load and register all configured extensions.
- * Idempotent — safe to call multiple times.
+ * Idempotent: safe to call multiple times.
  *
  * Extensions are controlled by extensions.config.json.
  * Run `npm run setup:extensions` to regenerate after config changes.

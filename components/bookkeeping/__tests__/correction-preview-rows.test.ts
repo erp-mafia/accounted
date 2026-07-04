@@ -10,7 +10,7 @@ describe('buildCorrectionRows', () => {
     expect(buildCorrectionRows([], [])).toEqual([])
   })
 
-  it('amount change on same accounts — storno cancels original, correction adds the new value', () => {
+  it('amount change on same accounts: storno cancels original, correction adds the new value', () => {
     const original = [
       makeJournalEntryLine({ account_number: '5410', debit_amount: 1000, credit_amount: 0 }),
       makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
@@ -27,7 +27,7 @@ describe('buildCorrectionRows', () => {
     ])
   })
 
-  it('account swap — old account zeros out, new account picks up the value', () => {
+  it('account swap: old account zeros out, new account picks up the value', () => {
     const original = [
       makeJournalEntryLine({ account_number: '5410', debit_amount: 1000, credit_amount: 0 }),
       makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
@@ -39,7 +39,7 @@ describe('buildCorrectionRows', () => {
     const rows = buildCorrectionRows(original, corrected)
 
     // 5410 ends at delta=-1000 (drained back), 5420 ends at delta=+1000 (new),
-    // 1930 nets to zero — correction matches storno exactly.
+    // 1930 nets to zero: correction matches storno exactly.
     expect(rows.find((r) => r.account_number === '5410')).toEqual({
       account_number: '5410',
       original: 1000,
@@ -119,7 +119,7 @@ describe('buildCorrectionRows', () => {
     // The reported scenario: a sale-shaped verifikat where the user drops the
     // revenue line (3001) from the rättelse. The storno still reverses 3001
     // (delta = −original), and correctionPresent=false lets the UI label it
-    // "tas bort" rather than rendering a bare "–".
+    // "tas bort" rather than rendering a bare "-".
     const original = [
       makeJournalEntryLine({ account_number: '1510', debit_amount: 0, credit_amount: 1875 }),
       makeJournalEntryLine({ account_number: '2611', debit_amount: 375, credit_amount: 0 }),
@@ -167,8 +167,8 @@ describe('formatSignedAmount', () => {
     expect(formatSignedAmount(-1000)).toBe('−1\u00a0000,00')
   })
 
-  it('renders zero as en-dash', () => {
-    expect(formatSignedAmount(0)).toBe('–')
+  it('renders zero as a hyphen', () => {
+    expect(formatSignedAmount(0)).toBe('-')
   })
 
   it('always renders two decimals', () => {

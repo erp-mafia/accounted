@@ -2,11 +2,11 @@
 -- Skatteverket has wired for your test BankID.
 --
 -- Replace the three placeholders below before running:
---   :user_id                — auth.users.id of the dev user signed in to gnubok
+--   :user_id: auth.users.id of the dev user signed in to gnubok
 --                              (your gnubok login email's user row)
---   :org_number_10digit     — the 10-digit form of the testredovisare SKV gave you
+--   :org_number_10digit: the 10-digit form of the testredovisare SKV gave you
 --                              (e.g. if SKV says 165020000013, use 5020000013)
---   :entity_type            — 'aktiebolag' (16-prefix) or 'enskild_firma' (19/20-prefix)
+--   :entity_type: 'aktiebolag' (16-prefix) or 'enskild_firma' (19/20-prefix)
 --
 -- Run with: psql "$DATABASE_URL" -v user_id="'<uuid>'" -v org_number_10digit="'5020000013'" -v entity_type="'aktiebolag'" -f scripts/setup-skv-test-company.sql
 

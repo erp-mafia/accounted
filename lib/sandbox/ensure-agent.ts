@@ -5,7 +5,7 @@ const log = createLogger('sandbox:ensure-agent')
 
 /**
  * Backfill a verified agent_profile for sandbox companies. Single source of
- * truth for the sandbox assistant's persona (name, avatar, atoms, summary) —
+ * truth for the sandbox assistant's persona (name, avatar, atoms, summary):
  * the seed route, dashboard layout, dashboard page, and chat layout all call
  * through here so the profile data lives in exactly one place.
  *
@@ -18,7 +18,7 @@ const log = createLogger('sandbox:ensure-agent')
  * Worst case the user sees the pre-seed UI on this request; the next
  * request retries.
  *
- * Idempotent — the UNIQUE constraint on company_id makes the insert a no-op
+ * Idempotent: the UNIQUE constraint on company_id makes the insert a no-op
  * once a profile exists.
  */
 export async function ensureSandboxAgentProfile(

@@ -101,7 +101,7 @@ function run(
 
 // --- Tests ---
 
-describe('syncMappedAccounts — create pass', () => {
+describe('syncMappedAccounts: create pass', () => {
   it('creates a missing BAS account with the BAS default name when the file has no custom name', async () => {
     const { supabase, inserts } = buildCapturingSupabase()
 
@@ -302,7 +302,7 @@ describe('syncMappedAccounts — create pass', () => {
   })
 })
 
-describe('syncMappedAccounts — rename pass', () => {
+describe('syncMappedAccounts: rename pass', () => {
   it('renames an existing account whose name differs from the file (K1-seeded default)', async () => {
     const basName = getBASReference('1930')!.account_name
     const { supabase, inserts, updates } = buildCapturingSupabase({
@@ -320,7 +320,7 @@ describe('syncMappedAccounts — rename pass', () => {
 
     expect(inserts).toHaveLength(0)
     expect(updates).toHaveLength(1)
-    // Only the name is touched — never is_system_account or anything else.
+    // Only the name is touched: never is_system_account or anything else.
     expect(Object.keys(updates[0].payload)).toEqual(['account_name'])
     expect(updates[0].payload.account_name).toBe('Företagskonto Swedbank')
     expect(updates[0].filters).toEqual({
@@ -415,7 +415,7 @@ describe('syncMappedAccounts — rename pass', () => {
     const result = await run(supabase, [
       mapping({ sourceAccount: '1930', targetAccount: '1930', sourceName: 'Företagskonto Swedbank' }),
       mapping({ sourceAccount: '1510', targetAccount: '1510', sourceName: 'Kundfordringar SEK' }),
-      // Unchanged name — must not produce an UPDATE.
+      // Unchanged name: must not produce an UPDATE.
       mapping({ sourceAccount: '2440', targetAccount: '2440', sourceName: 'Leverantörsskulder' }),
     ])
 

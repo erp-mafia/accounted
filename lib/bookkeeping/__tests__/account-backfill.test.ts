@@ -76,7 +76,7 @@ describe('backfillStandardBASAccounts', () => {
   })
 
   it('never resurrects an existing (deactivated) account', async () => {
-    // The caller saw 3740 as missing because it is INACTIVE — deactivation is
+    // The caller saw 3740 as missing because it is INACTIVE: deactivation is
     // a deliberate user choice, so the backfill must not touch the row.
     const { supabase, inserts } = createMockSupabase({
       existingRows: [{ account_number: '3740' }],

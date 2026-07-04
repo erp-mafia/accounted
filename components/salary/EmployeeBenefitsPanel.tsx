@@ -161,7 +161,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
                     <TableCell className="text-right tabular-nums">{formatCurrency(b.monthly_value)}</TableCell>
                     <TableCell className="text-muted-foreground tabular-nums text-xs">
                       {formatDate(b.valid_from)}
-                      {b.valid_to ? ` – ${formatDate(b.valid_to)}` : ' – löpande'}
+                      {b.valid_to ? ` till ${formatDate(b.valid_to)}` : ' till löpande'}
                     </TableCell>
                     <TableCell className="text-right">
                       {canWrite && (

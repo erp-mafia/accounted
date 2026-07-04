@@ -33,7 +33,7 @@ const REQUIRED_EXTENSION_VARS: ReadonlyArray<readonly string[]> = [
 function validateEnvironment(): void {
   // During builds (CI, Docker, Vercel), env vars may be absent or set to
   // placeholder sentinels. Skip validation so Next.js page collection
-  // doesn't fail — real validation happens at runtime.
+  // doesn't fail: real validation happens at runtime.
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   if (!supabaseUrl || supabaseUrl.startsWith('__')) return
 
@@ -63,7 +63,7 @@ function validateEnvironment(): void {
  * Ensure the system is initialized (extensions loaded, context factory wired,
  * core event handlers registered).
  * Called from API routes that emit events.
- * Idempotent — safe to call multiple times.
+ * Idempotent: safe to call multiple times.
  */
 export function ensureInitialized(): void {
   if (initialized) return

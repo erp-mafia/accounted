@@ -4,7 +4,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/pending-operations/expire/cron — daily 02:30 UTC.
+ * GET /api/pending-operations/expire/cron, daily 02:30 UTC.
  *
  * Auto-rejects staged operations that have sat at status='pending' for more
  * than 30 days. AI agents stage operations for human review; when the chat
@@ -13,12 +13,12 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
  * longer remember. A 30-day-old proposal has lost its context regardless of
  * risk level, so the sweep applies uniformly.
  *
- * Rows are flipped to 'rejected' (never deleted — the table is the audit
+ * Rows are flipped to 'rejected' (never deleted: the table is the audit
  * trail) with the same result_data shape the commit dispatcher uses for its
  * own auto-rejects (lib/pending-operations/commit.ts). The strict
  * reason: 'expired' marker is what the /pending UI keys its
  * "Utgick automatiskt" badge on. rejection_category/rejection_reason stay
- * NULL — those carry user feedback semantics, and an expiry is not feedback.
+ * NULL: those carry user feedback semantics, and an expiry is not feedback.
  *
  * If you change EXPIRY_DAYS, update the user-facing copy that states the
  * window: pending.auto_expiry_note + pending.auto_expired_detail in

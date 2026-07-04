@@ -2,7 +2,7 @@ services:
   app:
     image: ghcr.io/erp-mafia/gnubok:${IMAGE_TAG:-latest}
     env_file: .env
-    # Bound to loopback by default — put a TLS-terminating reverse proxy in
+    # Bound to loopback by default: put a TLS-terminating reverse proxy in
     # front (see docker-compose.caddy.yml). Override PORT in .env to change
     # the host port, or use the caddy overlay to remove the host binding.
     ports:
@@ -13,14 +13,14 @@ services:
       - ALL
     read_only: true
     init: true
-    # tmpfs ordering matters — the parent /app/.next must be mounted before
+    # tmpfs ordering matters: the parent /app/.next must be mounted before
     # any sub-mounts. The entrypoint cp's image-baked templates into these
     # mounts at startup, then sed-substitutes the NEXT_PUBLIC_* placeholders,
     # then drops the write bits.
     #
     # uid=1001 (nextjs), mode=750: the entrypoint runs UNPRIVILEGED as nextjs
-    # and owns these mounts, so it can populate them with no CAP_CHOWN/CAP_SETUID
-    # — which is what lets the container run under `cap_drop: ALL`. nodejs-group
+    # and owns these mounts, so it can populate them with no CAP_CHOWN/CAP_SETUID,
+    # which is what lets the container run under `cap_drop: ALL`. nodejs-group
     # members can read the served bundle; nothing else on the host can.
     tmpfs:
       - /tmp

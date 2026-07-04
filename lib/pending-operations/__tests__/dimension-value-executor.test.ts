@@ -1,5 +1,5 @@
 /**
- * commitCreateDimensionValue — executor tests (dimensions PR3).
+ * commitCreateDimensionValue: executor tests (dimensions PR3).
  *
  * The executor is private to lib/pending-operations/commit.ts and reached
  * through commitPendingOperation, same pattern as executors.test.ts. Staging-
@@ -106,7 +106,7 @@ describe('commitPendingOperation: create_dimension_value', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/Okänd dimension 12/)
-    // ensure_company_dimensions must NOT run for non-system dims — agents may
+    // ensure_company_dimensions must NOT run for non-system dims: agents may
     // stage new VALUES, never new dimensions.
     expect(supabase.rpc).not.toHaveBeenCalled()
   })

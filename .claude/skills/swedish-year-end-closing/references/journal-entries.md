@@ -113,7 +113,7 @@ Credit 2091  Balanserad vinst eller förlust
 ```
 
 ## New year opening: consolidate equity (Enskild firma)
-Zero all of 2011–2019 into 2010:
+Zero all of 2011-2019 into 2010:
 ```
 Debit  2010  Eget kapital (for net credits from sub-accounts)
 Credit 2011  Egna varuuttag

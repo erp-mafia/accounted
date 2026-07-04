@@ -6,7 +6,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 // POST /api/agent/profile/verify
 //
 // Stamps verified_at + verified_by_user_id on agent_profiles when the user
-// clicks "Det här ser rätt ut — kör" in Phase B. Idempotent: re-verifying
+// clicks "Det här ser rätt ut, kör" in Phase B. Idempotent: re-verifying
 // updates the timestamp; this is desirable for "Bygg om" rebuild flows.
 
 const BodySchema = z.object({
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // Defense in depth alongside RLS — confirm membership for the target
+  // Defense in depth alongside RLS: confirm membership for the target
   // company; a non-viewer role is required to stamp verified_at.
   const { data: membership } = await supabase
     .from('company_members')

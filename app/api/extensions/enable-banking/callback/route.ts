@@ -8,7 +8,7 @@ import { upsertFromPsd2 } from '@/lib/cash-accounts/service'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
 // (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
-// load so registerEventLogHandler() has subscribed before the first emit() —
+// load so registerEventLogHandler() has subscribed before the first emit();
 // otherwise the audit row is silently dropped on a cold instance where this
 // redirect route is the first event-emitting code path to execute.
 ensureInitialized()
@@ -163,7 +163,7 @@ export async function GET(request: Request) {
 
     // GDPR Art.5(1)(c) / Art.25(1): data minimization. We only store the
     // metadata the user needs to pick which accounts to sync (uid, name, IBAN,
-    // currency). Balances are bank account financial data — we don't fetch
+    // currency). Balances are bank account financial data: we don't fetch
     // them here. The first sync (after the user enables specific accounts)
     // populates balance + balance_updated_at via lib/sync.ts. Accounts the
     // user deselects never have their balance pulled.
@@ -231,7 +231,7 @@ export async function GET(request: Request) {
         })
         // Persist the failure to event_log so a security review can see that
         // a PSD2 account returned by the bank was not mirrored into our
-        // routing table — otherwise this is only visible in console output
+        // routing table; otherwise this is only visible in console output
         // (ASVS V16 / ISO 27001 A.8.15 / SOC 2 CC7.2).
         try {
           await eventBus.emit({

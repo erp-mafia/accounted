@@ -9,7 +9,7 @@ import { requireCompanyId } from '@/lib/company/context'
  * (template_id, company_id) row in booking_template_usage, refreshing
  * last_used_at. Used by the template pickers to drive MRU ordering.
  *
- * Fire-and-forget from the client — errors are non-fatal.
+ * Fire-and-forget from the client: errors are non-fatal.
  */
 export async function POST(
   _request: Request,

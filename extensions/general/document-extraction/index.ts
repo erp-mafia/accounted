@@ -10,7 +10,7 @@ import type { DocumentAttachment } from '@/types'
 const log = createLogger('document-extraction')
 
 // Mime types we know Claude can read directly via Bedrock. Anything else
-// (HEIC, ZIP, TXT, …) is skipped — extracted_at still gets stamped so the
+// (HEIC, ZIP, TXT, …) is skipped: extracted_at still gets stamped so the
 // row is marked as "attempted, not eligible".
 const SUPPORTED_MIME_TYPES = new Set([
   'application/pdf',
@@ -20,7 +20,7 @@ const SUPPORTED_MIME_TYPES = new Set([
   'image/gif',
 ])
 
-// AI-extraction extension — paid AI tier only.
+// AI-extraction extension: paid AI tier only.
 //
 // Subscribes to the existing document.uploaded event bus topic and runs
 // Sonnet 4.6 (via Bedrock, reusing invoice-inbox's extractInvoiceFields) on
@@ -29,7 +29,7 @@ const SUPPORTED_MIME_TYPES = new Set([
 // it without re-asking the user.
 //
 // Idempotency: skips when extracted_at is already set on the row. Also
-// dedupes against invoice_inbox_items.extracted_data — when the inbox
+// dedupes against invoice_inbox_items.extracted_data: when the inbox
 // extension already extracted the same file, we copy its result instead
 // of paying for a second Sonnet call.
 //
@@ -37,7 +37,7 @@ const SUPPORTED_MIME_TYPES = new Set([
 // still work; the agent intent will see null extracted_data and either
 // ask the user or call gnubok_get_document_content at chat-time.
 //
-// See dev_docs/specialized-agent-plan.md (§ paid/free tier note) — to be
+// See dev_docs/specialized-agent-plan.md (§ paid/free tier note): to be
 // authored.
 export const documentExtractionExtension: Extension = {
   id: 'document-extraction',
@@ -64,7 +64,7 @@ async function extractAndPersist(
   companyId: string,
 ): Promise<void> {
   // Service-role client: the handler runs out-of-band of the request that
-  // emitted the event, so we don't have user cookies. RLS doesn't fit —
+  // emitted the event, so we don't have user cookies. RLS doesn't fit:
   // events have no user context.
   const supabase: SupabaseClient = createServiceClient()
 
@@ -90,7 +90,7 @@ async function extractAndPersist(
   // Dedup against inbox: if invoice-inbox already extracted this exact file
   // (same document_id), copy its result to avoid a second AI call. If the
   // inbox row marked the upload as skip_extraction=true, the inbox row's
-  // extracted_data is an empty skeleton — we must stamp the doc with a
+  // extracted_data is an empty skeleton: we must stamp the doc with a
   // 'skipped:*' model so the client-side useDocumentExtraction hook reports
   // 'unsupported' rather than 'succeeded' (otherwise the UI would claim AI
   // finished reading a doc it never opened).
@@ -127,7 +127,7 @@ async function extractAndPersist(
       return
     }
 
-    // Download the file from Supabase Storage. The bucket is private — the
+    // Download the file from Supabase Storage. The bucket is private: the
     // service-role client can read any path.
     const storagePath = existing.storage_path as string | null
     if (!storagePath) {
@@ -145,7 +145,7 @@ async function extractAndPersist(
     const buffer = Buffer.from(await blob.arrayBuffer())
 
     if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) {
-      log.info('extraction skipped — ai capability not entitled', { doc: document.id, companyId })
+      log.info('extraction skipped, ai capability not entitled', { doc: document.id, companyId })
       return
     }
 
@@ -156,7 +156,7 @@ async function extractAndPersist(
         fileName: (document.file_name as string) || 'document',
       })
       // extractInvoiceFields returns an "empty" result on failure rather
-      // than throwing — distinguish by checking rawText. When rawText is
+      // than throwing: distinguish by checking rawText. When rawText is
       // null, the call was skipped (creds missing, unsupported type) or
       // the JSON parse failed.
       if (!rawText) {

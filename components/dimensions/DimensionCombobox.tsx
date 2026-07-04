@@ -22,7 +22,7 @@ interface DimensionComboboxProps {
 }
 
 /**
- * Searchable picker for dimension values — sibling of
+ * Searchable picker for dimension values: sibling of
  * components/bookkeeping/AccountCombobox.tsx and deliberately mirrors its
  * interaction model: plain Input trigger, keyboard-first dropdown
  * (arrows/Enter/Escape), close-on-outside-click, and an inline "Skapa ny…"
@@ -30,7 +30,7 @@ interface DimensionComboboxProps {
  * selects it.
  *
  * Fetches the registry lazily on first open and filters client-side (value
- * lists are small). Only active values are offered — archived codes stay
+ * lists are small). Only active values are offered: archived codes stay
  * pickable in history but are never suggested.
  *
  * Strings are hardcoded Swedish per the AccountCombobox convention: the
@@ -57,7 +57,7 @@ export default function DimensionCombobox({
 
   // Refs mirroring the committed `value` prop and the fetched values. The
   // blur timeout below runs 150ms after render, so reading `value`/`values`
-  // directly would act on a stale snapshot — a selection landing during that
+  // directly would act on a stale snapshot: a selection landing during that
   // window (updating the prop via onChange) must win over the revert.
   const committedRef = useRef(value)
   const valuesRef = useRef(values)
@@ -227,7 +227,7 @@ export default function DimensionCombobox({
   const handleBlur = () => {
     setIsOpen(false)
     // Small delay so a dropdown mousedown fires first (same trick as
-    // AccountCombobox — option clicks preventDefault, so they never blur).
+    // AccountCombobox: option clicks preventDefault, so they never blur).
     // An emptied field clears the dimension; anything that isn't a known
     // code reverts to the committed value. Committed value and values are
     // read through refs so a selection that lands during the 150ms window

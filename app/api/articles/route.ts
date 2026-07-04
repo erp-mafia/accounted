@@ -12,7 +12,7 @@ import type { Article } from '@/types'
 
 ensureInitialized()
 
-// GET /api/articles — list the active company's articles. `?include_inactive=1`
+// GET /api/articles: list the active company's articles. `?include_inactive=1`
 // returns soft-deactivated ones too (the register page can show an archive view).
 export const GET = withRouteContext(
   'article.list',

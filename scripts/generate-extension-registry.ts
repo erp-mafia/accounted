@@ -110,7 +110,7 @@ function generateExtensionList(manifests: Manifest[]): string {
   const entries = withRuntime.map(m => `  ${m.exportName},`)
 
   return [
-    `// AUTO-GENERATED — do not edit. Run \`npm run setup:extensions\` to regenerate.`,
+    `// AUTO-GENERATED: do not edit. Run \`npm run setup:extensions\` to regenerate.`,
     `import type { Extension } from '../types'`,
     ...imports,
     ``,
@@ -130,7 +130,7 @@ function generateWorkspaceMap(manifests: Manifest[]): string {
   })
 
   return [
-    `// AUTO-GENERATED — do not edit. Run \`npm run setup:extensions\` to regenerate.`,
+    `// AUTO-GENERATED: do not edit. Run \`npm run setup:extensions\` to regenerate.`,
     `import dynamic from 'next/dynamic'`,
     `import type { ComponentType } from 'react'`,
     `import type { WorkspaceComponentProps } from '../workspace-registry'`,
@@ -174,7 +174,7 @@ function generateSectorDefinitions(manifests: Manifest[]): string {
   }
 
   return [
-    `// AUTO-GENERATED — do not edit. Run \`npm run setup:extensions\` to regenerate.`,
+    `// AUTO-GENERATED: do not edit. Run \`npm run setup:extensions\` to regenerate.`,
     `import type { ExtensionDefinition } from '../types'`,
     ``,
     `export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {`,
@@ -188,7 +188,7 @@ function generateEnabledExtensions(manifests: Manifest[]): string {
   const ids = manifests.map(m => `  '${m.id}',`)
 
   return [
-    `// AUTO-GENERATED — do not edit. Run \`npm run setup:extensions\` to regenerate.`,
+    `// AUTO-GENERATED: do not edit. Run \`npm run setup:extensions\` to regenerate.`,
     ``,
     `export const ENABLED_EXTENSION_IDS: ReadonlySet<string> = new Set([`,
     ...ids,

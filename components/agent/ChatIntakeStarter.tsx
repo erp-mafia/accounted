@@ -9,8 +9,8 @@ import { useAgentSheet } from './AgentSheetProvider'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 // Phase C entry surface. Lands here from ReviewCard's "kör" after Phase B
-// verify succeeds. Renders AgentChat in fresh-start mode — no
-// initialConversationId, no initialMessages — so the auto-fire effect
+// verify succeeds. Renders AgentChat in fresh-start mode: no
+// initialConversationId, no initialMessages: so the auto-fire effect
 // kicks the first invoke. As soon as /api/agent/invoke emits the
 // conversation event, the URL swaps to /chat/[id] so reload / share /
 // browser-back all work like any other conversation.
@@ -22,7 +22,7 @@ export default function ChatIntakeStarter() {
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
   const agentName = identity.displayName?.trim() || 'Din assistent'
-  // Lock the swap to the first id we see — defensive guard against the
+  // Lock the swap to the first id we see: defensive guard against the
   // AgentChat callback firing twice during React 19 Strict Mode reruns.
   const [swapped, setSwapped] = useState(false)
 
@@ -34,8 +34,8 @@ export default function ChatIntakeStarter() {
           <h1 className="font-display text-lg tracking-tight truncate">{agentName} är redo</h1>
           <p className="text-xs text-muted-foreground">
             {isSandbox
-              ? 'Förhandsvisning — den verkliga konversationen kräver ett konto.'
-              : 'Några frågor för att lära känna din verksamhet — svara i din egen takt, du kan avsluta när du vill.'}
+              ? 'Förhandsvisning: den verkliga konversationen kräver ett konto.'
+              : 'Några frågor för att lära känna din verksamhet: svara i din egen takt, du kan avsluta när du vill.'}
           </p>
         </div>
       </header>
@@ -52,7 +52,7 @@ export default function ChatIntakeStarter() {
               // Wait for the greeting to finish streaming AND persist before
               // swapping the URL. Swapping on the early `conversation` event
               // unmounts AgentChat mid-stream, so the greeting is never saved
-              // and /chat/[id] hydrates empty — the bug where the chat lands
+              // and /chat/[id] hydrates empty: the bug where the chat lands
               // blank and only shows the intro on a later visit.
               if (swapped) return
               setSwapped(true)

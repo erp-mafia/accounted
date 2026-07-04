@@ -90,7 +90,7 @@ export async function GET(
 
   // Only employees with a positive payout end up in the file (see filter
   // below), so missing bank details must only block when they're actually
-  // being paid — a zero-net employee needs no destination account.
+  // being paid: a zero-net employee needs no destination account.
   const missingBank = runEmployees.filter((sre) => {
     if (effectiveNetPayout(sre) <= 0) return false
     const emp = sre.employee as { clearing_number: string | null; bank_account_number: string | null } | null
@@ -110,7 +110,7 @@ export async function GET(
   }
 
   const employees: BgLbEmployee[] = runEmployees
-    // Honor tax override on the bank payment file too — the net the employee
+    // Honor tax override on the bank payment file too: the net the employee
     // actually receives depends on the effective tax.
     .map((sre) => ({ sre, effectiveNet: effectiveNetPayout(sre) }))
     .filter(({ effectiveNet }) => effectiveNet > 0)
@@ -151,7 +151,7 @@ export async function GET(
     .eq('id', id)
     .eq('company_id', companyId)
 
-  // ISO 8859-1 encoding — re-encode the JS string to Latin-1 bytes.
+  // ISO 8859-1 encoding: re-encode the JS string to Latin-1 bytes.
   const buffer = Buffer.from(result.content, 'latin1')
 
   return new Response(buffer, {

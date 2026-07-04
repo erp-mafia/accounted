@@ -1,5 +1,5 @@
 /**
- * Dimensions PR4 — the shared `dimensions` filter arg on the report tools
+ * Dimensions PR4: the shared `dimensions` filter arg on the report tools
  * (gnubok_get_trial_balance / gnubok_get_income_statement /
  * gnubok_get_general_ledger).
  *
@@ -77,7 +77,7 @@ describe('report tools declare the dimensions filter arg', () => {
   })
 })
 
-describe('gnubok_get_trial_balance — dimensions filter', () => {
+describe('gnubok_get_trial_balance: dimensions filter', () => {
   it('resolves a value NAME to its registry code, filters, and echoes both', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD_ROW, error: null }) // period info
@@ -141,7 +141,7 @@ describe('gnubok_get_trial_balance — dimensions filter', () => {
   })
 })
 
-describe('gnubok_get_income_statement — dimensions filter', () => {
+describe('gnubok_get_income_statement: dimensions filter', () => {
   it('accepts an exact code without echoing resolutions', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD_ROW, error: null }) // period info
@@ -166,12 +166,12 @@ describe('gnubok_get_income_statement — dimensions filter', () => {
     expect(result.net_result).toBe(42)
     expect(result.period).toEqual({ start: '2026-01-01', end: '2026-12-31' })
     expect(result.dimension_filter).toEqual({ '6': 'P001' })
-    // Exact code match is not a resolution — no echo.
+    // Exact code match is not a resolution: no echo.
     expect(result.dimension_resolutions).toBeUndefined()
   })
 })
 
-describe('gnubok_get_general_ledger — dimensions filter', () => {
+describe('gnubok_get_general_ledger: dimensions filter', () => {
   it('passes the bag through verbatim when dimensions_enabled is false (free-text passthrough)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null }) // company_settings

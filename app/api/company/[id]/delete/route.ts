@@ -50,7 +50,7 @@ export async function POST(
   // and user.id for defense in depth.
   const service = createServiceClient()
 
-  // 1. Fetch company — must exist and be active. Query via service client
+  // 1. Fetch company: must exist and be active. Query via service client
   // because we need the raw row regardless of RLS visibility, but we still
   // enforce membership below.
   const { data: company, error: fetchError } = await service
@@ -97,7 +97,7 @@ export async function POST(
   // (companies.name may be stale) and CompanyDangerZone gates on that value, so
   // the server must accept ONLY that single name. Accepting the stale
   // companies.name as an alternative would open a confirmation path the user was
-  // never shown — weakening the gate on an irreversible action (ASVS V8.2.1).
+  // never shown, weakening the gate on an irreversible action (ASVS V8.2.1).
   // Case-sensitive trim, mirror of the client-side check.
   const { data: companySettings } = await service
     .from('company_settings')

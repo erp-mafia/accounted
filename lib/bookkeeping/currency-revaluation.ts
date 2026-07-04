@@ -227,7 +227,7 @@ export async function previewCurrencyRevaluation(
       account_number: '1510',
       debit_amount: Math.round(debit1510 * 100) / 100,
       credit_amount: 0,
-      line_description: 'Omvärdering kundfordringar — orealiserad kursvinst',
+      line_description: 'Omvärdering kundfordringar: orealiserad kursvinst',
     })
   }
   if (credit1510 > 0) {
@@ -235,7 +235,7 @@ export async function previewCurrencyRevaluation(
       account_number: '1510',
       debit_amount: 0,
       credit_amount: Math.round(credit1510 * 100) / 100,
-      line_description: 'Omvärdering kundfordringar — orealiserad kursförlust',
+      line_description: 'Omvärdering kundfordringar: orealiserad kursförlust',
     })
   }
   if (debit2440 > 0) {
@@ -243,7 +243,7 @@ export async function previewCurrencyRevaluation(
       account_number: '2440',
       debit_amount: Math.round(debit2440 * 100) / 100,
       credit_amount: 0,
-      line_description: 'Omvärdering leverantörsskulder — orealiserad kursvinst',
+      line_description: 'Omvärdering leverantörsskulder: orealiserad kursvinst',
     })
   }
   if (credit2440 > 0) {
@@ -251,7 +251,7 @@ export async function previewCurrencyRevaluation(
       account_number: '2440',
       debit_amount: 0,
       credit_amount: Math.round(credit2440 * 100) / 100,
-      line_description: 'Omvärdering leverantörsskulder — orealiserad kursförlust',
+      line_description: 'Omvärdering leverantörsskulder: orealiserad kursförlust',
     })
   }
   if (credit3960 > 0) {

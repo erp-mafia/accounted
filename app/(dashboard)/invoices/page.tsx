@@ -84,8 +84,8 @@ export default function InvoicesPage() {
   const getRelativeTimeLabel = useRelativeTimeLabel()
 
   // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
-  // — the header button, empty states, the command palette, and the legacy
-  // /invoices/new redirect — opens the same dialog, and the browser back
+  // (the header button, empty states, the command palette, and the legacy
+  // /invoices/new redirect) opens the same dialog, and the browser back
   // button closes it. No canWrite gate here: like the old /invoices/new page,
   // the editor itself disables submission for viewers.
   const showNewInvoice = searchParams.has('new')
@@ -288,7 +288,7 @@ export default function InvoicesPage() {
             const isProforma = docType === 'proforma'
             const isDeliveryNote = docType === 'delivery_note'
             // A draft that already has a number is issued-but-unsent ("Granska &
-            // skapa" done, "Skicka" pending) — distinct from a true unnumbered
+            // skapa" done, "Skicka" pending): distinct from a true unnumbered
             // draft. Show "Ej skickad" so the two don't look alike. Display-only.
             const isUnsentInvoice =
               invoice.status === 'draft' &&
@@ -331,7 +331,7 @@ export default function InvoicesPage() {
                   }
                 >
                   <DataListPrimary className={cn(!invoice.invoice_number && !invoice.external_invoice_number && 'italic text-muted-foreground')}>
-                    {invoice.is_self_billed ? invoiceDisplayNumber(invoice) : (invoice.invoice_number ?? '—')}{' '}
+                    {invoice.is_self_billed ? invoiceDisplayNumber(invoice) : (invoice.invoice_number ?? '-')}{' '}
                     <span className="font-normal text-muted-foreground">
                       · {(invoice.customer as { name: string })?.name}
                     </span>

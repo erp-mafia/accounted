@@ -1,5 +1,5 @@
 /**
- * Unit tests for commitCreateSupplierInvoiceFromInbox — driven through the
+ * Unit tests for commitCreateSupplierInvoiceFromInbox: driven through the
  * public commitPendingOperation dispatcher (the executor itself is module-
  * private).
  *
@@ -172,7 +172,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
   it('returns 404 when the inbox item does not exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: null, error: { message: 'not found' } }) // inbox fetch — empty
+    enqueue({ data: null, error: { message: 'not found' } }) // inbox fetch: empty
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const result = await commitPendingOperation(
@@ -195,7 +195,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
       error: null,
     })
-    enqueue({ data: null, error: { message: 'not found' } }) // supplier fetch — empty
+    enqueue({ data: null, error: { message: 'not found' } }) // supplier fetch: empty
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const result = await commitPendingOperation(
@@ -380,7 +380,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
           supplier_invoice_number: 'INV-100',
           invoice_date: '2026-05-15',
           currency: 'SEK',
-          // String values where numbers are required — Number(x) || 0 used to
+          // String values where numbers are required: Number(x) || 0 used to
           // silently produce a zero-value invoice.
           subtotal: 'not a number',
           vat_amount: null,
@@ -487,7 +487,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
   })
 
   it('JE-failure rollback deletes items BEFORE the parent invoice (FK ordering)', async () => {
-    // The parent has line items at this point — the rollback must reverse
+    // The parent has line items at this point: the rollback must reverse
     // insertion order or the FK on supplier_invoice_items blocks the parent
     // delete and we're left with an orphan understating leverantörsskuld.
     vi.mocked(createSupplierInvoiceRegistrationEntry).mockRejectedValueOnce(
@@ -534,7 +534,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     })
     enqueue({ data: null, error: null }) // items insert succeeds
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
-    // JE throws — rollback path runs
+    // JE throws: rollback path runs
     enqueue({ data: null, error: null }) // items delete
     enqueue({ data: null, error: null }) // parent delete
     enqueue({ data: null, error: null }) // dispatcher's reject update
@@ -563,7 +563,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       'company-1',
       makePendingOp({
         params: {
-          // Tampered or partial staged params — missing supplier_id + items
+          // Tampered or partial staged params: missing supplier_id + items
           inbox_item_id: 'inbox-1',
           supplier_invoice_number: 'INV-100',
           invoice_date: '2026-05-15',
@@ -577,10 +577,10 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
   })
 })
 
-describe('commitPendingOperation: create_supplier_invoice_from_inbox — dimensions propagation (PR7)', () => {
+describe('commitPendingOperation: create_supplier_invoice_from_inbox: dimensions propagation (PR7)', () => {
   /**
    * Capture both the supplier_invoices parent insert and the
-   * supplier_invoice_items rows (cash method — no JE, shortest queue).
+   * supplier_invoice_items rows (cash method: no JE, shortest queue).
    */
   function withInsertCapture(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
     const captured: {
@@ -692,7 +692,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox — dimensi
     const op = makePendingOp()
     op.params = {
       ...(op.params as Record<string, unknown>),
-      // '0' is not a valid SIE dimension number — the whole bag is rejected.
+      // '0' is not a valid SIE dimension number: the whole bag is rejected.
       default_dimensions: { '0': 'X' },
       items: [
         {
@@ -705,7 +705,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox — dimensi
           account_number: '6530',
           vat_rate: 0.25,
           vat_amount: 250,
-          // Empty code fails the schema — the whole bag is rejected.
+          // Empty code fails the schema: the whole bag is rejected.
           dimensions: { '1': '' },
         },
       ],

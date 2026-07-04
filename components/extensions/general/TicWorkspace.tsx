@@ -35,22 +35,22 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 import type { TICCompanyProfile } from '@/extensions/general/tic/lib/tic-types'
 
 function formatKSEK(value: number | null): string {
-  if (value === null) return '—'
+  if (value === null) return '-'
   return `${(value * 1000).toLocaleString('sv-SE')} kr`
 }
 
 function formatPercent(value: number | null): string {
-  if (value === null) return '—'
+  if (value === null) return '-'
   return `${value.toFixed(1)} %`
 }
 
 function formatSek(value: number | null): string {
-  if (value === null || value === undefined) return '—'
+  if (value === null || value === undefined) return '-'
   return `${value.toLocaleString('sv-SE')} kr`
 }
 
 function formatIsoDate(iso: string | null): string {
-  if (!iso) return '—'
+  if (!iso) return '-'
   return iso.slice(0, 10)
 }
 
@@ -79,7 +79,7 @@ function formatPeriod(start: number, end: number): string {
   const e = new Date(toMs(end))
   const fmt = (d: Date) =>
     d.toLocaleDateString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit' })
-  return `${fmt(s)} – ${fmt(e)}`
+  return `${fmt(s)} to ${fmt(e)}`
 }
 
 function timeAgo(isoDate: string, t: (key: string, values?: Record<string, string | number>) => string): string {
@@ -400,7 +400,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                   label={t('employees')}
                   value={profile.financials.numberOfEmployees !== null
                     ? String(profile.financials.numberOfEmployees)
-                    : '—'}
+                    : '-'}
                 />
                 <FinancialCell
                   label={t('operating_margin')}
@@ -419,7 +419,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         </Card>
       </div>
 
-      {/* Status entries — most recent first; usually 1-3 rows */}
+      {/* Status entries: most recent first; usually 1-3 rows */}
       {profile.statuses.length > 0 && (
         <Card>
           <CardHeader>
@@ -434,7 +434,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                 <li key={i} className="flex items-center justify-between gap-3 text-sm">
                   <div className="flex items-center gap-2">
                     <Badge variant={statusColorToVariant(status.color)}>
-                      {status.description ?? status.code ?? '—'}
+                      {status.description ?? status.code ?? '-'}
                     </Badge>
                     {status.isCeased && (
                       <span className="text-xs text-muted-foreground">
@@ -466,8 +466,8 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
               <CardContent className="space-y-2 text-sm">
                 <p className="font-mono tabular-nums">
                   {t('fiscal_year_current', {
-                    start: profile.fiscalYear.startMonthDay ?? '—',
-                    end: profile.fiscalYear.endMonthDay ?? '—',
+                    start: profile.fiscalYear.startMonthDay ?? '-',
+                    end: profile.fiscalYear.endMonthDay ?? '-',
                   })}
                 </p>
                 {profile.fiscalYearHistory.length > 1 && (
@@ -547,9 +547,9 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                 <TableBody>
                   {profile.representatives.slice(0, 12).map((p, i) => (
                     <TableRow key={i}>
-                      <TableCell className="text-sm">{p.name ?? '—'}</TableCell>
+                      <TableCell className="text-sm">{p.name ?? '-'}</TableCell>
                       <TableCell className="text-sm">
-                        {p.positionDescription ?? p.positionType ?? '—'}
+                        {p.positionDescription ?? p.positionType ?? '-'}
                       </TableCell>
                       <TableCell className="text-xs tabular-nums text-muted-foreground">
                         {formatIsoDate(p.positionStart)}
@@ -565,7 +565,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         </Card>
       )}
 
-      {/* Payroll history — payroll2 array, newest first */}
+      {/* Payroll history: payroll2 array, newest first */}
       {profile.payrolls.length > 0 && (
         <Card>
           <CardHeader>
@@ -591,11 +591,11 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                   <TableRow key={i}>
                     <TableCell className="font-mono tabular-nums text-xs">
                       {p.periodStart && p.periodEnd
-                        ? `${formatIsoDate(p.periodStart)} – ${formatIsoDate(p.periodEnd)}`
-                        : '—'}
+                        ? `${formatIsoDate(p.periodStart)} to ${formatIsoDate(p.periodEnd)}`
+                        : '-'}
                     </TableCell>
                     <TableCell className="text-right text-sm tabular-nums">
-                      {p.numberOfEmployees !== null ? p.numberOfEmployees.toFixed(0) : '—'}
+                      {p.numberOfEmployees !== null ? p.numberOfEmployees.toFixed(0) : '-'}
                     </TableCell>
                     <TableCell className="text-right text-sm tabular-nums">
                       {formatSek(p.sumPayrollTax)}
@@ -610,7 +610,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                           : 'text-muted-foreground'
                       }`}
                     >
-                      {p.deviation !== null ? `${(p.deviation * 100).toFixed(1)} %` : '—'}
+                      {p.deviation !== null ? `${(p.deviation * 100).toFixed(1)} %` : '-'}
                     </TableCell>
                     <TableCell
                       className={`text-right text-sm tabular-nums ${
@@ -657,14 +657,14 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                     <TableRow key={report.financialReportSummaryId ?? i}>
                       <TableCell className="font-mono tabular-nums text-xs">
                         {report.periodStart && report.periodEnd
-                          ? `${report.periodStart.slice(0, 10)} – ${report.periodEnd.slice(0, 10)}`
-                          : '—'}
+                          ? `${report.periodStart.slice(0, 10)} to ${report.periodEnd.slice(0, 10)}`
+                          : '-'}
                       </TableCell>
-                      <TableCell className="text-xs">{report.title ?? '—'}</TableCell>
+                      <TableCell className="text-xs">{report.title ?? '-'}</TableCell>
                       <TableCell className="text-xs">
                         {report.arrivalDate
                           ? new Date(report.arrivalDate).toLocaleDateString('sv-SE')
-                          : '—'}
+                          : '-'}
                       </TableCell>
                       <TableCell>
                         {report.isAudited === true ? (
@@ -672,10 +672,10 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                         ) : report.isAudited === false ? (
                           <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="text-xs text-muted-foreground">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-xs">{report.auditOpinion ?? '—'}</TableCell>
+                      <TableCell className="text-xs">{report.auditOpinion ?? '-'}</TableCell>
                     </TableRow>
                   ))}
               </TableBody>

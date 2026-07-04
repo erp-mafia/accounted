@@ -84,13 +84,13 @@ export default function BulkBookDialog({
   const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
   const [loadingTemplates, setLoadingTemplates] = useState(true)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
-  // null = fetch pending; array = loaded (may be empty on error — falls back to '1930')
+  // null = fetch pending; array = loaded (may be empty on error: falls back to '1930')
   const [cashAccounts, setCashAccounts] = useState<CashAccount[] | null>(null)
   const [mode, setMode] = useState<Mode>('one_line_per_tx')
   const [description, setDescription] = useState('')
   const [manualLines, setManualLines] = useState<ManualLine[]>([])
   const [submitting, setSubmitting] = useState(false)
-  // Dimension tagging (kostnadsställe/projekt) — the pair renders only when
+  // Dimension tagging (kostnadsställe/projekt): the pair renders only when
   // company_settings.dimensions_enabled, same gate as JournalEntryForm. One
   // header-level default bag applies to both tabs; the server tags the
   // generated voucher's lines with it.
@@ -164,7 +164,7 @@ export default function BulkBookDialog({
         setCashAccounts((json.data ?? []) as CashAccount[])
       })
       .catch(() => {
-        // Fall back to empty list — resolveAccount will return '1930'
+        // Fall back to empty list: resolveAccount will return '1930'
         if (!cancelled) setCashAccounts([])
       })
     return () => { cancelled = true }
@@ -210,7 +210,7 @@ export default function BulkBookDialog({
   // bank side is the unambiguous part the user always wants; the
   // counterpart (and any VAT split) is the user's responsibility.
   // Gate on cashAccounts !== null so lines are only built after the account
-  // fetch resolves — this prevents the form from briefly showing '1930' when
+  // fetch resolves: this prevents the form from briefly showing '1930' when
   // the resolved account differs.
   useEffect(() => {
     if (tab !== 'manual') return
@@ -233,7 +233,7 @@ export default function BulkBookDialog({
       }
     })
     // One empty counterpart row to scaffold the next entry. Account
-    // left blank — user must choose, which avoids the no-VAT trap.
+    // left blank: user must choose, which avoids the no-VAT trap.
     const counterpart: ManualLine = {
       id: newManualLineId(),
       account_number: '',
@@ -244,7 +244,7 @@ export default function BulkBookDialog({
     setManualLines([...bankLines, counterpart])
   }, [tab, manualLines.length, transactions, direction, cashAccounts])
 
-  // Live line preview — driven by either the template/mode pair (template
+  // Live line preview: driven by either the template/mode pair (template
   // tab) or the user-edited manual lines (manual tab). Same downstream
   // invariants (balance + bank-leg match) apply to both paths.
   const previewLines = useMemo<PreviewLine[]>(() => {
@@ -287,7 +287,7 @@ export default function BulkBookDialog({
             debit_amount: round2(debit),
             credit_amount: round2(credit),
             line_description: tag
-              ? `${fl.line_description ?? ''} – ${tag}`.trim()
+              ? `${fl.line_description ?? ''}, ${tag}`.trim()
               : fl.line_description,
           })
         }
@@ -313,8 +313,8 @@ export default function BulkBookDialog({
 
   // The active tab gates which selector must be valid. Both paths still
   // need a non-empty description, ≥2 lines, balance, bank-leg match,
-  // and (for manual mode) valid 4-digit account numbers — without this,
-  // a 1–3-digit entry escapes the lexicographic bank-account range
+  // and (for manual mode) valid 4-digit account numbers: without this,
+  // a 1-3-digit entry escapes the lexicographic bank-account range
   // check ('193' < '1900' is true), bank match could pass, and the
   // server's Zod schema rejects with a 400 only after submit.
   const tabReady = tab === 'template' ? selectedTemplate !== null : manualLines.length > 0
@@ -531,7 +531,7 @@ export default function BulkBookDialog({
             )}
           </div>
 
-          {/* Mode toggle — segmented control pattern (no RadioGroup primitive
+          {/* Mode toggle: segmented control pattern (no RadioGroup primitive
               in the design system; two outlined buttons act as a selectable
               pair) */}
           {selectedTemplate && (
@@ -661,7 +661,7 @@ export default function BulkBookDialog({
             </TabsContent>
           </Tabs>
 
-          {/* Description — shared by both tabs once the user has either a
+          {/* Description: shared by both tabs once the user has either a
               template selected or manual lines drafted. */}
           {tabReady && (
             <div className="space-y-2">
@@ -675,7 +675,7 @@ export default function BulkBookDialog({
             </div>
           )}
 
-          {/* Header default dims (kostnadsställe/projekt) — one bag applied to
+          {/* Header default dims (kostnadsställe/projekt): one bag applied to
               the whole verifikat, shared by both tabs. */}
           {dimensionsEnabled && tabReady && (
             <div className="space-y-1">
@@ -688,7 +688,7 @@ export default function BulkBookDialog({
             </div>
           )}
 
-          {/* Document inheritance hint — informs the user which receipts
+          {/* Document inheritance hint: informs the user which receipts
               follow the txs onto the combined verifikat. Zero is fine
               (txs without docs don't break anything); we only render
               when the count is non-zero to avoid clutter. */}
@@ -727,7 +727,7 @@ export default function BulkBookDialog({
                       <tr key={i} className="border-b border-border/40 last:border-b-0">
                         <td className="px-3 py-1.5 font-mono">{line.account_number}</td>
                         <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[240px]">
-                          {line.line_description ?? '—'}
+                          {line.line_description ?? '-'}
                         </td>
                         <td className="px-3 py-1.5 text-right">
                           {line.debit_amount > 0 ? formatCurrency(line.debit_amount) : ''}

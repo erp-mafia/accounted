@@ -42,7 +42,7 @@ function mockFetchStatus(status: number, body = '', headers?: HeadersInit) {
   ) as unknown as typeof fetch
 }
 
-describe('skvRequest — error mapping', () => {
+describe('skvRequest: error mapping', () => {
   it('maps empty 401 → ACCESS_DENIED (likely missing APIGW subscription)', async () => {
     mockFetchStatus(401)
     try {
@@ -65,7 +65,7 @@ describe('skvRequest — error mapping', () => {
       expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
       expect((e as SkatteverketAuthError).message).toMatch(/Sessionen har gått ut/)
       // Audit V16.1: the raw response body must NOT be concatenated into the
-      // user-facing message — that information stays in server-side logs.
+      // user-facing message: that information stays in server-side logs.
       expect((e as SkatteverketAuthError).message).not.toContain('token expired')
     }
   })
@@ -127,7 +127,7 @@ describe('skvRequest — error mapping', () => {
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
       expect((e as SkatteverketAuthError).code).toBe('RATE_LIMITED')
-      // Swedish message — UI surfaces it directly.
+      // Swedish message: UI surfaces it directly.
       expect((e as SkatteverketAuthError).message).toMatch(/Skatteverket/)
       expect((e as SkatteverketAuthError).message).toMatch(/igen/i)
     }

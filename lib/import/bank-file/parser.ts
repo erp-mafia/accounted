@@ -1,5 +1,5 @@
 /**
- * Bank file parser — main entry point
+ * Bank file parser: main entry point
  *
  * Auto-detects Swedish bank file formats and parses to normalized transactions.
  * Supports Nordea, SEB, Swedbank, Handelsbanken CSV and ISO 20022 camt.053 XML.
@@ -24,7 +24,7 @@ import { genericCSVFormat } from './formats/generic-csv'
  * Ordered list of format detectors.
  * camt.053 first (XML detection is unambiguous), then bank-specific CSV formats.
  * New bank formats go after existing ones but before generic_csv.
- * Generic CSV is last — it never auto-detects (manual fallback only).
+ * Generic CSV is last: it never auto-detects (manual fallback only).
  */
 const FORMATS: BankFileFormat[] = [
   camt053Format,

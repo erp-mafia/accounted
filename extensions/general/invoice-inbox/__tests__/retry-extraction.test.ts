@@ -121,7 +121,7 @@ describe('POST /items/:id/retry-extraction', () => {
     enqueue({
       data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
       error: null,
-    }) // item lookup — the ai gate fires immediately after
+    }) // item lookup: the ai gate fires immediately after
     const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
     const { status, body } = await parseJsonResponse<{ capability_blocked: boolean; capability: string }>(res)
     expect(status).toBe(403)

@@ -116,7 +116,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('createDraftEntry — dimension validation wiring', () => {
+describe('createDraftEntry: dimension validation wiring', () => {
   it('never fetches company_settings for an untagged entry', async () => {
     const { supabase, queriedTables } = buildSupabase(BASE_TABLES)
 
@@ -145,7 +145,7 @@ describe('createDraftEntry — dimension validation wiring', () => {
     // Toggle checked once, registry never consulted (free-text passthrough).
     expect(queriedTables().filter((t) => t === 'company_settings')).toHaveLength(1)
     expect(queriedTables()).not.toContain('dimensions')
-    // The free-text tag still lands on the inserted lines (bag only — the
+    // The free-text tag still lands on the inserted lines (bag only: the
     // project mirror is GENERATED at the database since the PR9 cutover).
     const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
     expect(lineRows[0].dimensions).toEqual({ '6': 'FRITEXT-PROJEKT' })
@@ -179,7 +179,7 @@ describe('createDraftEntry — dimension validation wiring', () => {
 
     await expect(
       createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput({ '6': 'P001' }))
-    ).rejects.toThrow('"P001" är arkiverat — återaktivera värdet för att använda det.')
+    ).rejects.toThrow('"P001" är arkiverat: återaktivera värdet för att använda det.')
   })
 
   it('creates the draft when every tagged code is registered and active', async () => {
@@ -195,14 +195,14 @@ describe('createDraftEntry — dimension validation wiring', () => {
     expect(entry.id).toBe('entry-1')
     const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
     expect(lineRows[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
-    // PR9 cutover: the payload must NOT name the generated mirror columns —
+    // PR9 cutover: the payload must NOT name the generated mirror columns:
     // an explicit value would make Postgres reject the insert.
     expect('cost_center' in lineRows[0]).toBe(false)
     expect('project' in lineRows[0]).toBe(false)
   })
 })
 
-describe('updateDraftEntry — dimension validation wiring', () => {
+describe('updateDraftEntry: dimension validation wiring', () => {
   it('rejects an unknown code before the header or lines are touched', async () => {
     const { supabase, updates, queriedTables } = buildSupabase({
       ...BASE_TABLES,

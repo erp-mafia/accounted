@@ -1,4 +1,4 @@
-// AUTO-GENERATED — do not edit. Run `npm run setup:extensions` to regenerate.
+// AUTO-GENERATED: do not edit. Run `npm run setup:extensions` to regenerate.
 import type { ExtensionDefinition } from '../types'
 
 export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
@@ -78,7 +78,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "description": "Synka säkerhetsbackup till din egen molnlagring",
           "longDescription": "Koppla ditt Google Drive-konto och ladda upp en fullständig säkerhetsbackup med ett klick. Accounted skapar en ZIP med SIE-filer, kvitton och behandlingshistorik och laddar upp till en egen mapp i din Drive. Perfekt för att uppfylla egna krav på redundans.",
           "hasOwnData": true,
-          "subscriptionNotice": "Kräver ett Google-konto. Uppladdningar sker direkt till din Drive — ingen data lagras hos tredje part utöver Google."
+          "subscriptionNotice": "Kräver ett Google-konto. Uppladdningar sker direkt till din Drive: ingen data lagras hos tredje part utöver Google."
     },
     {
           "slug": "skatteverket",
@@ -88,7 +88,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "FileCheck",
           "dataPattern": "core",
           "description": "Skicka momsdeklaration direkt till Skatteverket via BankID.",
-          "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från gnubok. Spara utkast, validera, lås och signera — utan att lämna appen."
+          "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från gnubok. Spara utkast, validera, lås och signera: utan att lämna appen."
     },
     {
           "slug": "invoice-inbox",
@@ -97,7 +97,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "category": "import",
           "icon": "Inbox",
           "dataPattern": "both",
-          "description": "Vidarebefordra leverantörsfakturor till en unik adress – dokumenten landar här med extraherade fält",
+          "description": "Vidarebefordra leverantörsfakturor till en unik adress: dokumenten landar här med extraherade fält",
           "longDescription": "Varje bolag får en unik fakturainkorg-adress. Fakturor som skickas dit fångas automatiskt och fält som org.nr, OCR, bankgiro, belopp och förfallodatum läses av med AI (kräver AI-funktionen). Utan AI lagras dokumentet ändå och fälten fylls i manuellt.",
           "readsCoreTables": [
                 "document_attachments",

@@ -17,7 +17,7 @@ export type DateRangeValue = {
 type Preset = 'full_year' | 'ytd' | 'this_month' | 'last_month' | 'this_quarter' | 'custom'
 
 interface Props {
-  /** Selected fiscal period — bounds the range. */
+  /** Selected fiscal period: bounds the range. */
   periodStart: string
   periodEnd: string
   value: DateRangeValue
@@ -30,7 +30,7 @@ const STORAGE_KEY_PREFIX = 'Accounted:report-range-preset:'
 const PRESETS: Preset[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter', 'custom']
 
 function todayIso(): string {
-  // Local calendar date — using toISOString() returns UTC, which falls a day
+  // Local calendar date: using toISOString() returns UTC, which falls a day
   // behind for Swedish users between midnight and 01:00/02:00 local time and
   // would silently truncate "today" from YTD / this-month / this-quarter.
   const d = new Date()
@@ -49,7 +49,7 @@ function clampToPeriod(date: string, periodStart: string, periodEnd: string): st
 /**
  * Resolve a preset to a concrete range inside the fiscal period.
  *
- * Endpoints are always clamped to the period — e.g. "this month" outside the
+ * Endpoints are always clamped to the period: e.g. "this month" outside the
  * period collapses to a zero-width range at whichever boundary you're nearest.
  * `full_year` returns `{}` so the API call omits the params entirely and the
  * report falls back to its full-period default (preserves cache parity with
@@ -113,7 +113,7 @@ function resolvePreset(
  *
  * Default = "Hittills i år" (YTD) which matches Fortnox/Visma. A "Hela året"
  * preset clears the range entirely so the API falls back to full-period
- * behaviour. Custom range is clamped to the fiscal period — cross-year
+ * behaviour. Custom range is clamped to the fiscal period: cross-year
  * ranges are out of scope.
  */
 export function ReportDateRange({
@@ -128,7 +128,7 @@ export function ReportDateRange({
   const [preset, setPreset] = useState<Preset>('ytd')
 
   // Restore last-used preset per company, then resolve it against the
-  // current fiscal period. The period selector lives upstream — when it
+  // current fiscal period. The period selector lives upstream: when it
   // changes, we re-resolve so the dates always sit inside the visible year.
   useEffect(() => {
     if (!company?.id || typeof window === 'undefined') return

@@ -14,7 +14,7 @@ import * as XLSX from 'xlsx'
  *
  * Bolding the header row would require `xlsx-style` or `cellStyles: true` which
  * is not supported in the base `xlsx` distribution we ship. Instead we freeze
- * the first row so the headers stay visible while scrolling — visually distinct
+ * the first row so the headers stay visible while scrolling: visually distinct
  * without depending on optional packages.
  *
  * Column widths are computed automatically from the maximum content length per
@@ -151,7 +151,7 @@ export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any
     }
 
     // Auto-size columns based on max content length per column. Header counts
-    // too — a short numeric column with a long header still needs to fit the
+    // too: a short numeric column with a long header still needs to fit the
     // label. Min 8, max 60 chars to avoid degenerate widths.
     const colWidths = sheet.columns.map((col, colIdx) => {
       let maxLen = col.header.length
@@ -177,7 +177,7 @@ export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any
   }
 
   // `XLSX.write` with `type: 'buffer'` returns a Node Buffer. `bookType: 'csv'`
-  // emits only the first sheet (CSV is single-sheet) — fine for the flat,
+  // emits only the first sheet (CSV is single-sheet): fine for the flat,
   // single-sheet register exports that use this option.
   const bookType = options.bookType ?? 'xlsx'
   const out = XLSX.write(workbook, { type: 'buffer', bookType }) as Buffer
@@ -188,7 +188,7 @@ export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any
 export const UTF8_BOM = '\uFEFF'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Column helpers — small declarative builders so route files read cleanly.
+// Column helpers: small declarative builders so route files read cleanly.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function textColumn(header: string): ColumnSpec {

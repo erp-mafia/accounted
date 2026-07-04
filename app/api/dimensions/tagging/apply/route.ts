@@ -1,9 +1,9 @@
 /**
- * POST /api/dimensions/tagging/apply — bulk retag of posted lines through the
+ * POST /api/dimensions/tagging/apply: bulk retag of posted lines through the
  * ONE audited write path, the retag_line_dimensions RPC (dimensions plan PR6
  * §3, migration 20260702170000).
  *
- * The body carries ONE dimensions object for ALL listed lines — the workbench
+ * The body carries ONE dimensions object for ALL listed lines: the workbench
  * groups selected lines by their computed resulting map client-side and issues
  * one POST per distinct map. The RPC is called per line (it locks, validates
  * tier boundaries, writes the immutable before/after log and performs the
@@ -13,7 +13,7 @@
  *
  *   200 { data: { retagged, unchanged, failed: [{ line_id, error }] } }
  *
- * RPC error messages pass through as-is — they are already Swedish domain
+ * RPC error messages pass through as-is: they are already Swedish domain
  * errors (closed/locked period, lock date, archived/unknown codes, drafts).
  */
 import { NextResponse } from 'next/server'

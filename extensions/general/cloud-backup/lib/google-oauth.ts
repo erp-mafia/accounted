@@ -1,9 +1,9 @@
 /**
  * Minimal Google OAuth 2.0 client for the cloud-backup extension.
  *
- * Scope: `drive.file` — app-created files only, not the user's full Drive.
- * Access type: `offline` — returns a refresh token on first consent.
- * Prompt: `consent` — forces the consent screen so the refresh token is
+ * Scope: `drive.file`: app-created files only, not the user's full Drive.
+ * Access type: `offline`: returns a refresh token on first consent.
+ * Prompt: `consent`: forces the consent screen so the refresh token is
  *   re-issued even if the user has previously authorised the app.
  */
 
@@ -87,7 +87,7 @@ export async function exchangeCodeForTokens(
   const json = (await res.json()) as TokenExchangeResult
   if (!json.refresh_token) {
     throw new Error(
-      'No refresh token returned — Google only issues one on first consent. ' +
+      'No refresh token returned: Google only issues one on first consent. ' +
         'Revoke the app at myaccount.google.com/permissions and try again.'
     )
   }

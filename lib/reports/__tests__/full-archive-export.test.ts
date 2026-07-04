@@ -335,7 +335,7 @@ describe('generateFullArchive', () => {
         { data: [PERIOD_2024] },
         {
           data: [
-            // Draft entry — journal_entry_id present but voucher_number is null
+            // Draft entry: journal_entry_id present but voucher_number is null
             {
               id: 'doc-draft',
               file_name: 'invoice.pdf',
@@ -360,7 +360,7 @@ describe('generateFullArchive', () => {
             },
           ],
         },
-        // entryIdToPeriodId map — draft and posted both resolve to PERIOD_2024
+        // entryIdToPeriodId map: draft and posted both resolve to PERIOD_2024
         {
           data: [
             { id: 'e-draft', fiscal_period_id: PERIOD_2024.id },

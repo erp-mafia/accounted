@@ -42,9 +42,9 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries/:id/reverse',
   summary: 'Storno a posted journal entry.',
   description:
-    'Creates a reversing journal entry that nullifies the original. The original remains posted and visible — the reversal links via reverses_id and the original is annotated reversed_by_id. The reversal carries its own voucher_number in the same series so the löpnummer chain stays unbroken (BFL 5 kap 5–7 §§).',
+    'Creates a reversing journal entry that nullifies the original. The original remains posted and visible: the reversal links via reverses_id and the original is annotated reversed_by_id. The reversal carries its own voucher_number in the same series so the löpnummer chain stays unbroken (BFL 5 kap 5-7 §§).',
   useWhen:
-    'A posted entry needs to be cancelled and there is no replacement coming — e.g. a duplicate booking, an entry posted to the wrong period. Use /correct instead when you need to replace the entry with corrected lines.',
+    'A posted entry needs to be cancelled and there is no replacement coming: e.g. a duplicate booking, an entry posted to the wrong period. Use /correct instead when you need to replace the entry with corrected lines.',
   doNotUseFor:
     'Cancelling a draft (drafts have no voucher_number; cancel via the dashboard). Reversing an already-reversed entry (returns ENTRY_ALREADY_REVERSED).',
   pitfalls: [

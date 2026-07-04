@@ -1,12 +1,12 @@
 /**
  * WCAG 2.x contrast ratio helpers.
  *
- * Pure utility — no I/O. Used by the invoice branding settings UI to warn
+ * Pure utility: no I/O. Used by the invoice branding settings UI to warn
  * users when their chosen primary color would fail AA contrast against a
  * white invoice background, and by the branding API to surface the same
  * warning in the JSON response.
  *
- * Reference: WCAG 2.2 §1.4.3 (Contrast — Minimum). The 4.5:1 threshold
+ * Reference: WCAG 2.2 §1.4.3 (Contrast: Minimum). The 4.5:1 threshold
  * applies to normal text (≤18pt, or ≤14pt bold). The PDF invoice renders
  * text at 8-14pt, so 4.5:1 is the right threshold here.
  *
@@ -22,7 +22,7 @@
 
 /**
  * Parse a hex color string (#RRGGBB) into RGB channels in [0, 1].
- * Throws on invalid input — callers should validate format upstream.
+ * Throws on invalid input: callers should validate format upstream.
  */
 function parseHexColor(hex: string): { r: number; g: number; b: number } {
   const m = /^#([0-9A-Fa-f]{6})$/.exec(hex.trim())
@@ -56,7 +56,7 @@ function relativeLuminance(hex: string): number {
 
 /**
  * Compute the WCAG contrast ratio between two hex colors. Returns a value in
- * [1, 21] — 1 = identical colors, 21 = pure black on pure white.
+ * [1, 21]: 1 = identical colors, 21 = pure black on pure white.
  *
  * Argument order does not matter (the formula uses the lighter and darker
  * luminance regardless of which is foreground).

@@ -50,7 +50,7 @@ export default function ResetPasswordPage() {
     try {
       // Routed through the API so the has_password flag flips in lock-step
       // with the password update. This is the unlock path for BankID-only
-      // users who enrolled MFA and got locked out — the recovery session
+      // users who enrolled MFA and got locked out: the recovery session
       // bypasses AAL2, the API flips has_password, and the lockout banner
       // disappears the next time they log in.
       const res = await fetch('/api/account/password', {

@@ -13,7 +13,7 @@
  * bulk_book_transactions and match_batch_allocate are deliberately NOT guarded:
  * they already enforce membership in-function and return structured domain
  * errors (BULK_BOOK_UNAUTHORIZED / BATCH_UNAUTHORIZED) that routes, MCP tools,
- * and their existing pg tests branch on — see the migration header.
+ * and their existing pg tests branch on: see the migration header.
  *
  * What each case asserts:
  *   - cross-tenant (userA's session, companyB's id) → RAISE with SQLSTATE 42501.
@@ -67,7 +67,7 @@ async function callAsUser(
 }
 
 /**
- * Run `sql` on the bare superuser pool with NO request.jwt.claims — the trusted
+ * Run `sql` on the bare superuser pool with NO request.jwt.claims: the trusted
  * bypass that migrations, this harness and the service-role / MCP API paths rely
  * on. Wrapped in a rolled-back transaction so writes don't persist. Returns the
  * thrown PgError or null.
@@ -116,7 +116,7 @@ const RESERVE = `SELECT public.reserve_voucher_range($1, $2, $3, $4)`
 const RELEASE = `SELECT public.release_voucher_range($1, $2, $3, $4, $5)`
 const ROTATE = `SELECT public.rotate_company_inbox($1)`
 
-describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
+describe('SECURITY DEFINER write RPCs: tenant-isolation guard', () => {
   it('mark_entry_as_opening_balance: blocks cross-company, passes own, bypasses for no-claims', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
@@ -136,7 +136,7 @@ describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
 
     // No-claims bare pool cross-referencing companyB with A's entry: guard
     // bypassed. It then raises a NON-guard domain error ("Journal entry not
-    // found" — the entry is not in companyB), proving the bypass is real.
+    // found": the entry is not in companyB), proving the bypass is real.
     const bare = await callBare(MARK_OB, [b.companyId, entryA])
     expect(bare?.code).not.toBe('42501')
   })
@@ -155,7 +155,7 @@ describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
 
     // No-claims bare pool cross-tenant → the new tenant guard is bypassed. (The
     // INSERT then writes auth.uid()=NULL into voucher_sequences.user_id, which is
-    // NOT NULL, so a 23502 surfaces — pre-existing behaviour for a true no-session
+    // NOT NULL, so a 23502 surfaces: pre-existing behaviour for a true no-session
     // caller; the point here is only that it is NOT the 42501 tenant guard.)
     const bare = await callBare(RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
     expect(bare?.code).not.toBe('42501')
@@ -198,7 +198,7 @@ describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
   })
 })
 
-describe('voucher-range RPCs — period-lock + sequence-integrity guards (BFL 5 kap)', () => {
+describe('voucher-range RPCs: period-lock + sequence-integrity guards (BFL 5 kap)', () => {
   it('reserve_voucher_range refuses a closed fiscal period', async () => {
     const a = await seedCompany({ isClosed: true })
     const err = await callBare(RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
@@ -221,7 +221,7 @@ describe('voucher-range RPCs — period-lock + sequence-integrity guards (BFL 5 
       companyId: a.companyId,
       fiscalPeriodId: a.fiscalPeriodId,
       status: 'posted',
-      voucherNumber: 5, // inside (3, 10] — rolling back to 3 would orphan it
+      voucherNumber: 5, // inside (3, 10]: rolling back to 3 would orphan it
     })
     const err = await callBare(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
     expect(err?.message).toMatch(/verifikat exist in the released range/i)
@@ -234,7 +234,7 @@ describe('voucher-range RPCs — period-lock + sequence-integrity guards (BFL 5 
        VALUES ($1, $2, $3, 'A', 10)`,
       [a.companyId, a.userId, a.fiscalPeriodId],
     )
-    // Highest inserted verifikat is 3 — numbers (3, 10] were reserved but unused.
+    // Highest inserted verifikat is 3: numbers (3, 10] were reserved but unused.
     await insertDraftJournalEntry({
       userId: a.userId,
       companyId: a.companyId,

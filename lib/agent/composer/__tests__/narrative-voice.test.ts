@@ -9,7 +9,7 @@ import type { ComposerInputs } from '../inputs'
 //   - everyone else       → "Coredination AB är..."
 //
 // The Sonnet path injects this via the system prompt (covered manually in
-// system-prompt eval), so these tests target the deterministic fallback —
+// system-prompt eval), so these tests target the deterministic fallback:
 // which is what ships when Sonnet times out or the API key is missing.
 // The fallback is the worst-case render and must never put presumptive
 // ownership words in a non-director user's mouth.
@@ -75,7 +75,7 @@ describe('fallbackNarrative voice branching', () => {
         userIsConfirmedDirector: false,
       }),
     )
-    // Generic neutral form — still no "Du driver".
+    // Generic neutral form: still no "Du driver".
     expect(text).toMatch(/Coredination AB är ett företag/)
     expect(text).not.toMatch(/Du driver/)
   })

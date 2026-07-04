@@ -93,7 +93,7 @@ describe('retryable contract (always present, transient inference)', () => {
   })
 
   it('classifies a wrapped deadlock message as TRANSIENT_ERROR, retryable', () => {
-    // Tools wrap DB errors as plain strings, losing the SQLSTATE — the
+    // Tools wrap DB errors as plain strings, losing the SQLSTATE: the
     // message pattern must survive that wrapping.
     const result = getStructuredError(new Error('Database error: deadlock detected'))
     expect(result.code).toBe('TRANSIENT_ERROR')

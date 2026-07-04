@@ -22,7 +22,7 @@ function atom(overrides: Partial<DiscoveredAtom>): DiscoveredAtom {
 }
 
 describe('buildMigrationSql', () => {
-  it('dollar-quotes bodies with backticks, $$, quotes, and the default tag — round-trips intact', () => {
+  it('dollar-quotes bodies with backticks, $$, quotes, and the default tag: round-trips intact', () => {
     const tricky = 'Body with `code`, $$dollars$$, \'single\' and "double" quotes, and a $gb$ tag.'
     const sql = buildMigrationSql([atom({ body: tricky, description: tricky })], { 'horizontal/test': 1 })
 
@@ -49,7 +49,7 @@ describe('buildMigrationSql', () => {
     expect(sql).toContain("'O''Brien & Co'")
   })
 
-  it('emits parent_atom_id — NULL for top-level skills, a quoted id for reference children', () => {
+  it('emits parent_atom_id: NULL for top-level skills, a quoted id for reference children', () => {
     const sql = buildMigrationSql(
       [
         atom({ id: 'horizontal/swedish-vat', parent_atom_id: null }),

@@ -1,7 +1,7 @@
 import type { SalaryLineItemType } from '@/types'
 
 /**
- * Salary account mapping — maps line item types and calculation results
+ * Salary account mapping: maps line item types and calculation results
  * to BAS accounts per Swedish chart of accounts standards.
  */
 
@@ -13,7 +13,7 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   overtime: '7210',
   overtime_50: '7210',
   overtime_100: '7210',
-  // OB-tillägg — bookat på samma lönekonto som grundlönen; differentieras via
+  // OB-tillägg: bookat på samma lönekonto som grundlönen; differentieras via
   // rad-text på verifikatet och lönespecifikationen.
   ob_weekday_evening: '7210',
   ob_weekend: '7210',
@@ -24,7 +24,7 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   // Gross deductions
   gross_deduction_pension: '7218',
   gross_deduction_other: '7210',
-  // Benefits (förmånsvärden — not a cash payment, just tax base)
+  // Benefits (förmånsvärden: not a cash payment, just tax base)
   benefit_car: '7385',
   benefit_housing: '7381',
   benefit_meals: '7382',

@@ -1,13 +1,13 @@
 /**
- * GET /api/dimensions/tagging/lines — posted VOUCHERS (with their complete
+ * GET /api/dimensions/tagging/lines: posted VOUCHERS (with their complete
  * line sets) for the bulk retro-tagging workbench (dimensions plan PR6 §3,
  * voucher-level rework).
  *
  * The verifikat is the unit of work: filters select qualifying vouchers
  * (period, entry-date range, free text, "has a line in the account range",
  * "has an untagged line") and the response carries every line of each
- * qualifying voucher so tagging a voucher means tagging a complete verifikat
- * — never the filtered subset of one.
+ * qualifying voucher so tagging a voucher means tagging a complete verifikat,
+ * never the filtered subset of one.
  *
  * Reversal pairs are EXCLUDED by default: an annulled entry and its storno
  * net to zero in every dimension bucket as long as both sides carry the same
@@ -67,7 +67,7 @@ export const GET = withRouteContext(
     const q = validation.data
 
     // Step 1: qualifying vouchers. Line-level filters (account range, only
-    // untagged) become "voucher HAS such a line" via the inner join — the
+    // untagged) become "voucher HAS such a line" via the inner join: the
     // parent row appears once regardless of how many lines match.
     let entryQuery = supabase
       .from('journal_entries')
@@ -75,13 +75,13 @@ export const GET = withRouteContext(
         'id, entry_date, voucher_number, voucher_series, description, reversed_by_id, reverses_id, fiscal_period_id, journal_entry_lines!inner(id)',
       )
       .eq('company_id', companyId)
-      // Posted only — drafts are edited directly in the voucher editor and the
+      // Posted only: drafts are edited directly in the voucher editor and the
       // retag RPC rejects them anyway.
       .eq('status', 'posted')
 
     if (q.include_annulled !== '1') {
       // Default view: no reversal pairs. Both sides net to zero in every
-      // dimension bucket when kept together, so they are pure noise here —
+      // dimension bucket when kept together, so they are pure noise here,
       // and hiding them makes tagging one side without the other impossible.
       entryQuery = entryQuery.is('reversed_by_id', null).is('reverses_id', null)
     }
@@ -90,7 +90,7 @@ export const GET = withRouteContext(
     if (q.date_from) entryQuery = entryQuery.gte('entry_date', q.date_from)
     if (q.date_to) entryQuery = entryQuery.lte('entry_date', q.date_to)
     if (q.text) {
-      // Escape LIKE wildcards (\ % _) so they match literally — same posture
+      // Escape LIKE wildcards (\ % _) so they match literally, same posture
       // as the journal-entries list route.
       entryQuery = entryQuery.ilike('description', `%${escapeLikePattern(q.text)}%`)
     }
@@ -131,7 +131,7 @@ export const GET = withRouteContext(
     // counter-entry fell outside the filters (e.g. the storno is in a later
     // month than the date range), pull the counter in anyway. Without it the
     // workbench's motverifikat guard cannot see the missing leg and the user
-    // could tag one side alone — exactly the P&L skew the guard exists to
+    // could tag one side alone, exactly the P&L skew the guard exists to
     // prevent (Srf U 14 gross reporting). Counters ride on top of the cap:
     // they are required for correctness, not part of the browsed page.
     if (q.include_annulled === '1') {

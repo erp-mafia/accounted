@@ -1,5 +1,5 @@
 /**
- * Tests for skills over MCP — registry, discovery tools, and resource exposure.
+ * Tests for skills over MCP: registry, discovery tools, and resource exposure.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
@@ -16,7 +16,7 @@ vi.mock('@/lib/supabase/server', () => ({
  *   - employees (active count, used by applicability filter)
  *
  *  All test queries resolve to the same defaults: entity_type='AB',
- *  vat_registered=true, 1 active employee — so every applicability-filtered
+ *  vat_registered=true, 1 active employee: so every applicability-filtered
  *  skill is included by default. Individual tests can override via the
  *  optional overrides parameter.
  */
@@ -79,7 +79,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     validateApiKey: vi.fn().mockResolvedValue({
       userId: 'user-1',
       companyId: 'company-1',
-      // Minimal scopes — list/load skill tools are intentionally unscoped.
+      // Minimal scopes: list/load skill tools are intentionally unscoped.
       scopes: [],
     }),
     createServiceClientNoCookies: vi.fn(() => makeSupabaseWithEmptyAtomRegistry()),
@@ -358,7 +358,7 @@ describe('gnubok_load_skill tool', () => {
 
   it('resolves a reference child by id even though it is hidden from the listed atom set', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
-    // Listed atoms (loadAtomsAsSkills) is empty — the reference is only reachable
+    // Listed atoms (loadAtomsAsSkills) is empty: the reference is only reachable
     // via loadReferenceById, which findSkill falls back to.
     const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, {
       id: 'horizontal/swedish-vat/vat-compliance-reference',
@@ -434,8 +434,8 @@ describe('gnubok_load_skill tool', () => {
 describe('Skills via MCP protocol', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // Protocol tests use the createServiceClientNoCookies mock (empty registry)
-    // — reset the module-level atom cache so we don't see stragglers from
+    // Protocol tests use the createServiceClientNoCookies mock (empty registry):
+    // reset the module-level atom cache so we don't see stragglers from
     // earlier tests in the file that populated the cache via direct execute().
     __resetAtomCache()
   })

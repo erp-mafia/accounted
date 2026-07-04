@@ -21,7 +21,7 @@ export function resolveAccount(
   if (cashAccountId) {
     const bound = cashAccounts.find((a) => a.id === cashAccountId)
     // If an explicit ID was given but not found, skip the currency fallback and
-    // return 1930 with fallback=true — the missing link is a data integrity signal.
+    // return 1930 with fallback=true: the missing link is a data integrity signal.
     if (bound) return { account: bound.ledger_account, fallback: false }
     return { account: '1930', fallback: true }
   }

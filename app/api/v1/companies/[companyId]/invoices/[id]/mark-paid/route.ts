@@ -1,7 +1,7 @@
 /**
  * POST /api/v1/companies/{companyId}/invoices/{id}/mark-paid
  *
- * Manually marks an invoice as paid — for payments received outside the
+ * Manually marks an invoice as paid: for payments received outside the
  * bank-sync flow.
  *
  * Accounting:
@@ -10,7 +10,7 @@
  *   - Kontantmetoden (cash): Debit 1930 / Credit 30xx + Credit 26xx. Revenue
  *     recognition happens here (no entry at :mark-sent under cash basis).
  *
- * Optional request body (all fields optional — empty POST = book full payment
+ * Optional request body (all fields optional: empty POST = book full payment
  * on today's date with default lines):
  *   - payment_date              ISO date; defaults to today
  *   - exchange_rate_difference  SEK adjustment for foreign-currency invoices
@@ -73,13 +73,13 @@ registerEndpoint({
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
-    'Reverting a payment — the public API does not expose unmark-paid. Issue a credit note via POST /:id/credit to cancel the underlying invoice instead. Bank-matched payments — those flow through the transactions endpoints.',
+    'Reverting a payment: the public API does not expose unmark-paid. Issue a credit note via POST /:id/credit to cancel the underlying invoice instead. Bank-matched payments: those flow through the transactions endpoints.',
   pitfalls: [
     'Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.',
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
     'Cash basis (kontantmetoden) recognizes revenue HERE, not at :mark-sent. The dashboard tracks this via company_settings.accounting_method.',
-    'Duplicate-payment guard: if an unlinked inbound bank transaction looks like this payment, returns 409 INVOICE_PAID_LIKELY_DUPLICATE with candidate transactions. Retry with `force: true` to bypass — but the retry MUST use a fresh Idempotency-Key (the original is body-hash bound; reusing it returns 400 IDEMPOTENCY_KEY_REUSE). The guard is also evaluated under dry-run, so a successful dry-run does not guarantee a successful commit.',
+    'Duplicate-payment guard: if an unlinked inbound bank transaction looks like this payment, returns 409 INVOICE_PAID_LIKELY_DUPLICATE with candidate transactions. Retry with `force: true` to bypass, but the retry MUST use a fresh Idempotency-Key (the original is body-hash bound; reusing it returns 400 IDEMPOTENCY_KEY_REUSE). The guard is also evaluated under dry-run, so a successful dry-run does not guarantee a successful commit.',
   ],
   example: {
     request: { payment_date: '2026-05-12' },
@@ -250,14 +250,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // The JE shape is driven by the invoice's actual booking state, not the
     // company's current accounting_method. An invoice that was booked at send
     // under accrual (Dr 1510) must be cleared at payment regardless of where
-    // the setting sits today — otherwise the receivable orphans and 30xx +
+    // the setting sits today: otherwise the receivable orphans and 30xx +
     // VAT double-count. Only true kontantmetoden invoices (never booked)
     // recognise revenue + VAT here.
     const invoiceAlreadyBooked = !!(typed as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
     // Compute the would-be payment amount. Default path (no customLines):
-    // use remaining_amount, not total — protects against over-crediting AR
+    // use remaining_amount, not total: protects against over-crediting AR
     // when a concurrent partial payment slips through the pre-flight check
     // (pre-flight sees status='sent' but the race-guard UPDATE later sees
     // status='partially_paid' so a second full-total amount would be booked
@@ -269,7 +269,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
       : (typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0))
 
-    // Ledger math + overpayment guard via the shared planInvoicePayment helper —
+    // Ledger math + overpayment guard via the shared planInvoicePayment helper:
     // the single source of truth across all three mark-paid surfaces (this route,
     // the dashboard route, and the agent commit path), so the paid/remaining/
     // status math can never drift again. Custom lines are SEK; convert to invoice
@@ -418,9 +418,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           // Fail closed: a real invoice must produce a posted payment voucher.
           // A null here (e.g. no open fiscal period) means nothing was booked,
           // so flipping the invoice to paid/partially_paid would diverge the GL
-          // from the AR sub-ledger. Abort BEFORE the invoice update below —
+          // from the AR sub-ledger. Abort BEFORE the invoice update below:
           // mirrors the v1 match-invoice strict mode.
-          ctx.log.error('mark-paid: no payment journal entry produced — aborting before state mutation', undefined, {
+          ctx.log.error('mark-paid: no payment journal entry produced: aborting before state mutation', undefined, {
             invoiceId,
             companyId: ctx.companyId,
           })
@@ -433,7 +433,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         if (err instanceof AccountsNotInChartError) {
           return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
         }
-        ctx.log.error('mark-paid: payment JE creation failed — aborting before state mutation', err as Error, {
+        ctx.log.error('mark-paid: payment JE creation failed: aborting before state mutation', err as Error, {
           invoiceId,
           companyId: ctx.companyId,
         })
@@ -489,7 +489,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!updated) {
       // Race: status transitioned (concurrent mark-paid / credit) between
       // pre-flight and our update. Surface as 409.
-      ctx.log.warn('mark-paid: race — invoice status transitioned during request', {
+      ctx.log.warn('mark-paid: race: invoice status transitioned during request', {
         invoiceId,
         companyId: ctx.companyId,
       })

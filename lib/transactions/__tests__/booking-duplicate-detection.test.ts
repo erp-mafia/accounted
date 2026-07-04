@@ -259,7 +259,7 @@ describe('detectLedgerDuplicateVoucher', () => {
       debit_amount: 0,
       credit_amount: 16609,
       journal_entry: {
-        id: 'je-3', entry_date: '2026-05-04', description: 'Lön 2026-05 — Nettolön',
+        id: 'je-3', entry_date: '2026-05-04', description: 'Lön 2026-05: Nettolön',
         voucher_series: 'A', voucher_number: 3, status: 'posted', source_type: 'salary',
       },
     })

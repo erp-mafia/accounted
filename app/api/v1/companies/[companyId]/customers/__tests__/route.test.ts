@@ -8,7 +8,7 @@ beforeAll(() => {
   // Belt-and-braces: ensure we never reach a real DB from this test suite.
   // Supabase clients are mocked, but if a future test refactor accidentally
   // bypassed the mock, this assertion fails the run rather than silently
-  // touching production. (Compliance: ISO 27001:2022 A.8.33 — test data
+  // touching production. (Compliance: ISO 27001:2022 A.8.33: test data
   // separation.)
   if (process.env.NODE_ENV !== 'test') {
     throw new Error(

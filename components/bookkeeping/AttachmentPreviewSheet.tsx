@@ -44,7 +44,7 @@ interface AttachmentPreviewSheetProps {
 // Tri-state integrity result so a transport/parse failure does not get
 // collapsed into "valid". Document bytes are immutable (WORM), so once we
 // have a definitive valid/invalid we can also memoise across re-opens of
-// the sheet — the integrity probe is the most expensive call on this
+// the sheet: the integrity probe is the most expensive call on this
 // surface and there's no need to re-run it for the same document twice in
 // a session.
 type IntegrityState = 'valid' | 'invalid' | 'error'
@@ -53,7 +53,7 @@ const integrityCache = new Map<string, IntegrityState>()
 function isImageType(type: string | null, fileName?: string): boolean {
   if (type?.startsWith('image/')) return true
   // Legacy uploads and browsers that fail to sniff sometimes leave mime_type
-  // null or set it to application/octet-stream — fall back to filename.
+  // null or set it to application/octet-stream: fall back to filename.
   if (type === null || type === 'application/octet-stream') {
     return /\.(jpe?g|png|gif|webp|svg)$/i.test(fileName ?? '')
   }
@@ -100,7 +100,7 @@ export default function AttachmentPreviewSheet({
       const { data } = await res.json()
       const list: DocumentRecord[] = data || []
 
-      // Pull a signed download_url for each — used by the
+      // Pull a signed download_url for each: used by the
       // "open in new tab" link. The iframe/img sources use the
       // same-origin inline proxy and do not need download_url.
       const enriched = await Promise.all(
@@ -150,7 +150,7 @@ export default function AttachmentPreviewSheet({
           try {
             const r = await fetch(`/api/documents/${doc.id}/integrity`)
             if (!r.ok) {
-              // Server reachable but returned a non-2xx — treat as unknown.
+              // Server reachable but returned a non-2xx: treat as unknown.
               // Caching the error would stick across reloads of the sheet,
               // which is not what we want for transient 5xx.
               return [doc.id, 'error' as const, false] as const
@@ -358,8 +358,8 @@ export default function AttachmentPreviewSheet({
                         // preview still renders; the user can fall back to
                         // Chrome's own viewer error UI if the bytes are
                         // also corrupt. Surfacing this rather than falling
-                        // through silently to "valid" satisfies SOC 2 CC8.1
-                        // — failed checks must not be masked.
+                        // through silently to "valid" satisfies SOC 2 CC8.1:
+                        // failed checks must not be masked.
                         <p className="text-xs text-muted-foreground">
                           {t('integrity_unknown')}
                         </p>
@@ -374,7 +374,7 @@ export default function AttachmentPreviewSheet({
                           {t('not_previewable')}
                           {doc.download_url && (
                             <>
-                              {' — '}
+                              {': '}
                               <a
                                 href={doc.download_url}
                                 target="_blank"

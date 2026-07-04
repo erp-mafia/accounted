@@ -62,7 +62,7 @@ describe('taxonomy registry (k2-ab-2024-09-12)', () => {
     expect(memberNames).toContain('UnderskriftHandlingTilltalsnamn')
     expect(memberNames).toContain('UnderskriftHandlingEfternamn')
     expect(memberNames).toContain('UnderskriftHandlingRoll')
-    // TA §2.9.1: DatumForUndertecknande per signer — element name UndertecknandeDatum.
+    // TA §2.9.1: DatumForUndertecknande per signer: element name UndertecknandeDatum.
     expect(memberNames).toContain('UndertecknandeDatum')
   })
 

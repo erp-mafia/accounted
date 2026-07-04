@@ -83,9 +83,9 @@ describe('counterparty-templates', () => {
     })
 
     it('does not strip multi-letter trailing words or 3+ letter brands', () => {
-      // Conservative guard: only 1–2 char all-caps initials and month tokens go.
+      // Conservative guard: only 1-2 char all-caps initials and month tokens go.
       expect(normalizeCounterpartyName('SWISH ANDERS JOHANSSON')).toBe('anders johansson')
-      expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars — kept
+      expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars: kept
       expect(normalizeCounterpartyName('KLARNA')).toBe('klarna')         // single token kept
     })
   })
@@ -461,7 +461,7 @@ describe('counterparty-templates', () => {
 
       await insertOrUpdateTemplate(supabase as never, 'user-1', baseParams, existing)
 
-      // Should NOT have queried for existing — only the update call
+      // Should NOT have queried for existing: only the update call
       // The from() call count indicates no select was made before update
       expect(supabase.from).toHaveBeenCalledTimes(1)
     })
@@ -483,7 +483,7 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
-    it('respects source priority — sie_import does not overwrite user_approved', async () => {
+    it('respects source priority: sie_import does not overwrite user_approved', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       const existing = makeCategorizationTemplate({
         debit_account: '5410', // Different accounts = correction
@@ -753,7 +753,7 @@ describe('counterparty-templates', () => {
 // ── dimensions propagation (PR7) ─────────────────────────────
 
 describe('dimensions propagation (PR7)', () => {
-  describe('buildMappingResultFromCounterpartyTemplate — multi-line pattern', () => {
+  describe('buildMappingResultFromCounterpartyTemplate: multi-line pattern', () => {
     it('materialized business lines carry the pattern bag; VAT and tax lines stay untagged', () => {
       const template = makeCategorizationTemplate({
         debit_account: '5410',
@@ -761,7 +761,7 @@ describe('dimensions propagation (PR7)', () => {
         line_pattern: [
           { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
           { account: '5410', type: 'business', side: 'debit', ratio: 0.8, dimensions: { '1': 'KS01' } },
-          // Even a (bogus) bag on a tax entry must not materialize — only
+          // Even a (bogus) bag on a tax entry must not materialize: only
           // business lines are tagged.
           { account: '2710', type: 'tax', side: 'debit', ratio: 0.2, dimensions: { '1': 'KS01' } },
         ],
@@ -795,7 +795,7 @@ describe('dimensions propagation (PR7)', () => {
     })
   })
 
-  describe('populateTemplatesFromSieVouchers — line-pattern dimension learning', () => {
+  describe('populateTemplatesFromSieVouchers: line-pattern dimension learning', () => {
     /**
      * Queue-based supabase mock that also records `.insert()` payloads per
      * table, so assertions can inspect the stored line_pattern. Follows the
@@ -867,7 +867,7 @@ describe('dimensions propagation (PR7)', () => {
       expect(pattern.find((e) => e.account === '5410')?.dimensions).toEqual({ '6': 'P001' })
     })
 
-    it('drops the bag when a voucher disagrees — or leaves the line untagged', async () => {
+    it('drops the bag when a voucher disagrees, or leaves the line untagged', async () => {
       // 6212 conflicts across vouchers (KS01 vs KS02); 5410 is untagged in one
       // voucher. Both must lose the bag: a template must never invent a tag
       // history does not consistently support.

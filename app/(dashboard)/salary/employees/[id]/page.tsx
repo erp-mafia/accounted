@@ -42,7 +42,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [tax, setTax] = useState<EmployeeTaxValue | null>(null)
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
-  // company_settings.dimensions_enabled — same UI gate as the voucher form.
+  // company_settings.dimensions_enabled: same UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [dimensions, setDimensions] = useState<Record<string, string>>({})
 
@@ -106,7 +106,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       bank_account_number: form.get('bank_account_number') as string || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
-      // Always sent — {} clears the employee's default dimensions.
+      // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
     }
 
@@ -370,12 +370,12 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                 </Select>
                 {vacationRule === 'none' && (
                   <p className="text-xs text-muted-foreground">
-                    Ingen avsättning till 2920 bokas. Använd om semester ingår i månadslönen — vanligt för ägare som är enda anställd.
+                    Ingen avsättning till 2920 bokas. Använd om semester ingår i månadslönen, vanligt för ägare som är enda anställd.
                   </p>
                 )}
                 {vacationRule === 'semesterersattning' && (
                   <p className="text-xs text-muted-foreground">
-                    12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp — vanligt för tim- och visstidsanställda.
+                    12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp, vanligt för tim- och visstidsanställda.
                   </p>
                 )}
               </div>

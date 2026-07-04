@@ -110,7 +110,7 @@ vi.mock('@/lib/transactions/category-suggestions', () => ({
 }))
 
 // The categorize tool runs the booking-time duplicate guard before staging.
-// These tests don't exercise that path, so stub it to "no duplicate" — otherwise
+// These tests don't exercise that path, so stub it to "no duplicate": otherwise
 // its detection queries would consume the queued supabase mock results.
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: vi.fn().mockResolvedValue(null),
@@ -328,8 +328,8 @@ describe('MCP Receipt Matcher', () => {
         { data: tx, error: null },           // fetch transaction (preview)
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
         { data: tx, error: null },            // fetch transaction for title
-        { data: null, error: null },          // resolvePeriodStatusForDate — company_settings
-        { data: null, error: null },          // resolvePeriodStatusForDate — fiscal_periods
+        { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
+        { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
         { data: { id: 'op-1' }, error: null }, // insert into pending_operations
       ])
 
@@ -371,8 +371,8 @@ describe('MCP Receipt Matcher', () => {
         { data: tx, error: null },
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
         { data: tx, error: null },            // fetch transaction for title
-        { data: null, error: null },          // resolvePeriodStatusForDate — company_settings
-        { data: null, error: null },          // resolvePeriodStatusForDate — fiscal_periods
+        { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
+        { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
         { data: { id: 'op-1' }, error: null }, // insert into pending_operations
       ])
 

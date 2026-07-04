@@ -146,7 +146,7 @@ export async function GET(request: Request) {
     ]
     const mapRow = (r: FlatRow) => [r.section, r.account_number, r.account_name, r.amount]
 
-    // Partial-view disclosure on every sheet — any tab opened alone must
+    // Partial-view disclosure on every sheet: any tab opened alone must
     // still identify the export as filtered (BFNAR 2013:2).
     const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
     if (disclosure) {

@@ -5,7 +5,7 @@
  *
  * NOTE: the official OpenAPI 2.0 servicespecifikationer are still pending
  * manual download (dev_docs/bokslut/INDEX.md checklist → api/). When they
- * land, reconcile these types against the specs — the specs win on conflict
+ * land, reconcile these types against the specs: the specs win on conflict
  * (GUIDE §5.1).
  */
 

@@ -4,7 +4,7 @@ import { getVapidPublicKey } from './notification-sender'
 import { getSettings, saveSettings } from './index'
 
 // ============================================================
-// /subscribe — GET: get VAPID public key for client-side subscription
+// /subscribe: GET: get VAPID public key for client-side subscription
 // ============================================================
 
 async function handleGetSubscribe(
@@ -24,7 +24,7 @@ async function handleGetSubscribe(
 }
 
 // ============================================================
-// /subscribe — POST: save a new push subscription
+// /subscribe: POST: save a new push subscription
 // ============================================================
 
 async function handlePostSubscribe(
@@ -99,7 +99,7 @@ async function handlePostSubscribe(
 }
 
 // ============================================================
-// /subscribe — DELETE: remove a push subscription
+// /subscribe: DELETE: remove a push subscription
 // ============================================================
 
 async function handleDeleteSubscribe(
@@ -137,7 +137,7 @@ async function handleDeleteSubscribe(
 }
 
 // ============================================================
-// /settings — GET: get current notification settings
+// /settings: GET: get current notification settings
 // ============================================================
 
 async function handleGetSettings(
@@ -150,7 +150,7 @@ async function handleGetSettings(
 }
 
 // ============================================================
-// /settings — PUT: update notification settings
+// /settings: PUT: update notification settings
 // ============================================================
 
 async function handleUpdateSettings(

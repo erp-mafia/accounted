@@ -3,7 +3,7 @@ import { z } from 'zod'
 // Commit-boundary re-validation for staged article operations. A staged
 // pending_operations row is re-parsed here before it touches the articles table
 // so a tampered row cannot inject unexpected fields or malformed data
-// (defense in depth, ASVS V4.5) — mirrors lib/pending-operations/schemas/create-supplier.ts.
+// (defense in depth, ASVS V4.5): mirrors lib/pending-operations/schemas/create-supplier.ts.
 
 const revenueAccount = z
   .string()

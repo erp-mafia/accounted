@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/balance-sheet
  *
- * Returns the balansrapport for a fiscal period — assets / liabilities /
+ * Returns the balansrapport for a fiscal period: assets / liabilities /
  * equity broken into sections per BAS class. Mirrors the dashboard
  * generator (`lib/reports/balance-sheet.ts`).
  */
@@ -13,7 +13,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 
-// Use z.unknown for the rich nested shape — the lib types are stable and
+// Use z.unknown for the rich nested shape: the lib types are stable and
 // callers consume via `data.sections[…]`. Strict Zod schemas here would
 // require importing every BAS-section type, which adds maintenance with no
 // runtime benefit (the server is the source of truth, not the agent).
@@ -27,12 +27,12 @@ registerEndpoint({
   description:
     'Returns assets / liabilities / equity grouped into BAS sections, with the period\'s opening and closing balances. Sums match the income statement for the same period; the closing equity flows into next period\'s opening balance.',
   useWhen:
-    'You need the company\'s balance position at period end — typically for management reporting, year-end review, or the K2/K3 årsredovisning uppställningsform.',
+    'You need the company\'s balance position at period end: typically for management reporting, year-end review, or the K2/K3 årsredovisning uppställningsform.',
   doNotUseFor:
     'Per-account drill-down (use /reports/general-ledger). Net result for the period (use /reports/income-statement).',
   pitfalls: [
     '`period_id` is required.',
-    'Balance sheet equity includes the period\'s computed result — recalculation happens on every call, so a freshly-posted entry is reflected immediately (no caching).',
+    'Balance sheet equity includes the period\'s computed result: recalculation happens on every call, so a freshly-posted entry is reflected immediately (no caching).',
   ],
   example: {
     response: {

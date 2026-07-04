@@ -115,7 +115,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
 
     // Only draft runs can be deleted. Once a run reaches review/approved/paid/
-    // booked it carries compliance weight — a booked run created immutable
+    // booked it carries compliance weight: a booked run created immutable
     // verifikat (storno to undo, never delete). A draft has produced no journal
     // entries and no AGI (the arbetsgivardeklaration is filed monthly from the
     // booked/paid run, never from a draft), so removing it touches no posted
@@ -139,7 +139,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // salary_run_employees and their salary_line_items are removed via
-    // ON DELETE CASCADE. An agi_declarations row — never present on a draft —
+    // ON DELETE CASCADE. An agi_declarations row (never present on a draft)
     // would block the delete via its RESTRICT FK, the safety net for the
     // impossible case.
     const { error } = await supabase

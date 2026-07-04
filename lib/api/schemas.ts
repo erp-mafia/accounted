@@ -16,22 +16,22 @@ const uuid = z.string().uuid()
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
 
 /**
- * ISO date that must also be a real, in-range calendar date — not just the
+ * ISO date that must also be a real, in-range calendar date: not just the
  * right shape. Backed by the shared `isSaneDateString` rule (also used by the
  * transaction form) so a 6-digit year or impossible date can't slip through
  * for user-entered dates. Use this over `isoDate` for free-text date input.
  */
 const saneIsoDate = z
   .string()
-  .refine(isSaneDateString, 'Invalid or out-of-range date (expected YYYY-MM-DD, year 1900–2100)')
+  .refine(isSaneDateString, 'Invalid or out-of-range date (expected YYYY-MM-DD, year 1900-2100)')
 
-/** BAS account number — always a string of 4 digits */
+/** BAS account number: always a string of 4 digits */
 const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactly 4 digits')
 
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
 
-/** BAS class-3 revenue account — exactly 4 digits starting with 3 (försäljning/intäkt). */
+/** BAS class-3 revenue account: exactly 4 digits starting with 3 (försäljning/intäkt). */
 const revenueAccount = z
   .string()
   .regex(/^3\d{3}$/, 'Revenue account must be a 4-digit BAS class-3 account (3xxx)')
@@ -54,7 +54,7 @@ const deferredRevenueAccount = z
 
 /**
  * Shared periodisering period rules for invoice line items: both dates or
- * neither, end after start, and a 2–120 calendar month span. The amount-side
+ * neither, end after start, and a 2-120 calendar month span. The amount-side
  * rules differ per item shape and stay in each schema's superRefine.
  */
 function validateAccrualPeriod(
@@ -106,12 +106,12 @@ export const EntityTypeSchema = z.enum(['enskild_firma', 'aktiebolag'])
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
 /**
- * Single K3 component (BFNAR 2012:1 ch.17.4 — komponentavskrivning).
+ * Single K3 component (BFNAR 2012:1 ch.17.4, komponentavskrivning).
  *
  * Used inside AssetCreateSchema / AssetUpdateSchema's `k3_components` array.
  * The cross-component invariant (sum of `cost` equals asset `acquisition_cost`)
  * lives in `validateComponents` from `lib/bokslut/assets/k3-components.ts`
- * and is called by the route-layer refinement — it cannot be expressed in
+ * and is called by the route-layer refinement: it cannot be expressed in
  * a single-object schema. Component-level checks (cost > 0, salvage ≤ cost,
  * positive useful life) are reinforced by `validateComponents` too so any
  * future caller that uses just the validator gets the same guarantees.
@@ -210,7 +210,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
 export const VoucherSequenceNextQuerySchema = z.object({
   period_id: uuid.optional(),
-  series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   source_type: JournalEntrySourceTypeSchema.optional(),
   date: isoDate.optional(),
 })
@@ -278,7 +278,7 @@ export const CreateInvoiceItemSchema = z
     article_id: uuid.nullable().optional(),
     revenue_account: revenueAccount.nullable().optional(),
     // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
-    // the client schema — the API computes it from rot-rut-rules.ts so a
+    // the client schema: the API computes it from rot-rut-rules.ts so a
     // tampered client can't expand the 1513 receivable beyond the line total.
     deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
     labor_hours: z.number().nonnegative().nullable().optional(),
@@ -286,8 +286,8 @@ export const CreateInvoiceItemSchema = z
     housing_designation: z.string().max(128).nullable().optional(),
     apartment_number: z.string().max(32).nullable().optional(),
     // Bostadsrättsföreningens orgnr (XSD BrfOrgNrTYPE). If present it must be
-    // a real orgnr shape — 10 digits (optional dash after position 6) or the
-    // 12-digit sekelsiffra form — or Skatteverkets schemavalidering rejects
+    // a real orgnr shape: 10 digits (optional dash after position 6) or the
+    // 12-digit sekelsiffra form, or Skatteverkets schemavalidering rejects
     // the whole file at upload time. Empty string = cleared field → null.
     brf_org_number: z
       .union([
@@ -362,7 +362,7 @@ export const CreateInvoiceSchema = z.object({
   // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
   // encrypted server-side before it ever hits the DB (see encryptPersonnummer
   // in lib/salary/personnummer.ts). `deduction_housing_designation` is the
-  // fastighetsbeteckning at invoice level — required when any ROT item is
+  // fastighetsbeteckning at invoice level: required when any ROT item is
   // present (enforced via rot-rut-rules.validateInvoice in the API).
   deduction_personnummer: z.string().max(20).optional(),
   deduction_housing_designation: z.string().max(128).optional(),
@@ -393,7 +393,7 @@ export const CreateInvoiceSchema = z.object({
 })
 
 // Update (edit) an existing DRAFT invoice in place. Same shape as create minus
-// `save_as_draft` — editing never (re)creates a draft or allocates a number, it
+// `save_as_draft`: editing never (re)creates a draft or allocates a number, it
 // only rewrites the draft's header + line items. The PATCH route guards that the
 // target is still a draft (status='draft', no journal entry, not self-billed).
 export const UpdateInvoiceSchema = CreateInvoiceSchema.omit({ save_as_draft: true })
@@ -410,7 +410,7 @@ export const CreateCreditNoteSchema = z.object({
 export const RotRutPayoutFileSchema = z.object({
   deduction_type: z.enum(['rot', 'rut']),
   invoice_ids: z.array(uuid).min(1).max(500),
-  // NamnPaBegaran — the XSD caps it at 16 chars; omitted → generated.
+  // NamnPaBegaran: the XSD caps it at 16 chars; omitted → generated.
   name: z.string().min(1).max(16).optional(),
 })
 
@@ -468,7 +468,7 @@ export const UpdateArticleSchema = CreateArticleSchema.partial().extend({
 // issued the invoice on our behalf; for us it is a sale. We store the
 // counterparty's number in external_invoice_number and never assign one from
 // our own series. No ROT/RUT (that is a B2C, own-issued concept), so the item
-// schema is the lean revenue-only shape — vat_rate is constrained to the legal
+// schema is the lean revenue-only shape: vat_rate is constrained to the legal
 // Swedish set so the booked output VAT is always reportable.
 export const SelfBillingInvoiceItemSchema = z.object({
   description: z.string().min(1, 'Item description is required'),
@@ -496,7 +496,7 @@ export const CreateSelfBillingInvoiceSchema = z.object({
 // Recurring invoice schedule schemas
 // ============================================================
 
-// Swedish VAT rates per ML 17 kap 24§ p.9 — null means "use customer default
+// Swedish VAT rates per ML 17 kap 24§ p.9: null means "use customer default
 // from getAvailableVatRates". Any other value would produce a non-compliant
 // invoice (buyer cannot deduct ingående moms). Cron-time validation against
 // the customer's allowed set still runs in executeRecurringSchedule.
@@ -558,7 +558,7 @@ export const MarkInvoicePaidSchema = z.object({
   // Bypass the duplicate-payment guard. Set after the user reviews the
   // candidate list returned by INVOICE_PAID_LIKELY_DUPLICATE and confirms
   // none of them are this payment. v1 callers must use a fresh
-  // Idempotency-Key on the retry — the original is body-hash bound.
+  // Idempotency-Key on the retry: the original is body-hash bound.
   force: z.boolean().optional(),
 })
 
@@ -636,7 +636,7 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   vat_amount: z.number().min(0).optional(),
   // Self-assessed VAT rate for omvänd skattskyldighet (reverse charge). The
   // supplier charges no VAT (vat_rate stays 0); this is the Swedish statutory
-  // rate the buyer self-assesses at — 25% huvudregel default, 12%/6% for
+  // rate the buyer self-assesses at: 25% huvudregel default, 12%/6% for
   // reduced-rated services (ML 6 kap 34 §). Must be a statutory rate.
   reverse_charge_rate: z
     .number()
@@ -764,7 +764,7 @@ export const CreateJournalEntryLineSchema = z.object({
   // the staged pending-operations path validates identically. Wins per key
   // over the cost_center/project aliases.
   dimensions: DimensionsBagSchema.optional(),
-  // Deprecated aliases for dimensions['1'] / dimensions['6'] — kept forever
+  // Deprecated aliases for dimensions['1'] / dimensions['6'], kept forever
   // for API/MCP compatibility.
   cost_center: z.string().optional(),
   project: z.string().optional(),
@@ -776,7 +776,7 @@ export const CreateJournalEntrySchema = z.object({
   description: z.string().min(1, 'Description is required'),
   source_type: JournalEntrySourceTypeSchema.default('manual'),
   source_id: z.string().optional(),
-  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
 })
@@ -794,7 +794,7 @@ export const CorrectJournalEntrySchema = z.object({
 /**
  * Object code for USER-CREATED dimension values: strict Fortnox format.
  * Deliberately tighter than both the DB CHECK (1..40 chars, no `"{}`') and
- * DimensionsBagSchema (line-level values) — legacy free-text codes from the
+ * DimensionsBagSchema (line-level values): legacy free-text codes from the
  * backfill/SIE import must survive on lines, but new registry codes minted
  * through the API stay portable to Fortnox/Visma.
  */
@@ -802,7 +802,7 @@ const dimensionValueCode = z
   .string()
   .regex(
     /^[A-Za-z0-9ÅÄÖåäö_+\-]{1,20}$/,
-    'Koden får bara innehålla bokstäver (A–Ö), siffror, _, + och - (max 20 tecken)',
+    'Koden får bara innehålla bokstäver (A-Ö), siffror, _, + och - (max 20 tecken)',
   )
 
 const dimensionValueDates = {
@@ -810,7 +810,7 @@ const dimensionValueDates = {
   end_date: isoDate.nullable().optional(),
 }
 
-/** PATCH /api/dimensions/[id] — name is rejected route-side for is_system dims. */
+/** PATCH /api/dimensions/[id]: name is rejected route-side for is_system dims. */
 export const UpdateDimensionSchema = z
   .object({
     name: z.string().min(1).max(80).optional(),
@@ -821,7 +821,7 @@ export const UpdateDimensionSchema = z
     message: 'Minst ett fält måste anges',
   })
 
-/** POST /api/dimensions/[id]/values — code is immutable after creation (v1: no rename). */
+/** POST /api/dimensions/[id]/values: code is immutable after creation (v1: no rename). */
 export const CreateDimensionValueSchema = z
   .object({
     code: dimensionValueCode,
@@ -836,7 +836,7 @@ export const CreateDimensionValueSchema = z
   )
 
 /**
- * POST /api/bookkeeping/journal-entry-lines/[lineId]/retag — Tier-2 retro-
+ * POST /api/bookkeeping/journal-entry-lines/[lineId]/retag: Tier-2 retro-
  * tagging (dimensions plan PR6). The RPC enforces every rule (posted only,
  * open period, lock date, active registry values); this schema only shapes
  * the request. An empty bag {} untags the line.
@@ -852,7 +852,7 @@ export const RetagLineDimensionsSchema = z.object({
   reason: z.string().min(3).max(500),
 })
 
-/** PATCH /api/dimensions/[id]/values/[valueId] — no `code` field by design. */
+/** PATCH /api/dimensions/[id]/values/[valueId]: no `code` field by design. */
 export const UpdateDimensionValueSchema = z
   .object({
     name: z.string().min(1).max(120).optional(),
@@ -865,7 +865,7 @@ export const UpdateDimensionValueSchema = z
 
 /**
  * Move a posted verifikation to a different date (and thereby fiscal period)
- * without changing its lines — fixes a booking entered with the wrong
+ * without changing its lines: fixes a booking entered with the wrong
  * date/year. The corrected lines are copied server-side from the original.
  */
 export const RecordateJournalEntrySchema = z.object({
@@ -910,7 +910,7 @@ export const CategorizeTransactionSchema = z
     // the specific already-booked candidate (re-detected server-side, so a
     // guessed id can't wave the guard away). The candidate is either a sibling
     // transaction (expected_duplicate_transaction_id) or a ledger-only voucher
-    // with no transaction behind it (expected_duplicate_journal_entry_id) — both
+    // with no transaction behind it (expected_duplicate_journal_entry_id): both
     // carry a journal_entry_id, so new callers bind on that.
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
@@ -927,7 +927,7 @@ export const BookTransactionSchema = z
     entry_date: isoDate,
     description: z.string().min(1, 'Description is required'),
     lines: z.array(CreateJournalEntryLineSchema).min(1, 'At least one line is required'),
-    // Booking-time duplicate guard — see CategorizeTransactionSchema.
+    // Booking-time duplicate guard: see CategorizeTransactionSchema.
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
     expected_duplicate_journal_entry_id: uuid.optional(),
@@ -938,7 +938,7 @@ export const BookTransactionSchema = z
   })
 
 /**
- * Edit a bank transaction's title (description). Only the working label —
+ * Edit a bank transaction's title (description). Only the working label:
  * gated server-side to unbooked, unmatched rows. Trimmed; whitespace-only is
  * rejected by min(1). Passing the bank original restores the "not edited" tag.
  */
@@ -959,7 +959,7 @@ export const BookInboxItemDirectlySchema = z.object({
  * Bulk-book selected Underlag (Dokumentinkorgen) against their matched bank
  * transactions. One shared category + VAT treatment is applied to every
  * selected item; each item is booked against its own matched transaction (which
- * carries the SEK amount), so the verifikat are individual — not a
+ * carries the SEK amount), so the verifikat are individual, not a
  * samlingsverifikation. Items without a matched transaction, already booked, or
  * already linked to a leverantörsfaktura are skipped server-side.
  *
@@ -990,7 +990,7 @@ export const MatchInvoiceSchema = z
     // Bypass the soft-duplicate guard (MATCH_INVOICE_POSSIBLE_DUPLICATE).
     // Set after the user reviews the candidate verifikation and confirms it
     // is not this payment. v1 callers must use a fresh Idempotency-Key on
-    // the retry — the original is body-hash bound.
+    // the retry: the original is body-hash bound.
     force: z.boolean().optional(),
     // Required whenever force=true. Echoes the journal_entry_id of the
     // candidate the user reviewed in the duplicate-payment-check pre-flight.
@@ -1000,7 +1000,7 @@ export const MatchInvoiceSchema = z
     // force=true to bypass the guard without ever consulting the candidate.
     expected_journal_entry_id: uuid.optional(),
     // Optional user-edited journal entry lines. When present they override
-    // the default clearing/cash booking — the route validates balance and
+    // the default clearing/cash booking: the route validates balance and
     // posts via createJournalEntry directly. Source_type is still set from
     // the routing decision (invoice_paid vs invoice_cash_payment) so
     // downstream payment-sync continues to work.
@@ -1012,11 +1012,11 @@ export const MatchInvoiceSchema = z
     })).min(2).optional(),
     // Optional caller-supplied SEK-per-invoice-currency rate for cross-currency
     // settlement. Used when the Riksbanken lookup returns nothing (rate not
-    // published for that date) — the dialog surfaces an input so the user can
+    // published for that date): the dialog surfaces an input so the user can
     // type the rate from their bank statement. Ignored when tx.currency ===
     // invoice.currency. The .max() is a sanity ceiling against pasted garbage /
     // scientific-notation input silently corrupting the FX-diff posting and
-    // invoice_payments.amount — no supported currency's SEK rate approaches it
+    // invoice_payments.amount: no supported currency's SEK rate approaches it
     // (USD~10.5, EUR~11.5, GBP~13.5). It is a guard rail, not a precise band;
     // the dialog's live preview (paid_in_invoice_currency + FX gain/loss) is
     // what catches a plausible-but-wrong decimal-shift typo before confirm.
@@ -1029,7 +1029,7 @@ export const MatchInvoiceSchema = z
 
 /**
  * Link an existing posted verifikat as payment for an invoice. No new
- * journal entry is created — only an invoice_payments row pointing at the
+ * journal entry is created: only an invoice_payments row pointing at the
  * supplied journal_entry_id, plus the invoice's paid/remaining are advanced.
  */
 export const LinkInvoiceToVoucherSchema = z.object({
@@ -1039,7 +1039,7 @@ export const LinkInvoiceToVoucherSchema = z.object({
 
 /**
  * Supplier-invoice mirror: link an existing posted verifikat as payment for a
- * supplier invoice. No new JE — only a supplier_invoice_payments row pointing
+ * supplier invoice. No new JE: only a supplier_invoice_payments row pointing
  * at the supplied journal_entry_id, plus the invoice's paid/remaining advance.
  */
 export const LinkSupplierInvoiceToVoucherSchema = z.object({
@@ -1060,7 +1060,7 @@ export const LinkSupplierInvoiceToVoucherSchema = z.object({
  *     expansion (one_line_per_tx OR sum_per_account) and passes the final
  *     lines to the RPC.
  *
- * Exactly one of the two paths must be set — enforced by superRefine.
+ * Exactly one of the two paths must be set: enforced by superRefine.
  */
 export const BulkBookSchema = z
   .object({
@@ -1151,7 +1151,7 @@ export const MatchBatchSchema = z
           z.object({
             kind: z.literal('customer_invoice'),
             invoice_id: uuid,
-            // Strictly positive — zero or negative is rejected at the schema
+            // Strictly positive: zero or negative is rejected at the schema
             // layer (PR #603 review) so the RPC's BATCH_INVALID_AMOUNT path
             // is only reachable from non-HTTP callers.
             amount: z.number().positive('Allocation amount must be greater than 0'),
@@ -1165,12 +1165,12 @@ export const MatchBatchSchema = z
       )
       .min(1, 'At least one allocation is required')
       // Cap at 100 to prevent DoS via unbounded FOR UPDATE locks in the RPC
-      // (PR #603 compliance review — OWASP V4.2). Domain-appropriate ceiling:
+      // (PR #603 compliance review, OWASP V4.2). Domain-appropriate ceiling:
       // a real samlingsverifikat rarely covers more than a few dozen invoices.
       .max(100, 'At most 100 allocations per batch'),
   })
   .superRefine((data, ctx) => {
-    // Reject mixed customer + supplier in a single batch — semantically a
+    // Reject mixed customer + supplier in a single batch: semantically a
     // single bank transfer settles invoices on one side. The RPC also guards
     // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
     // layer gives a cleaner 400 with a per-field path.
@@ -1203,7 +1203,7 @@ export const CreateTransactionFromDocumentSchema = z.object({
 
 export const MatchSupplierInvoiceSchema = z.object({
   supplier_invoice_id: uuid,
-  // Same purpose as MatchInvoiceSchema.lines — user-edited rows override
+  // Same purpose as MatchInvoiceSchema.lines: user-edited rows override
   // the default 2440-clearing / cash booking. Route validates balance and
   // posts via createJournalEntry; source_type still derives from routing.
   lines: z.array(z.object({
@@ -1219,7 +1219,7 @@ export const MatchSupplierInvoiceSchema = z.object({
 // Settings schemas
 // ============================================================
 
-// Editable invoice email texts (standard invoices only). Nested JSONB —
+// Editable invoice email texts (standard invoices only). Nested JSONB:
 // unknown keys inside are stripped (Zod default, consistent with this file).
 // Empty strings pass validation; the template resolver treats whitespace-only
 // as unset, and the UI prunes empties before saving so the stored object
@@ -1292,15 +1292,15 @@ export const UpdateSettingsSchema = z.object({
   bookkeeping_locked_through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ogiltigt datumformat (YYYY-MM-DD)').nullable().optional(),
   auto_lock_period_days: z.number().int().positive().nullable().optional(),
   // Voucher series
-  default_voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  default_voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   // Per-source-type voucher series map. Keys are journal_entries.source_type
-  // values; values are single uppercase letters A–Z. Read by the engine
+  // values; values are single uppercase letters A-Z. Read by the engine
   // (`createDraftEntry`) when no explicit voucher_series is passed, with a
   // fallback to 'A' for unknown keys.
   default_voucher_series_per_source_type: z
     .record(
       JournalEntrySourceTypeSchema,
-      z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z'),
+      z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z'),
     )
     .optional(),
   // Invoice PDF settings
@@ -1314,11 +1314,11 @@ export const UpdateSettingsSchema = z.object({
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
-  // Editable invoice email texts — { sv?: {...}, en?: {...} }; null clears
+  // Editable invoice email texts: { sv?: {...}, en?: {...} }; null clears
   // all overrides. Without this entry the generic PUT would silently strip
   // the field (the schema is the de-facto column whitelist).
   invoice_email_texts: InvoiceEmailTextsSchema.nullable().optional(),
-  // Invoice branding — colors enforced as #RRGGBB at the DB level too
+  // Invoice branding: colors enforced as #RRGGBB at the DB level too
   // (see migration 20260526120200_invoice_branding.sql). The dedicated
   // /api/settings/invoicing/branding route is the primary path; these
   // entries let the generic PUT /api/settings also accept the same fields.
@@ -1350,7 +1350,7 @@ export const UpdateSettingsSchema = z.object({
     .optional(),
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
-  // Dimensions (kostnadsställe/projekt) — UI-visibility toggle only, never
+  // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
   // load-bearing for correctness (dev_docs/dimensions_implementation_plan.md §2).
   dimensions_enabled: z.boolean().optional(),
   // Salary payment file
@@ -1498,7 +1498,7 @@ export const RunReconciliationSchema = z.object({
     .optional(),
   dry_run: z.boolean().optional(),
   // Pairs the user ticked in the dry-run preview. When present on an apply
-  // (dry_run false), only these pairs are committed — intersected server-side
+  // (dry_run false), only these pairs are committed: intersected server-side
   // with a fresh match run, so a stale or fabricated pair is never applied.
   selected_matches: z
     .array(
@@ -1532,10 +1532,10 @@ export const AccountBalancesQuerySchema = z.object({
     .string()
     .transform((s) => s.split(',').map((a) => a.trim()).filter(Boolean))
     .pipe(z.array(accountNumber).min(1).max(50)),
-  // Reject future dates — a saldo "as of tomorrow" would include unposted
+  // Reject future dates: a saldo "as of tomorrow" would include unposted
   // future entries (if any) and mislead the bookkeeper about the true
   // pre-entry state of the ledger. Compared in Europe/Stockholm so a Swedish
-  // bookkeeper working in the 00:00–02:00 CET window (after midnight UTC has
+  // bookkeeper working in the 00:00-02:00 CET window (after midnight UTC has
   // not yet passed) isn't rejected for entering their local today's date.
   as_of: isoDate.refine(
     (d) => d <= new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm' }),
@@ -1593,7 +1593,7 @@ export const PendingOperationsBulkSchema = z.object({
 
 export const VoucherGapQuerySchema = z.object({
   fiscal_period_id: uuid,
-  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
 })
 
 export const SaveGapExplanationSchema = z.object({
@@ -1740,7 +1740,7 @@ export const SalaryLineItemTypeSchema = z.enum([
   'correction', 'other',
 ])
 
-// Base employee object (no refinements — safe for .partial())
+// Base employee object (no refinements, safe for .partial())
 const EmployeeSchemaBase = z.object({
   first_name: z.string().min(1).max(200),
   last_name: z.string().min(1).max(200),
@@ -1813,9 +1813,9 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
   // Phase 5 PR-1 carry-over (PR-2 enforcement): if vaxa_stod_eligible is set,
   // require vaxa_stod_start. The end date is optional (some eligibility
   // windows run open-ended until the maximum benefit period is reached).
-  // Birth-year age gate (the actual eligibility rule — born 2003-2007 for
+  // Birth-year age gate (the actual eligibility rule, born 2003-2007 for
   // 2026) is checked at calculation-time by the engine, not here, because
-  // it depends on the payment year of each run — a 22-year-old at hire
+  // it depends on the payment year of each run: a 22-year-old at hire
   // becomes 23 the next year and the rate switches without a row edit.
   if (data.vaxa_stod_eligible && !data.vaxa_stod_start) {
     ctx.addIssue({
@@ -1876,7 +1876,7 @@ export const UpdateEmployeeSchema = EmployeeSchemaBase.partial().superRefine((da
   // already set can have vaxa_stod_eligible flipped on without also
   // sending start in the body). What the schema CAN enforce:
   //   - If the body enables vaxa_stod AND clears vaxa_stod_start explicitly
-  //     (sending null), reject — that would orphan the eligibility flag.
+  //     (sending null), reject: that would orphan the eligibility flag.
   //   - If the body sets vaxa_stod_eligible=true AND vaxa_stod_start is
   //     present in the body but invalid relative to vaxa_stod_end, reject.
   // The first case isn't currently expressible via .partial() (null != absent),
@@ -1951,7 +1951,7 @@ export const CreateSalaryRunSchema = z.object({
   period_year: z.number().int().min(2020).max(2100),
   period_month: z.number().int().min(1).max(12),
   payment_date: isoDate,
-  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').default('A'),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').default('A'),
   notes: z.string().max(2000).optional(),
 })
 
@@ -2015,7 +2015,7 @@ export const AbsenceRangeQuerySchema = z.object({
 // ── Worked-hours per-day records (hourly employees) ─────────────────
 //
 // Drives base salary calculation for hourly (timanställd) employees:
-// `baseSalary = hourly_rate × Σ hours`. Mirrors absence days deliberately —
+// `baseSalary = hourly_rate × Σ hours`. Mirrors absence days deliberately:
 // same calendar UX, half-day mixing with absence enforced by the 24h cap
 // trigger. The calculator sums these per pay period at calculate time.
 
@@ -2025,8 +2025,8 @@ export const UpsertWorkedDaySchema = z
     hours: z.number().positive().max(24).default(8),
     notes: z.string().max(2000).optional(),
     salary_run_employee_id: uuid.optional(),
-    // Optional shift window. Feeds the shift-premium engine — without explicit
-    // times, the engine assumes a default 08:00–17:00 day shift. Either both
+    // Optional shift window. Feeds the shift-premium engine: without explicit
+    // times, the engine assumes a default 08:00-17:00 day shift. Either both
     // fields are provided or neither.
     start_time: timeString.optional(),
     end_time: timeString.optional(),
@@ -2112,7 +2112,7 @@ export const AcceptProposalSchema = z.object({
 // Change the matched transaction on a pending match proposal without
 // accepting it. Source tells us whether the user picked one of the AI's
 // own alternatives, an AI-regenerated suggestion, or a manually-chosen
-// transaction — kept on edit_diff for learning signal.
+// transaction: kept on edit_diff for learning signal.
 export const ChangeMatchProposalSchema = z.object({
   version: z.number().int().nonnegative(),
   matched_transaction_id: uuid,
@@ -2233,7 +2233,7 @@ export const UpdateShiftPremiumRuleSchema = z
  *
  * Each field is independently nullable. `null` clears a previously-set
  * override; `undefined` leaves it unchanged. `reason` is required whenever
- * any non-null override is being applied — the DB CHECK constraint
+ * any non-null override is being applied: the DB CHECK constraint
  * enforces this at the storage layer too.
  */
 // Upper bound on per-employee override values. 10 MSEK is well above any
@@ -2245,7 +2245,7 @@ export const SalaryEmployeeOverrideSchema = z
   .object({
     // Per-run monthly salary for this employee, editable while the run is a
     // draft. 0 is allowed (an intentional nollkörning). This is NOT a review
-    // override — it sets the base the engine uses for this month only and does
+    // override: it sets the base the engine uses for this month only and does
     // not require a reason. The route gates this field to `draft` status.
     monthly_salary: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).optional(),
     tax_withheld_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
@@ -2272,14 +2272,14 @@ export const SalaryEmployeeOverrideSchema = z
 
 
 // ============================================================
-// Dimensions PR6 — bulk retro-tagging workbench (appended at end
+// Dimensions PR6: bulk retro-tagging workbench (appended at end
 // of file by PR6 to avoid conflicts; keep new schemas below).
 // ============================================================
 
 /**
  * Query filters for GET /api/dimensions/tagging/lines (the BulkTagWorkbench
  * line browser). All filters optional; `limit` is a hard cap (default 200,
- * max 500) — the route fetches limit+1 and reports `total_capped` instead of
+ * max 500): the route fetches limit+1 and reports `total_capped` instead of
  * paginating (dimensions plan §3, v1 scope).
  */
 export const DimensionTaggingLinesQuerySchema = z.object({
@@ -2295,7 +2295,7 @@ export const DimensionTaggingLinesQuerySchema = z.object({
   /**
    * '1' → include reversal pairs (annulled entries + their stornos). Excluded
    * by default: a pair nets to zero in every dimension bucket when both sides
-   * carry the same tag, so retro-tagging it is a no-op — and showing it
+   * carry the same tag, so retro-tagging it is a no-op, and showing it
    * invites tagging one side only, which skews project P&L.
    */
   include_annulled: z.enum(['0', '1']).optional(),
@@ -2308,7 +2308,7 @@ export const DimensionTaggingLinesQuerySchema = z.object({
  * to every listed line via the retag_line_dimensions RPC (the UI groups
  * selected lines by their computed resulting map and issues one POST per
  * distinct map). `dimensions` reuses THE bag schema so validation cannot
- * drift from the engine/API layers; an empty bag is allowed — replace mode
+ * drift from the engine/API layers; an empty bag is allowed: replace mode
  * uses it to clear phantom tags. `reason` mirrors the RPC's >= 3 chars CHECK.
  */
 export const DimensionTaggingApplySchema = z.object({

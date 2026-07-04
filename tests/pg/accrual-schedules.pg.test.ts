@@ -272,7 +272,7 @@ describe('posted installment immutability + verifikat protection', () => {
       journalEntryId: entryId,
     })
 
-    // The engine-level delete guard fires before the FK RESTRICT can — either
+    // The engine-level delete guard fires before the FK RESTRICT can: either
     // layer blocking the delete satisfies the verifikat-protection invariant.
     await expect(
       getPool().query(`DELETE FROM public.journal_entries WHERE id = $1`, [entryId]),

@@ -1,11 +1,11 @@
 ---
 name: supportmail-to-ticket
-description: "Triage Accounted customer support emails and turn them into GitHub issues in the erp-mafia/gnubok repo. Use this skill whenever the user invokes /supportmail-to-ticket (with or without a number argument), or asks to 'triage support mail', 'turn support emails into tickets', 'process Accounted support', 'check the support inbox and file issues', or any similar phrasing involving the Accounted support mailbox. Also trigger this skill if the user mentions [Accounted support] emails and wants them converted into actionable work — even if they don't use the exact slash command."
+description: "Triage Accounted customer support emails and turn them into GitHub issues in the erp-mafia/gnubok repo. Use this skill whenever the user invokes /supportmail-to-ticket (with or without a number argument), or asks to 'triage support mail', 'turn support emails into tickets', 'process Accounted support', 'check the support inbox and file issues', or any similar phrasing involving the Accounted support mailbox. Also trigger this skill if the user mentions [Accounted support] emails and wants them converted into actionable work, even if they don't use the exact slash command."
 ---
 
 # supportmail-to-ticket
 
-Triage `[Accounted support]` emails from Gmail, cross-reference them against the local erp-base codebase, and draft GitHub issues for the `erp-mafia/gnubok` repo — with inline user approval before anything gets created.
+Triage `[Accounted support]` emails from Gmail, cross-reference them against the local erp-base codebase, and draft GitHub issues for the `erp-mafia/gnubok` repo, with inline user approval before anything gets created.
 
 ## Invocation
 
@@ -22,17 +22,17 @@ If the user phrases the request in natural language ("triage the last 5 support 
 
 ## Required tools
 
-Before running anything, verify these are available. If any is missing, stop and tell the user which one to configure — do not attempt workarounds.
+Before running anything, verify these are available. If any is missing, stop and tell the user which one to configure. Do not attempt workarounds.
 
-- **Gmail MCP** — `search_threads`, `get_thread`
-- **GitHub CLI (`gh`)** — used via `bash_tool` for all GitHub operations. Verify with `gh --version` and `gh auth status`. If either fails, stop and say: *"I need the GitHub CLI (gh) installed and authenticated. Install from https://cli.github.com/ and run `gh auth login`, then retry. This skill uses gh as a hard requirement — there is no MCP fallback."* Do not proceed without it.
-- **Filesystem MCP** pointing at `C:\Users\emilm\projects\erp-base` — the skill is explicitly designed around local code search. If the filesystem tool is not available or the path doesn't resolve, stop and say: *"I need the Filesystem MCP configured with access to `C:\Users\emilm\projects\erp-base`. Please set it up in Claude Desktop's MCP config and retry."* Do not fall back to remote code search — the user has asked for local-only.
+- **Gmail MCP**: `search_threads`, `get_thread`
+- **GitHub CLI (`gh`)**: used via `bash_tool` for all GitHub operations. Verify with `gh --version` and `gh auth status`. If either fails, stop and say: *"I need the GitHub CLI (gh) installed and authenticated. Install from https://cli.github.com/ and run `gh auth login`, then retry. This skill uses gh as a hard requirement: there is no MCP fallback."* Do not proceed without it.
+- **Filesystem MCP** pointing at `C:\Users\emilm\projects\erp-base`: the skill is explicitly designed around local code search. If the filesystem tool is not available or the path doesn't resolve, stop and say: *"I need the Filesystem MCP configured with access to `C:\Users\emilm\projects\erp-base`. Please set it up in Claude Desktop's MCP config and retry."* Do not fall back to remote code search: the user has asked for local-only.
 
 ## Workflow
 
 Follow these five phases in order. Do not skip phase 4 (approval).
 
-### Phase 1 — Fetch emails
+### Phase 1: Fetch emails
 
 Call Gmail `search_threads` with:
 
@@ -47,13 +47,13 @@ For each returned thread, call `get_thread` with `messageFormat: FULL_CONTENT` t
 - Full body text of the first message (this is the customer's actual complaint)
 - Any reply messages (if the team has already responded, mention that but still propose a ticket unless the reply clearly resolves it)
 
-**Do not extract, store, or display the customer's email address anywhere.** Tickets are fully anonymized — the sender address must never appear in chat output, issue bodies, or issue comments. Use the Gmail thread ID alone as the correlation identifier.
+**Do not extract, store, or display the customer's email address anywhere.** Tickets are fully anonymized: the sender address must never appear in chat output, issue bodies, or issue comments. Use the Gmail thread ID alone as the correlation identifier.
 
-### Phase 2 — Codebase analysis (local only)
+### Phase 2: Codebase analysis (local only)
 
 For each email, analyze the complaint and search the local codebase at `C:\Users\emilm\projects\erp-base`.
 
-**Step 2a — Extract search terms from the email.** From the customer's message, pull:
+**Step 2a: Extract search terms from the email.** From the customer's message, pull:
 
 - Domain nouns (e.g., "SIE", "import", "bank", "fiscal year", "bokslut", "moms", "verifikat")
 - Quoted error strings or UI labels
@@ -61,23 +61,23 @@ For each email, analyze the complaint and search the local codebase at `C:\Users
 
 The emails are often in Swedish. Translate/expand Swedish terms to likely code identifiers (examples: `importera` → `import`, `räkenskapsår` → `fiscalYear`/`fiscal_year`, `bank` → `bank`, `SIE-fil` → `sie`/`SIE`, `verifikat` → `verification`/`voucher`, `moms` → `vat`/`tax`).
 
-**Step 2b — Search.** Use the filesystem tool to run targeted searches. Prefer grep-style or directory reads over reading whole files. For each search term:
+**Step 2b: Search.** Use the filesystem tool to run targeted searches. Prefer grep-style or directory reads over reading whole files. For each search term:
 
 - Search filenames and paths first (fast, high signal)
 - Then search file contents, case-insensitive
-- Focus on `.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rs`, `.java`, `.kt` — whatever extensions actually exist in the repo (check with a directory listing first if unsure)
+- Focus on `.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rs`, `.java`, `.kt`, whatever extensions actually exist in the repo (check with a directory listing first if unsure)
 - Skip `node_modules`, `dist`, `build`, `.git`, `.next`, `target`
 
-Collect up to ~5 most relevant file paths per email, with a line number or function name if you can identify one. Don't dump search results wholesale — synthesize.
+Collect up to ~5 most relevant file paths per email, with a line number or function name if you can identify one. Don't dump search results wholesale, synthesize.
 
-**Step 2c — Severity heuristic.**
+**Step 2c: Severity heuristic.**
 
 - **high**: core function broken (import fails completely, data loss risk, cannot log in, money/accounting math wrong, multiple users reporting same issue in this batch)
 - **medium**: feature partially broken, workaround exists, affects one customer, UX friction in a common flow
 - **low**: cosmetic, feature request, documentation gap, edge case
 - **feature**: customer is asking for something that doesn't exist yet (use label `feature`, priority is less relevant)
 
-### Phase 3 — Draft tickets
+### Phase 3: Draft tickets
 
 For each email, produce one draft issue. Output format per ticket (inline in chat):
 
@@ -88,17 +88,17 @@ Labels: <from: bug, feature, report, improvement, error + priority label>
 Priority: <high | medium | low>
 
 Description:
-<2–4 sentence summary of the customer's problem in your own words. State the observed behavior and expected behavior if you can infer it.>
+<2-4 sentence summary of the customer's problem in your own words. State the observed behavior and expected behavior if you can infer it.>
 
 Relevant code:
-- path/to/file.ts:line — short note on why this is relevant
-- path/to/other.ts — short note
-(If nothing found locally, say "No direct match in codebase — investigation needed" and suggest where to start looking.)
+- path/to/file.ts:line: short note on why this is relevant
+- path/to/other.ts: short note
+(If nothing found locally, say "No direct match in codebase: investigation needed" and suggest where to start looking.)
 
 Next steps:
 - Concrete first thing a developer should do
 - Second concrete step
-- (2–4 steps total, specific not vague)
+- (2-4 steps total, specific not vague)
 
 Customer email (anonymized):
 <The full body of the customer's first message, with all personal names AND email addresses replaced by `x`. See the anonymization rules below.>
@@ -106,24 +106,24 @@ Customer email (anonymized):
 Gmail thread ID: <threadId>
 ```
 
-**Anonymization rules — applied to the email body before it goes into the ticket**:
+**Anonymization rules, applied to the email body before it goes into the ticket**:
 
-The goal: strip anything that identifies the **specific customer or their employer**. Keep everything else — competitor tools, banks, authorities, domain terms — because that's operational context the developer needs.
+The goal: strip anything that identifies the **specific customer or their employer**. Keep everything else (competitor tools, banks, authorities, domain terms) because that's operational context the developer needs.
 
 - **Replace personal first and last names with `x`**. Example: *"Hey this is amazing. My name is Emil and I do bla bla"* → *"Hey this is amazing. My name is x and I do bla bla"*. Handles greetings (*"Hej Anna,"* → *"Hej x,"*) and signatures (*"/Lars Andersson"* → *"/x"*).
-- **Replace the customer's employer / own company name with `x`**, wherever it appears — body text, signatures, "jag jobbar på …", "vi på …", org numbers attributed to the sender, `@company.com` email domains. Also redact names of their direct clients or other companies they identify themselves through. Example: *"Jag jobbar på Capnos och behöver ta bort Capnos"* → *"Jag jobbar på x och behöver ta bort x"*.
-- **Do NOT redact** (these are not identifying — they're context):
+- **Replace the customer's employer / own company name with `x`**, wherever it appears: body text, signatures, "jag jobbar på …", "vi på …", org numbers attributed to the sender, `@company.com` email domains. Also redact names of their direct clients or other companies they identify themselves through. Example: *"Jag jobbar på Capnos och behöver ta bort Capnos"* → *"Jag jobbar på x och behöver ta bort x"*.
+- **Do NOT redact** (these are not identifying, they're context):
   - **Accounted itself**
   - **Swedish authorities / standard bodies**: Skatteverket, Bolagsverket, Försäkringskassan, Bankgirot, BFN
   - **Accounting / ERP providers and competitors**: Fortnox, Visma, Bokio, SpeedLedger, BL/Björn Lundén, Briox, etc.
-  - **Banks by name**: Swedbank, SEB, Handelsbanken, Nordea, etc. (unless clearly the customer's *own* company — rare)
+  - **Banks by name**: Swedbank, SEB, Handelsbanken, Nordea, etc. (unless clearly the customer's *own* company, rare)
   - **File formats / protocols / standards**: SIE, K2, K3, BAS, PSD2, Peppol, BFNAR
   - **Generic domain terms**: moms, verifikat, räkenskapsår, etc.
 - **Replace every email address with `x@x`**, including the sender's address, any `Från: <email>` or `From: <email>` header line inside the body, CC/BCC lines, and addresses mentioned in the body text. Do this before any other processing of the body.
 - **Replace phone numbers with `x`** (Swedish and international formats).
 - **Replace any internal identifier that ties the ticket to a specific account**: user UUIDs (e.g. `User ID: d36ff376-...`), session IDs, customer IDs. Replace the value with `x` but keep the label so the field structure is still readable.
-- **Never include Gmail URLs** (`https://mail.google.com/mail/u/.../#inbox/<id>`) anywhere in the issue body. The Gmail thread ID alone, as a plain identifier, is the only correlation allowed — it shows up once at the bottom as `**Gmail thread ID:** \`<id>\``. No `Original support thread: <URL>` line.
-- **Never output the customer's email address anywhere** — not in the chat preview, not in the GitHub issue body, not in issue comments, not in the summary.
+- **Never include Gmail URLs** (`https://mail.google.com/mail/u/.../#inbox/<id>`) anywhere in the issue body. The Gmail thread ID alone, as a plain identifier, is the only correlation allowed: it shows up once at the bottom as `**Gmail thread ID:** \`<id>\``. No `Original support thread: <URL>` line.
+- **Never output the customer's email address anywhere**: not in the chat preview, not in the GitHub issue body, not in issue comments, not in the summary.
 - **Keep** product names we build around, domain terms, error messages, account numbers, SIE references, dates, and amounts.
 - If unsure whether a capitalized word identifies the *customer or their employer* specifically, redact it. If it's clearly a third-party tool, bank, or authority, keep it. False positives on names/employers are harmless; leaked identifiers aren't.
 
@@ -144,15 +144,15 @@ If a duplicate is found, replace that ticket block with:
 
 ```
 ━━━ Ticket N of M ━━━ [DUPLICATE]
-Matches existing issue: #<number> — <existing title>
+Matches existing issue: #<number>, <existing title>
 URL: <issue url>
 Gmail thread ID: <threadId>
 Suggested action: add a comment to the existing issue linking this new customer report.
 ```
 
-Run the `gh issue list` call **once** at the start of phase 3 and reuse its results across all drafts — don't call it per ticket.
+Run the `gh issue list` call **once** at the start of phase 3 and reuse its results across all drafts: don't call it per ticket.
 
-### Phase 4 — Approval (inline, required)
+### Phase 4: Approval (inline, required)
 
 After presenting all drafts, ask:
 
@@ -169,7 +169,7 @@ Wait for the user's response. **Do not create issues until they reply.** If the 
 
 Parse their response per ticket. Apply edits to the draft. If they reject a ticket, drop it silently. If they ask to comment on an existing issue instead of creating new, add that to the action list.
 
-### Phase 5 — Create on GitHub
+### Phase 5: Create on GitHub
 
 For each approved ticket, use the `gh` CLI via `bash_tool`.
 
@@ -181,8 +181,8 @@ cat > /tmp/issue-body-<N>.md <<'EOF'
 <description paragraph>
 
 ## Relevant code
-- path/to/file.ts:line — note
-- path/to/other.ts — note
+- path/to/file.ts:line: note
+- path/to/other.ts: note
 
 ## Next steps
 - Step 1
@@ -205,7 +205,7 @@ gh issue create \
   --label "<label1>" --label "<label2>"
 ```
 
-The command prints the new issue's URL on success — capture it for the summary. Use `--json number,url` + `gh issue create ... | cat` if you need to parse the result programmatically; otherwise the stdout URL is fine.
+The command prints the new issue's URL on success: capture it for the summary. Use `--json number,url` + `gh issue create ... | cat` if you need to parse the result programmatically; otherwise the stdout URL is fine.
 
 **Commenting on an existing issue** (for duplicates where the user chose "comment on existing"):
 
@@ -218,22 +218,22 @@ gh issue comment <issue-number> \
 **Label notes**:
 
 - Available labels in this skill: `bug`, `feature`, `report`, `improvement`, `error`, plus priority (`priority:high`, `priority:medium`, `priority:low`).
-- If `gh issue create` fails with an error mentioning an unknown label (exit code non-zero, stderr contains `"could not add label"` or `"not found"`), retry the command without that `--label` flag and tell the user which labels are missing so they can create them manually — do **not** attempt to create labels automatically.
-- You can check available labels once at the start of phase 5 with: `gh label list --repo erp-mafia/gnubok --limit 100 --json name` — useful if multiple label errors happen in a row.
+- If `gh issue create` fails with an error mentioning an unknown label (exit code non-zero, stderr contains `"could not add label"` or `"not found"`), retry the command without that `--label` flag and tell the user which labels are missing so they can create them manually: do **not** attempt to create labels automatically.
+- You can check available labels once at the start of phase 5 with: `gh label list --repo erp-mafia/gnubok --limit 100 --json name`, useful if multiple label errors happen in a row.
 
-**Project board**: Issues are created in the `erp-mafia/gnubok` repo. The Accounted project board (`erp-mafia/projects/...`) aggregates issues but adding to a project via `gh` requires `gh project item-add` with the project number and GraphQL scopes that may not be in the current auth token. After creating issues, output the project URL once and remind the user they may want to drag the new issues onto the board. Example wording: *"Issues created. If you want them on the Accounted project board, you'll need to add them manually at https://github.com/orgs/erp-mafia/projects — or run `gh project item-add` if you have project scopes on your token."*
+**Project board**: Issues are created in the `erp-mafia/gnubok` repo. The Accounted project board (`erp-mafia/projects/...`) aggregates issues but adding to a project via `gh` requires `gh project item-add` with the project number and GraphQL scopes that may not be in the current auth token. After creating issues, output the project URL once and remind the user they may want to drag the new issues onto the board. Example wording: *"Issues created. If you want them on the Accounted project board, you'll need to add them manually at https://github.com/orgs/erp-mafia/projects, or run `gh project item-add` if you have project scopes on your token."*
 
-### Phase 6 — Summary
+### Phase 6: Summary
 
 End with a compact summary:
 
 ```
 Created 2 issues:
-- #47 Fix SIE import failure for first fiscal year — https://github.com/erp-mafia/gnubok/issues/47
-- #48 Investigate bank import for banks without BankID — https://github.com/erp-mafia/gnubok/issues/48
+- #47 Fix SIE import failure for first fiscal year: https://github.com/erp-mafia/gnubok/issues/47
+- #48 Investigate bank import for banks without BankID: https://github.com/erp-mafia/gnubok/issues/48
 
 Commented on 1 existing:
-- #42 — added new customer report
+- #42: added new customer report
 
 Skipped: 0
 ```
@@ -253,6 +253,6 @@ Skipped: 0
 - Titles are imperative ("Fix X", "Investigate Y", "Add Z"), not declarative ("X is broken").
 - Titles ≤ 80 characters. No emoji. No brackets.
 - Descriptions are ≤ 4 sentences. Describe what the customer sees and what should happen instead.
-- Next steps are concrete — "Check `importSie()` for silent catch blocks on line 142", not "Investigate the import code".
-- Paste the customer's email body verbatim into the `Customer email (anonymized)` section, with personal names replaced by `x`. No Gmail link — the ticket should be self-contained.
+- Next steps are concrete: "Check `importSie()` for silent catch blocks on line 142", not "Investigate the import code".
+- Paste the customer's email body verbatim into the `Customer email (anonymized)` section, with personal names replaced by `x`. No Gmail link: the ticket should be self-contained.
 - If the email is in Swedish, the summary/description/next steps are in English, but the anonymized email body stays in its original language. Keep domain terms that match the code (`SIE`, `verifikat` if the code uses that spelling, etc.).

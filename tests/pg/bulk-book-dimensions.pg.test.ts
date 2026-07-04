@@ -13,7 +13,7 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
  *
  *   - p_new_entry lines may carry a dimensions bag {sie_dim_no: code}. The
  *     RPC stores it on journal_entry_lines.dimensions; cost_center/project
- *     derive from keys '1'/'6' (GENERATED columns since the PR9 cutover —
+ *     derive from keys '1'/'6' (GENERATED columns since the PR9 cutover:
  *     the mirror assertions below now exercise the generation expression).
  *   - Bag normalization mirrors DimensionsBagSchema: non-canonical keys
  *     (leading zeros, non-numeric) and blank values are dropped; values are
@@ -79,7 +79,7 @@ interface LineRow {
 
 /**
  * Run the RPC and read back the created lines INSIDE the same
- * withUserContext transaction — the harness rolls the context back after
+ * withUserContext transaction: the harness rolls the context back after
  * the callback, so any assertion data must be captured in here.
  */
 async function callBulkBook(
@@ -112,7 +112,7 @@ async function callBulkBook(
   })
 }
 
-describe('bulk_book_transactions — line dimensions (PR7)', () => {
+describe('bulk_book_transactions: line dimensions (PR7)', () => {
   it('stores the bag and derives cost_center/project mirrors from keys 1/6', async () => {
     const { userId, companyId } = await seedTenant()
     const tx = await insertTransaction({ userId, companyId, amount: 500 })

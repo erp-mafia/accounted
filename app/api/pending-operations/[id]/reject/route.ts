@@ -17,7 +17,7 @@ const RejectBodySchema = z.object({
  * Reject a pending operation. Optionally accepts a JSON body with
  * `rejection_category` (fixed enum) and `rejection_reason` (free text). Both
  * are stored on the row so agents can fetch them via gnubok_get_recent_rejections
- * and learn from "no". The body is optional — bodyless POSTs from older
+ * and learn from "no". The body is optional: bodyless POSTs from older
  * clients still mark the op rejected with NULL category/reason.
  */
 export async function POST(
@@ -37,7 +37,7 @@ export async function POST(
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // Body is optional — accept empty/missing body without rejecting the request.
+  // Body is optional: accept empty/missing body without rejecting the request.
   // Old clients posted no body; the UI dialog will now post a body, but we
   // keep accepting both shapes to avoid coupling the API to the UI version.
   let rejectionCategory: string | undefined
@@ -56,7 +56,7 @@ export async function POST(
       rejectionCategory = parsed.data.rejection_category
       rejectionReason = parsed.data.rejection_reason?.trim() || undefined
     } catch {
-      // Body present but unparseable — fail closed.
+      // Body present but unparseable: fail closed.
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     }
   }
@@ -74,7 +74,7 @@ export async function POST(
 
   if (op.status !== 'pending') {
     // There is no auto-commit path (removed in 20260505190027), so a non-pending
-    // status here means the op was resolved explicitly — almost always the user
+    // status here means the op was resolved explicitly: almost always the user
     // pressed Godkänn in the /pending (Att göra) UI in parallel, or another
     // client already rejected it. Spell that out so an agent doesn't read the
     // generic 409 as "the system committed it behind my back".
@@ -83,7 +83,7 @@ export async function POST(
         ? 'Operation already rejected.'
         : op.status === 'expired'
           ? 'Operation already expired and can no longer be rejected.'
-          : `Operation already ${op.status} — it was approved explicitly (most likely via the ` +
+          : `Operation already ${op.status}: it was approved explicitly (most likely via the ` +
             'Att göra / pending UI in parallel), not auto-committed. It can no longer be rejected; ' +
             'reverse or correct the resulting verifikat instead.'
     return NextResponse.json(

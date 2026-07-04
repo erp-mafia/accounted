@@ -16,7 +16,7 @@ const TooltipContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
 >(({ className, sideOffset = 4, ...props }, ref) => (
   // Portal the content to document.body so the tooltip is never clipped by an
-  // ancestor with overflow (e.g. a scrollable DialogContent — the send-invoice
+  // ancestor with overflow (e.g. a scrollable DialogContent: the send-invoice
   // and journal-review dialogs use overflow-y-auto, which otherwise crops it).
   <TooltipPrimitive.Portal>
     <TooltipPrimitive.Content

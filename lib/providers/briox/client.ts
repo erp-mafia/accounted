@@ -52,7 +52,7 @@ export class BrioxClient {
     this.rateLimiter = new TokenBucketRateLimiter(BRIOX_RATE_LIMIT, 'ratelimit:briox');
   }
 
-  // The Authorization header carries the RAW access token — no "Bearer "
+  // The Authorization header carries the RAW access token: no "Bearer "
   // prefix. The swagger securityScheme is `apiKey` in header "Authorization"
   // (the Swagger UI pastes the bare token), not an OAuth bearer scheme.
   private authHeaders(accessToken: string): Record<string, string> {
@@ -94,7 +94,7 @@ export class BrioxClient {
 
   /**
    * Fetch a binary resource (e.g. the SIE export, served as an octet-stream)
-   * with the same rate-limit/retry behavior as get(). Returns the raw bytes —
+   * with the same rate-limit/retry behavior as get(). Returns the raw bytes:
    * SIE files must go through detectEncoding()/decodeBuffer() since Briox may
    * emit CP437, Windows-1252 or UTF-8.
    */

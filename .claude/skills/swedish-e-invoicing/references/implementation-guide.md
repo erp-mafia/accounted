@@ -96,7 +96,7 @@ Many AP rejections happen post-send when the receiver's MLR comes back hours lat
 
 ```
 break-even = €30,000 / €0.10 = 300,000 invoices/year
-            ≈ 3,000–5,000 active SME customers × 50–100 invoices/month
+            ≈ 3,000-5,000 active SME customers × 50-100 invoices/month
 ```
 
 **For receive there is no economic case to build initially**, Storecove free receive or own Oxalis-NG on a small VPS dominate.
@@ -107,10 +107,10 @@ break-even = €30,000 / €0.10 = 300,000 invoices/year
 
 | Reseller | Per-doc | Multi-mandate | DX | Sandbox | Best for |
 |---|---|---|---|---|---|
-| **Storecove** | €0.05–€0.30 | Excellent (Peppol + IT SDI + FR PA + BE + DE + PL KSeF + DBNAlliance) | Single REST API, OpenAPI spec | Free 30-day | Embedding in ERP/SaaS |
-| **Pagero (TR)** | EUR 0.20–0.80 + €5–20k/yr | Excellent | Multiple APIs, enterprise-flavoured | Yes | Large enterprise |
-| **InExchange** | SEK 1–5 + 200–400/mo | Nordic | REST | Yes | SE-only SME, Visma ecosystem |
-| **Maventa (Visma)** | SEK 0.50–3 | Nordic+ | REST + SOAP | Yes | Visma ecosystem |
+| **Storecove** | €0.05-€0.30 | Excellent (Peppol + IT SDI + FR PA + BE + DE + PL KSeF + DBNAlliance) | Single REST API, OpenAPI spec | Free 30-day | Embedding in ERP/SaaS |
+| **Pagero (TR)** | EUR 0.20-0.80 + €5-20k/yr | Excellent | Multiple APIs, enterprise-flavoured | Yes | Large enterprise |
+| **InExchange** | SEK 1-5 + 200-400/mo | Nordic | REST | Yes | SE-only SME, Visma ecosystem |
+| **Maventa (Visma)** | SEK 0.50-3 | Nordic+ | REST + SOAP | Yes | Visma ecosystem |
 | **Galaxy Gateway, Babelway, SBSCon, Comarch, Edicom, Sovos, Avalara, Tradeshift, Basware, Seeburger, Esker** | Various | Excellent | Enterprise-tier | Varies | Multi-mandate enterprise |
 
 ## Recommended stack for a new Swedish accounting platform
@@ -128,7 +128,7 @@ This hybrid is the dominant strategy:
 
 - **Oxalis-NG receive on day one** is open-source-friendly, scales linearly without per-doc fees, and gives genuine "native Peppol receive" differentiation that incumbents (white-labelling Crediflow/InExchange) cannot match without rebuilding their stack.
 - **Storecove send** handles Belgium 2026, France 2026 PA flow, Italy SDI, Germany XRechnung, Poland KSeF in one API, you don't want to be re-implementing FatturaPA.
-- **Migrate send to own AP only when volume justifies it**, likely 2028–2029 at the earliest for an early-stage product.
+- **Migrate send to own AP only when volume justifies it**, likely 2028-2029 at the earliest for an early-stage product.
 
 ## Critical UX features
 
@@ -145,7 +145,7 @@ This hybrid is the dominant strategy:
 - Register a Peppol participant ID for the company itself for dogfooding.
 - Set up CI with Helger phive-rules.
 
-### Phase 1, Months 1–3
+### Phase 1, Months 1-3
 
 - UBL generator with full Peppol BIS Billing 3 + Sweden CIUS rules (SE-R-* including F-skatt).
 - Storecove sandbox for outbound test.
@@ -153,7 +153,7 @@ This hybrid is the dominant strategy:
 - Schematron in CI on every UBL output.
 - BT-10 regex map for top 100 Swedish myndigheter.
 
-### Phase 2, Months 4–6
+### Phase 2, Months 4-6
 
 - Become Candidate Service Provider (AP-only) with OpenPeppol (~€4,400 one-off + €3,350/year ongoing).
 - Pass Conformance Test Suite.
@@ -161,7 +161,7 @@ This hybrid is the dominant strategy:
 - Migrate to native Oxalis-NG receive.
 - Marketing message: "your customers email PDFs, your suppliers send Peppol e-invoices, both arrive in your inbox."
 
-### Phase 3, Months 7–12
+### Phase 3, Months 7-12
 
 - Multi-mandate readiness for BE/DE/FR/PL/RO destinations through Storecove.
 - Per-customer compliance dashboard.
@@ -173,14 +173,14 @@ This hybrid is the dominant strategy:
 - Pre-build Skatteverket DRR ingestion behind feature flag for July 2030 activation.
 - Pivot on SOU 2027 (due 30 November 2027), adjust architecture if Sweden chooses non-Peppol model.
 
-**Total go-live cost** for a credible, differentiated, open-source native-Peppol Swedish bookkeeping product: **approximately €10–15k plus 3 months engineering**.
+**Total go-live cost** for a credible, differentiated, open-source native-Peppol Swedish bookkeeping product: **approximately €10-15k plus 3 months engineering**.
 
 ## Strategic positioning vs incumbents
 
 The competitive landscape has a hole.
 
 - **Visma eEkonomi, Fortnox, Bokio, SpeedLedger, Björn Lundén** all outsource their Peppol layer to Crediflow or InExchange/Maventa. None differentiate on Peppol-native architecture.
-- **The 3.00–3.50 SEK per outbound markup** these vendors charge has a baked-in reseller cost, building native eliminates that markup AND removes dependency risk now visible after the Pagero→Thomson Reuters acquisition.
+- **The 3.00-3.50 SEK per outbound markup** these vendors charge has a baked-in reseller cost, building native eliminates that markup AND removes dependency risk now visible after the Pagero→Thomson Reuters acquisition.
 - **Native Peppol receive as a free out-of-the-box feature**, every customer gets a Peppol address by default, every supplier can send them invoices for free, is a brutal customer acquisition anchor in a market where the SMB end is underserved.
 - **The open-source angle is force multiplier**: publishing the UBL generator on GitHub under BSD/MIT earns trust with bookkeeping/Linux-friendly customers without surrendering the moat, which lives in the bookkeeping engine and UX, not the XML serialiser.
 
@@ -188,9 +188,9 @@ Three forces converge to make this strategically valuable:
 
 1. **B2G compliance has been mandatory since April 2019**, any customer with public-sector revenue is a non-starter without native Peppol.
 2. **Large-enterprise customers** (Volvo, Ericsson, IKEA-supply, ICA, plus all Belgian/German/French subsidiaries hitting Swedish suppliers from 2026) increasingly require Peppol from suppliers.
-3. **ViDA cross-border B2B mandate of 1 July 2030 is non-negotiable**, plus the plausible domestic mandate window of 2029–2031.
+3. **ViDA cross-border B2B mandate of 1 July 2030 is non-negotiable**, plus the plausible domestic mandate window of 2029-2031.
 
-The window to build with this advantage is the next **18–24 months** before incumbents finish their own native-Peppol projects.
+The window to build with this advantage is the next **18-24 months** before incumbents finish their own native-Peppol projects.
 
 ## Authoritative source list
 

@@ -272,7 +272,7 @@ describe('findMatchingTemplates', () => {
 })
 
 // ============================================================
-// stripBankNoise — protects the matcher from bank-prefix noise
+// stripBankNoise: protects the matcher from bank-prefix noise
 // ============================================================
 
 describe('stripBankNoise', () => {
@@ -305,7 +305,7 @@ describe('stripBankNoise', () => {
 })
 
 // ============================================================
-// Milersättning / traktamente routing — regression guards for
+// Milersättning / traktamente routing: regression guards for
 // the "Överföring via internet" → 6230 Internet miscategorization
 // ============================================================
 
@@ -512,7 +512,7 @@ describe('buildMappingResultFromTemplate', () => {
     const tx = makeTransaction({ amount: -1000 })
     const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
 
-    // Only the fiktiv-moms pair — basbelopp would double-count.
+    // Only the fiktiv-moms pair: basbelopp would double-count.
     expect(result.vat_lines).toHaveLength(2)
     expect(result.vat_lines[0].account_number).toBe('2645')
     expect(result.vat_lines[1].account_number).toBe('2614')
@@ -598,7 +598,7 @@ describe('buildMappingResultFromTemplate', () => {
 
   // Foreign-currency transactions: the mall must always emit SEK amounts
   // (issue #442). Previously buildMappingResultFromTemplate used
-  // Math.abs(transaction.amount) — which is in the source currency — to
+  // Math.abs(transaction.amount) (which is in the source currency) to
   // compute VAT lines, producing a verifikation in mixed currencies.
   it('emits SEK amounts when transaction currency is USD (issue #442)', () => {
     const template = getTemplate('it_saas_subscription') // 25% input VAT
@@ -804,7 +804,7 @@ describe('new and split templates', () => {
 })
 
 // ============================================================
-// applySettlementAccount — bank-leg routing for non-1930 accounts
+// applySettlementAccount: bank-leg routing for non-1930 accounts
 // ============================================================
 
 describe('applySettlementAccount (bank-leg routing)', () => {
@@ -818,7 +818,7 @@ describe('applySettlementAccount (bank-leg routing)', () => {
     expect(base.credit_account).toBe('8310')
 
     // Interest that landed on a savings account mapped to 1931 must debit 1931,
-    // not 1930 — otherwise the real bank transaction never reconciles.
+    // not 1930: otherwise the real bank transaction never reconciles.
     const routed = applySettlementAccount(base, '1931')
     expect(routed.debit_account).toBe('1931')
     expect(routed.credit_account).toBe('8310')

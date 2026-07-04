@@ -25,12 +25,12 @@ ensureInitialized()
  * Because getOpeningBalances reads the linked entry directly and the
  * trial-balance / general-ledger movement queries include both `posted` and
  * `reversed` lines (excluding only the linked OB entry), the stornoed old IB
- * and its storno mirror cancel out in period movement — so the Balansrapport
+ * and its storno mirror cancel out in period movement, so the Balansrapport
  * IB column shows the corrected figures and UB stays correct.
  *
  * Gated to the safe case only: the period must be open, unlocked, already have
  * opening balances, and have no year-end close on top. Locked/closed periods or
- * periods with a bokslut must be unwound first (assisted) — we refuse here.
+ * periods with a bokslut must be unwound first (assisted): we refuse here.
  */
 export const POST = withRouteContext(
   'opening_balance.correct',
@@ -51,7 +51,7 @@ export const POST = withRouteContext(
       //    Write-role (non-viewer) + company membership are already enforced by
       //    withRouteContext({ requireWrite: true }) before this handler runs
       //    (requireWritePermission + getActiveCompanyId), and this fetch is scoped
-      //    by that verified companyId — no redundant authz here (ASVS V8.2.1).
+      //    by that verified companyId: no redundant authz here (ASVS V8.2.1).
       //    The embedded opening_balance_entry pulls the original IB verifikat's
       //    voucher label so the corrected entry can reference it (BFL 5 kap 5§).
       const { data: period, error: periodError } = await supabase
@@ -79,7 +79,7 @@ export const POST = withRouteContext(
         return errorResponseFromCode('OB_CORRECT_NO_EXISTING', opLog, { requestId })
       }
 
-      // Refuse if a year-end close was built on top — correcting the IB without
+      // Refuse if a year-end close was built on top: correcting the IB without
       // unwinding the bokslut would leave the period (and the next period's
       // carried-forward IB) internally inconsistent.
       const { count: yearEndCount } = await supabase
@@ -122,7 +122,7 @@ export const POST = withRouteContext(
         })
       }
 
-      // BFL 5 kap 5§ — reference the original verifikat so the correction is
+      // BFL 5 kap 5§: reference the original verifikat so the correction is
       // traceable to the entry it rättar. The embed above gave us the old IB's
       // voucher label (e.g. "A123"). CreateJournalEntryInput exposes no dedicated
       // correction-linkage field (corrects_entry_id / correction_of / metadata),
@@ -156,7 +156,7 @@ export const POST = withRouteContext(
         lines: buildOpeningBalanceEntryLines(validLines),
       })
 
-      // ASVS V16 — durable audit sink for a failed correction. The core event bus
+      // ASVS V16: durable audit sink for a failed correction. The core event bus
       // has no opening_balance.* correction event type and lib/events/types.ts is
       // outside the scope of this change, so the failure is recorded via the
       // structured logger: it lands in the JSON log sink (Vercel/Sentry), tagged
@@ -175,7 +175,7 @@ export const POST = withRouteContext(
         })
       }
 
-      // FIX (ASVS V2.3 — atomicity via compensation): steps B (storno old) and
+      // FIX (ASVS V2.3: atomicity via compensation): steps B (storno old) and
       // C (relink) are NOT atomic with A (create new). A already produced a second
       // posted opening_balance entry for the period; if B or C fails, that entry is
       // orphaned and the Balansrapport would show two OB entries. Wrap B+C so that
@@ -209,7 +209,7 @@ export const POST = withRouteContext(
         auditCorrectionFailure({ phase: 'sequence_failed', reason })
 
         // Compensating rollback. This may itself throw (e.g. the period was locked
-        // between A and here) — catch + audit and never let it propagate past the
+        // between A and here): catch + audit and never let it propagate past the
         // handler, so the caller always gets the OB_CORRECT_FAILED envelope.
         try {
           await reverseEntry(supabase, companyId!, user.id, newEntry.id)

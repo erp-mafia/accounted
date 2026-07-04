@@ -26,7 +26,7 @@ import { FileText, ImageIcon, Loader2, Search, Inbox, Eye } from 'lucide-react'
 // Two modes:
 // - Link mode (JournalEntryAttachments, "Välj från inkorgen"): `journalEntryId`
 //   is set and picking a document immediately links it to the journal entry AND
-//   stamps the inbox item so it drops out of the active inbox — see
+//   stamps the inbox item so it drops out of the active inbox: see
 //   app/api/documents/[id]/link/route.ts.
 // - Select mode (TransactionBookingDialog, "Välj befintligt underlag"): the
 //   journal entry does not exist yet, so `onSelect` is provided instead and the
@@ -121,7 +121,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   }, [items, search])
 
   async function handlePick(item: AvailableInboxDoc) {
-    // Select mode: the journal entry doesn't exist yet — hand the pick to the
+    // Select mode: the journal entry doesn't exist yet: hand the pick to the
     // parent and let it link after creation. Clear the preview first: the
     // preview dialog's open state is `previewItem !== null`, so leaving it set
     // would strand a floating preview after the picker closes (the component

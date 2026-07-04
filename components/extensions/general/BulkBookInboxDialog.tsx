@@ -36,7 +36,7 @@ interface Props {
   onSuccess: () => void | Promise<void>
 }
 
-// Swedish category labels — mirrors lib/bookkeeping/category-mapping.ts
+// Swedish category labels: mirrors lib/bookkeeping/category-mapping.ts
 // (categoryLabels), ordered expenses-first since underlag are overwhelmingly
 // costs. Values match TransactionCategorySchema in lib/api/schemas.ts.
 const CATEGORY_OPTIONS: { value: string; label: string }[] = [
@@ -65,7 +65,7 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 // so this list can never drift from what the backend accepts: the bulk-book
 // route feeds the value straight into buildMappingResultFromCategory, which
 // only recognises these six. The 12% and 6% reduced rates are ALREADY covered
-// here by `reduced_12` / `reduced_6` — there is deliberately no `standard_12` /
+// here by `reduced_12` / `reduced_6`: there is deliberately no `standard_12` /
 // `standard_6` (no such treatment exists; the backend would reject it). Keep
 // this list in sync with the union, not with rate labels.
 const VAT_OPTIONS: { value: VatTreatment; label: string }[] = [
@@ -99,7 +99,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
   // Reset to the safe default (25% svensk moms) each time the dialog opens.
   // Currency is deliberately NOT used to preselect omvänd skattskyldighet: a
-  // foreign currency does not imply a foreign seller — a Swedish supplier can
+  // foreign currency does not imply a foreign seller: a Swedish supplier can
   // invoice in EUR and still debit 25% moms. Reverse charge is a property of
   // the seller (utländsk, utan svenskt momsnr), never of the currency, so
   // defaulting to it from currency alone would silently mis-book domestic VAT.
@@ -195,7 +195,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
                   <>
                     Välj <strong>Omvänd skattskyldighet</strong> för köp från en utländsk säljare utan
                     svenskt momsnummer (t.ex. EU-tjänster som moln/mjukvara). Svenska fakturor med moms:
-                    välj den sats kvittot visar — valutan avgör inte.
+                    välj den sats kvittot visar: valutan avgör inte.
                   </>
                 }
               />
@@ -217,7 +217,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
               <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
                 <strong className="font-medium text-foreground">Kontrollera säljaren.</strong>{' '}
                 Omvänd skattskyldighet gäller bara köp från en <strong className="font-medium text-foreground">utländsk
-                säljare utan svenskt momsregistreringsnummer</strong> — t.ex. EU-tjänster, EU-varor,
+                säljare utan svenskt momsregistreringsnummer</strong>: t.ex. EU-tjänster, EU-varor,
                 byggtjänster eller viss elektronik. Valutan avgör inte: en svensk säljare kan fakturera i
                 EUR och ändå debitera 25% moms. Är säljaren svensk och momsen står på kvittot, välj i
                 stället rätt momssats ovan.

@@ -29,7 +29,7 @@ Use the table below to decide which reference file(s) to read. Multiple files of
 
 These are short enough to inline; the references expand each.
 
-**Legal status (April 2026):** B2G mandatory since **1 April 2019** (Lag 2018:1277). B2B **voluntary**. B2C uses bank rails / Kivra, not Peppol. ViDA cross-border B2B mandate hard date: **1 July 2030**. Domestic mandate inquiry: **Dir. 2026:9 issued 5 Feb 2026, final report 30 Nov 2027**. Realistic Swedish domestic mandate window: **2029–2031** on a Belgium-style decentralised Peppol model.
+**Legal status (April 2026):** B2G mandatory since **1 April 2019** (Lag 2018:1277). B2B **voluntary**. B2C uses bank rails / Kivra, not Peppol. ViDA cross-border B2B mandate hard date: **1 July 2030**. Domestic mandate inquiry: **Dir. 2026:9 issued 5 Feb 2026, final report 30 Nov 2027**. Realistic Swedish domestic mandate window: **2029-2031** on a Belgium-style decentralised Peppol model.
 
 **Wire format:** Peppol BIS Billing 3.0, UBL 2.1 syntax, EN 16931 semantic. CustomizationID = `urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0`. ProfileID = `urn:fdc:peppol.eu:2017:poacc:billing:01:1.0`. Current release: **Billing 3.0.20 (November 2025)**. BIS 4.0 / PINT convergence in late 2025 / early 2026.
 
@@ -39,7 +39,7 @@ These are short enough to inline; the references expand each.
 
 **Identifier formats:** Swedish orgnr → `schemeID="0007"`, 10 digits no dash. Swedish VAT ID → `SE` + 10 digits + `01` (e.g. `SE556732100001`), prefix mandatory (BR-CO-9). For sole proprietors **DIGG recommends GLN (`0088`) over personnummer (`0007`) for GDPR**.
 
-**Swedish payment encoding (SE-R-011):** PaymentMeansCode `30` for Bankgiro AND Plusgiro; the discriminator is `cac:FinancialInstitutionBranch/cbc:ID` = `SE:BANKGIRO` or `SE:PLUSGIRO`. Legacy codes 56 / 50 are forbidden. Bankgiro 7–8 digits (SE-R-008/009), Plusgiro 2–8 chars (SE-R-010). OCR reference goes in `cbc:PaymentID` (BT-83), Luhn-validated.
+**Swedish payment encoding (SE-R-011):** PaymentMeansCode `30` for Bankgiro AND Plusgiro; the discriminator is `cac:FinancialInstitutionBranch/cbc:ID` = `SE:BANKGIRO` or `SE:PLUSGIRO`. Legacy codes 56 / 50 are forbidden. Bankgiro 7-8 digits (SE-R-008/009), Plusgiro 2-8 chars (SE-R-010). OCR reference goes in `cbc:PaymentID` (BT-83), Luhn-validated.
 
 **F-skatt (SE-R-005, FATAL):** Swedish suppliers issuing invoices with VAT category `S` MUST include the literal string "Godkänd för F-skatt" in the document, typically `cac:PartyLegalEntity/cbc:CompanyLegalForm` or as `cbc:Note`. Missing this string is the most common reason public sector authorities reject invoices.
 
@@ -53,4 +53,4 @@ When answering questions in this domain:
 - For UBL fragments, output real, valid XML with full namespaces and example values, not pseudocode.
 - For build-vs-buy or vendor selection, give numbers, €/SEK, monthly minimums, per-document costs, certification fee tiers, break-even volume, not adjectives.
 - When a regulatory date is involved, distinguish (a) hard EU deadline, (b) currently-known Swedish proposal, (c) speculation. The user is technically sophisticated and is making product decisions; mistaking speculation for binding fact is the worst possible failure mode.
-- Be willing to say "the spec is currently in flux", Peppol BIS 4.0 / PINT convergence, the DIGG → Upphandlingsmyndigheten / PTS reorganisation, the Dir. 2026:9 outcome, and the post-ViDA national mandate landscape are all moving targets in 2026–2027.
+- Be willing to say "the spec is currently in flux", Peppol BIS 4.0 / PINT convergence, the DIGG → Upphandlingsmyndigheten / PTS reorganisation, the Dir. 2026:9 outcome, and the post-ViDA national mandate landscape are all moving targets in 2026-2027.

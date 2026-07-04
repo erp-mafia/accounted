@@ -57,7 +57,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 
 import { POST } from '../route'
 
-describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
+describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
   const customer = makeCustomer({ id: 'cust-1', email: 'kund@test.se' })
   const company = makeCompanySettings({
@@ -240,7 +240,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
     expect(status).toBe(200)
     // The in-memory invoice still reads 'draft' after the DB status flip
     // (it's never re-fetched). We must override it before render or
-    // pdf-template.tsx prints the "UTKAST – inte en giltig faktura" banner
+    // pdf-template.tsx prints the "UTKAST: inte en giltig faktura" banner
     // on the archived underlag.
     expect(vi.mocked(InvoicePDF)).toHaveBeenCalledTimes(1)
     const renderArgs = vi.mocked(InvoicePDF).mock.calls[0][0]

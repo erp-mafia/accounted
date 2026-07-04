@@ -69,7 +69,7 @@ import {
 } from '../schemas'
 
 // ============================================================
-// Helpers — minimal valid objects for composition
+// Helpers: minimal valid objects for composition
 // ============================================================
 
 const validUuid = '550e8400-e29b-41d4-a716-446655440000'
@@ -401,7 +401,7 @@ describe('UpdateInvoiceSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('drops save_as_draft — editing a draft never re-creates it', () => {
+  it('drops save_as_draft: editing a draft never re-creates it', () => {
     const result = UpdateInvoiceSchema.safeParse(validInvoice({ save_as_draft: true }))
     expect(result.success).toBe(true)
     if (result.success) {
@@ -1589,7 +1589,7 @@ describe('CreateDeadlineSchema', () => {
       deadline_type: 'tax',
       due_time: '25:00',
     })
-    // Note: regex accepts 25:00 — business logic validates actual time values
+    // Note: regex accepts 25:00: business logic validates actual time values
     // This test documents the current behavior
     const parsed = CreateDeadlineSchema.safeParse({
       title: 'Test',

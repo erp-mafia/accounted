@@ -62,7 +62,7 @@ async function insertAbsenceDay(params: {
   return id
 }
 
-describe('salary_worked_days.pg — RLS tenant isolation', () => {
+describe('salary_worked_days.pg: RLS tenant isolation', () => {
   it('a user only sees worked days for their own company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
@@ -108,12 +108,12 @@ describe('salary_worked_days.pg — RLS tenant isolation', () => {
   })
 })
 
-describe('salary_worked_days.pg — 24h cap across worked + absence', () => {
+describe('salary_worked_days.pg: 24h cap across worked + absence', () => {
   it('allows half-day mixing (4h worked + 4h sick = 8h total)', async () => {
     const a = await seedCompany()
     const empA = await insertEmployee({ userId: a.userId, companyId: a.companyId })
     await insertWorkedDay({ companyId: a.companyId, employeeId: empA, date: '2026-04-20', hours: 4 })
-    // Should not throw — combined 4h + 4h = 8h ≤ 24h.
+    // Should not throw: combined 4h + 4h = 8h ≤ 24h.
     await expect(
       insertAbsenceDay({ companyId: a.companyId, employeeId: empA, date: '2026-04-20', hours: 4 }),
     ).resolves.not.toThrow()

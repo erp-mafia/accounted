@@ -50,7 +50,7 @@ describe('Typed bookkeeping errors', () => {
 
   it('AccountsNotInChartError sorts numerically, not by UTF-16 code units', () => {
     // Default string sort would order ['245', '1930'] as ['1930', '245']
-    // because '1' < '2'. That's wrong for accounts — a user looking at the
+    // because '1' < '2'. That's wrong for accounts: a user looking at the
     // toast and walking down their kontoplan expects numeric order.
     const err = new AccountsNotInChartError(['1930', '245', '5410'])
     expect(err.accountNumbers).toEqual(['245', '1930', '5410'])
@@ -168,7 +168,7 @@ describe('Typed bookkeeping errors', () => {
       'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
     )
     expect(err.message).toContain(
-      '"KS-GAMMAL" är arkiverat — återaktivera värdet för att använda det.'
+      '"KS-GAMMAL" är arkiverat: återaktivera värdet för att använda det.'
     )
     expect(err.message).toContain('Okänd dimension 9. Skapa dimensionen i registret först.')
   })

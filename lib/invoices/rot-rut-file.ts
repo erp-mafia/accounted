@@ -3,11 +3,11 @@ import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import type { DeductionType } from './rot-rut-rules'
 
 /**
- * Begäran om utbetalning — rot & rut (Skatteverkets husavdragstjänst).
+ * Begäran om utbetalning: rot & rut (Skatteverkets husavdragstjänst).
  *
  * Generates the HUS XML file (schema V6) that is uploaded manually on
- * Skatteverkets e-tjänst "Rot och rut – företag" → "Begär utbetalning via
- * fil". There is NO submission API — the file replaces per-ärende manual
+ * Skatteverkets e-tjänst "Rot och rut: företag" → "Begär utbetalning via
+ * fil". There is NO submission API: the file replaces per-ärende manual
  * entry, the upload + signature (e-legitimation) stays with the user.
  *
  * Schema (vendored in dev_docs/skatteverket/husavdrag/):
@@ -19,12 +19,12 @@ import type { DeductionType } from './rot-rut-rules'
  *     HushallBegaran). One file per deduction type.
  *   - All amounts are whole kronor (xs:long). PrisForArbete min 2.
  *   - Kopare is a 12-digit personnummer.
- *   - NamnPaBegaran is 1–16 characters.
+ *   - NamnPaBegaran is 1-16 characters.
  *   - Element order inside an ärende is fixed: base fields, then (rot only)
  *     property fields, then UtfortArbete.
  *   - Ovrigkostnad is mandatory as soon as UtfortArbete reports hours or
- *     material. Accounted doesn't itemize övrig kostnad (travel/machines) —
- *     materials live on non-deduction rows — so 0 is emitted.
+ *     material. Accounted doesn't itemize övrig kostnad (travel/machines):
+ *     materials live on non-deduction rows: so 0 is emitted.
  *
  * Everything in this module is pure and deterministic: the caller passes the
  * invoices and `today`; blockers are named per invoice, never guessed.
@@ -37,7 +37,7 @@ const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/ht/komponent/b
 /**
  * work_type code → XSD element. Array order = the XSD sequence order, which
  * is also the emission order inside UtfortArbete. `schablon` services are
- * reported as <Utfort>true</Utfort> — no hours, no material.
+ * reported as <Utfort>true</Utfort>: no hours, no material.
  */
 const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
   code: string
@@ -92,7 +92,7 @@ export interface RotRutBlocker {
   invoice_id: string
   invoice_number: string | null
   code: RotRutBlockerCode
-  /** Swedish — shown as-is in UI and MCP output (statutory surface). */
+  /** Swedish: shown as-is in UI and MCP output (statutory surface). */
   message: string
 }
 
@@ -141,7 +141,7 @@ function isDeductionLine(item: InvoiceItem, type: DeductionType): boolean {
  */
 export function normalizeBrfOrgNr(raw: string): string | null {
   const digits = raw.replace(/\D/g, '')
-  // 12-digit orgnr must carry sekelsiffra 16 (juridisk person) — anything
+  // 12-digit orgnr must carry sekelsiffra 16 (juridisk person): anything
   // else is not a valid Swedish orgnr and fails SKV's schema at upload.
   if (digits.length === 12) return digits.startsWith('16') ? digits : null
   if (digits.length === 10) return `16${digits}`
@@ -173,11 +173,11 @@ export function evaluateInvoiceForFile(
   }
   // One invoice must map to exactly one ärende in exactly one file. Mixed
   // rot+rut invoices would need to live in two active begäran at once, which
-  // the double-request guard (rightly) refuses — ask the user to split.
+  // the double-request guard (rightly) refuses: ask the user to split.
   if (otherLines.length > 0) {
     return block(
       'MIXED_DEDUCTION_TYPES',
-      'Fakturan blandar ROT- och RUT-rader. Skatteverket tillåter inte båda i samma fil — dela upp i separata fakturor.',
+      'Fakturan blandar ROT- och RUT-rader. Skatteverket tillåter inte båda i samma fil: dela upp i separata fakturor.',
     )
   }
 
@@ -196,7 +196,7 @@ export function evaluateInvoiceForFile(
   try {
     kopare = decryptPersonnummer(invoice.deduction_personnummer_encrypted).replace(/\D/g, '')
   } catch {
-    return block('PERSONNUMMER_UNREADABLE', 'Köparens personnummer kunde inte läsas — öppna fakturautkastet och ange det igen.')
+    return block('PERSONNUMMER_UNREADABLE', 'Köparens personnummer kunde inte läsas: öppna fakturautkastet och ange det igen.')
   }
   if (kopare.length !== 12) {
     return block('PERSONNUMMER_UNREADABLE', 'Köparens personnummer är inte 12 siffror.')
@@ -233,7 +233,7 @@ export function evaluateInvoiceForFile(
     if (!hoursByCode.has(def.code)) continue
     const hours = Math.round(hoursByCode.get(def.code) ?? 0)
     if (!def.schablon && (hours < 1 || hours > 999)) {
-      return block('HOURS_OUT_OF_RANGE', `Antal timmar för ${def.element} måste vara 1–999 (är ${hours}).`)
+      return block('HOURS_OUT_OF_RANGE', `Antal timmar för ${def.element} måste vara 1-999 (är ${hours}).`)
     }
     work.push({ element: def.element, schablon: def.schablon === true, hours })
   }
@@ -281,10 +281,10 @@ export function evaluateInvoiceForFile(
   if (prisForArbete < 2) {
     return block('PRICE_BELOW_MINIMUM', 'Arbetskostnaden måste vara minst 2 kr (Skatteverkets filformat).')
   }
-  // A zero-kronor ärende is rejected (or silently ignored) by Skatteverket —
+  // A zero-kronor ärende is rejected (or silently ignored) by Skatteverket:
   // an invoice whose deduction rounds to 0 has nothing to request.
   if (begartBelopp < 1) {
-    return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr — det finns inget belopp att begära.')
+    return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr: det finns inget belopp att begära.')
   }
   // The buyer must have paid at least as much as is being requested
   // (skattereduktionen är max 50 % av arbetskostnaden). Independent rounding
@@ -293,7 +293,7 @@ export function evaluateInvoiceForFile(
   if (begartBelopp > betaltBelopp) {
     return block(
       'DEDUCTION_EXCEEDS_PAYMENT',
-      `Begärt belopp (${begartBelopp} kr) överstiger vad kunden betalat för arbetet (${betaltBelopp} kr) — Skatteverket avslår. Kontrollera avdragsraderna.`,
+      `Begärt belopp (${begartBelopp} kr) överstiger vad kunden betalat för arbetet (${betaltBelopp} kr): Skatteverket avslår. Kontrollera avdragsraderna.`,
     )
   }
 
@@ -339,7 +339,7 @@ export function isPastRequestDeadline(paidDate: string, today: string): boolean 
 
 export function buildRotRutFile(params: {
   type: DeductionType
-  /** NamnPaBegaran — clamped to the XSD's 16-char cap. */
+  /** NamnPaBegaran: clamped to the XSD's 16-char cap. */
   name: string
   invoices: Invoice[]
   /** YYYY-MM-DD, injected for determinism. */
@@ -415,7 +415,7 @@ export function buildRotRutFile(params: {
           lines.push(`\t\t\t\t<ns2:${w.element}>`)
           lines.push(`\t\t\t\t\t<ns2:AntalTimmar>${w.hours}</ns2:AntalTimmar>`)
           // Materials are invoiced on non-deduction rows in Accounted's
-          // fakturamodell — the file reports 0 (XSD requires the element).
+          // fakturamodell: the file reports 0 (XSD requires the element).
           lines.push('\t\t\t\t\t<ns2:Materialkostnad>0</ns2:Materialkostnad>')
           lines.push(`\t\t\t\t</ns2:${w.element}>`)
         }

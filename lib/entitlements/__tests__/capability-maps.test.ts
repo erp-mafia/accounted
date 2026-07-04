@@ -9,14 +9,14 @@ import {
 /**
  * These maps are the contract that gates the paid MCP/agent path (dispatch +
  * commit). Locking the exact entries is the guard against a future paid
- * external-service tool silently bypassing the paywall — mirrors the
+ * external-service tool silently bypassing the paywall: mirrors the
  * TOOL_SCOPE_MAP assertions in the mcp-server tests.
  */
 /**
  * MCP tools that invoke a paid capability directly (no stage→commit round-trip),
  * so they are gated at DISPATCH only and have no commit-time (operation-map)
  * counterpart. gnubok_upload_document runs Bedrock OCR inline via
- * extractInvoiceFields — it never stages a pending_operation.
+ * extractInvoiceFields: it never stages a pending_operation.
  */
 const DISPATCH_ONLY_MCP_TOOLS = new Set<string>(['gnubok_upload_document'])
 
@@ -26,7 +26,7 @@ describe('MCP_TOOL_CAPABILITY_MAP', () => {
       gnubok_send_invoice: CAPABILITY.email_send,
       gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
       gnubok_agi_submit: CAPABILITY.skatteverket,
-      // Dispatch-only AI tool — inline Bedrock OCR, no staged operation.
+      // Dispatch-only AI tool: inline Bedrock OCR, no staged operation.
       gnubok_upload_document: CAPABILITY.ai,
     })
   })

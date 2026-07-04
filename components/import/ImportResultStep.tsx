@@ -68,7 +68,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
           <CardDescription>
             {result.success
               ? skipped && skipped.total > 0
-                ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över — se detaljer nedan.`
+                ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
                 : 'Din bokföring har importerats framgångsrikt.'
               : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
           </CardDescription>
@@ -123,7 +123,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
               )}
               .{' '}
               {result.dimensionsImported.toggleEnabled && (
-                <>Dimensioner aktiverades automatiskt för företaget — du hittar registret under{' '}
+                <>Dimensioner aktiverades automatiskt för företaget: du hittar registret under{' '}
                 <Link href="/dimensions" className="underline underline-offset-4">
                   Kostnadsställen &amp; projekt
                 </Link>
@@ -211,7 +211,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
         </Card>
       )}
 
-      {/* Skipped vouchers — structured breakdown */}
+      {/* Skipped vouchers: structured breakdown */}
       {skipped && skipped.total > 0 && (
         <Card className="border-muted-foreground/20">
           <CardHeader>
@@ -226,7 +226,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
                 <div className="text-sm">
                   <p className="font-medium">{skipped.empty} tomma verifikationer</p>
                   <p className="text-muted-foreground">
-                    Platshållare utan bokföringsrader — vanligt i Fortnox och Visma. Påverkar inte din bokföring.
+                    Platshållare utan bokföringsrader: vanligt i Fortnox och Visma. Påverkar inte din bokföring.
                   </p>
                 </div>
               )}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { getErrorMessage } from '../get-error-message'
 
-describe('getErrorMessage — typed bookkeeping error codes', () => {
+describe('getErrorMessage: typed bookkeeping error codes', () => {
   it('ACCOUNTS_NOT_IN_CHART → lists accounts to activate', () => {
     const msg = getErrorMessage({
       error: { code: 'ACCOUNTS_NOT_IN_CHART', message: '...', account_numbers: ['1930', '2641'] },
@@ -83,7 +83,7 @@ describe('getErrorMessage — typed bookkeeping error codes', () => {
   })
 
   it('BOOKKEEPING_DATABASE_ERROR falls through to regex pattern for period lock', () => {
-    // Period-lock trigger errors come through as DB errors — message should still
+    // Period-lock trigger errors come through as DB errors: message should still
     // match the locked-period pattern and produce the specific Swedish message.
     const msg = getErrorMessage({
       error: {
@@ -95,7 +95,7 @@ describe('getErrorMessage — typed bookkeeping error codes', () => {
   })
 })
 
-describe('getErrorMessage — English locale uses registry English (C9)', () => {
+describe('getErrorMessage: English locale uses registry English (C9)', () => {
   it('returns the registry English message for a known structured code instead of Swedish', () => {
     const code = 'FISCAL_PERIOD_NOT_FOUND'
     const sv = getErrorMessage({ error: { code, message: '...' } })
@@ -114,11 +114,11 @@ describe('getErrorMessage — English locale uses registry English (C9)', () => 
   })
 })
 
-describe('getErrorMessage — accumulated validation details', () => {
+describe('getErrorMessage: accumulated validation details', () => {
   it('surfaces the specific per-item reasons instead of the generic 400 message', () => {
     const msg = getErrorMessage(
       {
-        error: 'Valideringsfel — korrigera innan godkännande',
+        error: 'Valideringsfel: korrigera innan godkännande',
         details: ['Tomas Tysén: Bankuppgifter saknas (clearingnummer och/eller kontonummer)'],
         warnings: [],
       },
@@ -147,7 +147,7 @@ describe('getErrorMessage — accumulated validation details', () => {
   })
 })
 
-describe('getErrorMessage — existing patterns still work', () => {
+describe('getErrorMessage: existing patterns still work', () => {
   it('regex match for "Entry date ... outside fiscal period" on plain string', () => {
     const msg = getErrorMessage('Entry date 2024-06-15 is outside fiscal period "FY 2025"')
     expect(msg).toBe('Datumet ligger utanför det valda räkenskapsåret.')

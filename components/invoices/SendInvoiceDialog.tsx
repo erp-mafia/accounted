@@ -162,7 +162,7 @@ export default function SendInvoiceDialog({
           description: data.message || t('send_success_default', { email: invoice.customer.email ?? '' }),
         })
       } else {
-        // For manual send, just close — no email to confirm
+        // For manual send, just close: no email to confirm
         onOpenChange(false)
         toast({
           title: t('mark_success_title'),

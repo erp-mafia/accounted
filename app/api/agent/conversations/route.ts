@@ -7,7 +7,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 // Query params:
 //   archived: 'true' | 'false' (default 'false')
 //   pinned:   'true' filters to pinned only
-//   intent:   'general.help' (or any intent id) — filter
+//   intent:   'general.help' (or any intent id), filter
 //   q:        case-insensitive substring match on title/context_ref
 //   limit:    1..200, default 50
 //

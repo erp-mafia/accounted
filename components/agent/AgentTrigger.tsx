@@ -23,8 +23,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 // Page-specific triggers (e.g. "Granska med assistent" on a supplier invoice)
 // still call useAgentSheet() directly from their own buttons because they
 // know exactly which entity to pass. (Per-transaction help has its own
-// row-level "Fråga [namn]" button in TransactionInboxCard — and the matching
-// "Fråga assistenten" in Dokumentinkorgen — both passing a transaction_id the
+// row-level "Fråga [namn]" button in TransactionInboxCard, and the matching
+// "Fråga assistenten" in Dokumentinkorgen: both passing a transaction_id the
 // pathname-only FAB can't know.)
 export default function AgentTrigger() {
   const { openAgentSheet, expandAgentSheet, isOpen, collapsed, identity } = useAgentSheet()
@@ -33,19 +33,19 @@ export default function AgentTrigger() {
   const hasAi = useCapability(CAPABILITY.ai)
 
   // Sheet open AND visible → hide the FAB so the icon doesn't double up. When
-  // the session is merely collapsed we KEEP the FAB — it's the handle that
+  // the session is merely collapsed we KEEP the FAB: it's the handle that
   // brings the minimized conversation back.
   if (isOpen && !collapsed) return null
   // The page-suppression rules below apply only to a FRESH open. A collapsed
-  // session always gets its reopen handle, regardless of page — otherwise a
+  // session always gets its reopen handle, regardless of page: otherwise a
   // conversation minimized on /chat or /bookkeeping/[id] could never be
   // brought back.
   if (!collapsed) {
-    // The /chat surface IS the chat — a floating "Fråga …" pill on top of it
+    // The /chat surface IS the chat: a floating "Fråga …" pill on top of it
     // is redundant and overlaps the input. Suppress while the user is here.
     if (pathname?.startsWith('/chat')) return null
     // The verifikation editor is a dense regulatory surface (debits/credits,
-    // BAS codes, period locks) — a floating "Fråga … om denna verifikation"
+    // BAS codes, period locks): a floating "Fråga … om denna verifikation"
     // pill on top of it adds noise without earning its place. Suppress on
     // /bookkeeping/[id] specifically; /bookkeeping (list), /bookkeeping/new,
     // and /bookkeeping/year-end still get the FAB.

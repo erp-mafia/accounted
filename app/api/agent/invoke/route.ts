@@ -10,7 +10,7 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
-// Make sure extensions are loaded — the chat loop dispatches against the
+// Make sure extensions are loaded: the chat loop dispatches against the
 // agent tool registry which is populated by the mcp-server extension at load.
 ensureInitialized()
 
@@ -62,7 +62,7 @@ const BodySchema = z.object({
 // POST /api/agent/invoke
 //
 // Streams NDJSON events from the chat loop. Each line is a JSON object whose
-// `kind` identifies the event type — see lib/agent/chat/run-turn.ts StreamEvent.
+// `kind` identifies the event type: see lib/agent/chat/run-turn.ts StreamEvent.
 //
 // Auth: the user must be a member of the resolved company.
 //
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Generous per-user rate limit — bounds runaway Bedrock spend (loop-firing
+  // Generous per-user rate limit: bounds runaway Bedrock spend (loop-firing
   // sessions). Fails open on infra error.
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) {
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  // No Anthropic Bedrock calls in the sandbox — the demo runs entirely on
+  // No Anthropic Bedrock calls in the sandbox: the demo runs entirely on
   // seed data and the assistant is gated to a "look, don't touch" preview.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked
@@ -116,12 +116,12 @@ export async function POST(request: Request) {
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked
 
-  // onboarding.intake completion signal — once the user has actually
+  // onboarding.intake completion signal: once the user has actually
   // engaged (typed a real reply, not the auto-fired greeting prompt that
   // mounts the chat), stamp intake_completed_at on the profile so re-entry
   // logic and opportunistic follow-up logic in other intents can tell the
   // intake happened. Idempotent: the IS NULL guard ensures we never
-  // overwrite the first engagement timestamp. Best-effort — failure here
+  // overwrite the first engagement timestamp. Best-effort: failure here
   // doesn't break the chat; the next user turn retries.
   if (
     body.intent_id === 'onboarding.intake' &&
@@ -136,7 +136,7 @@ export async function POST(request: Request) {
         .eq('company_id', companyId)
         .is('intake_completed_at', null)
     } catch {
-      // ignored — see comment above
+      // ignored: see comment above
     }
   }
 
@@ -210,7 +210,7 @@ export async function POST(request: Request) {
     }
   }
 
-  // Stream — NDJSON events from the chat loop.
+  // Stream: NDJSON events from the chat loop.
   const encoder = new TextEncoder()
   // Conversation id is set above; capture into a non-null local for the
   // streaming closure's first emission.

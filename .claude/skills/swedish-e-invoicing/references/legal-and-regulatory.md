@@ -25,7 +25,7 @@ In force **1 December 2019**. Requires all contracting authorities to publish th
 
 ### MDFFS 2021:1
 
-§§12–20 require state agencies to:
+§§12-20 require state agencies to:
 - use Peppol BIS Billing 3 for outbound invoices to other state agencies;
 - send e-invoices to non-state recipients that have consented;
 - handle inbound e-invoices in EN 16931 conformance.
@@ -50,7 +50,7 @@ Most recent consolidation: SFS 2024:342, in force **1 July 2024**. Modernised th
 
 Replaces ML 1994:200 since 1 July 2023.
 
-- **2 kap. 9–10 §§.** Defines the e-invoice consistent with Article 217 of Directive 2006/112/EC.
+- **2 kap. 9-10 §§.** Defines the e-invoice consistent with Article 217 of Directive 2006/112/EC.
 - **17 kap.** Mandatory invoice content, implements Article 226 of the VAT Directive.
 - **SKVFS 2024:16.** Simplified invoices (förenklad faktura).
 - **No qualified electronic signature is required.** Authenticity and integrity are ensured via "business controls creating a reliable audit trail" per Article 233 of Directive 2006/112/EC. The Peppol AS4 message-level signing between Access Points is sufficient.
@@ -82,11 +82,11 @@ Binding dates relevant for Sweden:
 
 | Date | Obligation |
 |---|---|
-| 14 Apr 2025 | Member states may mandate domestic B2B e-invoicing without Article 395 derogation, provided EN 16931–based; recipient consent abolished |
+| 14 Apr 2025 | Member states may mandate domestic B2B e-invoicing without Article 395 derogation, provided EN 16931-based; recipient consent abolished |
 | 1 Jul 2030 | **Mandatory structured e-invoicing + Digital Reporting Requirements (DRR) for cross-border intra-EU B2B**; recapitulative VIES statements abolished; invoice issuance ≤10 days after chargeable event |
 | 1 Jan 2035 | Pre-existing national clearance regimes (IT/FR/PL/RO/HU/ES) must align to the EU DRR standard |
 
-**Sweden has no pre-existing CTC, so Sweden does NOT get the 2035 grandfather clause.** Any new domestic mandate Sweden builds post-2025 must already be EN 16931–compliant by design.
+**Sweden has no pre-existing CTC, so Sweden does NOT get the 2035 grandfather clause.** Any new domestic mandate Sweden builds post-2025 must already be EN 16931-compliant by design.
 
 ## Swedish authorities
 
@@ -102,8 +102,8 @@ Binding dates relevant for Sweden:
 
 - Receives e-invoices via Peppol at `0007:2021005448`.
 - Publicly **in favour** of mandatory domestic B2B e-invoicing and transaction-based reporting.
-- Ran a public consultation June–July 2025 on three models (SAF-T, clearance, post-audit-with-real-time-reporting).
-- Estimates **SEK 10–20 billion/year** in business savings if Sweden mandates domestic e-invoicing.
+- Ran a public consultation June-July 2025 on three models (SAF-T, clearance, post-audit-with-real-time-reporting).
+- Estimates **SEK 10-20 billion/year** in business savings if Sweden mandates domestic e-invoicing.
 - Sektionschef Björn Erling has explicitly endorsed Peppol as the future Swedish standard.
 
 ### ESV (Ekonomistyrningsverket) and Statskontoret
@@ -126,7 +126,7 @@ The inquiry will determine:
 - whether Sweden adopts transaction-based reporting (DRR-style or otherwise);
 - the architectural model (decentralised Peppol vs. centralised clearance vs. post-audit with real-time reporting).
 
-**Realistic Swedish trajectory:** SOU report 30 November 2027 → lagrådsremiss/proposition 2028 → first domestic obligations **2029–2030** (likely receive obligation first, send obligation phased by entity size, mirroring Germany's 2025/2027/2028 rollout). The reference design Sweden will mirror is **Belgium's 2026 decentralised Peppol 4-corner model**, eventually augmented with a 5-corner DRR layer where Skatteverket becomes Corner 5.
+**Realistic Swedish trajectory:** SOU report 30 November 2027 → lagrådsremiss/proposition 2028 → first domestic obligations **2029-2030** (likely receive obligation first, send obligation phased by entity size, mirroring Germany's 2025/2027/2028 rollout). The reference design Sweden will mirror is **Belgium's 2026 decentralised Peppol 4-corner model**, eventually augmented with a 5-corner DRR layer where Skatteverket becomes Corner 5.
 
 ## Penalties and the B2G/B2B/B2C distinction
 

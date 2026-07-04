@@ -5,7 +5,7 @@ import type { EventPayload } from '@/lib/events/types'
  * Example Logger Extension
  *
  * Minimal reference implementation that logs events to the console.
- * Not wired into the loader by default — add to FIRST_PARTY_EXTENSIONS
+ * Not wired into the loader by default: add to FIRST_PARTY_EXTENSIONS
  * in lib/extensions/loader.ts to activate.
  */
 export const exampleLoggerExtension: Extension = {
@@ -18,7 +18,7 @@ export const exampleLoggerExtension: Extension = {
       eventType: 'journal_entry.committed',
       handler: async (payload: EventPayload<'journal_entry.committed'>) => {
         console.log(
-          `[example-logger] Journal entry committed: ${payload.entry.voucher_series}${payload.entry.voucher_number} — ${payload.entry.description}`
+          `[example-logger] Journal entry committed: ${payload.entry.voucher_series}${payload.entry.voucher_number}: ${payload.entry.description}`
         )
       },
     },

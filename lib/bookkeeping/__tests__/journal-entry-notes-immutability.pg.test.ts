@@ -28,7 +28,7 @@ async function insertPostedEntry(params: {
   return id
 }
 
-describe('enforce_journal_entry_immutability.pg — notes-only edits', () => {
+describe('enforce_journal_entry_immutability.pg: notes-only edits', () => {
   it('allows setting notes on a posted entry (the reported bug)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })

@@ -2,7 +2,7 @@ import type { McpResource } from './types'
 
 /**
  * Per-company working memory for agents. Read at session start so Claude
- * knows what exists in the tenant before composing tool calls — counts,
+ * knows what exists in the tenant before composing tool calls: counts,
  * active fiscal period, lock dates, voucher-series state, recent activity,
  * approaching deadlines. Mirrors the `context.md` pattern from
  * Shipper+Claude's "Agent-native Architectures" guidance.
@@ -45,7 +45,7 @@ export const companyCurrentResource: McpResource = {
         .eq('company_id', companyId)
         .maybeSingle(),
 
-      // The fiscal period covering today — the "active" one for new entries.
+      // The fiscal period covering today: the "active" one for new entries.
       supabase
         .from('fiscal_periods')
         .select('id, name, period_start, period_end, is_closed, locked_at, closing_entry_id')
@@ -94,7 +94,7 @@ export const companyCurrentResource: McpResource = {
         .eq('company_id', companyId)
         .is('journal_entry_id', null),
 
-      // Voucher-series state across open fiscal periods. Scoped by company_id —
+      // Voucher-series state across open fiscal periods. Scoped by company_id:
       // the table also carries user_id, but a multi-company user would otherwise
       // pull series belonging to their other tenants into this company's context
       // (cross-tenant leak flagged by PR #505 review).
@@ -104,7 +104,7 @@ export const companyCurrentResource: McpResource = {
         .eq('company_id', companyId)
         .order('voucher_series', { ascending: true }),
 
-      // Recency signals — when did each surface last move?
+      // Recency signals: when did each surface last move?
       supabase
         .from('journal_entries')
         .select('created_at')
@@ -132,7 +132,7 @@ export const companyCurrentResource: McpResource = {
         .limit(1)
         .maybeSingle(),
 
-      // Scoped by company_id — the table also carries user_id (legacy single-tenant
+      // Scoped by company_id: the table also carries user_id (legacy single-tenant
       // design), but RLS + multi-tenant refactor added company_id and the column is
       // indexed. Multi-company users would otherwise see deadlines from all their
       // companies mixed into one company's context (cross-tenant leak flagged by

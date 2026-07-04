@@ -3,7 +3,7 @@
  * date-range-aware financial reports (resultat- and balansrapport).
  *
  * Returns the bounds clamped against the fiscal period. Both params are
- * optional — when omitted, the report falls back to the period as a whole.
+ * optional: when omitted, the report falls back to the period as a whole.
  * Returns a `{ error }` shape on invalid input so callers can map it to a
  * 400 response without each route duplicating the same checks.
  */
@@ -35,13 +35,13 @@ export function parseReportDateRange(
   if (fromDate && (fromDate < period.period_start || fromDate > period.period_end)) {
     return {
       ok: false,
-      error: `from_date måste ligga inom räkenskapsåret (${period.period_start} — ${period.period_end}).`,
+      error: `from_date måste ligga inom räkenskapsåret (${period.period_start}: ${period.period_end}).`,
     }
   }
   if (toDate && (toDate < period.period_start || toDate > period.period_end)) {
     return {
       ok: false,
-      error: `to_date måste ligga inom räkenskapsåret (${period.period_start} — ${period.period_end}).`,
+      error: `to_date måste ligga inom räkenskapsåret (${period.period_start}: ${period.period_end}).`,
     }
   }
   if (fromDate && toDate && fromDate > toDate) {

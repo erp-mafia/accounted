@@ -5,7 +5,7 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
 
 const log = createLogger('onboarding-client')
 
-// This is an UNAUTHENTICATED client telemetry sink — it's called from the
+// This is an UNAUTHENTICATED client telemetry sink: it's called from the
 // browser during onboarding, before a session necessarily exists, so it can't
 // require auth. Abuse is bounded instead by a per-/24 rate limit (log-flooding,
 // SOC2 CC6.1) and size caps on the client-supplied fields (OWASP V2.2). PII in
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
     // Bound the client-supplied fields before logging: cap the message length
     // and the serialized size of `extra` so a single request can't flood the
-    // log pipeline. Shape is coerced rather than strictly schema-rejected —
+    // log pipeline. Shape is coerced rather than strictly schema-rejected:
     // dropping a malformed error report would lose the telemetry this endpoint
     // exists to capture.
     const message =
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       try {
         if (JSON.stringify(extra).length > MAX_EXTRA_BYTES) extra = { truncated: true }
       } catch {
-        extra = undefined // non-serializable (e.g. cyclic) — drop it
+        extra = undefined // non-serializable (e.g. cyclic), drop it
       }
     }
 

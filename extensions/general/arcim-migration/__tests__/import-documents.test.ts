@@ -112,7 +112,7 @@ describe('importProviderDocuments', () => {
   })
 
   it('counts a receipt as unmatched when no gnubok verifikat resolves', async () => {
-    // gnubok has the number in a DIFFERENT fiscal period — must not match.
+    // gnubok has the number in a DIFFERENT fiscal period: must not match.
     const supabase = rangeMockSupabase({
       fiscal_periods: PERIODS,
       journal_entries: [
@@ -154,7 +154,7 @@ describe('importProviderDocuments', () => {
   })
 
   it('counts a receipt as unmatched when its journalEntryId is not in the Bokio voucher index', async () => {
-    // e.g. an unparseable journalEntryNumber — must be reported, not dropped.
+    // e.g. an unparseable journalEntryNumber: must be reported, not dropped.
     const supabase = wireBokio()
     mockFetchVoucherIndex.mockResolvedValue(new Map<string, BokioVoucherRef>())
 

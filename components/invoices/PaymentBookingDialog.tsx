@@ -86,7 +86,7 @@ export default function PaymentBookingDialog({
   // Drives the "Befintlig verifikation" picker copy: cash links against a 19xx
   // debit, accrual against a 1510 credit.
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
-  // source_type the booking will use — drives the voucher-series preview so the
+  // source_type the booking will use: drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =
     useState<'invoice_cash_payment' | 'invoice_paid' | null>(null)
@@ -356,7 +356,7 @@ export default function PaymentBookingDialog({
                         </span>
                       </div>
                       <p className="truncate text-xs text-muted-foreground">
-                        {c.merchant_name || c.description || '—'}
+                        {c.merchant_name || c.description || '-'}
                       </p>
                     </div>
                     <Button

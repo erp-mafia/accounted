@@ -12,7 +12,7 @@
  * Aesthetic: paper-white surfaces, hairline borders, Hedvig display
  * headlines, Geist body. Sidebar entries use the same warm-beige hover
  * + active background as the dashboard sidebar so the docs feel like the
- * same instrument as the app — not a separate marketing site.
+ * same instrument as the app: not a separate marketing site.
  */
 
 import Link from 'next/link'

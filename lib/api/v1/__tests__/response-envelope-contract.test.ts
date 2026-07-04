@@ -1,11 +1,11 @@
 /**
  * Response-envelope contract test.
  *
- * Every v1 handler returns the canonical `{ data, meta }` envelope — `ok()` and
+ * Every v1 handler returns the canonical `{ data, meta }` envelope: `ok()` and
  * `created()` wrap a single object, `paginated()` wraps an array, both stamping
  * the shared `meta` block (see `lib/api/v1/response.ts`). The OpenAPI generator,
  * however, derives each endpoint's documented body purely from its registered
- * `response.success` Zod schema, and that schema is NOT validated at runtime —
+ * `response.success` Zod schema, and that schema is NOT validated at runtime:
  * so nothing stops a route from declaring a shape the handler never sends.
  *
  * That is exactly what issue #794 found: every list endpoint declared a bare
@@ -16,7 +16,7 @@
  *
  * This test is the regression guard the issue asked for. It asserts EVERY
  * JSON-returning endpoint declares the `{ data, meta }` envelope with the shared
- * `ResponseMetaSchema` — so a new endpoint that forgets to wrap its schema
+ * `ResponseMetaSchema`: so a new endpoint that forgets to wrap its schema
  * (list OR single) fails CI here instead of shipping a lying spec. Binary
  * downloads (`response.contentType`) and 204 No Content endpoints
  * (`NoBodyResponse`) carry no JSON body and are the only exemptions.
@@ -25,7 +25,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { listEndpoints, ResponseMetaSchema, NoBodyResponse, listEnvelope, dataEnvelope } from '../registry'
-// Side-effect import — every route file's registerEndpoint() runs at module
+// Side-effect import: every route file's registerEndpoint() runs at module
 // load time and populates the shared ENDPOINTS map.
 import '../load-routes'
 
@@ -52,14 +52,14 @@ describe('v1 response envelope contract', () => {
 
       const success = ep.response.success
       if (!(success instanceof z.ZodObject)) {
-        violations.push(`${ctx}: response.success is not a { data, meta } object — wrap it with listEnvelope()/dataEnvelope() (or use NoBodyResponse for 204 / response.contentType for binary).`)
+        violations.push(`${ctx}: response.success is not a { data, meta } object: wrap it with listEnvelope()/dataEnvelope() (or use NoBodyResponse for 204 / response.contentType for binary).`)
         continue
       }
 
       const shape = (success as z.ZodObject<z.ZodRawShape>).shape
       const keys = Object.keys(shape).sort()
       if (keys.length !== 2 || keys[0] !== 'data' || keys[1] !== 'meta') {
-        violations.push(`${ctx}: top-level keys must be [data, meta] — found [${keys.join(', ')}]. The handler returns { data, meta }; declare it with listEnvelope()/dataEnvelope().`)
+        violations.push(`${ctx}: top-level keys must be [data, meta]: found [${keys.join(', ')}]. The handler returns { data, meta }; declare it with listEnvelope()/dataEnvelope().`)
         continue
       }
 
@@ -79,7 +79,7 @@ describe('v1 response envelope contract', () => {
 
   it('list endpoints expose data as an array (the paginated() envelope)', () => {
     // Detect list endpoints structurally: their `data` is a Zod array. This is
-    // the half of the contract that maps onto paginated() specifically — guards
+    // the half of the contract that maps onto paginated() specifically: guards
     // against a list endpoint drifting from `{ data: [...] }` back to a bare
     // `{ <name>: [...] }` (which would drop the array out of `data` entirely).
     const arrayDataEndpoints = endpoints.filter((ep) => {

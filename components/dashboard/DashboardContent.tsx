@@ -35,7 +35,7 @@ interface DashboardContentProps {
     deadlines: Deadline[]
     staleUncategorizedCount: number
   }
-  /** Unified pending-work counts from lib/worklist — same source as the sidebar badges. */
+  /** Unified pending-work counts from lib/worklist: same source as the sidebar badges. */
   worklist: WorklistCounts
   /** High-confidence transaction↔invoice matches for inline one-click confirm. */
   suggestedMatches: SuggestedMatch[]
@@ -54,7 +54,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
 
   // The setup gate exists to nudge brand-new users into a data-import step
   // before they hit the dashboard. Once the assistant is built we treat the
-  // user as past that phase — they've already committed to using the tool —
+  // user as past that phase (they've already committed to using the tool)
   // and let the dashboard render normally. This also keeps the sandbox
   // (which ships with a pre-built assistant + seeded data but no bank
   // connection / SIE import) from showing a checklist that re-links to
@@ -113,7 +113,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
 
   return (
     <div className="stagger-enter space-y-8">
-      {/* Build-assistant hero — shown only until the company has a verified
+      {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. Once the assistant is built the
           dashboard leads with the metrics + the unified "Att göra" worklist
@@ -146,7 +146,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         </section>
       )}
 
-      {/* Key metrics — 4 compact cards */}
+      {/* Key metrics: 4 compact cards */}
       <section>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card>
@@ -228,7 +228,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         </div>
       </section>
 
-      {/* Att göra — the unified worklist. One section, every actionable item,
+      {/* Att göra: the unified worklist. One section, every actionable item,
           same counts as the sidebar badges (lib/worklist). */}
       <AttGoraSection
         worklist={worklist}
@@ -237,7 +237,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         staleUncategorizedCount={summary.staleUncategorizedCount}
       />
 
-      {/* Result — revenue / expenses (always visible) */}
+      {/* Result: revenue / expenses (always visible) */}
       <section>
         <div className="grid md:grid-cols-2 gap-4">
           <Card>

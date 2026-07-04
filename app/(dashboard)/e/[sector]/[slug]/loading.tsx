@@ -6,7 +6,7 @@ import { getExtensionDefinition } from '@/lib/extensions/sectors'
 
 // Mirror of FULLSCREEN_WORKSPACES in ExtensionWorkspaceLoader. loading.tsx
 // can't read route params, so we inspect the forwarded x-pathname header to
-// branch the skeleton shape — the parent dashboard loading.tsx renders a
+// branch the skeleton shape: the parent dashboard loading.tsx renders a
 // metrics dashboard shape that has nothing to do with extension workspaces.
 const FULLSCREEN_WORKSPACES = new Set(['general/invoice-inbox'])
 

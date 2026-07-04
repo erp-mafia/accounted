@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/supplier-ledger
  *
- * Accounts payable ledger (leverantörsreskontra) — unpaid supplier
+ * Accounts payable ledger (leverantörsreskontra): unpaid supplier
  * invoices grouped by supplier with aging buckets.
  */
 
@@ -17,7 +17,7 @@ registerEndpoint({
   operation: 'reports.supplier-ledger',
   method: 'GET',
   path: '/api/v1/companies/:companyId/reports/supplier-ledger',
-  summary: 'Supplier ledger — unpaid supplier invoices with aging.',
+  summary: 'Supplier ledger: unpaid supplier invoices with aging.',
   description:
     'Returns the supplier-payable ledger as of `as_of_date` (defaults to today). Each supplier entry includes outstanding invoices grouped into aging buckets. Reconciles against BAS 2440.',
   useWhen:
@@ -54,7 +54,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           details: { field: 'as_of_date', message: 'Expected YYYY-MM-DD.' },
         })
       }
-      // Calendar validity — regex alone accepts 2026-13-45.
+      // Calendar validity: regex alone accepts 2026-13-45.
       const probe = new Date(`${asOfDate}T00:00:00Z`)
       if (Number.isNaN(probe.getTime()) || probe.toISOString().slice(0, 10) !== asOfDate) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {

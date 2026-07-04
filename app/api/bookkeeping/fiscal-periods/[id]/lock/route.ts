@@ -16,7 +16,7 @@ export const POST = withRouteContext(
     } catch (err) {
       opLog.error('failed to lock period', err as Error)
       // The service throws plain Error with messages like "Period not found"
-      // or "Period contains drafts" — translate to envelope codes.
+      // or "Period contains drafts": translate to envelope codes.
       const message = err instanceof Error ? err.message : ''
       if (/not found/i.test(message)) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })

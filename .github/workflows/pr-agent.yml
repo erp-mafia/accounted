@@ -1,6 +1,6 @@
 name: PR Agent
 
-# AI pull-request review (PR-Agent, the original open-source reviewer — repo id
+# AI pull-request review (PR-Agent, the original open-source reviewer: repo id
 # 662766482, same repo the qodo-ai/Codium-ai names redirect to). Replaces the
 # Greptile bot that went silent after #682.
 #
@@ -8,7 +8,7 @@ name: PR Agent
 #   * Pinned to an immutable commit SHA (v0.36.0), NOT a movable tag, because the
 #     repo now sits under a recently-created, unverified org (The-PR-Agent).
 #   * Runs on a DEDICATED, minimal IAM key (bedrock:InvokeModel only) supplied via
-#     PR_AGENT_AWS_* secrets — never the app's general AWS credentials. A leaked
+#     PR_AGENT_AWS_* secrets: never the app's general AWS credentials. A leaked
 #     PR-Agent key can do nothing but invoke the one Bedrock model.
 #
 # Scope: ONLY /review runs automatically. /describe and /improve are disabled so
@@ -25,7 +25,7 @@ on:
 # a superseded review. The event_name suffix is critical: without it, the
 # pull_request and issue_comment triggers share a group, so a bot comment
 # (Vercel/Supabase/compliance preview bots fire within ~2s of opening a PR)
-# queues an issue_comment run that cancel-in-progress kills the real review with —
+# queues an issue_comment run that cancel-in-progress kills the real review with,
 # before the job-level `if: sender.type != 'Bot'` ever gets to skip it. Keeping the
 # groups separate lets comment runs cancel only each other (all skipped, harmless)
 # and never the open/push review.
@@ -46,12 +46,12 @@ jobs:
     name: The PR Agent
     steps:
       - name: The PR Agent
-        # Pinned to the v0.36.0 commit SHA (immutable) — do not switch to @v0.36.0.
+        # Pinned to the v0.36.0 commit SHA (immutable): do not switch to @v0.36.0.
         uses: The-PR-Agent/pr-agent@bd09b6cf89c6d6f3d16b159fa7603fa0e7768cf2 # v0.38.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # ── DEDICATED Bedrock IAM key (bedrock:InvokeModel only) — NOT the
+          # ── DEDICATED Bedrock IAM key (bedrock:InvokeModel only): NOT the
           #    app's AWS_* secrets. litellm reads AWS_REGION_NAME; AWS_REGION is
           #    set too for safety. Create these three repo/org secrets:
           #      PR_AGENT_AWS_ACCESS_KEY_ID, PR_AGENT_AWS_SECRET_ACCESS_KEY,
@@ -78,7 +78,7 @@ jobs:
           #    (NOT a command list). Default omits 'synchronize', so pushes are
           #    skipped; we add it so every push is reviewed too.
           GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "reopened", "ready_for_review", "review_requested", "synchronize"]'
-          # ── Which commands actually run on a handled event. Only review —
+          # ── Which commands actually run on a handled event. Only review:
           #    describe/improve off so the bot never rewrites the PR body or
           #    pushes code suggestions.
           GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"

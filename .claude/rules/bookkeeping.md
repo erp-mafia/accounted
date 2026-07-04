@@ -14,18 +14,18 @@ For Swedish accounting-law questions, use the domain skills (`swedish-vat`, `swe
 
 ## Core Services (`lib/core/`)
 
-- `bookkeeping/period-service.ts` — Fiscal period lifecycle management (open, close, lock)
-- `bookkeeping/year-end-service.ts` — Year-end closing procedures
-- `bookkeeping/storno-service.ts` — Reversal/correction entry generation
-- `tax/tax-code-service.ts` — Tax code definitions and rates
-- `audit/audit-service.ts` — Audit trail and compliance logging
-- `documents/document-service.ts` — Document attachment lifecycle (WORM storage with version chains)
+- `bookkeeping/period-service.ts`: Fiscal period lifecycle management (open, close, lock)
+- `bookkeeping/year-end-service.ts`: Year-end closing procedures
+- `bookkeeping/storno-service.ts`: Reversal/correction entry generation
+- `tax/tax-code-service.ts`: Tax code definitions and rates
+- `audit/audit-service.ts`: Audit trail and compliance logging
+- `documents/document-service.ts`: Document attachment lifecycle (WORM storage with version chains)
 
 ## Key BAS Accounts
 
 `1510` Accounts receivable | `1930` Business bank account | `2013` Private withdrawals (EF) | `2440` Accounts payable | `2611`/`2621`/`2631` Output VAT 25%/12%/6% | `2641` Input VAT | `2645` Calculated input VAT (EU) | `2893` Shareholder loan (AB) | `3001`/`3002`/`3003` Revenue 25%/12%/6% | `3305`/`3308` Export/EU service revenue
 
-BAS data (`lib/bookkeeping/bas-data/`): full BAS 2026 chart by class (1–8) + SRU mapping. Account numbers are **strings** (`'1930'`, never `1930`).
+BAS data (`lib/bookkeeping/bas-data/`): full BAS 2026 chart by class (1-8) + SRU mapping. Account numbers are **strings** (`'1930'`, never `1930`).
 
 ## VAT Treatments
 

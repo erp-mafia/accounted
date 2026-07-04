@@ -1,11 +1,11 @@
 /**
- * AUTO-GENERATED — do not edit by hand.
+ * AUTO-GENERATED: do not edit by hand.
  *
  * Source: data/tax-tables/2026/allmanna-tabeller-manad.txt (Skatteverket SKV 434)
  * Generator: scripts/import-tax-tables.ts
  *
  * Emergency fallback for lib/salary/tax-tables.ts when the Skatteverket
- * open-data API is unreachable. Do not use as the primary source — the API
+ * open-data API is unreachable. Do not use as the primary source: the API
  * is authoritative.
  *
  * Rows: 6734 across tables 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42
@@ -16,7 +16,7 @@ export type FallbackTaxRow = readonly [
   number, number, number, number, number, number, number, number,
 ]
 
-/** Tables keyed by municipal tax rate number (29–42). */
+/** Tables keyed by municipal tax rate number (29-42). */
 export type FallbackTaxYear = Readonly<Record<number, readonly FallbackTaxRow[]>>
 
 export const FALLBACK_TAX_TABLES_2026: FallbackTaxYear = {

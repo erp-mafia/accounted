@@ -6,7 +6,7 @@
  *  1. A non-VAT-registered company gets every line rate coerced to 0 and the
  *     invoice stored as momsfri ('exempt'), regardless of what was staged.
  *  2. Free-text rows (line_type 'text') are excluded from subtotal, VAT, and
- *     mixed-rate detection — a text row's 0% must not flip vat_rate to null.
+ *     mixed-rate detection: a text row's 0% must not flip vat_rate to null.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
@@ -183,7 +183,7 @@ describe('commitPendingOperation: create_invoice', () => {
   })
 })
 
-describe('commitPendingOperation: create_invoice — dimensions propagation (PR7)', () => {
+describe('commitPendingOperation: create_invoice: dimensions propagation (PR7)', () => {
   it('staged default_dimensions lands on the invoices row and item bags on invoice_items rows', async () => {
     const { supabase, inserts } = createCapturingSupabase(queueFor({ vat_registered: true }))
 
@@ -235,13 +235,13 @@ describe('commitPendingOperation: create_invoice — dimensions propagation (PR7
     expect(itemRows[0]).toMatchObject({ dimensions: {} })
   })
 
-  it('coerces an INVALID staged bag away — the insert gets {} (drift/tamper gate)', async () => {
+  it('coerces an INVALID staged bag away: the insert gets {} (drift/tamper gate)', async () => {
     const { supabase, inserts } = createCapturingSupabase(queueFor({ vat_registered: true }))
 
     const op = makePendingOp({
       params: {
         customer_id: 'cust-1',
-        // '0' is not a valid SIE dimension number — the whole bag is rejected.
+        // '0' is not a valid SIE dimension number: the whole bag is rejected.
         default_dimensions: { '0': 'X' },
         items: [
           {
@@ -250,7 +250,7 @@ describe('commitPendingOperation: create_invoice — dimensions propagation (PR7
             unit: 'tim',
             unit_price: 1000,
             vat_rate: 25,
-            // Empty code fails the schema — the whole bag is rejected.
+            // Empty code fails the schema: the whole bag is rejected.
             dimensions: { '1': '' },
           },
         ],

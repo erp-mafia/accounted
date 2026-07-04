@@ -1,4 +1,4 @@
-# Extension System — Design Document
+# Extension System: Design Document
 
 ## The App
 
@@ -6,7 +6,7 @@ Accounted is a Swedish accounting platform for sole traders (enskild firma) and 
 
 ## Core Functionality
 
-The core is the standard accounting system. It's what every user gets out of the box — the features that exist in any accounting platform like Fortnox, Visma, or Björn Lundén. Nothing more, nothing less:
+The core is the standard accounting system. It's what every user gets out of the box: the features that exist in any accounting platform like Fortnox, Visma, or Björn Lundén. Nothing more, nothing less:
 
 - Double-entry bookkeeping (journal entries, BAS chart of accounts, voucher numbering)
 - Invoicing (create, send, track, payment matching)
@@ -17,11 +17,11 @@ The core is the standard accounting system. It's what every user gets out of the
 - Document archive with 7-year legal retention
 - Customer and supplier management
 
-That's the core. It doesn't include receipt scanning, AI categorization, AI chat, push notifications, or PSD2 bank connection. Those are not standard accounting features — they're value-adds.
+That's the core. It doesn't include receipt scanning, AI categorization, AI chat, push notifications, or PSD2 bank connection. Those are not standard accounting features: they're value-adds.
 
 ## Extensions
 
-Extensions are **everything beyond the core accounting system**. They are self-contained tools that a user adds to their dashboard. All compiled extensions are active for all users — the operator decides which extensions to include via `extensions.config.json` at build time.
+Extensions are **everything beyond the core accounting system**. They are self-contained tools that a user adds to their dashboard. All compiled extensions are active for all users: the operator decides which extensions to include via `extensions.config.json` at build time.
 
 There are two kinds of extensions:
 
@@ -30,11 +30,11 @@ There are two kinds of extensions:
 General extensions are not tied to any specific business sector. They're useful for any business but they go beyond what a standard accounting system offers.
 
 Examples:
-- **Receipt OCR** — Scan receipts and extract data automatically
-- **AI Categorization** — AI-powered transaction categorization suggestions
-- **AI Chat** — AI assistant for tax and bookkeeping questions
-- **Push Notifications** — Event notifications for accounting activities
-- **Enable Banking** — PSD2 automatic bank transaction sync
+- **Receipt OCR**: Scan receipts and extract data automatically
+- **AI Categorization**: AI-powered transaction categorization suggestions
+- **AI Chat**: AI assistant for tax and bookkeeping questions
+- **Push Notifications**: Event notifications for accounting activities
+- **Enable Banking**: PSD2 automatic bank transaction sync
 
 These are configured via `extensions.config.json` and only loaded when explicitly enabled by the operator.
 
@@ -103,7 +103,7 @@ In the sidebar under "Your Extensions":
 
 ## Design Decisions (Confirmed)
 
-### 1. Extensions are self-contained — they do NOT write to the core accounting system
+### 1. Extensions are self-contained: they do NOT write to the core accounting system
 
 Extensions are **independent tools that live on the dashboard**. They are NOT part of the core accounting system. They have their own world, their own data, their own purpose. They never create journal entries, invoices, or modify any accounting records.
 
@@ -116,10 +116,10 @@ Extension            ──✗──→ Core Accounting (never writes back)
 ```
 
 An extension may:
-- **Be fed core data** — the platform feeds accounting data (journal entries, transactions, invoices) into the extension for it to read and use in calculations
-- **Accept user input** — the user submits data directly into the extension for data that doesn't exist in any accounting system (e.g. liters of alcohol sold per day, POS Z-report files, Shopify order exports)
-- **Store its own data** — extension-specific data lives in the extension's own storage, separate from core accounting
-- **Calculate and display** — combine core data + extension data to produce metrics, reports, insights
+- **Be fed core data**: the platform feeds accounting data (journal entries, transactions, invoices) into the extension for it to read and use in calculations
+- **Accept user input**: the user submits data directly into the extension for data that doesn't exist in any accounting system (e.g. liters of alcohol sold per day, POS Z-report files, Shopify order exports)
+- **Store its own data**: extension-specific data lives in the extension's own storage, separate from core accounting
+- **Calculate and display**: combine core data + extension data to produce metrics, reports, insights
 
 An extension may NOT:
 - Create journal entries
@@ -127,14 +127,14 @@ An extension may NOT:
 - Modify transactions or any core accounting table
 - Write back to the core accounting system in any way
 
-This is a critical architectural constraint. Extensions are safe — enabling or disabling one can never corrupt or affect the accounting data. The core bookkeeping is a walled garden that extensions can look into but never modify.
+This is a critical architectural constraint. Extensions are safe: enabling or disabling one can never corrupt or affect the accounting data. The core bookkeeping is a walled garden that extensions can look into but never modify.
 
 **Important:** Features like POS Z-Report Import and Shopify Order Import are EXTENSIONS. They import data into the extension's own storage and provide analytics on that data. They do not create journal entries from imported data. The bookkeeping of POS data or Shopify orders is a separate activity the user does in the core platform.
 
-### 2. Data source depends on the extension — three patterns
+### 2. Data source depends on the extension: three patterns
 
 **Pattern A: Fed from core accounting data**
-Some extensions are fed existing bookkeeping data. For example, a "Food Cost %" extension reads journal entries for food purchase accounts (4000-series) and food revenue accounts (3000-series), then calculates and displays the metric. The user doesn't enter anything — the data already exists in the bookkeeping. These are extensions for data that Fortnox, Visma, and other accounting systems already have.
+Some extensions are fed existing bookkeeping data. For example, a "Food Cost %" extension reads journal entries for food purchase accounts (4000-series) and food revenue accounts (3000-series), then calculates and displays the metric. The user doesn't enter anything: the data already exists in the bookkeeping. These are extensions for data that Fortnox, Visma, and other accounting systems already have.
 
 **Pattern B: User submits data manually**
 Some extensions need data that doesn't exist in any accounting system. No system tracks liters of alcohol sold, or daily staff tips, or room occupancy counts. For these extensions, the user manually submits data into the extension's workspace. The extension stores, processes, and displays this data. This has nothing to do with the core accounting functionality.
@@ -151,7 +151,7 @@ Users have a dedicated "Extensions" marketplace page where they can:
 
 ### 4. Primary sector with cross-sector browsing
 
-During onboarding, the user selects a **primary sector** (e.g. "Restaurant & Cafe"). The app then suggests extensions for that sector, plus general extensions. But the user is NOT locked in — they can browse and enable extensions from any sector at any time via the marketplace.
+During onboarding, the user selects a **primary sector** (e.g. "Restaurant & Cafe"). The app then suggests extensions for that sector, plus general extensions. But the user is NOT locked in: they can browse and enable extensions from any sector at any time via the marketplace.
 
 The primary sector serves as a **recommendation filter**, not a restriction.
 
@@ -168,7 +168,7 @@ We build all extensions ourselves initially. But the architecture should be clea
 
 1. User signs up, goes through onboarding
 2. On the dashboard, the sidebar shows links to compiled extensions that have a workspace + quickAction
-3. Clicking an extension opens its workspace — a dedicated page with the extension's own UI
+3. Clicking an extension opens its workspace: a dedicated page with the extension's own UI
 4. The user interacts with the extension: views data, enters inputs, sees calculations/reports
 5. User can browse the marketplace to see all compiled extensions
 
@@ -180,8 +180,8 @@ We build all extensions ourselves initially. But the architecture should be clea
 
 | Part | Required? | Description |
 |------|-----------|-------------|
-| **Metadata** | Yes | Name, description, sector (or 'general'), category, icon — for marketplace and sidebar |
-| **Workspace UI** | Yes | A React component — the main page the user sees when they click the extension |
+| **Metadata** | Yes | Name, description, sector (or 'general'), category, icon: for marketplace and sidebar |
+| **Workspace UI** | Yes | A React component: the main page the user sees when they click the extension |
 | **Extension data** | Depends | Storage for user-submitted data and extension state |
 | **Configuration** | Optional | Settings panel for customizing the extension's behavior |
 | **Core data queries** | Optional | Queries that read from journal entries, transactions, invoices, etc. |
@@ -458,7 +458,7 @@ key: 'config'       → { "revenueAccounts": ["3001"], "trackByType": true }
 
 ### Extension Enablement
 
-Extensions are enabled at **build time** via `extensions.config.json`. All compiled extensions are active for all users — there is no per-user toggle system. The operator (hosted or self-hosted) decides which extensions to include.
+Extensions are enabled at **build time** via `extensions.config.json`. All compiled extensions are active for all users: there is no per-user toggle system. The operator (hosted or self-hosted) decides which extensions to include.
 
 To check if an extension is compiled in at runtime (e.g. for conditional UI), use the build-time constant:
 
@@ -514,20 +514,20 @@ app/api/extensions/ext/[...path]/route.ts
 URL scheme: `/api/extensions/ext/{extensionId}/{...routePath}`
 
 The dispatcher handles:
-1. **Auth check** — 401 if not logged in
-2. **Extension lookup** — 404 if extension not registered or has no apiRoutes
-3. **Path matching** — Matches method + path pattern (supports `:param` wildcards)
-4. **AI consent check** — 403 if AI extension and user hasn't consented
-5. **Param extraction** — Path params like `:id` are added as `_id` search params
-6. **Context building** — Creates `ExtensionContext` with supabase, userId, settings, storage, logger
-7. **Dispatch** — Calls the matched handler with the request and context
+1. **Auth check**: 401 if not logged in
+2. **Extension lookup**: 404 if extension not registered or has no apiRoutes
+3. **Path matching**: Matches method + path pattern (supports `:param` wildcards)
+4. **AI consent check**: 403 if AI extension and user hasn't consented
+5. **Param extraction**: Path params like `:id` are added as `_id` search params
+6. **Context building**: Creates `ExtensionContext` with supabase, userId, settings, storage, logger
+7. **Dispatch**: Calls the matched handler with the request and context
 
 The generic data CRUD routes for `extension_data` still exist alongside:
 
 ```
 app/api/extensions/[sector]/[slug]/
-  data/route.ts       — GET (read entries), POST (submit new entry), DELETE (remove entry)
-  settings/route.ts   — GET (read settings), PATCH (update settings)
+  data/route.ts       : GET (read entries), POST (submit new entry), DELETE (remove entry)
+  settings/route.ts   : GET (read settings), PATCH (update settings)
 ```
 
 ### Sidebar Integration
@@ -580,7 +580,7 @@ When the user clicks this extension, they see:
 2. **Data entry section**: Form to log daily sales (date, liters sold, alcohol type)
 3. **History table**: Past entries with edit/delete
 4. **Chart**: Earnings per liter over time (line chart)
-5. **Revenue breakdown**: Reads from core journal entries — alcohol revenue by account
+5. **Revenue breakdown**: Reads from core journal entries: alcohol revenue by account
 
 The extension reads revenue data from journal_entry_lines (BAS 3001 for 25% alcohol revenue) and combines it with user-submitted liter data to calculate the metric.
 
@@ -677,7 +677,7 @@ npm start
 # 1. See available extensions
 npx tsx scripts/generate-extension-registry.ts --list
 
-# 2. Edit extensions.config.json — add extension IDs
+# 2. Edit extensions.config.json: add extension IDs
 {
   "extensions": ["receipt-ocr", "ai-categorization", "email"]
 }
@@ -786,7 +786,7 @@ export const aiCategorizationExtension: Extension = {
 Core code calls the service via registry lookup:
 
 ```typescript
-// Core code — no direct import from extensions/
+// Core code: no direct import from extensions/
 const ext = extensionRegistry.get('ai-categorization')
 const results = await ext?.services?.findSimilarTemplates(description, 5)
 if (results) {

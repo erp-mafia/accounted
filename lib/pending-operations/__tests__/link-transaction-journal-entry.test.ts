@@ -7,7 +7,7 @@
  * picks it up, the executor delegates to the shared service in
  * lib/transactions/link-journal-entry.ts. The service is also covered
  * indirectly by the REST route test
- * app/api/transactions/[id]/link-journal-entry/__tests__/route.test.ts —
+ * app/api/transactions/[id]/link-journal-entry/__tests__/route.test.ts;
  * these tests focus on the dispatcher/executor wiring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

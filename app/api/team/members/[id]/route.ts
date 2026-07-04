@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 
 /**
  * DELETE /api/team/members/[id]
- * Removing team members is disabled — teams are single-user.
+ * Removing team members is disabled: teams are single-user.
  */
 export async function DELETE() {
   return NextResponse.json(

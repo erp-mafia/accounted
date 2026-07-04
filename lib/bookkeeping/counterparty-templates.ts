@@ -37,12 +37,12 @@ const TRAILING_MONTH_TOKENS = new Set([
 
 /**
  * Strip trailing tokens that label *when/who* rather than *what merchant*:
- * a month name, or a 1–2 letter all-caps personal initial ("ngrok JW",
+ * a month name, or a 1-2 letter all-caps personal initial ("ngrok JW",
  * "ngrok JW", "Ngrok Mars" all describe the same merchant). Without this, one
  * merchant splinters into many un-learnable variants and counterparty matching
  * never fires (the reported ngrok bug: three prior bookings, zero matches).
  *
- * Conservative by design: only acts on a TRAILING token, only on 1–2 char
+ * Conservative by design: only acts on a TRAILING token, only on 1-2 char
  * all-caps initials (so 3-letter brands like SEB/ICA and any lowercased word
  * survive), and always keeps at least one core token (never strips to empty).
  */
@@ -51,7 +51,7 @@ function stripTrailingNoiseTokens(s: string): string {
   while (tokens.length > 1) {
     const last = tokens[tokens.length - 1]
     const isMonth = TRAILING_MONTH_TOKENS.has(last.toLowerCase())
-    // Personal initials: 1–2 letters, all-caps in the ORIGINAL casing (run
+    // Personal initials: 1-2 letters, all-caps in the ORIGINAL casing (run
     // before normalizeMerchantName lowercases everything).
     const isInitials = /^[A-ZÅÄÖ]{1,2}$/.test(last)
     if (!isMonth && !isInitials) break
@@ -168,7 +168,7 @@ export interface CounterpartyTemplateMatch {
  * Three-tier matching (delegated to batch version with single-element array):
  * 1. Exact alias match
  * 2. Exact normalized name match
- * 3. Fuzzy Levenshtein — distance ≤2 for short names, ≤3 for long names
+ * 3. Fuzzy Levenshtein: distance ≤2 for short names, ≤3 for long names
  */
 export async function findCounterpartyTemplate(
   supabase: SupabaseClient,
@@ -623,7 +623,7 @@ function isSettlementAccount(account: string): boolean {
   return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890'
 }
 
-/** Rounding account — excluded from pattern extraction */
+/** Rounding account: excluded from pattern extraction */
 function isRoundingAccount(account: string): boolean {
   return account === '3740'
 }
@@ -670,7 +670,7 @@ function extractVoucherLinePattern(
     if (isSettlementAccount(line.account)) {
       settlement.push(line)
     } else if (isRoundingAccount(line.account)) {
-      // Skip 3740 lines — rounding artifacts
+      // Skip 3740 lines: rounding artifacts
       continue
     } else if (isVatAccount(line.account)) {
       vat.push(line)
@@ -790,7 +790,7 @@ function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePattern
     side: LinePatternEntry['side']
     ratios: number[]
     vat_rate?: number
-    // Dimensions PR7: conservative — a bag survives averaging only when EVERY
+    // Dimensions PR7: conservative: a bag survives averaging only when EVERY
     // occurrence of the account carries the identical bag. A single
     // disagreeing (or untagged) voucher drops it: a template must never
     // invent a tag history doesn't consistently support.

@@ -83,7 +83,7 @@ interface RpcResult {
   tx_sum?: number
 }
 
-describe('bulk_book_transactions — create new', () => {
+describe('bulk_book_transactions: create new', () => {
   it('builds a single combined verifikat from caller-supplied lines (kiosk samlingsverifikation)', async () => {
     const { userId, companyId } = await seedTenant()
     // 3 income txs at 100/200/300 SEK on the same day.
@@ -240,7 +240,7 @@ describe('bulk_book_transactions — create new', () => {
   })
 })
 
-describe('bulk_book_transactions — link existing', () => {
+describe('bulk_book_transactions: link existing', () => {
   it('links N txs to an already-posted day-summary verifikat', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedTenant()
     const tx1 = await insertTransaction({ userId, companyId, amount: 100 })
@@ -273,7 +273,7 @@ describe('bulk_book_transactions — link existing', () => {
       expect(result.journal_entry_id).toBe(jeId)
       expect(result.linked_tx_count).toBe(2)
 
-      // No new JE was created — only junction rows.
+      // No new JE was created: only junction rows.
       const links = await client.query<{ transaction_id: string }>(
         `SELECT transaction_id FROM public.transaction_voucher_links
           WHERE journal_entry_id = $1`,
@@ -340,7 +340,7 @@ describe('bulk_book_transactions — link existing', () => {
   })
 })
 
-// PR #608 — document inheritance + manual lines path.
+// PR #608: document inheritance + manual lines path.
 async function insertDocumentForTx(params: {
   userId: string
   companyId: string
@@ -358,7 +358,7 @@ async function insertDocumentForTx(params: {
       params.companyId,
       `test/${docId}.pdf`,
       params.fileName ?? 'receipt.pdf',
-      // 64-char hex string — sha256 placeholder for the test.
+      // 64-char hex string: sha256 placeholder for the test.
       docId.replace(/-/g, '').padEnd(64, '0'),
     ],
   )
@@ -369,7 +369,7 @@ async function insertDocumentForTx(params: {
   return docId
 }
 
-describe('bulk_book_transactions — document inheritance (PR #608)', () => {
+describe('bulk_book_transactions: document inheritance (PR #608)', () => {
   it('copies each constituent tx document onto the combined new verifikat', async () => {
     const { userId, companyId } = await seedTenant()
     const tx1 = await insertTransaction({ userId, companyId, amount: 100 })
@@ -378,7 +378,7 @@ describe('bulk_book_transactions — document inheritance (PR #608)', () => {
 
     const doc1 = await insertDocumentForTx({ userId, companyId, txId: tx1, fileName: 'kvitto-1.pdf' })
     const doc2 = await insertDocumentForTx({ userId, companyId, txId: tx2, fileName: 'kvitto-2.pdf' })
-    // tx3 intentionally without a doc — the RPC should not break and
+    // tx3 intentionally without a doc: the RPC should not break and
     // should report docs_linked = 2 (not 3).
 
     const newEntry = {
@@ -405,7 +405,7 @@ describe('bulk_book_transactions — document inheritance (PR #608)', () => {
         [[doc1, doc2]],
       )
       expect(docs.rows).toHaveLength(2)
-      // Both docs now point at the new verifikat — verifikationsunderlag
+      // Both docs now point at the new verifikat: verifikationsunderlag
       // per BFL 5 kap 6§ + BFNAR 2013:2 kap 4.
       for (const row of docs.rows) {
         expect(row.journal_entry_id).toBe(result.journal_entry_id)
@@ -457,7 +457,7 @@ describe('bulk_book_transactions — document inheritance (PR #608)', () => {
   })
 })
 
-describe('bulk_book_transactions — manual lines path (PR #608)', () => {
+describe('bulk_book_transactions: manual lines path (PR #608)', () => {
   it('accepts user-built lines (no template expansion) and commits the combined verifikat', async () => {
     const { userId, companyId } = await seedTenant()
     // 2 expense txs of −400 each. Manual booking: 800 to a kostnadskonto
