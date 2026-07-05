@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
           cookiesToSet.forEach((cookie) => {
             // Mirror the cookie into request.cookies so subsequent getAll()
             // calls within this request lifecycle return the updated values
-            // (matches the pattern used in middleware.ts).
+            // (matches the pattern used in proxy.ts).
             request.cookies.set(cookie.name, cookie.value)
             pendingCookies.push(cookie)
           })
