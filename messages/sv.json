@@ -4482,7 +4482,7 @@
     "confirm_unapprove_intro": "Godkännandet återkallas och körningen går tillbaka till granskning.",
     "confirm_unapprove_payment_file": "En betalfil har genererats. Om den redan laddats upp till banken måste betalningen makuleras där — annars betalas de gamla beloppen ut.",
     "confirm_unapprove_payslips": "Lönebesked har redan skickats och behöver skickas om efter ny beräkning.",
-    "confirm_unapprove_agi": "Den genererade AGI-filen raderas och behöver genereras om.",
+    "confirm_unapprove_agi": "Den genererade AGI-filen raderas och behöver genereras om. Har du redan lämnat in den manuellt hos Skatteverket ska du i stället lämna en korrigerad arbetsgivardeklaration.",
     "action_mark_paid": "Markera som betald",
     "action_continue": "Fortsätt",
     "action_book": "Bokför",

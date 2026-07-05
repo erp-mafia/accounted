@@ -55,14 +55,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    // A generated-but-unfiled AGI now carries stale amounts — delete it so the
-    // stale XML can't be exported. Regeneration on the forward path recreates
-    // it. A rejected declaration is kept: it documents the rejection, and
-    // regeneration upserts over it.
-    if (agiDeclaration && ['generated', 'exported'].includes(agiDeclaration.status)) {
-      await supabase.from('agi_declarations').delete().eq('id', agiDeclaration.id)
-    }
-
     // Clear payment-file tracking too: a previously generated file would show
     // as current after re-approval even though the amounts may change. Whether
     // the file already reached the bank is outside the app's knowledge — the
@@ -87,9 +79,30 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Kunde inte återkalla godkännandet' }, { status: 500 })
     }
 
+    // A generated-but-unfiled AGI now carries stale amounts — delete it so the
+    // stale XML can't be exported. Deliberately after the status flip: the
+    // reverse order could destroy the declaration and then fail the
+    // transition, leaving an approved run with its AGI gone. If this delete
+    // fails instead, agi_generated_at is already null and regeneration on the
+    // forward path upserts over the orphaned row. A rejected declaration is
+    // kept: it documents the rejection.
+    const staleAgi =
+      agiDeclaration && ['generated', 'exported'].includes(agiDeclaration.status)
+        ? agiDeclaration
+        : null
+    if (staleAgi) {
+      await supabase.from('agi_declarations').delete().eq('id', staleAgi.id)
+    }
+
     await eventBus.emit({
       type: 'salary_run.approval_reverted',
-      payload: { salaryRunId: id, revertedBy: user.id, userId: user.id, companyId },
+      payload: {
+        salaryRunId: id,
+        revertedBy: user.id,
+        deletedAgiDeclarationId: staleAgi?.id ?? null,
+        userId: user.id,
+        companyId,
+      },
     })
 
     return NextResponse.json({ data: updatedRun })

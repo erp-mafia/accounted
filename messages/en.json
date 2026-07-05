@@ -4482,7 +4482,7 @@
     "confirm_unapprove_intro": "The approval is recalled and the run goes back to review.",
     "confirm_unapprove_payment_file": "A payment file has been generated. If it has already been uploaded to the bank, the payment must be cancelled there — otherwise the old amounts will be paid out.",
     "confirm_unapprove_payslips": "Payslips have already been sent and need to be re-sent after recalculation.",
-    "confirm_unapprove_agi": "The generated AGI file is deleted and needs to be regenerated.",
+    "confirm_unapprove_agi": "The generated AGI file is deleted and needs to be regenerated. If you have already filed it manually with Skatteverket, file a corrected employer declaration instead.",
     "action_mark_paid": "Mark as paid",
     "action_continue": "Continue",
     "action_book": "Post",

@@ -146,21 +146,22 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
       payload: {
         salaryRunId: 'run-1',
         revertedBy: 'user-1',
+        deletedAgiDeclarationId: null,
         userId: 'user-1',
         companyId: 'company-1',
       },
     })
   })
 
-  it('deletes a generated (unfiled) AGI declaration before reverting', async () => {
+  it('deletes a generated (unfiled) AGI declaration after reverting', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)
 
     enqueueMany([
       { data: approvedRun },                          // salary_runs lookup
       { data: { id: 'agi-1', status: 'generated' } }, // agi_declarations lookup
-      { data: null },                                 // agi_declarations delete
       { data: { id: 'run-1', status: 'review' } },    // salary_runs update
+      { data: null },                                 // agi_declarations delete
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
@@ -169,6 +170,11 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     expect(status).toBe(200)
     expect(body.data.status).toBe('review')
-    expect(eventBus.emit).toHaveBeenCalled()
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'salary_run.approval_reverted',
+        payload: expect.objectContaining({ deletedAgiDeclarationId: 'agi-1' }),
+      }),
+    )
   })
 })
