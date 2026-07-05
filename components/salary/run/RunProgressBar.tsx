@@ -24,6 +24,7 @@ interface RunProgressBarProps {
   // obligation. (Recalculate lives with the employee rows.)
   onPreview: () => void
   onRevert: () => void
+  onUnapprove: () => void
   onSendPayslips: () => void
   onDownloadPayslips: () => void
 }
@@ -175,6 +176,19 @@ export function RunProgressBar(props: RunProgressBarProps) {
           <Button variant="ghost" size="sm" onClick={props.onRevert} disabled={busy}>
             <ArrowLeftCircle className="mr-2 h-4 w-4" />
             {t('action_revert')}
+          </Button>
+        </>
+      )
+    } else if (run.status === 'approved') {
+      // Approval is an internal control point, not a legal event — the run can
+      // be unlocked again as long as nothing has been paid, booked, or filed.
+      // The API refuses once the AGI has reached Skatteverket.
+      secondaryActions = (
+        <>
+          {payslipActions}
+          <Button variant="ghost" size="sm" onClick={props.onUnapprove} disabled={busy}>
+            <ArrowLeftCircle className="mr-2 h-4 w-4" />
+            {t('action_unapprove')}
           </Button>
         </>
       )

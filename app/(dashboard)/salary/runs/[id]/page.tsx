@@ -202,6 +202,21 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     setActionLoading(null)
   }
 
+  // Recall an approval (approved → review). Approval is only an internal
+  // control point, but side effects may already exist — a payment file that
+  // could be sitting at the bank, sent payslips, a generated AGI — so the
+  // confirm spells out exactly the ones that apply to this run. The API
+  // refuses outright once the AGI has been filed with Skatteverket.
+  function handleUnapprove() {
+    if (!run) return
+    const lines = [t('confirm_unapprove_intro')]
+    if (run.payment_file_generated_at) lines.push(t('confirm_unapprove_payment_file'))
+    if ((run.payslip_deliveries_summary?.sent ?? 0) > 0) lines.push(t('confirm_unapprove_payslips'))
+    if (run.agi_generated_at) lines.push(t('confirm_unapprove_agi'))
+    if (!confirm(lines.join('\n\n'))) return
+    handleAction('unapprove')
+  }
+
   async function handleDelete() {
     if (!run) return
     const period = periodLabelOf(run)
@@ -526,6 +541,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         primaryAction={primaryAction}
         onPreview={handlePreview}
         onRevert={() => handleAction('revert')}
+        onUnapprove={handleUnapprove}
         onSendPayslips={handleSendPayslips}
         onDownloadPayslips={handleBulkPayslipDownload}
       />
