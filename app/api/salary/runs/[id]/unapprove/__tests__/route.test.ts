@@ -125,6 +125,25 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
     expect(status).toBe(409)
   })
 
+  it('returns 409 when the run transitions concurrently between read and update', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                            // salary_runs lookup
+      { data: null, error: { message: 'No rows' } },    // agi_declarations lookup
+      { data: null, error: { code: 'PGRST116', message: 'no rows returned' } }, // update matched 0 rows
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error).toContain('ändrats')
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
   it('reverts an approved run to review and emits the event', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)
@@ -161,7 +180,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
       { data: approvedRun },                          // salary_runs lookup
       { data: { id: 'agi-1', status: 'generated' } }, // agi_declarations lookup
       { data: { id: 'run-1', status: 'review' } },    // salary_runs update
-      { data: null },                                 // agi_declarations delete
+      { data: [{ id: 'agi-1' }] },                    // agi_declarations delete
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })

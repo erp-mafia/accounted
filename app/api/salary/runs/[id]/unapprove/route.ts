@@ -17,7 +17,7 @@ ensureInitialized()
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.unapprove',
-  async (_request, { supabase, companyId, user }, { params }) => {
+  async (_request, { supabase, companyId, user, log }, { params }) => {
     const { id } = await params
 
     const { data: run, error: runError } = await supabase
@@ -72,10 +72,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('id', id)
       .eq('company_id', companyId)
       .eq('status', 'approved')
+      // TOCTOU guard: AGI submission is allowed from `approved` (also out of
+      // band via MCP / the public API), so a filing may have landed since the
+      // read above. Re-assert it hasn't inside the update filter.
+      .is('agi_submitted_at', null)
       .select()
       .single()
 
     if (error || !updatedRun) {
+      // Zero rows matched (PGRST116): the run moved on concurrently — marked
+      // paid, or the AGI was filed — between the read and this update. Not a
+      // server fault; tell the user to reload instead of returning 500.
+      if ((error as { code?: string } | null)?.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: 'Lönekörningens status har ändrats — ladda om sidan och försök igen.' },
+          { status: 409 },
+        )
+      }
       return NextResponse.json({ error: 'Kunde inte återkalla godkännandet' }, { status: 500 })
     }
 
@@ -83,15 +96,30 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // stale XML can't be exported. Deliberately after the status flip: the
     // reverse order could destroy the declaration and then fail the
     // transition, leaving an approved run with its AGI gone. If this delete
-    // fails instead, agi_generated_at is already null and regeneration on the
-    // forward path upserts over the orphaned row. A rejected declaration is
-    // kept: it documents the rejection.
+    // misses instead, agi_generated_at is already null and regeneration on the
+    // forward path upserts over the orphaned row. The status filter makes the
+    // delete a no-op if the declaration advanced (e.g. to pending_signature)
+    // since the read. A rejected declaration is kept: it documents the
+    // rejection.
     const staleAgi =
       agiDeclaration && ['generated', 'exported'].includes(agiDeclaration.status)
         ? agiDeclaration
         : null
+    let deletedAgiDeclarationId: string | null = null
     if (staleAgi) {
-      await supabase.from('agi_declarations').delete().eq('id', staleAgi.id)
+      const { data: deletedRows, error: deleteError } = await supabase
+        .from('agi_declarations')
+        .delete()
+        .eq('id', staleAgi.id)
+        .in('status', ['generated', 'exported'])
+        .select('id')
+      deletedAgiDeclarationId = deletedRows?.length ? staleAgi.id : null
+      if (deleteError) {
+        log.warn('stale AGI declaration delete failed', {
+          agiDeclarationId: staleAgi.id,
+          error: deleteError.message,
+        })
+      }
     }
 
     await eventBus.emit({
@@ -99,7 +127,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       payload: {
         salaryRunId: id,
         revertedBy: user.id,
-        deletedAgiDeclarationId: staleAgi?.id ?? null,
+        deletedAgiDeclarationId,
         userId: user.id,
         companyId,
       },
