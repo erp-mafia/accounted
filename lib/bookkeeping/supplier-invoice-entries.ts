@@ -172,7 +172,7 @@ export async function createSupplierInvoiceRegistrationEntry(
         }
       }
     }
-  } else if (invoice.vat_amount > 0) {
+  } else if (itemsHaveVat(items)) {
     // Domestic standard: Debit ingående moms per rate group
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
     for (const [rate, amount] of vatByRate) {
@@ -430,7 +430,7 @@ export async function createSupplierInvoiceCashEntry(
         }
       }
     }
-  } else if (invoice.vat_amount > 0) {
+  } else if (itemsHaveVat(items)) {
     // Domestic standard: Debit ingående moms per rate group (at the payment-
     // date rate when settling a foreign invoice, see effectiveRate above).
     const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate)
@@ -544,7 +544,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   }
 
   // Debit: Ingående moms per rate group (mixed-rate kvitto support)
-  if (invoice.vat_amount > 0) {
+  if (itemsHaveVat(items)) {
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
@@ -751,6 +751,23 @@ export async function createSupplierCreditNoteEntry(
  * Reverse-charge fiktiv moms doesn't use this: see groupBaseByRate, which
  * derives the basis directly so fiktiv VAT is always base × statutory rate.
  */
+/**
+ * True if any item would produce a non-zero ingående moms line: mirrors the
+ * same stored-vs-computed fallback groupVatByRate uses (stored vat_amount,
+ * else line_total × rate). Callers must gate the VAT branch on this instead
+ * of invoice.vat_amount: that header field can come from a source (e.g. the
+ * MCP inbox-conversion tool's OCR-extracted totals) that is never
+ * reconciled against the items, so a stale or zero header would otherwise
+ * silently suppress a correct per-line VAT posting.
+ */
+function itemsHaveVat(items: SupplierInvoiceItem[]): boolean {
+  return items.some((item) => {
+    if ((item.vat_amount ?? 0) > 0) return true
+    const rate = item.vat_rate ?? 0.25
+    return rate > 0 && (item.line_total ?? 0) > 0
+  })
+}
+
 function groupVatByRate(
   items: SupplierInvoiceItem[],
   currency: string,

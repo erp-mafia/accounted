@@ -250,6 +250,47 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     assertBalanced(input)
   })
 
+  it('posts 2641 from the items even when invoice.vat_amount is stale/zero (regression: MCP inbox-conversion header/line mismatch)', async () => {
+    // Reported bug: gnubok_create_supplier_invoice_from_inbox sourced the
+    // header vat_amount from the OCR-extracted document totals (totalsExt.vat)
+    // instead of summing the line items. Customizing per-line VAT rates (or a
+    // mis-extracted document total) left invoice.vat_amount at 0 while the
+    // items still carried correct non-zero vat_rate/vat_amount. The engine
+    // used to gate the whole VAT branch on `invoice.vat_amount > 0`, so a
+    // stale header silently suppressed a correct per-line VAT posting (e.g.
+    // Glesys 623884: 1 001 kr booked with zero VAT instead of 800.54 + 200.14).
+    // The fix drives the gate off the items themselves (itemsHaveVat), so the
+    // header field can never again suppress a correct posting.
+    const invoice = makeSupplierInvoice({
+      subtotal: 800.54,
+      vat_amount: 0, // stale header: never reconciled against the customized line
+      total: 1001,
+    })
+    const items = [
+      makeItem({ line_total: 800.54, account_number: '6540', vat_rate: 0.25, vat_amount: 200.14 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit6540 = findByAccount(input.lines, '6540')
+    expect(debit6540[0].debit_amount).toBe(800.54)
+
+    const debit2641 = findByAccount(input.lines, '2641')
+    expect(debit2641).toHaveLength(1)
+    expect(debit2641[0].debit_amount).toBe(200.14)
+
+    // 2440 must reflect the TRUE gross total (800.54 + 200.14), not the stale
+    // header total: the engine derives it as totalDebits - totalCredits.
+    const credit2440 = findByAccount(input.lines, '2440')
+    expect(credit2440[0].credit_amount).toBe(1000.68)
+
+    assertBalanced(input)
+  })
+
   it('aggregates manual VAT overrides per rate group on mixed-rate invoice', async () => {
     // Restaurangkvitto med två olika momsöverskridningar pga representation-
     // tak och egen avrundning. 25%-raden får manuell 100 kr, 12%-raden får

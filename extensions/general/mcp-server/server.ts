@@ -7764,7 +7764,6 @@ export const tools: McpTool[] = [
 
       const total = Number(totalsExt?.total) || 0
       const subtotal = Number(totalsExt?.subtotal) || 0
-      const vatAmount = Number(totalsExt?.vat) || 0
 
       // VAT treatment: explicit override wins, else heuristic from extracted data
       const vatTreatment = (args.vat_treatment_override as string | undefined)
@@ -7823,6 +7822,16 @@ export const tools: McpTool[] = [
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }
       })
+
+      // Derive from the actual per-line VAT rather than trusting
+      // totalsExt.vat: that header figure comes straight from OCR/agent-
+      // supplied extracted_data and is never reconciled against lineItems.
+      // Per-line VAT customization (edited rate/amount on a line without
+      // also fixing up the document totals) used to leave this at a stale
+      // or zero value, and createSupplierInvoiceRegistrationEntry gates the
+      // whole 2641 posting on invoice.vat_amount > 0: a stale header meant
+      // the correct per-line VAT was silently never booked.
+      const vatAmount = lineItems.reduce((sum, li) => sum + li.vat_amount, 0)
 
       const params = {
         inbox_item_id: inboxItemId,
