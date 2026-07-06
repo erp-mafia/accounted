@@ -74,18 +74,23 @@ describe('skatteverket paywall gate', () => {
     expect(body.capability).toBe(CAPABILITY.skatteverket)
   })
 
-  it('DELETE /declaration/lock (unlock) is NOT gated: lapsed companies can recover drafts', async () => {
+  // Unlock operations stay free: a lapsed company must be able to unlock
+  // what it locked while entitled (draft recovery, never data hostage).
+  it.each([
+    { method: 'DELETE', path: '/declaration/lock' },
+    { method: 'POST', path: '/agi/lasUpp' },
+  ])('$method $path (unlock) is NOT paywall-gated', async ({ method, path }) => {
     vi.mocked(requireCapability).mockResolvedValue(
       capabilityBlockedResponse(CAPABILITY.skatteverket),
     )
     const route = skatteverketExtension.apiRoutes?.find(
-      (r) => r.method === 'DELETE' && r.path === '/declaration/lock',
+      (r) => r.method === method && r.path === path,
     )
     expect(route).toBeDefined()
 
     const request = new Request(
-      'https://test.local/api/extensions/ext/skatteverket/declaration/lock?period=202606',
-      { method: 'DELETE' },
+      `https://test.local/api/extensions/ext/skatteverket${path}?period=202606`,
+      { method },
     )
     const response = await route!.handler(request, makeContext())
     // Fails later (missing params / no tokens) but never with the paywall 403.
