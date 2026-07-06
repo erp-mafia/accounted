@@ -49,7 +49,7 @@ export const POST = withRouteContext(
     )
 
     const toReactivate: string[] = []
-    const toInsert: Array<ReturnType<typeof buildInsertRow>> = []
+    const toInsert: Array<NonNullable<ReturnType<typeof buildInsertRow>>> = []
     const unknown: string[] = []
     let skipped = 0
 
