@@ -1,16 +1,18 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `104`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `107`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
   "DELETE /api/v1/companies/:companyId/customers/:id",
+  "DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId",
   "DELETE /api/v1/companies/:companyId/employees/:id",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id",
   "DELETE /api/v1/companies/:companyId/suppliers/:id",
   "DELETE /api/v1/companies/:companyId/webhooks/:id",
   "GET /api/v1/companies",
   "GET /api/v1/companies/:companyId/accounts",
+  "GET /api/v1/companies/:companyId/articles",
   "GET /api/v1/companies/:companyId/compliance/check",
   "GET /api/v1/companies/:companyId/customers",
   "GET /api/v1/companies/:companyId/customers/:id",
@@ -53,6 +55,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/health",
   "GET /api/v1/operations/:id",
   "PATCH /api/v1/companies/:companyId/customers/:id",
+  "PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId",
   "PATCH /api/v1/companies/:companyId/employees/:id",
   "PATCH /api/v1/companies/:companyId/invoices/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",

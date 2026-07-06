@@ -135,5 +135,10 @@ import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/stamp/route'
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/route'
+// #895: value lifecycle (rename/archive/end-date + delete-unreferenced).
+import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/[valueId]/route'
+
+// #895: articles read (artikelregister) for invoice line linkage.
+import '@/app/api/v1/companies/[companyId]/articles/route'
 
 export {}

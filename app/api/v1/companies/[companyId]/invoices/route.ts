@@ -27,10 +27,9 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
-import { getAvailableVatRates, getVatRules } from '@/lib/invoices/vat-rules'
-import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { eventBus } from '@/lib/events'
-import type { Invoice, InvoiceDocumentType } from '@/types'
+import type { Customer, Invoice, InvoiceDocumentType } from '@/types'
 
 const InvoiceStatus = z.enum([
   'draft',
@@ -298,10 +297,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 // Response projection on create: same shape as the detail endpoint.
 // Drop user_id, company_id (internal scoping).
 const INVOICE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
 
 const INVOICE_ITEMS_RESPONSE_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions, created_at'
+  'id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, created_at'
 
 // Loose response schema: invoices have many fields; pinning every one in
 // the registry is overkill until we have a real schema-drift test.
@@ -327,7 +326,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices',
   summary: 'Create a draft invoice, proforma, or delivery note.',
   description:
-    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send).',
+    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Supports ROT/RUT deduction lines (items[].deduction_type = "rot"|"rut" with invoice-level deduction_personnummer + deduction_housing_designation, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt), article linkage (items[].article_id + optional revenue_account override from the artikelregister), and project/cost-centre tagging (default_dimensions / items[].dimensions). Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send).',
   useWhen:
     'You need to issue a new invoice, proforma, or delivery note. Use dry-run first to confirm VAT calculations and currency conversion before committing.',
   doNotUseFor:
@@ -339,6 +338,8 @@ registerEndpoint({
     'invoice_number is null on creation. The number is allocated atomically when the invoice transitions out of draft. Counting on a specific number at create time is a bug.',
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
+    'ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.',
+    'Articles: pass items[].article_id (from the artikelregister, GET /articles) to link a line to a catalog article; price/description are still taken from the request body (the API never auto-fills from the article: send the values you want on the invoice). items[].revenue_account optionally overrides the BAS class-3 account and is validated against the chart of accounts.',
   ],
   example: {
     request: {
@@ -418,7 +419,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // of allowed per-item rates.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number_validated')
+      .select('*')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -433,116 +434,54 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    const vatRules = getVatRules(
-      customer.customer_type as Parameters<typeof getVatRules>[0],
-      customer.vat_number_validated,
-    )
-    const availableRates = getAvailableVatRates(
-      customer.customer_type as Parameters<typeof getAvailableVatRates>[0],
-      customer.vat_number_validated,
-    )
-    const allowedRates = new Set(availableRates.map((r) => r.rate))
-
-    // Per-item VAT validation + totals.
-    const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
-    let vatAmount = 0
-    if (documentType !== 'delivery_note') {
-      for (const item of input.items) {
-        const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-        if (!allowedRates.has(itemRate)) {
-          return v1ErrorResponseFromCode('INVOICE_CREATE_VAT_RULE_VIOLATION', ctx.log, {
-            requestId: ctx.requestId,
-            details: {
-              attempted_rate: itemRate,
-              allowed_rates: Array.from(allowedRates),
-              customer_type: customer.customer_type,
-            },
-          })
-        }
-        const lineTotal = item.quantity * item.unit_price
-        vatAmount += Math.round((lineTotal * itemRate) / 100 * 100) / 100
-      }
-    }
-    const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
-    const uniqueRates = new Set(input.items.map((item) => item.vat_rate ?? vatRules.rate))
-    const isMixedRate = uniqueRates.size > 1
-    const headerVatRate = documentType === 'delivery_note'
-      ? 0
-      : isMixedRate
-        ? null
-        : (uniqueRates.values().next().value ?? vatRules.rate)
-
-    // Currency conversion (best-effort; non-fatal on failure).
-    let exchangeRate: number | null = null
-    let exchangeRateDate: string | null = null
-    let subtotalSek: number | null = null
-    let vatAmountSek: number | null = null
-    let totalSek: number | null = null
-    if (input.currency !== 'SEK') {
-      const rateData = await fetchExchangeRate(input.currency)
-      if (rateData) {
-        exchangeRate = rateData.rate
-        exchangeRateDate = rateData.date
-        subtotalSek = convertToSEK(subtotal, exchangeRate)
-        vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-        totalSek = convertToSEK(total, exchangeRate)
-      }
-    }
-
-    // Build computed item rows for the would-be insert.
-    const itemRows = input.items.map((item, index) => {
-      const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-      const lineTotal = item.quantity * item.unit_price
-      const itemVat = documentType === 'delivery_note'
-        ? 0
-        : Math.round((lineTotal * itemRate) / 100 * 100) / 100
-      return {
-        sort_order: index,
-        description: item.description,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price: item.unit_price,
-        line_total: lineTotal,
-        vat_rate: itemRate,
-        vat_amount: itemVat,
-        // Dimensions PR7: per-item bag, merged over the invoice's
-        // default_dimensions on the revenue line when the JE posts at :send.
-        dimensions: item.dimensions ?? {},
-      }
+    // Shared write-builder: identical validation + computation to the
+    // dashboard create/edit routes (VAT rule gating, accrual guards,
+    // revenue-account override checks, server-side ROT/RUT compute +
+    // personnummer encryption, currency conversion, item-row mapping).
+    // A v1 caller therefore gets the same field coverage as the UI:
+    // deduction lines, article linkage, and per-line dimensions included.
+    const build = await buildInvoiceWriteData({
+      supabase: ctx.supabase,
+      companyId: ctx.companyId!,
+      customer: customer as Customer,
+      documentType,
+      input,
     })
+    if (!build.ok) {
+      if ('dbError' in build) {
+        return v1ErrorResponse(build.dbError, ctx.log, { requestId: ctx.requestId })
+      }
+      // The builder emits camelCase detail keys (internal-route convention);
+      // the v1 wire shape for this code predates the builder and is
+      // documented snake_case: keep it stable for existing consumers.
+      const details =
+        build.code === 'INVOICE_CREATE_VAT_RULE_VIOLATION' && build.details
+          ? {
+              attempted_rate: build.details.attemptedRate,
+              allowed_rates: build.details.allowedRates,
+              customer_type: build.details.customerType,
+            }
+          : build.details
+      return v1ErrorResponseFromCode(build.code, ctx.log, {
+        requestId: ctx.requestId,
+        details,
+      })
+    }
+    const { invoiceFields, items: itemRows } = build
 
     // Dry-run: validation-only preview. Drafts have no journal-entry side
     // effects yet, so no pending_operations staging needed; the
     // dryRunStaged() variant lands in PR-B-2b for :send.
     if (ctx.dryRun) {
+      // Never echo the encrypted personnummer blob in a preview; last4 is
+      // the display-safe representation the response columns expose too.
+      const { deduction_personnummer_encrypted: _omit, ...previewFields } = invoiceFields
       return dryRunPreview(
         {
           // Would-be invoice row.
           invoice_number: null,
-          customer_id: input.customer_id,
-          invoice_date: input.invoice_date,
-          due_date: input.due_date,
-          delivery_date: input.delivery_date ?? null,
           status: 'draft' as const,
-          currency: input.currency,
-          exchange_rate: exchangeRate,
-          exchange_rate_date: exchangeRateDate,
-          subtotal: documentType === 'delivery_note' ? 0 : subtotal,
-          subtotal_sek: documentType === 'delivery_note' ? null : subtotalSek,
-          vat_amount: vatAmount,
-          vat_amount_sek: documentType === 'delivery_note' ? null : vatAmountSek,
-          total,
-          total_sek: documentType === 'delivery_note' ? null : totalSek,
-          vat_treatment: vatRules.treatment,
-          vat_rate: headerVatRate,
-          moms_ruta: vatRules.momsRuta,
-          reverse_charge_text: vatRules.reverseChargeText || null,
-          your_reference: input.your_reference ?? null,
-          our_reference: input.our_reference ?? null,
-          notes: input.notes ?? null,
-          document_type: documentType,
-          remaining_amount: documentType === 'invoice' ? total : 0,
-          default_dimensions: input.default_dimensions ?? {},
+          ...previewFields,
           items: itemRows,
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -566,32 +505,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .insert({
         user_id: ctx.userId,
         company_id: ctx.companyId!,
-        customer_id: input.customer_id,
         invoice_number: invoiceNumber,
-        invoice_date: input.invoice_date,
-        due_date: input.due_date,
-        delivery_date: input.delivery_date ?? null,
-        currency: input.currency,
-        exchange_rate: exchangeRate,
-        exchange_rate_date: exchangeRateDate,
-        subtotal: documentType === 'delivery_note' ? 0 : subtotal,
-        subtotal_sek: documentType === 'delivery_note' ? null : subtotalSek,
-        vat_amount: vatAmount,
-        vat_amount_sek: documentType === 'delivery_note' ? null : vatAmountSek,
-        total,
-        total_sek: documentType === 'delivery_note' ? null : totalSek,
-        remaining_amount: documentType === 'invoice' ? total : 0,
-        vat_treatment: vatRules.treatment,
-        vat_rate: headerVatRate,
-        moms_ruta: vatRules.momsRuta,
-        reverse_charge_text: vatRules.reverseChargeText || null,
-        your_reference: input.your_reference,
-        our_reference: input.our_reference,
-        notes: input.notes,
-        document_type: documentType,
-        // Dimensions PR7: invoice-level bag; the :send JE generator applies it
-        // to every line (items[].dimensions win per key).
-        default_dimensions: input.default_dimensions ?? {},
+        ...invoiceFields,
       })
       .select(INVOICE_RESPONSE_COLUMNS)
       .single()

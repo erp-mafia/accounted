@@ -186,6 +186,15 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
   'POST /api/v1/companies/:companyId/dimensions/:id/values': 'bookkeeping:write',
+  // Value lifecycle (#895): rename/archive/end-date via PATCH; DELETE only
+  // succeeds for unreferenced values (BFL retention trigger guards the rest).
+  'PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId': 'bookkeeping:write',
+
+  // Articles (artikelregister, #895): read-only list so invoice items can
+  // link article_id / copy housework_type + revenue_account. Rides
+  // invoices:read (the register exists to serve invoicing).
+  'GET /api/v1/companies/:companyId/articles': 'invoices:read',
 
   // Webhooks (Phase 6 PR-1)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',

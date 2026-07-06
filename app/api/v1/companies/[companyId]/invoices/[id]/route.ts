@@ -19,6 +19,7 @@ import { parseExpand } from '@/lib/api/v1/expand'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 
 // Allowed PATCH fields for a draft invoice. Excludes items (separate
 // workflow), customer_id / currency / document_type (structural: change
@@ -31,6 +32,10 @@ const V1PatchDraftInvoiceSchema = z.object({
   your_reference: z.union([z.string(), z.null()]).optional(),
   our_reference: z.union([z.string(), z.null()]).optional(),
   notes: z.union([z.string(), z.null()]).optional(),
+  // Project/cost-centre tagging ({"6":"P001"}): replaces the whole bag.
+  // Send {} to clear all tags. Codes are validated against the dimension
+  // registry when the invoice posts at :send, not here.
+  default_dimensions: DimensionsBagSchema.optional(),
 })
 
 // Loose schema: detail responses carry many fields, and pinning the exact
@@ -57,13 +62,13 @@ const ALLOWED_EXPAND = ['items', 'payments'] as const
 // VAT treatment, conversion, FX, and notes, but still drops user_id and
 // company_id (internal scoping).
 const INVOICE_DETAIL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
 
 const CUSTOMER_DETAIL_COLUMNS =
   'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const INVOICE_ITEM_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions, created_at'
+  'id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, created_at'
 
 // Payment projection: drops invoice_id (redundant on the parent), user_id,
 // company_id (internal scoping).
@@ -182,7 +187,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id',
   summary: 'Update a draft invoice (metadata fields only).',
   description:
-    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes. customer_id, currency, document_type, items, and computed totals are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
+    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag). customer_id, currency, document_type, items, and computed totals are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
   useWhen:
     'You need to correct a typo, push the due date, or update a customer reference on a draft you have not sent yet. The invoice number stays null until the first :send action.',
   doNotUseFor:
@@ -191,6 +196,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The error code name is shared with the DELETE handler.',
     'Items are immutable here: to change line items, delete the draft and POST a fresh one.',
+    'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
   ],
   example: {
     request: { due_date: '2026-07-15', notes: 'Förlängd förfallotid' },
@@ -214,7 +220,7 @@ registerEndpoint({
 })
 
 const INVOICE_PATCH_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'invoices.update',
@@ -262,6 +268,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'your_reference',
       'our_reference',
       'notes',
+      'default_dimensions',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }
