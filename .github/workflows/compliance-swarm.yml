@@ -1,4 +1,4 @@
-name: compliance: full swarm
+name: "compliance: full swarm"
 
 # Full hybrid audit: deterministic scanners + LLM-driven deep_audit checks
 # (RoPA drift, AGPL §13 evaluation, IDOR/access-control reasoning, ISMS clause
