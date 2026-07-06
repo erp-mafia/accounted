@@ -137,4 +137,82 @@ describe('POST /api/salary/runs/[id]/approve: bank-detail guard', () => {
 
     expect(status).toBe(200)
   })
+
+  it('flags the bank-detail block as overridable so the UI can offer "Godkänn ändå"', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review', company_id: 'company-1' } },
+      { data: [runEmp({ first_name: 'Test', last_name: 'Testsson', net_salary: 24000, tax_withheld: 8000 })] },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/approve', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ code: string; overridable: boolean }>(response)
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('SALARY_APPROVE_BANK_DETAILS_MISSING')
+    expect(body.overridable).toBe(true)
+  })
+
+  it('approves past missing bank details when ?force=true, surfacing the reminder as a warning', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review', company_id: 'company-1' } },
+      { data: [runEmp({ first_name: 'Test', last_name: 'Testsson', net_salary: 24000, tax_withheld: 8000 })] },
+      { data: { id: 'run-1', status: 'approved' } }, // update
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/approve', {
+      method: 'POST',
+      searchParams: { force: 'true' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { status: string }; warnings: string[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('approved')
+    expect(body.warnings.some((w) => w.includes('Bankuppgifter saknas'))).toBe(true)
+  })
+
+  it('does not let ?force=true bypass a missing calculation (hard block)', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review', company_id: 'company-1' } },
+      {
+        data: [
+          {
+            net_salary: 24000,
+            tax_withheld: 8000,
+            tax_withheld_override: null,
+            calculation_breakdown: null, // never calculated → hard block
+            employee: {
+              first_name: 'Test',
+              last_name: 'Testsson',
+              clearing_number: '8327',
+              bank_account_number: '1234567',
+              email: 'employee@example.com',
+            },
+          },
+        ],
+      },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/approve', {
+      method: 'POST',
+      searchParams: { force: 'true' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ code: string; overridable: boolean; details: string[] }>(response)
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('SALARY_APPROVE_BLOCKED')
+    expect(body.overridable).toBe(false)
+    expect(body.details[0]).toContain('Beräkning saknas')
+  })
 })

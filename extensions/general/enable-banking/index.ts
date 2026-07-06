@@ -817,6 +817,106 @@ export const enableBankingExtension: Extension = {
           }
         })
 
+        // Resolve the effective mirror ledger for every account up front and
+        // reject collisions with a 400 — the mirror pass below writes into
+        // cash_accounts, whose UNIQUE (company_id, ledger_account) constraint
+        // would otherwise fail per-account and get swallowed, leaving accounts
+        // silently unmirrored.
+        const { allocatePsd2LedgerAccount, upsertFromPsd2 } = await import(
+          '@/lib/cash-accounts/service'
+        )
+
+        const { data: companyCashRows } = await supabase
+          .from('cash_accounts')
+          .select('external_uid, bank_connection_id, ledger_account')
+          .eq('company_id', companyId)
+        const cashRows = (companyCashRows ?? []) as Array<{
+          external_uid: string | null
+          bank_connection_id: string | null
+          ledger_account: string
+        }>
+        const existingLedgerByUid = new Map(
+          cashRows
+            .filter(r => r.bank_connection_id === connection.id && r.external_uid)
+            .map(r => [r.external_uid as string, r.ledger_account])
+        )
+        // Slots held by OTHER connections' PSD2 accounts — an explicit mapping
+        // onto one of those would violate the unique constraint. Manual rows
+        // are not foreign: upsertFromPsd2 promotes them in place.
+        const foreignConnectedLedgers = new Set(
+          cashRows
+            .filter(r => r.bank_connection_id !== null && r.bank_connection_id !== connection.id)
+            .map(r => r.ledger_account)
+        )
+
+        const effectiveLedgerByUid = new Map<string, string>()
+        const usedLedgers = new Set<string>()
+        const duplicateLedgers = new Set<string>()
+        const conflictingLedgers = new Set<string>()
+
+        // First pass: accounts with an explicit or previously mirrored ledger.
+        for (const a of updatedAccounts) {
+          const ledger = a.ledger_account ?? existingLedgerByUid.get(a.uid)
+          if (!ledger) continue
+          if (usedLedgers.has(ledger)) duplicateLedgers.add(ledger)
+          if (foreignConnectedLedgers.has(ledger) && existingLedgerByUid.get(a.uid) !== ledger) {
+            conflictingLedgers.add(ledger)
+          }
+          usedLedgers.add(ledger)
+          effectiveLedgerByUid.set(a.uid, ledger)
+        }
+
+        if (duplicateLedgers.size > 0) {
+          return NextResponse.json(
+            {
+              error: 'Flera bankkonton kan inte bokföras på samma konto. Välj olika bokföringskonton.',
+              duplicate_accounts: [...duplicateLedgers],
+            },
+            { status: 400 }
+          )
+        }
+        if (conflictingLedgers.size > 0) {
+          return NextResponse.json(
+            {
+              error: 'Bokföringskontot används redan av ett bankkonto från en annan bankanslutning.',
+              conflicting_accounts: [...conflictingLedgers],
+            },
+            { status: 400 }
+          )
+        }
+
+        // Second pass: allocate a free slot for accounts with no ledger at all
+        // (legacy connections mirrored before allocation existed, or mappings
+        // explicitly cleared). Allocation failure must never block selection
+        // save — fall back to the pre-allocator behavior (1930) and let the
+        // mirror pass surface any collision per-account, as before.
+        for (const a of updatedAccounts) {
+          if (effectiveLedgerByUid.has(a.uid)) continue
+          let allocated: string | null = null
+          try {
+            allocated = await allocatePsd2LedgerAccount(supabase, companyId, user.id, {
+              currency: a.currency,
+              accountName: a.name,
+              exclude: usedLedgers,
+            })
+          } catch (allocErr) {
+            log.warn('[enable-banking] ledger allocation failed on selection save', {
+              connectionId: connection.id,
+              uid: a.uid,
+              error: allocErr instanceof Error ? allocErr.message : String(allocErr),
+            })
+          }
+          const ledger = allocated ?? '1930'
+          usedLedgers.add(ledger)
+          effectiveLedgerByUid.set(a.uid, ledger)
+        }
+
+        // accounts_data mirrors the resolved assignment so the picker
+        // pre-fills reality on the next open.
+        for (const a of updatedAccounts) {
+          a.ledger_account = effectiveLedgerByUid.get(a.uid)
+        }
+
         // State machine: only transition pending_selection → active. Once
         // active, the status field is omitted from the update so the same
         // endpoint can be reused to change account selection without
@@ -847,7 +947,6 @@ export const enableBankingExtension: Extension = {
         // and reconciliation pick up the new enabled state + ledger mapping
         // without reading the JSONB column.
         {
-          const { upsertFromPsd2 } = await import('@/lib/cash-accounts/service')
           for (const a of updatedAccounts) {
             try {
               await upsertFromPsd2(supabase, companyId, {

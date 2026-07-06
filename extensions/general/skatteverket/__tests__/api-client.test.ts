@@ -156,3 +156,61 @@ describe('SkatteverketAuthError', () => {
     expect(b.code).toBe('RATE_LIMITED')
   })
 })
+
+describe('refresh-token 404 classification', () => {
+  // SKV's per-flow refresh tokens live 65 minutes, so daily crons always find
+  // a dead token and get 404 id_not_found. That must surface as the
+  // SESSION_EXPIRED SkatteverketAuthError (which cron quiet-buckets and the
+  // UI reconnect flow understand), not as a raw Error that error-logs every
+  // night. Unique userIds per test: the module-level refresh coalescing map
+  // is keyed by userId.
+  const expiredTokens = {
+    access_token: 'stale',
+    refresh_token: 'dead-refresh',
+    expires_at: Date.now() - 60_000,
+    refresh_count: 1,
+    scope: 'momsdeklaration',
+  }
+
+  it('classifies 404 id_not_found as SESSION_EXPIRED', async () => {
+    const { getTokens } = await import('../lib/token-store')
+    const { refreshAccessToken } = await import('../lib/oauth')
+    // getValidToken reads once, refreshTokenForUser re-reads — queue both.
+    vi.mocked(getTokens)
+      .mockResolvedValueOnce(expiredTokens)
+      .mockResolvedValueOnce(expiredTokens)
+    vi.mocked(refreshAccessToken).mockRejectedValueOnce(
+      new Error(
+        'Skatteverket token refresh failed (404): {\n  "error":"id_not_found",\n  "error_description":"The refresh token is not found"\n}\n',
+      ),
+    )
+
+    try {
+      await skvRequest(fakeSupabase, 'user-404', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
+      expect((e as SkatteverketAuthError).message).toMatch(/Sessionen har gått ut/)
+    }
+  })
+
+  it('re-throws other refresh failures untouched', async () => {
+    const { getTokens } = await import('../lib/token-store')
+    const { refreshAccessToken } = await import('../lib/oauth')
+    vi.mocked(getTokens)
+      .mockResolvedValueOnce(expiredTokens)
+      .mockResolvedValueOnce(expiredTokens)
+    vi.mocked(refreshAccessToken).mockRejectedValueOnce(
+      new Error('Skatteverket token refresh failed (500): upstream unavailable'),
+    )
+
+    try {
+      await skvRequest(fakeSupabase, 'user-500', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).not.toBeInstanceOf(SkatteverketAuthError)
+      expect((e as Error).message).toMatch(/500/)
+    }
+  })
+})

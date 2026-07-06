@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api/calendar/feed-token')
 
 // In-memory rate limiting: token -> { count, resetAt }
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -141,7 +144,7 @@ export async function GET(
       },
     })
   } catch (error) {
-    console.error('Error generating ICS feed:', error)
+    log.error('Error generating ICS feed', error as Error, { feedId: feed.id })
     return new NextResponse('Failed to generate calendar feed', { status: 500 })
   }
 }

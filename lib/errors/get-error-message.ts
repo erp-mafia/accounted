@@ -372,6 +372,13 @@ export function getErrorMessage(
           : 'Räkenskapsperioden för det valda datumet är låst. Lås upp perioden för att flytta verifikationen dit.'
       }
 
+      if (structured.code === 'OB_COMPANY_LOCK_DATE') {
+        const details = structured.details as { lockDate?: string } | undefined
+        return details?.lockDate
+          ? `Bokföringen är låst t.o.m. ${details.lockDate} och ingående balanser kan inte korrigeras. Ta bort eller flytta låsdatumet under Inställningar → Bokföring och försök igen.`
+          : 'Bokföringen är låst av företagets låsdatum och ingående balanser kan inte korrigeras. Ta bort eller flytta låsdatumet under Inställningar → Bokföring och försök igen.'
+      }
+
       if (structured.code === 'MEANINGLESS_CORRECTION') {
         const details = structured.details as { reason?: string } | undefined
         if (details?.reason === 'no_date_change') {

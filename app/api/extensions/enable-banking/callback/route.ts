@@ -4,7 +4,11 @@ import { ensureInitialized } from '@/lib/init'
 import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
-import { upsertFromPsd2 } from '@/lib/cash-accounts/service'
+import {
+  upsertFromPsd2,
+  allocatePsd2LedgerAccount,
+  defaultLedgerForCurrency,
+} from '@/lib/cash-accounts/service'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
 // (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
@@ -13,19 +17,6 @@ import { upsertFromPsd2 } from '@/lib/cash-accounts/service'
 // redirect route is the first event-emitting code path to execute.
 ensureInitialized()
 
-// Suggested BAS account per currency. Mirrors the AccountPickerDialog defaults
-// (SEK→1930, EUR→1932, USD→1933, GBP→1934). The user can re-map in the picker
-// after this callback redirects them.
-const CURRENCY_DEFAULTS: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
-
-function defaultLedgerForCurrency(currency: string): string {
-  return CURRENCY_DEFAULTS[currency.toUpperCase()] ?? '1930'
-}
 
 /**
  * GET /api/extensions/enable-banking/callback
@@ -46,7 +37,12 @@ export async function GET(request: Request) {
 
   if (error) {
     const errorMessage = errorDescription || error
-    console.error('[enable-banking] Bank authorization denied', {
+    // access_denied is the user cancelling at the bank — an expected outcome,
+    // not a runtime error. Only bank-side failures stay at error level.
+    const isUserCancel =
+      error === 'access_denied' || /cancelled by user/i.test(errorDescription ?? '')
+    const logDenied = isUserCancel ? console.warn : console.error
+    logDenied('[enable-banking] Bank authorization denied', {
       error,
       error_description: errorDescription,
       has_state: !!state,
@@ -62,13 +58,13 @@ export async function GET(request: Request) {
         // (which stays 'expired' during the round-trip) is also handled.
         const { data: pendingConn } = await supabase
           .from('bank_connections')
-          .select('id, user_id, bank_name')
+          .select('id, user_id, bank_name, psu_type')
           .eq('oauth_state', state)
           .in('status', ['pending', 'expired', 'error'])
           .single()
 
         if (pendingConn) {
-          console.error('[enable-banking] Authorization denied details', {
+          logDenied('[enable-banking] Authorization denied details', {
             connection_id: pendingConn.id,
             user_id: pendingConn.user_id,
             bank_name: pendingConn.bank_name,
@@ -88,11 +84,15 @@ export async function GET(request: Request) {
             .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: errorMessage, oauth_state: null })
             .eq('id', pendingConn.id)
 
-          // Include bank name and error code in redirect so the UI can offer PSU type retry
+          // Include bank name, error code, and psu_type in the redirect so the
+          // UI can render targeted guidance (e.g. PSU-type retry on
+          // access_denied, or the Handelsbanken corporate fullmakt steps on
+          // server_error for a business connect).
           const params = new URLSearchParams({
             bank_error: errorMessage,
             ...(pendingConn.bank_name ? { bank_name: pendingConn.bank_name } : {}),
-            ...(error === 'access_denied' ? { bank_error_code: error } : {}),
+            bank_error_code: error,
+            ...(pendingConn.psu_type ? { psu_type: pendingConn.psu_type } : {}),
           })
           return NextResponse.redirect(`${baseUrl}/settings/banking?${params.toString()}`)
         }
@@ -206,12 +206,40 @@ export async function GET(request: Request) {
       throw new Error(`Failed to update connection: ${updateError.message}`)
     }
 
-    // Mirror each PSD2 account into cash_accounts so routing decisions read from
-    // the canonical entity table. The user picks a ledger_account in the
-    // AccountPickerDialog after this redirect; until then we route SEK→1930,
-    // EUR→1932, USD→1933, GBP→1934 by convention.
+    // Mirror each PSD2 account into cash_accounts so routing decisions read
+    // from the canonical entity table. Accounts already mirrored (reconnect)
+    // keep their ledger_account — re-deriving it here would clobber the
+    // user's remaps. New accounts each get a free BAS class-19 slot: a bank
+    // returning N same-currency accounts must not collide on the UNIQUE
+    // (company_id, ledger_account) constraint by all defaulting to 1930.
+    const { data: mirroredRows } = await supabase
+      .from('cash_accounts')
+      .select('external_uid, ledger_account')
+      .eq('company_id', updatedConnection.company_id)
+      .eq('bank_connection_id', updatedConnection.id)
+    const existingLedgerByUid = new Map(
+      ((mirroredRows ?? []) as Array<{ external_uid: string; ledger_account: string }>).map(
+        (r) => [r.external_uid, r.ledger_account],
+      ),
+    )
+    const assignedLedgers = new Set<string>(existingLedgerByUid.values())
+    let accountsDataDirty = false
+
     for (const account of accountsMetadata) {
-      const targetLedger = defaultLedgerForCurrency(account.currency)
+      let targetLedger = existingLedgerByUid.get(account.uid)
+      if (!targetLedger) {
+        targetLedger =
+          (await allocatePsd2LedgerAccount(supabase, updatedConnection.company_id, updatedConnection.user_id, {
+            currency: account.currency,
+            accountName: account.name,
+            exclude: assignedLedgers,
+          })) ?? defaultLedgerForCurrency(account.currency)
+      }
+      assignedLedgers.add(targetLedger)
+      if (account.ledger_account !== targetLedger) {
+        account.ledger_account = targetLedger
+        accountsDataDirty = true
+      }
       try {
         await upsertFromPsd2(supabase, updatedConnection.company_id, {
           bank_connection_id: updatedConnection.id,
@@ -253,6 +281,22 @@ export async function GET(request: Request) {
             error: emitError instanceof Error ? emitError.message : String(emitError),
           })
         }
+      }
+    }
+
+    // Persist the allocated ledgers into accounts_data so the AccountPicker
+    // pre-fills the actual assignments instead of colliding currency
+    // defaults. Non-fatal: cash_accounts is the routing source of truth.
+    if (accountsDataDirty) {
+      const { error: accountsDataError } = await supabase
+        .from('bank_connections')
+        .update({ accounts_data: accountsMetadata })
+        .eq('id', updatedConnection.id)
+      if (accountsDataError) {
+        console.warn('[enable-banking] Failed to persist allocated ledgers to accounts_data', {
+          connectionId: updatedConnection.id,
+          error: accountsDataError.message,
+        })
       }
     }
 

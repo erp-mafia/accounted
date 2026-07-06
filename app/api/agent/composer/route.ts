@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { composeAgentProfile } from '@/lib/agent/composer'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -24,13 +23,12 @@ const BodySchema = z.object({
 //   4. Persists to agent_profiles (skipped on dry_run).
 //   5. Fires fire-and-forget cache pre-warm.
 //
-// Auth: must be a member of the target company.
+// Auth: must be a non-viewer member of the target company (it rewrites the
+// company's agent_profile unless dry_run).
 //
 // Plan ref: dev_docs/specialized-agent-plan.md §6.
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const POST = withRouteContext('agent.composer.run', async (request, ctx) => {
+  const { supabase, companyId: activeCompanyId, user } = ctx
 
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) {
@@ -40,22 +38,29 @@ export async function POST(request: Request) {
     })
   }
 
-  let body: z.infer<typeof BodySchema>
-  try {
-    body = BodySchema.parse(await request.json().catch(() => ({})))
-  } catch (err) {
+  // Tolerant parse: ops callers POST with an empty body, which is valid here.
+  const raw = await request.json().catch(() => ({}))
+  const parsed = BodySchema.safeParse(raw)
+  if (!parsed.success) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
+      {
+        error: 'Validation failed',
+        type: 'validation_error',
+        errors: parsed.error.issues.map((issue) => ({
+          field: issue.path.join('.'),
+          message: issue.message,
+          code: issue.code,
+        })),
+      },
       { status: 400 },
     )
   }
+  const body = parsed.data
 
-  const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
-  if (!companyId) {
-    return NextResponse.json({ error: 'No active company' }, { status: 400 })
-  }
+  const companyId = body.company_id ?? activeCompanyId
 
-  // Defense in depth alongside RLS: confirm membership before composing.
+  // Defense in depth alongside RLS: confirm membership before composing, and
+  // require a non-viewer role: the composer rewrites agent_profiles.
   const { data: membership } = await supabase
     .from('company_members')
     .select('role')
@@ -63,7 +68,28 @@ export async function POST(request: Request) {
     .eq('user_id', user.id)
     .maybeSingle()
   if (!membership) {
-    return NextResponse.json({ error: 'Not a member of this company' }, { status: 403 })
+    return NextResponse.json(
+      {
+        error: {
+          code: 'NOT_COMPANY_MEMBER',
+          message: 'Du är inte medlem i detta företag.',
+          message_en: 'Not a member of this company.',
+        },
+      },
+      { status: 403 },
+    )
+  }
+  if (membership.role === 'viewer') {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'WRITE_PERMISSION_REQUIRED',
+          message: 'Du har endast läsbehörighet i detta företag.',
+          message_en: 'You only have read access in this company.',
+        },
+      },
+      { status: 403 },
+    )
   }
 
   const blocked = await guardSandbox(supabase, companyId)
@@ -72,11 +98,6 @@ export async function POST(request: Request) {
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked
 
-  try {
-    const composed = await composeAgentProfile(supabase, companyId, { dryRun: body.dry_run })
-    return NextResponse.json({ data: composed })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Composer failed'
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
-}
+  const composed = await composeAgentProfile(supabase, companyId, { dryRun: body.dry_run })
+  return NextResponse.json({ data: composed })
+})

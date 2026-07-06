@@ -4,12 +4,20 @@ vi.mock('../trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 
+vi.mock('../imbalance-diagnosis', () => ({
+  findUntransferredResults: vi.fn(),
+  buildImbalanceDiagnosis: vi.fn(),
+}))
+
 import { generateBalansrapport } from '../balansrapport'
 import { generateTrialBalance } from '../trial-balance'
+import { findUntransferredResults, buildImbalanceDiagnosis } from '../imbalance-diagnosis'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
+const mockFindUntransferred = vi.mocked(findUntransferredResults)
+const mockBuildDiagnosis = vi.mocked(buildImbalanceDiagnosis)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -233,6 +241,67 @@ describe('generateBalansrapport', () => {
     const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
 
     expect(report.is_balanced).toBe(false)
+  })
+
+  it('attaches imbalance_diagnosis when the trial balance does not balance', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2025-03-01', period_end: '2026-02-28' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce({
+      rows: [
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 1097 }),
+        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, closing_credit: 1000 }),
+      ],
+      totalDebit: 1097,
+      totalCredit: 1000,
+      isBalanced: false,
+    })
+
+    const culprit = {
+      fiscal_period_id: 'p2',
+      period_name: 'Räkenskapsår 2024/2025',
+      pl_net: 97,
+    }
+    const diagnosis = {
+      differens: 97,
+      untransferred_results: [culprit],
+      message: 'Differensen beror på att resultatet för Räkenskapsår 2024/2025 …',
+    }
+    mockFindUntransferred.mockResolvedValue([culprit])
+    mockBuildDiagnosis.mockReturnValue(diagnosis)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-3')
+
+    expect(mockFindUntransferred).toHaveBeenCalledWith(q.supabase, 'company-1', {
+      beforePeriodStart: '2025-03-01',
+    })
+    expect(mockBuildDiagnosis).toHaveBeenCalledWith([culprit], 97)
+    expect(report.imbalance_diagnosis).toEqual(diagnosis)
+  })
+
+  it('omits imbalance_diagnosis when the trial balance balances', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 1000 }),
+        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, closing_credit: 1000 }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.imbalance_diagnosis).toBeUndefined()
+    expect(mockFindUntransferred).not.toHaveBeenCalled()
   })
 
   it('ignores P&L accounts (class 3-8)', async () => {

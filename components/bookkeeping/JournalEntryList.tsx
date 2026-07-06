@@ -257,6 +257,23 @@ export default function JournalEntryList() {
       setPeriodHydrated(true)
       return
     }
+
+    const stored =
+      typeof window !== 'undefined'
+        ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
+        : null
+    // Optimistic hydration: a saved scope unblocks the first entries fetch
+    // immediately instead of serializing it behind the fiscal-periods
+    // round-trip (the common returning-user case). The fetch below still
+    // validates a saved period id and re-scopes to the current räkenskapsår
+    // if it went stale (e.g. the period was deleted), the entries effect
+    // then refires with the corrected scope.
+    if (stored) {
+      // FISCAL_YEAR_ALL_VALUE = user explicitly chose "all years", respect it.
+      setPeriodId(stored === FISCAL_YEAR_ALL_VALUE ? null : stored)
+      setPeriodHydrated(true)
+    }
+
     let cancelled = false
     ;(async () => {
       let fetched: FiscalPeriod[] = []
@@ -271,20 +288,12 @@ export default function JournalEntryList() {
       }
       if (cancelled) return
 
-      const stored =
-        typeof window !== 'undefined'
-          ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
-          : null
-      if (stored === FISCAL_YEAR_ALL_VALUE) {
-        // User explicitly chose "all years", respect it.
-        setPeriodId(null)
-      } else if (stored && fetched.some((p) => p.id === stored)) {
-        setPeriodId(stored)
-      } else {
-        // No (valid) saved scope → default to the current räkenskapsår.
-        const today = new Date().toISOString().split('T')[0]
-        setPeriodId(resolveCurrentPeriodId(fetched, today))
-      }
+      if (stored === FISCAL_YEAR_ALL_VALUE) return
+      if (stored && fetched.some((p) => p.id === stored)) return
+
+      // No (valid) saved scope → default to the current räkenskapsår.
+      const today = new Date().toISOString().split('T')[0]
+      setPeriodId(resolveCurrentPeriodId(fetched, today))
       setPeriodHydrated(true)
     })()
     return () => {

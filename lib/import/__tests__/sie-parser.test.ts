@@ -535,6 +535,89 @@ describe('validateSIEFile', () => {
   })
 })
 
+// --- validateSIEFile: missing omföring av årets resultat ---
+// A completed fiscal year whose vouchers leave a residual on P&L accounts
+// never moved its result to equity. Later imported years derive IB from
+// balance-sheet accounts only, so the residual becomes a permanent
+// balansräkning differens (prod incident: 97 kr across three years).
+
+const OMFORING_HEADER = [
+  '#FLAGGA 0',
+  '#SIETYP 4',
+  '#FNAMN "Omföring AB"',
+  '#KONTO 1930 "Företagskonto"',
+  '#KONTO 3001 "Försäljning"',
+  '#KONTO 8999 "Årets resultat"',
+  '#KONTO 2099 "Årets resultat"',
+]
+
+const OMFORING_MISSING_VOUCHERS = [
+  '#VER A 1 20240401 "Försäljning"',
+  '{',
+  '#TRANS 1930 {} 97.00',
+  '#TRANS 3001 {} -97.00',
+  '}',
+]
+
+const OMFORING_PRESENT_VOUCHERS = [
+  ...OMFORING_MISSING_VOUCHERS,
+  '#VER A 2 20250228 "Omföring av årets resultat"',
+  '{',
+  '#TRANS 8999 {} 97.00',
+  '#TRANS 2099 {} -97.00',
+  '}',
+]
+
+describe('validateSIEFile — untransferred result (omföring saknas)', () => {
+  it('warns when a completed year leaves a residual on P&L accounts', () => {
+    const content = [
+      ...OMFORING_HEADER,
+      '#RAR 0 20240301 20250228',
+      ...OMFORING_MISSING_VOUCHERS,
+    ].join('\n')
+
+    const validation = validateSIEFile(parseSIEFile(content))
+
+    const warning = validation.warnings.find((w) => w.includes('omföring av årets resultat'))
+    expect(warning).toBeDefined()
+    expect(warning).toContain('97.00 kr')
+    // A missing omföring is a data-quality heads-up, never an import blocker.
+    expect(validation.valid).toBe(true)
+  })
+
+  it('does not warn when the file contains the result transfer', () => {
+    const content = [
+      ...OMFORING_HEADER,
+      '#RAR 0 20240301 20250228',
+      ...OMFORING_PRESENT_VOUCHERS,
+    ].join('\n')
+
+    const validation = validateSIEFile(parseSIEFile(content))
+
+    expect(
+      validation.warnings.some((w) => w.includes('omföring av årets resultat'))
+    ).toBe(false)
+  })
+
+  it('does not warn for a running fiscal year', () => {
+    const content = [
+      ...OMFORING_HEADER,
+      // Fiscal year end far in the future — the running year legitimately
+      // carries its result on class 3-8 until bokslut.
+      '#RAR 0 20990101 20991231',
+      ...OMFORING_MISSING_VOUCHERS.map((line) =>
+        line.replace('20240401', '20990401')
+      ),
+    ].join('\n')
+
+    const validation = validateSIEFile(parseSIEFile(content))
+
+    expect(
+      validation.warnings.some((w) => w.includes('omföring av årets resultat'))
+    ).toBe(false)
+  })
+})
+
 // --- Fix 2: Windows-1252 encoding detection and decoding ---
 
 describe('detectEncoding: #FORMAT PC8 detection', () => {

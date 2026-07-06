@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -44,6 +45,7 @@ export default function EmployeeTaxCard({
   disabled,
   onChange,
 }: EmployeeTaxCardProps) {
+  const t = useTranslations('salary_employee')
   const incomeYear = year ?? new Date().getFullYear()
 
   const [fSkatt, setFSkatt] = useState(initial?.f_skatt_status ?? 'a_skatt')
@@ -89,14 +91,14 @@ export default function EmployeeTaxCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Skatt</CardTitle>
+        <CardTitle className="text-base">{t('tax_title')}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="f_skatt_status">
-              <InfoTooltip content="A-skatt: du drar preliminärskatt enligt skattetabell. F-skatt/FA-skatt: personen sköter sin egen skatt: inget skatteavdrag görs.">
-                Skatteform
+              <InfoTooltip content={t('tax_form_tooltip')}>
+                {t('tax_form_label')}
               </InfoTooltip>
             </Label>
             <Select value={fSkatt} onValueChange={setFSkatt} disabled={disabled}>
@@ -107,7 +109,7 @@ export default function EmployeeTaxCard({
                 <SelectItem value="a_skatt">A-skatt</SelectItem>
                 <SelectItem value="f_skatt">F-skatt</SelectItem>
                 <SelectItem value="fa_skatt">FA-skatt</SelectItem>
-                <SelectItem value="not_verified">Ej verifierad</SelectItem>
+                <SelectItem value="not_verified">{t('tax_status_not_verified')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -120,8 +122,8 @@ export default function EmployeeTaxCard({
                 disabled={disabled}
                 className="rounded border-border"
               />
-              <InfoTooltip content="Kryssa i om detta INTE är personens huvudarbetsgivare. Då dras en fast skatt på 30 % istället för enligt tabell.">
-                Sidoinkomst (30 % skatteavdrag)
+              <InfoTooltip content={t('tax_sidoinkomst_tooltip')}>
+                {t('tax_sidoinkomst_label')}
               </InfoTooltip>
             </label>
           </div>
@@ -131,8 +133,8 @@ export default function EmployeeTaxCard({
           <>
             <div className="space-y-2">
               <Label htmlFor="tax_municipality">
-                <InfoTooltip content="Kommunen där personen är folkbokförd (per 1 november föregående år). Den avgör skattetabellen: välj kommun så fylls tabellen i automatiskt.">
-                  Folkbokföringskommun
+                <InfoTooltip content={t('tax_municipality_tooltip')}>
+                  {t('tax_municipality_label')}
                 </InfoTooltip>
                 <RequiredMark />
               </Label>
@@ -163,8 +165,8 @@ export default function EmployeeTaxCard({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="tax_table_number">
-                  <InfoTooltip content="Skatteverkets tabell 29-42, baserad på kommunens totala skattesats. Härleds automatiskt från folkbokföringskommunen.">
-                    Skattetabell
+                  <InfoTooltip content={t('tax_table_tooltip')}>
+                    {t('tax_table_label')}
                   </InfoTooltip>
                   <RequiredMark />
                 </Label>
@@ -191,7 +193,7 @@ export default function EmployeeTaxCard({
                   </div>
                 ) : (
                   <p className="rounded-md border border-dashed border-input px-3 py-2 text-sm text-muted-foreground">
-                    Välj kommun ovan
+                    {t('tax_table_pick_municipality')}
                   </p>
                 )}
 
@@ -201,15 +203,15 @@ export default function EmployeeTaxCard({
                     onClick={() => setTableManual((v) => !v)}
                     className="text-xs text-primary hover:underline underline-offset-4"
                   >
-                    {tableManual ? 'Använd kommunens tabell' : 'Ange tabell manuellt'}
+                    {tableManual ? t('tax_table_use_municipality') : t('tax_table_enter_manually')}
                   </button>
                 )}
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="tax_column">
-                  <InfoTooltip content="Kolumnen i skattetabellen avgör hur avdraget beräknas, främst utifrån ålder och inkomsttyp. Föreslås automatiskt från personnumret.">
-                    Kolumn
+                  <InfoTooltip content={t('tax_column_tooltip')}>
+                    {t('tax_column_label')}
                   </InfoTooltip>
                 </Label>
                 <Select
@@ -233,11 +235,11 @@ export default function EmployeeTaxCard({
                 </Select>
                 {!columnTouched && derivedColumn != null ? (
                   <p className="text-xs text-muted-foreground">
-                    Föreslås automatiskt: anställd under 66 år.
+                    {t('tax_column_suggested_under_66')}
                   </p>
                 ) : isSenior && !columnTouched ? (
                   <p className="text-xs text-warning-foreground">
-                    Personen har fyllt 66 år: välj kolumn manuellt (lön = kolumn 3, pension = kolumn 2).
+                    {t('tax_column_senior_warning')}
                   </p>
                 ) : null}
               </div>
@@ -246,8 +248,8 @@ export default function EmployeeTaxCard({
         ) : (
           <p className="rounded-md border border-dashed border-input px-3 py-3 text-sm text-muted-foreground">
             {sido
-              ? 'Sidoinkomst: ett fast skatteavdrag på 30 % görs: ingen skattetabell behövs.'
-              : 'Med F-skatt eller FA-skatt sköter personen sin egen skatt: inget skatteavdrag görs och ingen skattetabell behövs.'}
+              ? t('tax_no_table_sidoinkomst')
+              : t('tax_no_table_f_skatt')}
           </p>
         )}
       </CardContent>

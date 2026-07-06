@@ -39,13 +39,16 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions'
 
+// default_dimensions stays in this projection: the inserted credit-note row is
+// handed to createCreditNoteJournalEntry, which reads the bag off the row so
+// the reversing JE nets against the same dimension cells as the original.
 const CREDIT_NOTE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const ORIGINAL_ITEMS_COLUMNS =
-  'sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount'
+  'sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions'
 
 const CreditNoteCreated = z.object({
   id: z.string().uuid(),
@@ -181,6 +184,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         line_total: number
         vat_rate?: number | null
         vat_amount?: number | null
+        dimensions?: Record<string, string> | null
       }>
     }
     const original = originalInvoice as unknown as OriginalShape
@@ -246,6 +250,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       credited_invoice_id: originalId,
       status: 'sent' as const,
       document_type: 'invoice' as const,
+      // Copy the original's dimension bag so the credit-note verifikat nets
+      // against the same dimension cells in reports (dimensions PR7).
+      default_dimensions: original.default_dimensions ?? {},
     }
 
     const creditNoteItems = (original.items ?? []).map((item) => ({
@@ -257,6 +264,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       line_total: -Math.abs(item.line_total),
       vat_rate: item.vat_rate ?? 0,
       vat_amount: -Math.abs(item.vat_amount ?? 0),
+      // Same reasoning: the reversal must carry the exact per-item bag the
+      // original booked with (dimensions PR7).
+      dimensions: item.dimensions ?? {},
     }))
 
     // Fetch settings for accounting method + entity type.

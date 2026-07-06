@@ -485,8 +485,15 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
       return stampHeaders(response, requestId)
     } catch (err) {
-      log.error('op failed', err as Error, { durationMs: Date.now() - start })
-      return await v1ErrorResponse(err, log, { requestId })
+      // Resolve the envelope first so the log level can follow the mapped
+      // status — thrown 4xx domain errors are expected outcomes (warn), only
+      // 5xx are runtime errors. v1ErrorResponse logs the error itself at the
+      // same threshold.
+      const response = await v1ErrorResponse(err, log, { requestId })
+      const meta = { durationMs: Date.now() - start, status: response.status }
+      if (response.status < 500) log.warn('op failed', err as Error, meta)
+      else log.error('op failed', err as Error, meta)
+      return response
     }
   }
 }

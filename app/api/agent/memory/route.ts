@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getActiveCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody, validateQuery } from '@/lib/api/validate'
 
 // GET /api/agent/memory
 //
@@ -27,6 +26,15 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 const KIND = ['fact', 'preference', 'pattern', 'correction'] as const
 const SOURCE = ['composer', 'user_taught', 'agent_learned', 'derived'] as const
 
+const MEMORY_COLUMNS =
+  'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at'
+
+const ListQuerySchema = z.object({
+  include_dismissed: z.enum(['true', 'false']).optional(),
+  kind: z.enum(KIND).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(200),
+})
+
 const BodySchema = z.object({
   company_id: z.string().uuid().optional(),
   content: z.string().min(2).max(2000),
@@ -38,30 +46,22 @@ const BodySchema = z.object({
   relevance_score: z.number().min(0).max(1).default(1.0),
 })
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const GET = withRouteContext('agent.memory.list', async (request, ctx) => {
+  const { supabase, companyId, log } = ctx
 
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
-
-  const url = new URL(request.url)
-  const includeDismissed = url.searchParams.get('include_dismissed') === 'true'
-  const kindParam = url.searchParams.get('kind')
-  const kind = KIND.includes(kindParam as (typeof KIND)[number])
-    ? (kindParam as (typeof KIND)[number])
-    : null
-  const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 200, 1), 200)
+  const validated = validateQuery(request, ListQuerySchema, {
+    log,
+    operation: 'agent.memory.list',
+  })
+  if (!validated.success) return validated.response
+  const { include_dismissed, kind, limit } = validated.data
 
   let query = supabase
     .from('agent_memory')
-    .select(
-      'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at',
-    )
+    .select(MEMORY_COLUMNS)
     .eq('company_id', companyId)
 
-  if (!includeDismissed) query = query.eq('is_active', true)
+  if (include_dismissed !== 'true') query = query.eq('is_active', true)
   if (kind) query = query.eq('kind', kind)
 
   query = query
@@ -73,64 +73,63 @@ export async function GET(request: Request) {
     .limit(limit)
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) throw error
   return NextResponse.json({ data: data ?? [] })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const POST = withRouteContext(
+  'agent.memory.create',
+  async (request, ctx) => {
+    const { supabase, companyId: activeCompanyId, user, log } = ctx
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  let body: z.infer<typeof BodySchema>
-  try {
-    body = BodySchema.parse(await request.json())
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
-      { status: 400 },
-    )
-  }
-
-  const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
-
-  // requireWritePermission above checks the *active* company's role; if the
-  // caller passes a different company_id in the body, re-check membership +
-  // non-viewer role for THAT company specifically.
-  const { data: bodyMembership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-  if (!bodyMembership || bodyMembership.role === 'viewer') {
-    return NextResponse.json(
-      { error: 'Du har endast läsbehörighet i detta företag.' },
-      { status: 403 },
-    )
-  }
-
-  const { data, error } = await supabase
-    .from('agent_memory')
-    .insert({
-      company_id: companyId,
-      kind: body.kind,
-      content: body.content,
-      source: body.source,
-      source_ref: body.source_ref ?? null,
-      relevance_score: body.relevance_score,
-      is_active: true,
-      created_by_user_id: user.id,
+    const validation = await validateBody(request, BodySchema, {
+      log,
+      operation: 'agent.memory.create',
     })
-    .select(
-      'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at',
-    )
-    .single()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (!validation.success) return validation.response
+    const body = validation.data
 
-  return NextResponse.json({ data })
-}
+    const companyId = body.company_id ?? activeCompanyId
+
+    // requireWrite (wrapper option) checks the *active* company's role; if
+    // the caller passes a different company_id in the body, re-check
+    // membership + non-viewer role for THAT company specifically.
+    const { data: bodyMembership } = await supabase
+      .from('company_members')
+      .select('role')
+      .eq('company_id', companyId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!bodyMembership || bodyMembership.role === 'viewer') {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'WRITE_PERMISSION_REQUIRED',
+            message: 'Du har endast läsbehörighet i detta företag.',
+            message_en: 'You only have read access in this company.',
+          },
+        },
+        { status: 403 },
+      )
+    }
+
+    const { data, error } = await supabase
+      .from('agent_memory')
+      .insert({
+        company_id: companyId,
+        kind: body.kind,
+        content: body.content,
+        source: body.source,
+        source_ref: body.source_ref ?? null,
+        relevance_score: body.relevance_score,
+        is_active: true,
+        created_by_user_id: user.id,
+      })
+      .select(MEMORY_COLUMNS)
+      .single()
+    if (error) throw error
+
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

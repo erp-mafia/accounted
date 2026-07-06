@@ -23,20 +23,24 @@ export default async function ChatConversationPage({ params }: PageProps) {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
-  const { data: conversation } = await supabase
-    .from('agent_conversations')
-    .select('id, intent_id, context_ref, title, pinned, archived, last_message_at')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .maybeSingle()
+  // Both queries key on the route id, so they run in parallel. The tenant
+  // check on the conversation row still gates rendering — when it fails,
+  // notFound() throws and the messages result is discarded unrendered.
+  const [{ data: conversation }, { data: messages }] = await Promise.all([
+    supabase
+      .from('agent_conversations')
+      .select('id, intent_id, context_ref, title, pinned, archived, last_message_at')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('agent_messages')
+      .select('role, content, hidden, created_at')
+      .eq('conversation_id', id)
+      .order('created_at', { ascending: true }),
+  ])
 
   if (!conversation) notFound()
-
-  const { data: messages } = await supabase
-    .from('agent_messages')
-    .select('role, content, hidden, created_at')
-    .eq('conversation_id', id)
-    .order('created_at', { ascending: true })
 
   return (
     <ChatConversationView

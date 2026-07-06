@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDimensionSchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
@@ -71,19 +72,28 @@ export const GET = withRouteContext(
       return errorResponse(dimsError, log, { requestId })
     }
 
-    const { data: values, error: valuesError } = await supabase
-      .from('dimension_values')
-      .select('id, dimension_id, code, name, is_active, start_date, end_date')
-      .eq('company_id', companyId)
-      .order('code', { ascending: true })
-
-    if (valuesError) {
-      log.error('dimension value list failed', valuesError)
+    // Paginated: import-existing can mint one value row per historical code
+    // (thousands for project-heavy SIE histories), which exceeds PostgREST's
+    // 1000-row cap and would silently drop codes from the register/pickers.
+    // Secondary order on id gives the stable total order .range() requires.
+    let values: DimensionValueRow[]
+    try {
+      values = await fetchAllRows<DimensionValueRow>(({ from, to }) =>
+        supabase
+          .from('dimension_values')
+          .select('id, dimension_id, code, name, is_active, start_date, end_date')
+          .eq('company_id', companyId)
+          .order('code', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      )
+    } catch (valuesError) {
+      log.error('dimension value list failed', valuesError as Error)
       return errorResponse(valuesError, log, { requestId })
     }
 
     const valuesByDimension = new Map<string, Omit<DimensionValueRow, 'dimension_id'>[]>()
-    for (const v of (values ?? []) as DimensionValueRow[]) {
+    for (const v of values) {
       const bucket = valuesByDimension.get(v.dimension_id) ?? []
       bucket.push({
         id: v.id,

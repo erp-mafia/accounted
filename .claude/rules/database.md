@@ -26,7 +26,7 @@ Use the `/supabase-migration` skill for new migrations.
 ## Key Tables (~60)
 
 - **Multi-tenant**: `companies`, `company_members`, `company_invitations`, `teams`, `team_members`, `team_invitations`, `user_preferences`, `profiles`
-- **Bookkeeping**: `chart_of_accounts`, `fiscal_periods`, `journal_entries`, `journal_entry_lines`, `account_balances`, `voucher_sequences`, `voucher_gap_explanations`
+- **Bookkeeping**: `chart_of_accounts`, `fiscal_periods`, `journal_entries`, `journal_entry_lines`, `voucher_sequences`, `voucher_gap_explanations`
 - **Invoicing**: `customers`, `invoices`, `invoice_items`, `invoice_payments`, `invoice_inbox_items`
 - **Suppliers**: `suppliers`, `supplier_invoices`, `supplier_invoice_items`
 - **Banking**: `bank_connections`, `transactions`, `bank_file_imports`, `payment_match_log`

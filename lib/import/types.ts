@@ -299,6 +299,20 @@ export interface ImportResultDetails {
     accountsAdjusted: number
   }
 
+  /**
+   * Non-latest fiscal years whose P&L doesn't net to zero — their result
+   * was never transferred to equity (omföring av årets resultat saknas).
+   * Each corrupts every later derived opening balance by exactly pl_net,
+   * which surfaces as a balansräkning differens. Structurally identical to
+   * UntransferredResult in @/types.
+   */
+  untransferredResults?: Array<{
+    fiscal_period_id: string
+    period_name: string
+    /** Class 3-8 net (credit-positive = profit), rounded to öre. */
+    pl_net: number
+  }>
+
   /** Number of batches that needed retries (0 = clean run) */
   retriedBatches: number
 

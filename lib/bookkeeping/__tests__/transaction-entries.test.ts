@@ -83,7 +83,7 @@ const { createJournalEntry, findFiscalPeriod } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 const mockedFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 
-const { createTransactionJournalEntry, buildDomesticExpenseLines } = await import('../transaction-entries')
+const { createTransactionJournalEntry, buildDomesticExpenseLines, buildTransactionEntryLines } = await import('../transaction-entries')
 
 function makeMappingResult(overrides: Partial<MappingResult> = {}): MappingResult {
   return {
@@ -474,6 +474,65 @@ describe('createTransactionJournalEntry', () => {
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.entry_date).toBe('2024-09-15')
+  })
+})
+
+// The exported builder feeds the staged categorization preview (MCP
+// preview_data.lines and the pending-operations PATCH re-derive) — these
+// tests pin that what a user approves is the netted entry, not the
+// gross-on-cost-account summary that used to mislead users and agents.
+describe('buildTransactionEntryLines', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('nets the cost line against input VAT with öre precision', () => {
+    const tx = makeTransaction({ amount: -312.53, description: 'Mjukvaruabonnemang' })
+    const vatLines: VatJournalLine[] = [
+      { account_number: '2641', debit_amount: 62.51, credit_amount: 0, description: 'Ingående moms (enligt underlag)' },
+    ]
+    const mapping = makeMappingResult({
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: vatLines,
+    })
+
+    const lines = buildTransactionEntryLines(tx, mapping)
+
+    expect(lines).toHaveLength(3)
+    expect(lines.find(l => l.account_number === '5420')?.debit_amount).toBe(250.02) // 312.53 - 62.51
+    expect(lines.find(l => l.account_number === '2641')?.debit_amount).toBe(62.51)
+    expect(lines.find(l => l.account_number === '1930')?.credit_amount).toBe(312.53)
+
+    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBeCloseTo(totalCredit, 2)
+  })
+
+  it('matches the lines createTransactionJournalEntry posts (preview == booked)', async () => {
+    const tx = makeTransaction({ amount: -1250, description: 'Software license' })
+    const mapping = makeMappingResult({
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2641', debit_amount: 250, credit_amount: 0, description: 'Ingående moms 25%' },
+      ],
+    })
+
+    const previewLines = buildTransactionEntryLines(tx, mapping)
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(previewLines).toEqual(input.lines)
+  })
+
+  it('throws InvalidMappingResultError on missing accounts', () => {
+    const tx = makeTransaction()
+    expect(() => buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '' })))
+      .toThrow('Invalid mapping result')
+    expect(() => buildTransactionEntryLines(tx, makeMappingResult({ credit_account: '' })))
+      .toThrow('Invalid mapping result')
   })
 })
 

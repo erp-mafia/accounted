@@ -1,9 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { validatePeriodDuration, parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { z } from 'zod'
 
 const UpdateFiscalPeriodSchema = z.object({
@@ -12,22 +10,14 @@ const UpdateFiscalPeriodSchema = z.object({
   period_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Slutdatum måste vara i format ÅÅÅÅ-MM-DD').optional(),
 })
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+// Response shapes are legacy `{ error: string }` (Swedish) — the fiscal-year
+// settings UI renders them directly. Only the auth/company layer was moved
+// into withRouteContext.
+export const PATCH = withRouteContext(
+  'period.update',
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
   const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+  const { supabase, companyId } = ctx
 
   const validation = await validateBody(request, UpdateFiscalPeriodSchema)
   if (!validation.success) return validation.response
@@ -166,4 +156,6 @@ export async function PATCH(
   }
 
   return NextResponse.json({ data: updated })
-}
+  },
+  { requireWrite: true },
+)

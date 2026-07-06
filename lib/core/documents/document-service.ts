@@ -112,6 +112,24 @@ function looksLikeXhtml(bytes: Uint8Array): boolean {
 }
 
 /**
+ * JSON has no binary magic number either. For the declared type
+ * application/json (raw PSD2 responses archived as räkenskapsinformation per
+ * BFL 7 kap) the content must parse as JSON with an object or array root — a
+ * prose placeholder is not valid JSON, and a bare quoted string still fails
+ * the root check, so the anti-placeholder defense stays intact. Consulted
+ * ONLY for that declared type.
+ */
+function looksLikeJson(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  try {
+    const parsed = JSON.parse(Buffer.from(bytes.slice(offset)).toString('utf8'))
+    return typeof parsed === 'object' && parsed !== null
+  } catch {
+    return false
+  }
+}
+
+/**
  * Verify the buffer actually contains a file of the declared type.
  * Returns an error string or null if valid. HEIC has many ftyp brands so
  * we skip the check for now: the UI path doesn't allow HEIC anyway, only
@@ -122,6 +140,10 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
   if (declaredMimeType === 'application/xhtml+xml') {
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
+  }
+  if (declaredMimeType === 'application/json') {
+    if (looksLikeJson(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett giltigt JSON-dokument.`
   }
   const detected = detectFileMagic(new Uint8Array(buffer))
   if (!detected) {

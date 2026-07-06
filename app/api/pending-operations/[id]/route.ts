@@ -5,6 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
+import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
 
@@ -191,6 +192,14 @@ export async function PATCH(
     credit_account: mapping.credit_account,
     amount: Math.abs((tx as Transaction).amount),
     currency: (tx as Transaction).currency,
+    // Re-derive the exact journal lines (net cost line, VAT, gross bank) —
+    // spreading oldPreview would otherwise leave stale lines from staging.
+    lines: buildTransactionEntryLines(tx as Transaction, mapping).map((l) => ({
+      account_number: l.account_number,
+      debit_amount: l.debit_amount,
+      credit_amount: l.credit_amount,
+      description: l.line_description ?? '',
+    })),
     vat_lines: (mapping.vat_lines ?? []).map((v) => ({
       account: v.account_number,
       amount: v.debit_amount || v.credit_amount,

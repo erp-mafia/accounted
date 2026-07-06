@@ -131,7 +131,7 @@ export async function correctEntry(
      */
     preloadedOriginal?: OriginalWithLines
   }
-): Promise<{ reversal: JournalEntry; corrected: JournalEntry }> {
+): Promise<{ reversal: JournalEntry; corrected: JournalEntry; documentRelinkError?: string }> {
   // Validate the corrected lines are balanced
   const balance = validateBalance(correctedLines)
   if (!balance.valid) {
@@ -424,9 +424,16 @@ export async function correctEntry(
   // live representation of the affärshändelse, so the transaction row should
   // keep reading as booked against it (and stay correctable/uncategorizable),
   // and the underlag should travel with it. Best-effort: the correction_of_id
-  // chain preserves traceability even if either relink fails.
+  // chain preserves traceability even if either relink fails, but a document
+  // relink failure is surfaced on the result so the caller can warn instead
+  // of silently stranding underlag on the reversed entry.
   await relinkTransactionsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
-  await relinkDocumentsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+  const documentRelinkError = await relinkDocumentsToEntry(
+    supabase,
+    userId,
+    originalEntryId,
+    correctedEntry!.id
+  )
 
   // ===== Step 3: Fetch complete entries =====
   const { data: finalReversal } = await supabase
@@ -444,6 +451,7 @@ export async function correctEntry(
   const result = {
     reversal: finalReversal as JournalEntry,
     corrected: finalCorrected as JournalEntry,
+    ...(documentRelinkError ? { documentRelinkError } : {}),
   }
 
   await eventBus.emit({
@@ -582,27 +590,38 @@ async function relinkTransactionsToEntry(
 }
 
 /**
- * Re-point every document_attachment from one entry to another. Used when a
- * verifikation is moved to a different period so its underlag travels with the
- * live (corrected) entry. The line-level link is cleared because the corrected
- * entry has new line ids. Failures are logged, not thrown: the entry-level
- * correction chain is the source of truth for traceability.
+ * Re-point every document_attachment from one entry to another so the
+ * underlag travels with the live (corrected) entry. Goes through the
+ * relink_documents_to_correction RPC: a direct UPDATE on
+ * document_attachments.journal_entry_id is categorically blocked by the
+ * BFL immutability triggers (migration 20260506130000/150000); the RPC
+ * validates the correction chain (source reversed, target posted,
+ * target.correction_of_id = source) and performs the move under the narrow
+ * gnubok.allow_correction_relink GUC. The line-level link is cleared because
+ * the corrected entry has new line ids.
+ *
+ * Failures are logged, not thrown (the entry-level correction chain is the
+ * source of truth for traceability), but the error message is returned so
+ * correctEntry can surface a warning instead of pretending the underlag
+ * moved.
  */
 async function relinkDocumentsToEntry(
   supabase: SupabaseClient,
-  companyId: string,
+  userId: string,
   fromEntryId: string,
   toEntryId: string
-): Promise<void> {
-  const { error } = await supabase
-    .from('document_attachments')
-    .update({ journal_entry_id: toEntryId, journal_entry_line_id: null })
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', fromEntryId)
+): Promise<string | undefined> {
+  const { error } = await supabase.rpc('relink_documents_to_correction', {
+    p_user_id: userId,
+    p_from_entry_id: fromEntryId,
+    p_to_entry_id: toEntryId,
+  })
   if (error) {
     console.error(
       `[storno] relinkDocumentsToEntry: failed to move documents ${fromEntryId} → ${toEntryId}:`,
       error.message
     )
+    return error.message
   }
+  return undefined
 }

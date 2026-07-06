@@ -456,6 +456,11 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
               {report.is_balanced ? 'Balanserar' : 'Balanserar ej'}
             </Text>
           </View>
+          {!report.is_balanced && report.imbalance_diagnosis && (
+            <Text style={{ fontSize: 8, color: '#666', marginTop: 4 }}>
+              {report.imbalance_diagnosis.message}
+            </Text>
+          )}
         </View>
 
         <FooterBlock company={company} generatedAt={generatedAt} />

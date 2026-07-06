@@ -298,10 +298,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 // Response projection on create: same shape as the detail endpoint.
 // Drop user_id, company_id (internal scoping).
 const INVOICE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const INVOICE_ITEMS_RESPONSE_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
+  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions, created_at'
 
 // Loose response schema: invoices have many fields; pinning every one in
 // the registry is overkill until we have a real schema-drift test.
@@ -338,6 +338,7 @@ registerEndpoint({
     'Non-SEK currencies require an active Riksbanken exchange-rate fetch. Failure is non-fatal: the invoice is created with null SEK fields and the agent can recompute later.',
     'invoice_number is null on creation. The number is allocated atomically when the invoice transitions out of draft. Counting on a specific number at create time is a bug.',
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
+    'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
   ],
   example: {
     request: {
@@ -504,6 +505,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         line_total: lineTotal,
         vat_rate: itemRate,
         vat_amount: itemVat,
+        // Dimensions PR7: per-item bag, merged over the invoice's
+        // default_dimensions on the revenue line when the JE posts at :send.
+        dimensions: item.dimensions ?? {},
       }
     })
 
@@ -538,6 +542,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           notes: input.notes ?? null,
           document_type: documentType,
           remaining_amount: documentType === 'invoice' ? total : 0,
+          default_dimensions: input.default_dimensions ?? {},
           items: itemRows,
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -584,6 +589,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         our_reference: input.our_reference,
         notes: input.notes,
         document_type: documentType,
+        // Dimensions PR7: invoice-level bag; the :send JE generator applies it
+        // to every line (items[].dimensions win per key).
+        default_dimensions: input.default_dimensions ?? {},
       })
       .select(INVOICE_RESPONSE_COLUMNS)
       .single()

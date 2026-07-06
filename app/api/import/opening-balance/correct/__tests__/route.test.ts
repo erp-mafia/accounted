@@ -105,6 +105,7 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
   // FIX 3 (BFL 5 kap 5§): the corrected entry references the original voucher.
   it('references the original verifikationsnummer in the corrected entry description', async () => {
     enqueue({ data: openPeriodWithOB({ opening_balance_entry: { voucher_series: 'B', voucher_number: 7 } }) }) // period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
     enqueue({ count: 0 }) // year-end check
     enqueue({ error: null }) // replace_period_opening_balance_link RPC
 
@@ -134,6 +135,7 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
   // after the new entry was already created.
   it('compensates by stornoing the new entry when reverseEntry throws, returning OB_CORRECT_FAILED', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
     enqueue({ count: 0 }) // year-end check
     // No RPC enqueue: step B throws before the relink is reached.
 
@@ -163,6 +165,7 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
   // FIX 1 + FIX 2: relink RPC error triggers compensation and a durable audit.
   it('compensates and emits a durable audit when the relink RPC returns an error', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
     enqueue({ count: 0 }) // year-end check
     enqueue({ error: { message: 'relink boom' } }) // RPC failure
 
@@ -194,6 +197,7 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
   // return the envelope and audit the compensation failure (never rethrow).
   it('audits a compensation failure and still returns OB_CORRECT_FAILED', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
     enqueue({ count: 0 }) // year-end check
     enqueue({ error: { message: 'relink boom' } }) // RPC failure
 

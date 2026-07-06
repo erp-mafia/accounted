@@ -21,7 +21,13 @@ export async function createSalaryRunWithEmployees(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  params: { periodYear: number; periodMonth: number; paymentDate: string },
+  params: {
+    periodYear: number
+    periodMonth: number
+    paymentDate: string
+    voucherSeries?: string
+    notes?: string
+  },
 ): Promise<CreateSalaryRunResult> {
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
@@ -31,6 +37,9 @@ export async function createSalaryRunWithEmployees(
       period_year: params.periodYear,
       period_month: params.periodMonth,
       payment_date: params.paymentDate,
+      // Omitted → DB defaults ('A' / NULL) so the MCP commit path is unchanged.
+      ...(params.voucherSeries ? { voucher_series: params.voucherSeries } : {}),
+      ...(params.notes ? { notes: params.notes } : {}),
     })
     .select()
     .single()

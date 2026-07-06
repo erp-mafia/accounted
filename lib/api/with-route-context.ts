@@ -164,8 +164,15 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       })
       return response
     } catch (err) {
-      errLog.error('op failed', err as Error, { durationMs: Date.now() - start })
-      return errorResponse(err, errLog, { requestId })
+      // Resolve the envelope first so the log level can follow the mapped
+      // status — thrown 4xx domain errors are expected outcomes (warn), only
+      // 5xx are runtime errors. errorResponse logs the error itself at the
+      // same threshold.
+      const response = errorResponse(err, errLog, { requestId })
+      const meta = { durationMs: Date.now() - start, status: response.status }
+      if (response.status < 500) errLog.warn('op failed', err as Error, meta)
+      else errLog.error('op failed', err as Error, meta)
+      return response
     }
   }
 }

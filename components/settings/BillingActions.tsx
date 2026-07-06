@@ -38,8 +38,12 @@ export function BillingActions({ isPaying, configured }: { isPaying: boolean; co
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload ?? {}),
       })
-      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string }
-      if (!res.ok || !data.url) throw new Error(data.error || 'Något gick fel')
+      const data = (await res.json().catch(() => ({}))) as {
+        url?: string
+        error?: string | { message?: string }
+      }
+      const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message
+      if (!res.ok || !data.url) throw new Error(errorMessage || 'Något gick fel')
       window.location.href = data.url
     } catch (e) {
       toast({

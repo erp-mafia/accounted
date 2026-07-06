@@ -48,17 +48,15 @@ describe('fetchExchangeRate', () => {
     })
   })
 
-  it('returns fallback rate on fetch error', async () => {
+  it('returns null on fetch error — never a hardcoded rate on the booking path', async () => {
     vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('Network error'))
 
     const result = await fetchExchangeRate('EUR')
 
-    expect(result).not.toBeNull()
-    expect(result!.currency).toBe('EUR')
-    expect(result!.rate).toBeGreaterThan(0)
+    expect(result).toBeNull()
   })
 
-  it('tries fallback URL when primary returns non-200', async () => {
+  it('tries fallback URL when primary returns 404 (no observation for the date)', async () => {
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce(new Response('Not Found', { status: 404 }))
       .mockResolvedValueOnce(
@@ -74,6 +72,136 @@ describe('fetchExchangeRate', () => {
       currency: 'USD',
       rate: 10.85,
       date: '2025-01-14',
+    })
+  })
+
+  it('retries once on 429 and does NOT fire the range-fallback request', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchSpy = vi
+        .spyOn(global, 'fetch')
+        .mockResolvedValueOnce(
+          new Response('Too Many Requests', { status: 429, headers: { 'retry-after': '1' } })
+        )
+        .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429 }))
+
+      const promise = fetchExchangeRate('EUR', new Date('2025-01-15'))
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      // Two calls to the SAME single-day URL (initial + retry); the 7-day
+      // range endpoint is never hit — the old code fired it on 429 and
+      // doubled the load on an already rate-limited API.
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      const urls = fetchSpy.mock.calls.map((c) => String(c[0]))
+      expect(urls[0]).toBe(urls[1])
+      expect(urls[0]).toContain('/2025-01-15/2025-01-15')
+      expect(result).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('recovers when the 429 retry succeeds', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(global, 'fetch')
+        .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([{ value: '11.42', date: '2025-01-15' }]), { status: 200 })
+        )
+
+      const promise = fetchExchangeRate('EUR', new Date('2025-01-15'))
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toEqual({ currency: 'EUR', rate: 11.42, date: '2025-01-15' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  describe('with the persistent exchange_rates cache (supabase passed)', () => {
+    type CacheRow = { rate: number; observation_date: string }
+
+    function makeSupabase(opts: {
+      exactHit?: CacheRow | null
+      latestHit?: CacheRow | null
+      onUpsert?: (row: Record<string, unknown>) => void
+    }) {
+      // .maybeSingle() terminates both the exact lookup and the latest
+      // lookup. Shared across from() calls so the once-queue holds: the
+      // first maybeSingle in a test is the exact lookup, subsequent ones
+      // are the latest-cached lookup.
+      const maybeSingle = vi
+        .fn()
+        .mockResolvedValueOnce({ data: opts.exactHit ?? null, error: null })
+        .mockResolvedValue({ data: opts.latestHit ?? null, error: null })
+      return {
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          lte: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          maybeSingle,
+          upsert: vi.fn((row: Record<string, unknown>) => {
+            opts.onUpsert?.(row)
+            return Promise.resolve({ data: null, error: null })
+          }),
+        })),
+      } as never
+    }
+
+    it('serves a cache hit without touching Riksbanken', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch')
+      const supabase = makeSupabase({ exactHit: { rate: 11.11, observation_date: '2025-01-15' } })
+
+      const result = await fetchExchangeRate('EUR', new Date('2025-01-15'), supabase)
+
+      expect(result).toEqual({ currency: 'EUR', rate: 11.11, date: '2025-01-15' })
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('writes a fetched rate into the cache', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify([{ value: '11.42', date: '2025-01-15' }]), { status: 200 })
+      )
+      let upserted: Record<string, unknown> | undefined
+      const supabase = makeSupabase({ onUpsert: (row) => (upserted = row) })
+
+      const result = await fetchExchangeRate('EUR', new Date('2025-01-15'), supabase)
+
+      expect(result).toEqual({ currency: 'EUR', rate: 11.42, date: '2025-01-15' })
+      expect(upserted).toMatchObject({
+        currency: 'EUR',
+        rate_date: '2025-01-15',
+        rate: 11.42,
+        observation_date: '2025-01-15',
+        source: 'riksbanken',
+      })
+    })
+
+    it('falls back to the most recent cached observation when Riksbanken is down', async () => {
+      vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Network error'))
+      const supabase = makeSupabase({
+        exactHit: null,
+        latestHit: { rate: 11.38, observation_date: '2025-01-10' },
+      })
+
+      const result = await fetchExchangeRate('EUR', new Date('2025-01-15'), supabase)
+
+      // An honest, dated observation — not a hardcoded 11.5.
+      expect(result).toEqual({ currency: 'EUR', rate: 11.38, date: '2025-01-10' })
+    })
+
+    it('returns null when Riksbanken is down and the cache is empty', async () => {
+      vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Network error'))
+      const supabase = makeSupabase({ exactHit: null, latestHit: null })
+
+      const result = await fetchExchangeRate('EUR', new Date('2025-01-15'), supabase)
+
+      expect(result).toBeNull()
     })
   })
 })

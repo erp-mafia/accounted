@@ -247,6 +247,22 @@ interface ErrorResponseContext {
 
 interface MinimalLogger {
   error: (msg: string, ...args: unknown[]) => void
+  warn?: (msg: string, ...args: unknown[]) => void
+}
+
+/**
+ * 4xx outcomes are expected request failures (auth, validation, domain
+ * guards) — log them at warn so Vercel's runtime-error clustering surfaces
+ * only genuine 5xx. Falls back to error when the caller's logger has no warn.
+ */
+function logAtLevel(
+  log: MinimalLogger,
+  httpStatus: number,
+  msg: string,
+  ...args: unknown[]
+): void {
+  if (httpStatus < 500 && log.warn) log.warn(msg, ...args)
+  else log.error(msg, ...args)
 }
 
 function entryFor(code: string): StructuredErrorEntry {
@@ -317,8 +333,8 @@ export function errorResponse(
   //    the structured details each typed error class carries.
   if (isBookkeepingError(err)) {
     const { code, details } = extractBookkeepingDetails(err)
-    log.error(code, err as Error, { requestId: ctx.requestId })
     const entry = entryFor(code)
+    logAtLevel(log, entry.httpStatus, code, err as Error, { requestId: ctx.requestId })
     return buildResponse(code, entry, ctx.requestId, details ?? ctx.details)
   }
 
@@ -329,7 +345,7 @@ export function errorResponse(
       message: i.message,
       code: i.code,
     }))
-    log.error('validation failed', err as Error, {
+    logAtLevel(log, 400, 'validation failed', err as Error, {
       requestId: ctx.requestId,
       issueCount: issues.length,
     })
@@ -341,23 +357,27 @@ export function errorResponse(
   // 3. Postgres errors
   if (isPostgresError(err)) {
     const mapped = postgresCodeToStructured(err.code)
+    if (mapped) {
+      const entry = entryFor(mapped)
+      logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
+        requestId: ctx.requestId,
+        pgCode: err.code,
+      })
+      const details = mergeDetails({ pgCode: err.code }, ctx.details)
+      return buildResponse(mapped, entry, ctx.requestId, details)
+    }
     log.error('database error', err as unknown as Error, {
       requestId: ctx.requestId,
       pgCode: err.code,
     })
-    if (mapped) {
-      const entry = entryFor(mapped)
-      const details = mergeDetails({ pgCode: err.code }, ctx.details)
-      return buildResponse(mapped, entry, ctx.requestId, details)
-    }
   }
 
   // 4. Errors with a known structured code on them
   const code = extractCode(err)
   if (code && getErrorEntry(code)) {
     const entry = entryFor(code)
-    log.error(`${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
     const status = ctx.status ?? entry.httpStatus
+    logAtLevel(log, status, `${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
     return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
   }
 
@@ -472,8 +492,8 @@ export function errorResponseFromCode(
   ctx: ErrorResponseContext & { reason?: string } = {},
 ): NextResponse {
   const entry = entryFor(code)
-  log.error(code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
   const status = ctx.status ?? entry.httpStatus
+  logAtLevel(log, status, code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
   return buildResponse(
     code,
     {

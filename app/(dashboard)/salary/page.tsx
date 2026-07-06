@@ -1,21 +1,26 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { createClient } from '@/lib/supabase/client'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from "@/components/ui/skeleton"
+import { Skeleton } from '@/components/ui/skeleton'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Plus, Users, HandCoins, CalendarDays, ArrowRight } from 'lucide-react'
+import { ArrowRight, CalendarClock, HandCoins, Loader2, Plus, UserX, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
+import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompany } from '@/contexts/CompanyContext'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import NewSalaryRunDialog from '@/components/salary/NewSalaryRunDialog'
-import type { SalaryRun } from '@/types'
+import type { Employee, SalaryRun } from '@/types'
+
+const supabase = createClient()
 
 const STATUS_LABEL_KEYS: Record<string, string> = {
   draft: 'status_draft',
@@ -23,58 +28,125 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
   approved: 'status_approved',
   paid: 'status_paid',
   booked: 'status_booked',
+  corrected: 'status_corrected',
 }
 
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
   draft: 'secondary',
   review: 'warning',
   approved: 'default',
   paid: 'success',
   booked: 'success',
+  corrected: 'outline',
+}
+
+interface TaxPaymentState {
+  tax_payment_file_generated_at: string | null
+  tax_paid_at: string | null
 }
 
 export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
-  const [employeeCount, setEmployeeCount] = useState(0)
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [payDay, setPayDay] = useState(25)
+  const [agiDeadline, setAgiDeadline] = useState<{ due_date: string; title: string } | null>(null)
+  const [taxPayment, setTaxPayment] = useState<TaxPaymentState | null>(null)
   const [loading, setLoading] = useState(true)
+  const [starting, setStarting] = useState(false)
   const { canWrite } = useCanWrite()
+  const { company } = useCompany()
+  const { toast } = useToast()
   const router = useRouter()
-  const searchParams = useSearchParams()
   const t = useTranslations('salary')
 
-  // The "Ny lönekörning" modal is driven by the URL (?new=1) so every entry
-  // point (the header button, the empty state, and the legacy
-  // /salary/runs/new redirect) opens the same dialog, and the browser back
-  // button closes it. Same pattern as /invoices.
-  const showNewRun = searchParams.has('new')
-  const closeNewRun = () => router.replace('/salary', { scroll: false })
-  const openNewRun = () => router.push('/salary?new=1', { scroll: false })
+  const load = useCallback(async () => {
+    const [runsRes, empRes, settingsRes] = await Promise.all([
+      fetch('/api/salary/runs'),
+      fetch('/api/salary/employees'),
+      fetch('/api/settings'),
+    ])
 
-  useEffect(() => {
-    async function load() {
-      const [runsRes, empRes] = await Promise.all([
-        fetch('/api/salary/runs'),
-        fetch('/api/salary/employees'),
-      ])
-
-      if (runsRes.ok) {
-        const { data } = await runsRes.json()
-        setRuns(data || [])
-      }
-      if (empRes.ok) {
-        const { data } = await empRes.json()
-        setEmployeeCount((data || []).length)
-      }
-      setLoading(false)
+    let loadedRuns: SalaryRun[] = []
+    if (runsRes.ok) {
+      const { data } = await runsRes.json()
+      loadedRuns = data || []
+      setRuns(loadedRuns)
     }
-    load()
+    if (empRes.ok) {
+      const { data } = await empRes.json()
+      setEmployees(data || [])
+    }
+    if (settingsRes.ok) {
+      const { data } = await settingsRes.json()
+      if (typeof data?.salary_pay_day === 'number') setPayDay(data.salary_pay_day)
+    }
+
+    // Latest booked run drives the "skatt att betala" card.
+    const latestBooked = loadedRuns.find(r => r.status === 'booked')
+    if (latestBooked) {
+      const period = `${latestBooked.period_year}-${String(latestBooked.period_month).padStart(2, '0')}`
+      const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
+      if (txRes.ok) {
+        const tx = await txRes.json()
+        setTaxPayment(tx.data)
+      }
+    }
+
+    setLoading(false)
   }, [])
 
-  const currentYear = new Date().getFullYear()
-  const yearRuns = runs.filter(r => r.period_year === currentYear)
-  const totalGrossYTD = yearRuns.filter(r => r.status === 'booked').reduce((sum, r) => sum + r.total_gross, 0)
-  const totalAvgifterYTD = yearRuns.filter(r => r.status === 'booked').reduce((sum, r) => sum + r.total_avgifter, 0)
-  const latestRun = runs[0]
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Next open AGI deadline instance - generated by the tax-deadline engine
+  // when the company pays salaries; same source as the /deadlines page.
+  useEffect(() => {
+    if (!company) return
+    const today = new Date().toISOString().split('T')[0]
+    supabase
+      .from('deadlines')
+      .select('due_date, title')
+      .eq('company_id', company.id)
+      .eq('tax_deadline_type', 'arbetsgivardeklaration')
+      .eq('is_completed', false)
+      .gte('due_date', today)
+      .order('due_date')
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => setAgiDeadline(data ?? null))
+  }, [company])
+
+  // One-click run creation: the API seeds all active employees, calculates,
+  // and resolves period/pay-date/series defaults from settings.
+  async function startRun() {
+    setStarting(true)
+    try {
+      const res = await fetch('/api/salary/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      const json = await res.json().catch(() => null)
+      if (res.status === 201 && json?.data?.id) {
+        router.push(`/salary/runs/${json.data.id}`)
+        return
+      }
+      const existingId = json?.error?.details?.existingId
+      if (res.status === 409 && existingId) {
+        toast({ title: t('run_exists_opening') })
+        router.push(`/salary/runs/${existingId}`)
+        return
+      }
+      toast({
+        title: t('start_run_failed'),
+        description: getErrorMessage(json, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    } finally {
+      setStarting(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -83,6 +155,7 @@ export default function SalaryPage() {
           <Skeleton className="h-9 w-40" />
           <Skeleton className="h-9 w-32" />
         </div>
+        <Skeleton className="h-28 rounded-lg" />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
             <Skeleton key={i} className="h-24 rounded-lg" />
@@ -91,6 +164,94 @@ export default function SalaryPage() {
       </div>
     )
   }
+
+  // ── Hero state machine (first match wins) ────────────────────────────────
+  const activeRun = runs.find(r => r.status !== 'corrected')
+  const latestBooked = runs.find(r => r.status === 'booked')
+  const periodOf = (r: SalaryRun) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
+
+  // Next period for the quiet state: month after the latest non-corrected run.
+  const nextPeriod = (() => {
+    if (!activeRun) {
+      const now = new Date()
+      return { year: now.getFullYear(), month: now.getMonth() + 1 }
+    }
+    return activeRun.period_month === 12
+      ? { year: activeRun.period_year + 1, month: 1 }
+      : { year: activeRun.period_year, month: activeRun.period_month + 1 }
+  })()
+  const nextPayDate = `${nextPeriod.year}-${String(nextPeriod.month).padStart(2, '0')}-${String(payDay).padStart(2, '0')}`
+
+  type Hero =
+    | { kind: 'onboarding' }
+    | { kind: 'cta'; title: string; description: string; label: string; runId: string }
+    | { kind: 'quiet' }
+
+  const hero: Hero = (() => {
+    if (runs.length === 0 && employees.length === 0) return { kind: 'onboarding' }
+    if (activeRun && (activeRun.status === 'draft' || activeRun.status === 'review')) {
+      return {
+        kind: 'cta',
+        title: t('hero_review_title', { period: periodOf(activeRun) }),
+        description: t('hero_review_description', {
+          count: (activeRun as SalaryRun & { employees?: unknown[] }).employees?.length ?? employees.length,
+          net: formatCurrency(activeRun.total_net),
+          date: formatDate(activeRun.payment_date),
+        }),
+        label: t('hero_review_action'),
+        runId: activeRun.id,
+      }
+    }
+    if (activeRun && activeRun.status === 'approved') {
+      // A run that pays out nothing (nollkörning, or fully net-deducted) has no
+      // payment file to download - don't send the user to "pay". The real next
+      // step is to post it and file AGI, so shepherd them into the run instead.
+      const noPayout = Math.round((activeRun.total_net ?? 0) * 100) === 0
+      if (noPayout) {
+        return {
+          kind: 'cta',
+          title: t('hero_finish_title', { period: periodOf(activeRun) }),
+          description: t('hero_finish_description'),
+          label: t('hero_finish_action'),
+          runId: activeRun.id,
+        }
+      }
+      return {
+        kind: 'cta',
+        title: t('hero_pay_title', { period: periodOf(activeRun) }),
+        description: t('hero_pay_description', {
+          net: formatCurrency(activeRun.total_net),
+          date: formatDate(activeRun.payment_date),
+        }),
+        label: t('hero_pay_action'),
+        runId: activeRun.id,
+      }
+    }
+    if (activeRun && activeRun.status === 'paid') {
+      return {
+        kind: 'cta',
+        title: t('hero_book_title', { period: periodOf(activeRun) }),
+        description: t('hero_book_description'),
+        label: t('hero_book_action'),
+        runId: activeRun.id,
+      }
+    }
+    if (activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at) {
+      return {
+        kind: 'cta',
+        title: t('hero_agi_title', { period: periodOf(activeRun) }),
+        description: t('hero_agi_description'),
+        label: t('hero_agi_action'),
+        runId: activeRun.id,
+      }
+    }
+    return { kind: 'quiet' }
+  })()
+
+  // ── Blockers: active employees missing what a run needs ──────────────────
+  const missingBank = employees.filter(e => !e.clearing_number || !e.bank_account_number).length
+  const missingEmail = employees.filter(e => !e.email).length
+  const blockerCount = missingBank + missingEmail
 
   return (
     <div className="space-y-8">
@@ -105,53 +266,145 @@ export default function SalaryPage() {
               </Link>
             </Button>
             {canWrite && (
-              <Button onClick={openNewRun}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('new_run')}
+              <Button onClick={startRun} disabled={starting}>
+                {starting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="mr-2 h-4 w-4" />
+                )}
+                {t('start_run')}
               </Button>
             )}
           </div>
         }
       />
 
-      {/* Summary cards */}
+      {/* Hero - the one thing to do now */}
+      {hero.kind === 'onboarding' ? (
+        <Card>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={Users}
+              title={t('onboarding_title')}
+              description={t('onboarding_description')}
+              actionLabel={canWrite ? t('onboarding_action') : undefined}
+              actionHref={canWrite ? '/salary/employees/new' : undefined}
+            />
+          </CardContent>
+        </Card>
+      ) : hero.kind === 'cta' ? (
+        <Card>
+          <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+            <div className="space-y-1 min-w-0">
+              <h2 className="font-display text-xl md:text-2xl tracking-tight">{hero.title}</h2>
+              <p className="text-sm text-muted-foreground">{hero.description}</p>
+            </div>
+            <Button asChild className="shrink-0">
+              <Link href={`/salary/runs/${hero.runId}`}>
+                {hero.label}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+            <div className="space-y-1 min-w-0">
+              <h2 className="font-display text-xl md:text-2xl tracking-tight">
+                {t('quiet_title', {
+                  period: `${nextPeriod.year}-${String(nextPeriod.month).padStart(2, '0')}`,
+                })}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {t('quiet_description', { date: formatDate(nextPayDate) })}
+              </p>
+            </div>
+            {canWrite && (
+              <Button variant="outline" onClick={startRun} disabled={starting} className="shrink-0">
+                {starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {t('quiet_action')}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Attention cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <Users className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-muted-foreground">{t('employees')}</p>
-                <p className="text-2xl font-semibold tabular-nums">{employeeCount}</p>
-              </div>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <CalendarClock className="h-4 w-4 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">{t('card_agi_title')}</p>
             </div>
+            {agiDeadline ? (
+              <>
+                <p className="font-sans text-lg font-medium tabular-nums leading-tight">
+                  {formatDate(agiDeadline.due_date)}
+                </p>
+                <Link
+                  href="/deadlines"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  {agiDeadline.title}
+                </Link>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('card_agi_none')}</p>
+            )}
           </CardContent>
         </Card>
+
         <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <HandCoins className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-muted-foreground">{t('gross_year', { year: currentYear })}</p>
-                <p className="text-2xl font-semibold tabular-nums">{formatCurrency(totalGrossYTD)}</p>
-              </div>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <HandCoins className="h-4 w-4 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">{t('card_tax_title')}</p>
             </div>
+            {latestBooked ? (
+              <>
+                <p className="font-sans text-lg font-medium tabular-nums leading-tight">
+                  {formatCurrency(latestBooked.total_tax + latestBooked.total_avgifter)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {taxPayment?.tax_paid_at
+                    ? t('card_tax_paid', { date: formatDate(taxPayment.tax_paid_at) })
+                    : t('card_tax_unpaid', { period: periodOf(latestBooked) })}
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('card_tax_none')}</p>
+            )}
           </CardContent>
         </Card>
+
         <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <CalendarDays className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-muted-foreground">{t('contributions_year', { year: currentYear })}</p>
-                <p className="text-2xl font-semibold tabular-nums">{formatCurrency(totalAvgifterYTD)}</p>
-              </div>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <UserX className="h-4 w-4 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">{t('card_blockers_title')}</p>
             </div>
+            {blockerCount > 0 ? (
+              <>
+                <p className="font-sans text-lg font-medium tabular-nums leading-tight">
+                  {blockerCount}
+                </p>
+                <Link
+                  href="/salary/employees"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  {t('card_blockers_detail', { bank: missingBank, email: missingEmail })}
+                </Link>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('card_blockers_none')}</p>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Recent runs */}
+      {/* History */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t('runs_title')}</CardTitle>
@@ -162,8 +415,8 @@ export default function SalaryPage() {
               icon={HandCoins}
               title={t('empty_runs_title')}
               description={t('empty_runs_description')}
-              actionLabel={canWrite ? t('create_run') : undefined}
-              onAction={canWrite ? openNewRun : undefined}
+              actionLabel={canWrite ? t('start_run') : undefined}
+              onAction={canWrite ? startRun : undefined}
             />
           ) : (
             <Table>
@@ -182,7 +435,7 @@ export default function SalaryPage() {
                 {runs.slice(0, 12).map(run => (
                   <TableRow key={run.id}>
                     <TableCell className="font-medium tabular-nums">
-                      {run.period_year}-{String(run.period_month).padStart(2, '0')}
+                      {periodOf(run)}
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
                       {formatDate(run.payment_date)}
@@ -213,13 +466,6 @@ export default function SalaryPage() {
           )}
         </CardContent>
       </Card>
-
-      <NewSalaryRunDialog
-        open={showNewRun}
-        onOpenChange={(open) => {
-          if (!open) closeNewRun()
-        }}
-      />
     </div>
   )
 }

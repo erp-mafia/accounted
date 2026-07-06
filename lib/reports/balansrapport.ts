@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
+import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
 import type {
+  BalanceImbalanceDiagnosis,
   BalansrapportReport,
   BalansrapportRow,
   BalansrapportGroup,
@@ -96,6 +98,23 @@ export async function generateBalansrapport(
   // After year-end close posts the result into 2099, the residual is 0.
   const beraknatResultat = round2(totalAssetsUb + totalEquityLiabilitiesUb)
 
+  // An unbalanced trial balance here means the opening balance itself is
+  // broken — double-entry guarantees period activity balances. Explain why
+  // (usually a prior year's untransferred result) instead of leaving a bare
+  // "Balanserar ej". Best-effort: a diagnosis failure never breaks the report.
+  let imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined
+  if (!trialBalance.isBalanced) {
+    const differens = round2(trialBalance.totalDebit - trialBalance.totalCredit)
+    try {
+      const untransferred = await findUntransferredResults(supabase, companyId, {
+        beforePeriodStart: period.period_start,
+      })
+      imbalanceDiagnosis = buildImbalanceDiagnosis(untransferred, differens) ?? undefined
+    } catch {
+      // Best-effort diagnosis only.
+    }
+  }
+
   return {
     groups,
     total_assets_ub: totalAssetsUb,
@@ -103,6 +122,7 @@ export async function generateBalansrapport(
     beraknat_resultat: beraknatResultat,
     is_balanced: trialBalance.isBalanced,
     period: { start: effectiveFromDate, end: effectiveToDate },
+    ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),
   }
 }
 

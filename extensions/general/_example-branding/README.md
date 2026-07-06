@@ -17,7 +17,7 @@ Then:
    ```
 5. Run `npm run setup:extensions && npm run dev`.
 
-See `WHITELABEL.md` at the repo root for the full fork checklist (env vars, sync workflow, what NOT to change).
+See `docs/WHITELABEL.md` for the full fork checklist (env vars, sync workflow, what NOT to change).
 
 ## Why a separate extension instead of just env vars?
 

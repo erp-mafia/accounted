@@ -538,9 +538,19 @@ function CategorizeTransactionPreview({
   const amount = preview.amount as number | undefined
   const currency = (preview.currency as string | undefined) ?? 'SEK'
   const category = preview.category as string | undefined
-  // Server emits { account_number, debit_amount, credit_amount, description }
-  // per VAT line (extensions/general/mcp-server/server.ts:390-395). One side
-  // is non-zero, the other 0: render the active side with D/K prefix.
+  // The exact journal lines the approval will post (net cost line, VAT line,
+  // gross bank line, SEK), staged by the server since the preview-lines fix.
+  const lines = (preview.lines as
+    | {
+        account_number?: string
+        debit_amount?: number
+        credit_amount?: number
+        description?: string
+      }[]
+    | undefined) ?? []
+  // Legacy summary fields, rendered only for operations staged before the
+  // preview carried full lines. Pairing the gross amount with the cost
+  // account reads as an unbalanced entry: never show it when lines exist.
   const vatLines = (preview.vat_lines as
     | {
         account_number?: string
@@ -560,42 +570,69 @@ function CategorizeTransactionPreview({
           {prettyCategory(category)}
         </span>
       </div>
-      {debit && credit && amount != null && (
-        <Row
-          label="Bokning"
-          value={
-            <span className="tabular-nums">
-              <span className="text-muted-foreground">D </span>
-              <strong className="font-medium">{debit}</strong>
-              <span className="text-muted-foreground"> / K </span>
-              <strong className="font-medium">{credit}</strong>
-              <span className="ml-2">{formatCurrency(amount, currency)}</span>
-            </span>
-          }
-        />
-      )}
-      {vatLines.length > 0 && (
-        <div className="pt-1 mt-1 border-t border-border">
-          {vatLines.map((v, i) => {
-            const debit = typeof v.debit_amount === 'number' ? v.debit_amount : 0
-            const credit = typeof v.credit_amount === 'number' ? v.credit_amount : 0
-            const side: 'D' | 'K' | null = debit > 0 ? 'D' : credit > 0 ? 'K' : null
-            const amount = side === 'D' ? debit : side === 'K' ? credit : 0
+      {lines.length > 0 ? (
+        <div className="pt-1 mt-1 border-t border-border space-y-0.5">
+          {lines.map((l, i) => {
+            const debitAmt = typeof l.debit_amount === 'number' ? l.debit_amount : 0
+            const creditAmt = typeof l.credit_amount === 'number' ? l.credit_amount : 0
+            const side: 'D' | 'K' = debitAmt > 0 ? 'D' : 'K'
             return (
               <Row
                 key={i}
-                label={i === 0 ? 'Moms' : ''}
+                label={i === 0 ? 'Verifikat' : ''}
                 value={
                   <span className="tabular-nums">
-                    {side && <span className="text-muted-foreground">{side} </span>}
-                    <span className="text-muted-foreground">{v.account_number ?? ''} </span>
-                    {formatCurrency(amount, currency)}
+                    <span className="text-muted-foreground">{side} </span>
+                    <strong className="font-medium">{l.account_number ?? '?'}</strong>
+                    <span className="ml-2">
+                      {formatCurrency(side === 'D' ? debitAmt : creditAmt)}
+                    </span>
                   </span>
                 }
               />
             )
           })}
         </div>
+      ) : (
+        <>
+          {debit && credit && amount != null && (
+            <Row
+              label="Bokning"
+              value={
+                <span className="tabular-nums">
+                  <span className="text-muted-foreground">D </span>
+                  <strong className="font-medium">{debit}</strong>
+                  <span className="text-muted-foreground"> / K </span>
+                  <strong className="font-medium">{credit}</strong>
+                  <span className="ml-2">{formatCurrency(amount, currency)}</span>
+                </span>
+              }
+            />
+          )}
+          {vatLines.length > 0 && (
+            <div className="pt-1 mt-1 border-t border-border">
+              {vatLines.map((v, i) => {
+                const debit = typeof v.debit_amount === 'number' ? v.debit_amount : 0
+                const credit = typeof v.credit_amount === 'number' ? v.credit_amount : 0
+                const side: 'D' | 'K' | null = debit > 0 ? 'D' : credit > 0 ? 'K' : null
+                const amount = side === 'D' ? debit : side === 'K' ? credit : 0
+                return (
+                  <Row
+                    key={i}
+                    label={i === 0 ? 'Moms' : ''}
+                    value={
+                      <span className="tabular-nums">
+                        {side && <span className="text-muted-foreground">{side} </span>}
+                        <span className="text-muted-foreground">{v.account_number ?? ''} </span>
+                        {formatCurrency(amount, currency)}
+                      </span>
+                    }
+                  />
+                )
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

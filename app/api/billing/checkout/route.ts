@@ -1,30 +1,45 @@
 import { NextResponse } from 'next/server'
-import { requireAuth } from '@/lib/auth/require-auth'
-import { requireCompanyId } from '@/lib/company/context'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { getStripe, priceIdForPlan, type BillingPlan } from '@/lib/stripe/client'
+import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
+
+const CheckoutSchema = z.object({
+  plan: z.enum(['monthly', 'yearly']).default('monthly'),
+})
 
 /**
  * Create a Stripe subscription Checkout Session and return its hosted URL.
  * The client redirects to it; provisioning happens via the webhook on
  * checkout.session.completed (never trust the success redirect for fulfilment).
+ *
+ * company_subscriptions is read/written via the service client on purpose —
+ * the row is webhook-owned and not member-readable under RLS; every query
+ * still filters by the membership-validated companyId.
  */
-export async function POST(request: Request) {
-  const { user, supabase, error } = await requireAuth()
-  if (error) return error
+export const POST = withRouteContext('billing.checkout', async (request, ctx) => {
+  const { user, companyId, log } = ctx
 
-  let companyId: string
-  try {
-    companyId = await requireCompanyId(supabase, user.id)
-  } catch {
-    return NextResponse.json({ error: 'No company context' }, { status: 400 })
-  }
+  const validation = await validateBody(request, CheckoutSchema, {
+    log,
+    operation: 'billing.checkout',
+  })
+  if (!validation.success) return validation.response
+  const { plan } = validation.data
 
-  const body = (await request.json().catch(() => ({}))) as { plan?: string }
-  const plan: BillingPlan = body.plan === 'yearly' ? 'yearly' : 'monthly'
   const priceId = priceIdForPlan(plan)
   if (!priceId) {
-    return NextResponse.json({ error: 'Stripe price not configured' }, { status: 500 })
+    return NextResponse.json(
+      {
+        error: {
+          code: 'STRIPE_NOT_CONFIGURED',
+          message: 'Betalning är inte konfigurerad. Kontakta supporten.',
+          message_en: 'Stripe price not configured.',
+        },
+      },
+      { status: 500 },
+    )
   }
 
   const stripe = getStripe()
@@ -63,4 +78,4 @@ export async function POST(request: Request) {
   })
 
   return NextResponse.json({ url: session.url })
-}
+})

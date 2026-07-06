@@ -16,7 +16,11 @@ import type {
 const log = createLogger('transaction-entries')
 
 /**
- * Create a journal entry from a bank transaction using mapping engine result
+ * Build the journal entry lines for a bank transaction from a mapping engine
+ * result. Single source of truth for the gross→net split: the expense account
+ * gets the amount net of deductible input VAT while the bank line stays gross.
+ * Used both by createTransactionJournalEntry (commit) and by the staged
+ * categorization preview, so the lines a user approves are the lines posted.
  *
  * Standard expense pattern (domestic purchase with 25% VAT):
  *   Debit  5xxx/6xxx Expense account  [net amount]
@@ -41,26 +45,12 @@ const log = createLogger('transaction-entries')
  *   Debit  1930 Företagskonto          [total]
  *   Credit 3xxx Revenue account        [total]
  */
-export async function createTransactionJournalEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+export function buildTransactionEntryLines(
   transaction: Transaction,
   mappingResult: MappingResult,
-  // Optional audit-trail text to append to the verifikation's description.
-  // Used by the agent for representation bookings to capture deltagare +
-  // syfte directly on the journal entry (SKV's representationsregler /
-  // ML 8 kap require the verifikation to document who attended and why).
-  notes?: string,
-): Promise<JournalEntry | null> {
+): CreateJournalEntryLineInput[] {
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new InvalidMappingResultError(mappingResult.debit_account, mappingResult.credit_account)
-  }
-
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for transaction date:', transaction.date)
-    return null
   }
 
   const absAmountSek = Math.abs(resolveSekAmount(
@@ -249,6 +239,35 @@ export async function createTransactionJournalEntry(
         }
       )
     }
+  }
+
+  return lines
+}
+
+/**
+ * Create a journal entry from a bank transaction using mapping engine result.
+ * Line patterns are documented on buildTransactionEntryLines above.
+ */
+export async function createTransactionJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  transaction: Transaction,
+  mappingResult: MappingResult,
+  // Optional audit-trail text to append to the verifikation's description.
+  // Used by the agent for representation bookings to capture deltagare +
+  // syfte directly on the journal entry (SKV's representationsregler /
+  // ML 8 kap require the verifikation to document who attended and why).
+  notes?: string,
+): Promise<JournalEntry | null> {
+  // Build lines first — throws InvalidMappingResultError on a broken mapping
+  // before any period lookup, preserving the original validation order.
+  const lines = buildTransactionEntryLines(transaction, mappingResult)
+
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for transaction date:', transaction.date)
+    return null
   }
 
   // Compose the verifikation's description (verifikationstext). journal_entries

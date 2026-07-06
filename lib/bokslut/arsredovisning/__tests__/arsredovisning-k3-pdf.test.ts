@@ -29,6 +29,7 @@ function makeMinimalK3Data(): ArsredovisningData {
       period_start: '2025-01-01',
       period_end: '2025-12-31',
     },
+    previous_period: null,
     accounting_framework: 'k3',
     forvaltningsberattelse: {
       description: 'Bolaget bedriver konsultverksamhet inom IT.',
@@ -38,32 +39,52 @@ function makeMinimalK3Data(): ArsredovisningData {
         { year: '2025', net_revenue: 500_000, result_after_financial: 300_000, soliditet_pct: 80.0 },
       ],
       egen_kapital_changes: [
-        { label: '2081 Aktiekapital', amount: 50_000 },
-        { label: '2099 Årets resultat', amount: 300_000 },
+        { label: 'Aktiekapital', amount: 50_000 },
+        { label: 'Årets resultat', amount: 300_000 },
       ],
       resultatdisposition: 'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
       agm_date: '2026-06-15',
     },
     resultatrakning: [
-      { label: '3001 Försäljning', amount: 500_000 },
-      { label: 'Summa rörelseintäkter', amount: 500_000, is_total: true },
-      { label: '4010 Inköp', amount: -200_000 },
-      { label: 'Rörelseresultat', amount: 300_000, is_total: true },
-      { label: 'Årets resultat', amount: 300_000, is_total: true },
+      {
+        label: 'Rörelseintäkter, lagerförändringar m.m.',
+        current: null,
+        previous: null,
+        is_heading: true,
+      },
+      { label: 'Nettoomsättning', current: 500_000, previous: null, indent: 1 },
+      {
+        label: 'Summa rörelseintäkter, lagerförändringar m.m.',
+        current: 500_000,
+        previous: null,
+        is_total: true,
+      },
+      { label: 'Rörelsekostnader', current: null, previous: null, is_heading: true },
+      { label: 'Råvaror och förnödenheter', current: -200_000, previous: null, indent: 1 },
+      { label: 'Summa rörelsekostnader', current: -200_000, previous: null, is_total: true },
+      { label: 'Rörelseresultat', current: 300_000, previous: null, is_total: true },
+      { label: 'Årets resultat', current: 300_000, previous: null, is_total: true },
     ],
     balansrakning: {
       assets: [
-        { label: 'Omsättningstillgångar', amount: 600_000, is_total: true, indent: 0 },
-        { label: '1930 Bank', amount: 600_000, indent: 1 },
+        { label: 'Omsättningstillgångar', current: null, previous: null, is_heading: true },
+        { label: 'Kassa och bank', current: null, previous: null, is_heading: true, indent: 1 },
+        { label: 'Kassa och bank', current: 600_000, previous: null, indent: 2 },
+        { label: 'Summa kassa och bank', current: 600_000, previous: null, is_total: true, indent: 1 },
+        { label: 'Summa tillgångar', current: 600_000, previous: null, is_total: true },
       ],
       total_assets: 600_000,
+      total_assets_previous: null,
       equity_liabilities: [
-        { label: 'Eget kapital', amount: 600_000, is_total: true, indent: 0 },
-        { label: '2081 Aktiekapital', amount: 50_000, indent: 1 },
-        { label: '2099 Årets resultat', amount: 300_000, indent: 1 },
-        { label: '2098 Balanserade vinstmedel', amount: 250_000, indent: 1 },
+        { label: 'Eget kapital', current: null, previous: null, is_heading: true },
+        { label: 'Aktiekapital', current: 50_000, previous: null, indent: 2 },
+        { label: 'Balanserat resultat', current: 250_000, previous: null, indent: 2 },
+        { label: 'Årets resultat', current: 300_000, previous: null, indent: 2 },
+        { label: 'Summa eget kapital', current: 600_000, previous: null, is_total: true },
+        { label: 'Summa eget kapital och skulder', current: 600_000, previous: null, is_total: true },
       ],
       total_equity_liabilities: 600_000,
+      total_equity_liabilities_previous: null,
     },
     noter: [
       {
@@ -135,6 +156,22 @@ describe('ArsredovisningK3PDF', () => {
     const doc = ArsredovisningK3PDF({ data: makeMinimalK3Data() })
     const buffer = await renderToBuffer(doc)
     expect(buffer).toBeInstanceOf(Buffer)
+    expect(buffer.length).toBeGreaterThan(0)
+  })
+
+  it('renders the jämförelseår column when previous_period is set', async () => {
+    const data = makeMinimalK3Data()
+    data.previous_period = {
+      name: '2024',
+      period_start: '2024-01-01',
+      period_end: '2024-12-31',
+    }
+    data.resultatrakning = data.resultatrakning.map((row) =>
+      row.is_heading ? row : { ...row, previous: 100_000 },
+    )
+    data.balansrakning.total_assets_previous = 400_000
+    const doc = ArsredovisningK3PDF({ data })
+    const buffer = await renderToBuffer(doc)
     expect(buffer.length).toBeGreaterThan(0)
   })
 

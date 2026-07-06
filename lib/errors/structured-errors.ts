@@ -1308,6 +1308,17 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsperioden är låst.',
     message_en: 'Fiscal period is locked.',
   },
+  OB_COMPANY_LOCK_DATE: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringen är låst t.o.m. ett låsdatum som täcker periodens start — ingående balanser kan inte korrigeras. Ta bort eller flytta låsdatumet under Inställningar → Bokföring och försök igen.',
+    message_en:
+      'The company-wide bookkeeping lock date covers the period start — opening balances cannot be corrected. Remove or move the lock date under Settings → Bookkeeping and try again.',
+    remediation: {
+      description:
+        'Clear or move the bookkeeping lock date (company_settings.bookkeeping_locked_through) to a date before the period start, then retry the correction.',
+    },
+  },
   OB_PERIOD_ALREADY_HAS_BALANCES: {
     httpStatus: 409,
     message_sv: 'Räkenskapsperioden har redan ingående balanser.',
@@ -1869,6 +1880,16 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Lönekörningen måste vara markerad som betald för bokföring.',
     message_en: 'Salary run must be marked paid before booking.',
+  },
+  SALARY_PAYSLIPS_SEND_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Lönespecifikationer kan bara skickas efter godkännande.',
+    message_en: 'Payslips can only be sent after the salary run is approved.',
+  },
+  SALARY_PAYSLIPS_NO_EMPLOYEES: {
+    httpStatus: 400,
+    message_sv: 'Inga anställda i lönekörningen.',
+    message_en: 'No employees in the salary run.',
   },
   AGI_GENERATE_NOT_BOOKABLE: {
     httpStatus: 400,

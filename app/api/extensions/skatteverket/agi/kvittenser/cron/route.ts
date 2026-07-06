@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
+import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -103,12 +104,21 @@ export async function GET(request: Request) {
       // operator's token is reused only for the company that owns the AGI.
       const { data: token } = await supabase
         .from('skatteverket_tokens')
-        .select('user_id')
+        .select('user_id, status')
         .eq('company_id', companyId)
         .maybeSingle()
 
       if (!token?.user_id) {
         results.push({ declarationId, companyId, period, status: 'no_token' })
+        continue
+      }
+
+      // A connection flagged needs_reconsent cannot heal on its own (SKV's
+      // per-flow refresh tokens live 65 minutes) — skip quietly instead of
+      // failing the same pending declaration every run until the user
+      // re-consents.
+      if (token.status === 'needs_reconsent') {
+        results.push({ declarationId, companyId, period, status: 'expired_token', error: 'needs_reconsent' })
         continue
       }
 
@@ -208,8 +218,23 @@ export async function GET(request: Request) {
 
       if (
         err instanceof SkatteverketAuthError &&
-        (err.code === 'REFRESH_EXHAUSTED' || err.code === 'SESSION_EXPIRED' || err.code === 'TOKEN_CORRUPTED' || err.code === 'MISSING_SCOPE')
+        (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
       ) {
+        // Persist the health flag so both crons stop retrying this
+        // connection and the UI can prompt for re-consent proactively.
+        const { data: tokenRow } = await supabase
+          .from('skatteverket_tokens')
+          .select('user_id')
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (tokenRow?.user_id) {
+          await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
+        }
+        results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
+        continue
+      }
+      if (err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
+        // skvRequest already deleted the token row.
         results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
         continue
       }

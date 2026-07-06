@@ -42,7 +42,10 @@ export async function POST(request: Request) {
 
     // Route through the structured logger so message + extra are PII-redacted
     // (personnummer / IBAN / tokens via REDACT_KEYS) before reaching Vercel logs.
-    log.error('client onboarding error', { clientMessage: message, extra })
+    // warn, never error: this is client-supplied telemetry (mostly form
+    // validation misses) — client input must not be able to emit error-level
+    // lines that land in Vercel's runtime-error clustering.
+    log.warn('client onboarding error', { clientMessage: message, extra })
 
     return NextResponse.json({ ok: true })
   } catch {

@@ -1,104 +1,104 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateAccountSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ number: string }> }
-) {
-  const { number } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+// DELETE hard-deletes an unused, non-system account; accounts referenced by
+// this company's journal entries must be deactivated instead (PUT is_active).
+// Response shapes are legacy `{ error: string }` — the kontoplan UI renders
+// them directly.
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export const DELETE = withRouteContext(
+  'bookkeeping.accounts.delete',
+  async (_request, ctx, { params }: { params: Promise<{ number: string }> }) => {
+    const { number } = await params
+    const { supabase, companyId } = ctx
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    // Fetch the account to check if it's a system account
+    const { data: account, error: fetchError } = await supabase
+      .from('chart_of_accounts')
+      .select('id, is_system_account')
+      .eq('company_id', companyId)
+      .eq('account_number', number)
+      .single()
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    if (fetchError || !account) {
+      return NextResponse.json({ error: 'Kontot hittades inte' }, { status: 404 })
+    }
 
-  // Fetch the account to check if it's a system account
-  const { data: account, error: fetchError } = await supabase
-    .from('chart_of_accounts')
-    .select('id, is_system_account')
-    .eq('company_id', companyId)
-    .eq('account_number', number)
-    .single()
+    if (account.is_system_account) {
+      return NextResponse.json(
+        { error: 'Systemkonton kan inte tas bort' },
+        { status: 400 }
+      )
+    }
 
-  if (fetchError || !account) {
-    return NextResponse.json({ error: 'Kontot hittades inte' }, { status: 404 })
-  }
+    // Check if the account is referenced in THIS company's journal entries.
+    // journal_entry_lines has no company_id column, so scope via the parent
+    // entry — a user can be a member of several companies, and another
+    // company's usage of the same BAS number must not block deletion here.
+    const { count } = await supabase
+      .from('journal_entry_lines')
+      .select('id, journal_entries!inner(company_id)', { count: 'exact', head: true })
+      .eq('journal_entries.company_id', companyId)
+      .eq('account_number', number)
 
-  if (account.is_system_account) {
-    return NextResponse.json(
-      { error: 'Systemkonton kan inte tas bort' },
-      { status: 400 }
-    )
-  }
+    if (count && count > 0) {
+      return NextResponse.json(
+        { error: 'Kontot kan inte tas bort eftersom det används i bokförda verifikationer. Inaktivera det istället.' },
+        { status: 400 }
+      )
+    }
 
-  // Check if account is referenced in posted journal entries
-  const { count } = await supabase
-    .from('journal_entry_lines')
-    .select('id', { count: 'exact', head: true })
-    .eq('account_number', number)
+    const { error: deleteError } = await supabase
+      .from('chart_of_accounts')
+      .delete()
+      .eq('id', account.id)
+      .eq('company_id', companyId)
 
-  if (count && count > 0) {
-    return NextResponse.json(
-      { error: 'Kontot kan inte tas bort eftersom det används i bokförda verifikationer. Inaktivera det istället.' },
-      { status: 400 }
-    )
-  }
+    if (deleteError) {
+      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+    }
 
-  const { error: deleteError } = await supabase
-    .from('chart_of_accounts')
-    .delete()
-    .eq('id', account.id)
-    .eq('company_id', companyId)
+    return NextResponse.json({ success: true })
+  },
+  { requireWrite: true },
+)
 
-  if (deleteError) {
-    return NextResponse.json({ error: deleteError.message }, { status: 500 })
-  }
+export const PUT = withRouteContext(
+  'bookkeeping.accounts.update',
+  async (request, ctx, { params }: { params: Promise<{ number: string }> }) => {
+    const { number } = await params
+    const { supabase, companyId, log } = ctx
 
-  return NextResponse.json({ success: true })
-}
+    const validation = await validateBody(request, UpdateAccountSchema, {
+      log,
+      operation: 'bookkeeping.accounts.update',
+    })
+    if (!validation.success) return validation.response
+    const body = validation.data
 
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ number: string }> }
-) {
-  const { number } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+    if (Object.keys(body).length === 0) {
+      return NextResponse.json({ error: 'Inget att uppdatera' }, { status: 400 })
+    }
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const { data, error } = await supabase
+      .from('chart_of_accounts')
+      .update(body)
+      .eq('company_id', companyId)
+      .eq('account_number', number)
+      .select()
+      .single()
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    if (error) {
+      // PGRST116 = zero rows — the account doesn't exist in this company.
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Kontot hittades inte' }, { status: 404 })
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const validation = await validateBody(request, UpdateAccountSchema)
-  if (!validation.success) return validation.response
-  const body = validation.data
-
-  const { data, error } = await supabase
-    .from('chart_of_accounts')
-    .update(body)
-    .eq('company_id', companyId)
-    .eq('account_number', number)
-    .select()
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ data })
-}
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

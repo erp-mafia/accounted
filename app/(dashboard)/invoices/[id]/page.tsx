@@ -127,15 +127,36 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   async function fetchInvoice() {
     setIsLoading(true)
 
-    const { data, error } = await supabase
-      .from('invoices')
-      .select(`
-        *,
-        customer:customers(*),
-        items:invoice_items(*)
-      `)
-      .eq('id', id)
-      .single()
+    // Invoice, reminders, and payments all key on the route id — one
+    // parallel batch. Only the follow-ups below need the invoice row.
+    const [{ data, error }, { data: reminderData }, { data: paymentData }] =
+      await Promise.all([
+        supabase
+          .from('invoices')
+          .select(`
+            *,
+            customer:customers(*),
+            items:invoice_items(*)
+          `)
+          .eq('id', id)
+          .single(),
+        supabase
+          .from('invoice_reminders')
+          .select('*')
+          .eq('invoice_id', id)
+          .order('sent_at', { ascending: false }),
+        // Payment history for the Betalningsstatus card. Joins the
+        // journal_entries row to get voucher_series + voucher_number so each
+        // payment row can link to its verifikat. Manual payments (no tx, no
+        // JE) still surface with the amount + date.
+        supabase
+          .from('invoice_payments')
+          .select(
+            'id, payment_date, amount, currency, journal_entry_id, journal_entries(voucher_series, voucher_number)',
+          )
+          .eq('invoice_id', id)
+          .order('payment_date', { ascending: true }),
+      ])
 
     if (error || !data) {
       toast({
@@ -154,44 +175,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
     setInvoice(data as InvoiceWithRelations)
 
-    // Fetch the öresavrundning + VAT-registration settings so the detail view
-    // matches the PDF (pdf-template.tsx:792 hides org_number / personnummer
-    // for private customers, and :876 suppresses the moms row when the seller
-    // is not VAT-registered and the invoice carries no VAT).
-    if (data.company_id) {
-      const { data: settings } = await supabase
-        .from('company_settings')
-        .select('ore_rounding, vat_registered')
-        .eq('company_id', data.company_id)
-        .maybeSingle()
-      setOreRounding(settings?.ore_rounding ?? true)
-      if (typeof settings?.vat_registered === 'boolean') {
-        setVatRegistered(settings.vat_registered)
-      }
-    }
-
-    // Fetch reminders for this invoice
-    const { data: reminderData } = await supabase
-      .from('invoice_reminders')
-      .select('*')
-      .eq('invoice_id', id)
-      .order('sent_at', { ascending: false })
-
     if (reminderData) {
       setReminders(reminderData as InvoiceReminder[])
     }
-
-    // Fetch payment history for the Betalningsstatus card. Joins the
-    // journal_entries row to get voucher_series + voucher_number so each
-    // payment row can link to its verifikat. Manual payments (no tx, no
-    // JE) still surface with the amount + date.
-    const { data: paymentData } = await supabase
-      .from('invoice_payments')
-      .select(
-        'id, payment_date, amount, currency, journal_entry_id, journal_entries(voucher_series, voucher_number)',
-      )
-      .eq('invoice_id', id)
-      .order('payment_date', { ascending: true })
 
     if (paymentData) {
       type PaymentRow = {
@@ -215,43 +201,57 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       )
     }
 
-    // If this invoice is credited, find the credit note
-    if (data.status === 'credited') {
-      const { data: creditNoteData } = await supabase
-        .from('invoices')
-        .select('id, invoice_number')
-        .eq('credited_invoice_id', id)
-        .single()
+    // Follow-ups that need the invoice row: company settings (öresavrundning
+    // + VAT registration so the detail view matches the PDF — see
+    // pdf-template.tsx:792 and :876), the credit note, the original invoice,
+    // and the proforma source. Independent of each other → parallel.
+    const [settingsRes, creditNoteRes, originalRes, convertedRes] =
+      await Promise.all([
+        data.company_id
+          ? supabase
+              .from('company_settings')
+              .select('ore_rounding, vat_registered')
+              .eq('company_id', data.company_id)
+              .maybeSingle()
+          : Promise.resolve(null),
+        data.status === 'credited'
+          ? supabase
+              .from('invoices')
+              .select('id, invoice_number')
+              .eq('credited_invoice_id', id)
+              .single()
+          : Promise.resolve(null),
+        data.credited_invoice_id
+          ? supabase
+              .from('invoices')
+              .select('id, invoice_number')
+              .eq('id', data.credited_invoice_id)
+              .single()
+          : Promise.resolve(null),
+        data.converted_from_id
+          ? supabase
+              .from('invoices')
+              .select('id, invoice_number')
+              .eq('id', data.converted_from_id)
+              .single()
+          : Promise.resolve(null),
+      ])
 
-      if (creditNoteData) {
-        setCreditNote(creditNoteData as Invoice)
+    if (settingsRes) {
+      const settings = settingsRes.data
+      setOreRounding(settings?.ore_rounding ?? true)
+      if (typeof settings?.vat_registered === 'boolean') {
+        setVatRegistered(settings.vat_registered)
       }
     }
-
-    // If this is a credit note, fetch the original invoice
-    if (data.credited_invoice_id) {
-      const { data: originalData } = await supabase
-        .from('invoices')
-        .select('id, invoice_number')
-        .eq('id', data.credited_invoice_id)
-        .single()
-
-      if (originalData) {
-        setOriginalInvoice(originalData as Invoice)
-      }
+    if (creditNoteRes?.data) {
+      setCreditNote(creditNoteRes.data as Invoice)
     }
-
-    // If this invoice was converted from a proforma, fetch it
-    if (data.converted_from_id) {
-      const { data: convertedData } = await supabase
-        .from('invoices')
-        .select('id, invoice_number')
-        .eq('id', data.converted_from_id)
-        .single()
-
-      if (convertedData) {
-        setConvertedFromInvoice(convertedData as Invoice)
-      }
+    if (originalRes?.data) {
+      setOriginalInvoice(originalRes.data as Invoice)
+    }
+    if (convertedRes?.data) {
+      setConvertedFromInvoice(convertedRes.data as Invoice)
     }
 
     setIsLoading(false)

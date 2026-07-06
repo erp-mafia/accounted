@@ -38,6 +38,8 @@ import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { populateTemplatesFromSieVouchers } from '@/lib/bookkeeping/counterparty-templates'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
+import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
+import { formatCurrency } from '@/lib/utils'
 
 /**
  * Format a date to ISO date string (YYYY-MM-DD)
@@ -2602,6 +2604,28 @@ export async function executeSIEImport(
       } : undefined,
       retriedBatches: voucherRetryStats.retriedBatches,
       failedBatches: voucherRetryStats.failedBatches,
+    }
+
+    // Untransferred prior-year results — the root cause of "balansräkningen
+    // balanserar inte" after multi-year migrations. Any non-latest fiscal
+    // year whose P&L doesn't net to zero (its omföring av årets resultat is
+    // missing) corrupts every later derived opening balance by exactly that
+    // residual. Checked against the DB (not the file) so it also catches
+    // gaps introduced across separate per-year imports. Non-fatal: a
+    // diagnosis failure never fails the import.
+    try {
+      const untransferred = await findUntransferredResults(supabase, companyId)
+      if (untransferred.length > 0 && result.details) {
+        result.details.untransferredResults = untransferred
+        for (const culprit of untransferred) {
+          result.warnings.push(
+            `Resultatet för ${culprit.period_name} (${formatCurrency(culprit.pl_net, 'SEK', { minimumFractionDigits: 2 })}) har inte förts om till eget kapital — ` +
+            'senare års balansräkning visar en differens tills omföringen bokförs i det året.'
+          )
+        }
+      }
+    } catch (diagnosisError) {
+      console.error('[sie-import] untransferred-results check failed (non-fatal):', diagnosisError)
     }
 
     // Set success before finalizing

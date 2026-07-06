@@ -1,25 +1,16 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * DELETE /api/company/members/invite/[id]
  * Revoke a pending company invitation.
  * Only company owners and admins can revoke.
  */
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'company_members.revoke_invite',
+  async (_request, ctx, { params }) => {
+  const { companyId, user } = ctx
   const { id: inviteId } = await params
   const serviceClient = await createServiceClient()
 
@@ -63,4 +54,6 @@ export async function DELETE(
   }
 
   return NextResponse.json({ data: { revoked: inviteId } })
-}
+  },
+  { requireWrite: true },
+)

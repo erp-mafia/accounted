@@ -1,6 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateQuery } from '@/lib/api/validate'
 
 // GET /api/agent/conversations
 //
@@ -16,20 +17,25 @@ import { getActiveCompanyId } from '@/lib/company/context'
 //
 // Ordered: pinned first (within archived bucket), then last_message_at desc.
 // Used by the /chat sidebar and "resume conversation" UI in the sheet.
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
+const ListQuerySchema = z.object({
+  archived: z.enum(['true', 'false']).default('false'),
+  pinned: z.enum(['true', 'false']).optional(),
+  intent: z.string().min(1).optional(),
+  q: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+})
 
-  const url = new URL(request.url)
-  const archived = url.searchParams.get('archived') === 'true'
-  const pinnedOnly = url.searchParams.get('pinned') === 'true'
-  const intent = url.searchParams.get('intent') ?? null
-  const q = url.searchParams.get('q')?.trim() ?? ''
-  const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200)
+export const GET = withRouteContext('agent.conversations.list', async (request, ctx) => {
+  const { supabase, companyId, user, log } = ctx
+
+  const validated = validateQuery(request, ListQuerySchema, {
+    log,
+    operation: 'agent.conversations.list',
+  })
+  if (!validated.success) return validated.response
+  const { archived, pinned, intent, limit } = validated.data
+  const q = validated.data.q?.trim() ?? ''
 
   let query = supabase
     .from('agent_conversations')
@@ -37,9 +43,14 @@ export async function GET(request: Request) {
       'id, intent_id, context_ref, title, pinned, archived, last_message_at, last_message_preview, created_at',
     )
     .eq('company_id', companyId)
-    .eq('archived', archived)
+    // Conversations are user-scoped within a company — one member must not
+    // see another's (see [id]/route.ts). The RLS policy is company-scoped,
+    // so this filter is what actually prevents cross-member leakage of
+    // titles and last_message_preview snippets.
+    .eq('user_id', user.id)
+    .eq('archived', archived === 'true')
 
-  if (pinnedOnly) query = query.eq('pinned', true)
+  if (pinned === 'true') query = query.eq('pinned', true)
   if (intent) query = query.eq('intent_id', intent)
   if (q.length > 0) {
     // Pattern is sanitized via Postgres' percent-handling; ilike accepts the
@@ -55,6 +66,6 @@ export async function GET(request: Request) {
     .limit(limit)
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) throw error
   return NextResponse.json({ data: data ?? [] })
-}
+})

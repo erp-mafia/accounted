@@ -1,25 +1,19 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 
 ensureInitialized()
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
+// Query params are hand-parsed with per-param clamping/regex validation (see
+// each param's comment) rather than a Zod schema; response shapes are legacy
+// `{ data, count }` / `{ error: string }` for the verifikat list UI.
+export const GET = withRouteContext('bookkeeping.journal_entries.list', async (request, ctx) => {
+  const { supabase, companyId } = ctx
 
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
@@ -187,20 +181,12 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ data, count })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const POST = withRouteContext(
+  'bookkeeping.journal_entries.create',
+  async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
 
   const validation = await validateBody(request, CreateJournalEntrySchema)
   if (!validation.success) return validation.response
@@ -222,4 +208,6 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
-}
+  },
+  { requireWrite: true },
+)

@@ -45,6 +45,22 @@ export async function updateSession(request: NextRequest) {
   // Get the pathname
   const pathname = request.nextUrl.pathname
 
+  // If the refresh token is stale/invalid, clear the session cookies so the
+  // browser stops sending them on every request, INCLUDING /api requests,
+  // which previously returned before this cleanup and replayed the dead
+  // token forever. Skip on auth routes, the callback needs PKCE cookies
+  // intact. scope: 'local' only clears cookies: the refresh token is already
+  // dead server-side, and the default global-revoke round-trip re-triggers
+  // the failed refresh, the exact AuthApiError this cleans up after.
+  if (authError && !user && !pathname.startsWith('/auth')) {
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch (signOutError) {
+      // Expected session expiry, not a runtime error.
+      console.warn('[middleware] session cleanup after stale refresh token failed', signOutError)
+    }
+  }
+
   // ── API routes ──────────────────────────────────────────────────────────
   // API routes authenticate themselves (requireAuth, API-key Bearer, cron
   // secret, webhook signatures). Middleware runs on them for ONE reason: to
@@ -73,19 +89,20 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // If the refresh token is stale/invalid, clear the session cookies
-  // so the browser stops sending them on every request.
-  // Skip on auth routes: the callback needs PKCE cookies intact.
-  if (authError && !user && !pathname.startsWith('/auth')) {
-    await supabase.auth.signOut()
-  }
-
   // Invite pages: accessible to everyone, signed in or not. A user who
   // already has an account and is signed in should still be able to land on
   // /invite/[token] to accept the invite with one click (see
   // app/invite/[token]/page.tsx). If we bounce them to '/', they never see
   // the invite at all.
   if (pathname.startsWith('/invite')) {
+    return supabaseResponse
+  }
+
+  // Public payslip pages, the token in the URL is the authentication
+  // (resolved server-side against salary_payslip_links). Employees have no
+  // account; bouncing them to /login would make every emailed payslip link
+  // dead. See app/payslip/[token]/page.tsx.
+  if (pathname.startsWith('/payslip')) {
     return supabaseResponse
   }
 
@@ -222,12 +239,13 @@ export async function updateSession(request: NextRequest) {
       return supabaseResponse
     }
 
+    // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
+    // 20260506160000), it cannot live in extension_data, which is
+    // company-scoped, and the user has no company yet on this path.
     const { data: enrichmentRow } = await supabase
-      .from('extension_data')
-      .select('id')
+      .from('bankid_enrichment')
+      .select('user_id')
       .eq('user_id', user.id)
-      .eq('extension_id', 'tic')
-      .eq('key', 'bankid_enrichment')
       .maybeSingle()
 
     const destination = enrichmentRow ? '/select-company' : '/onboarding'

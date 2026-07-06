@@ -1,7 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 
@@ -9,22 +7,10 @@ const SetNoDocSchema = z.object({
   reason: z.string().trim().max(200).nullable().optional(),
 })
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal_entry.no_doc_required.set',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const result = await validateBody(request, SetNoDocSchema)
   if (!result.success) return result.response
@@ -57,24 +43,14 @@ export async function POST(
   }
 
   return NextResponse.json({ data: { exempted: true } })
-}
+  },
+  { requireWrite: true },
+)
 
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal_entry.no_doc_required.unset',
+  async (_request, { supabase, companyId }, { params }) => {
   const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   // Authorization is company-scoped, not user-scoped: any non-viewer member
   // of the active company may revoke any exemption in that company. The flag
@@ -92,4 +68,6 @@ export async function DELETE(
   }
 
   return NextResponse.json({ data: { exempted: false } })
-}
+  },
+  { requireWrite: true },
+)

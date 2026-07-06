@@ -95,7 +95,7 @@ jobs:
         # between publish and the blocking scan is the scan's own duration
         # (minutes), not a 24h cron window) plus a daily cron as a safety net.
         # Accepted residual risk: an image is live for that short scan window
-        # before the gate fires; see SELF-HOSTING.md / the risk register.
+        # before the gate fires; see docs/SELF-HOSTING.md / the risk register.
         continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:

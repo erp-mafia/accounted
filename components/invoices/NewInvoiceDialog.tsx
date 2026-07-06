@@ -1,8 +1,23 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import InvoiceEditor from '@/components/invoices/InvoiceEditor'
+import { Skeleton } from '@/components/ui/skeleton'
+
+// Deferred: the editor (and its framer-motion dependency) is a large chunk
+// that would otherwise ship with the invoice LIST bundle — it's only needed
+// once this dialog actually opens.
+const InvoiceEditor = dynamic(() => import('@/components/invoices/InvoiceEditor'), {
+  ssr: false,
+  loading: () => (
+    <div className="space-y-4 p-6">
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-32 w-full" />
+      <Skeleton className="h-32 w-full" />
+    </div>
+  ),
+})
 
 interface Props {
   open: boolean

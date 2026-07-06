@@ -1,7 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
 
 // PATCH /api/agent/memory/[id]
 //
@@ -30,61 +30,65 @@ const PatchSchema = z
     { message: 'Nothing to update' },
   )
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+const notFound = () =>
+  NextResponse.json(
+    {
+      error: {
+        code: 'MEMORY_NOT_FOUND',
+        message: 'Minnet hittades inte.',
+        message_en: 'Memory not found.',
+      },
+    },
+    { status: 404 },
+  )
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+export const PATCH = withRouteContext(
+  'agent.memory.update',
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, user, log } = ctx
 
-  const { id } = await params
+    const validation = await validateBody(request, PatchSchema, {
+      log,
+      operation: 'agent.memory.update',
+    })
+    if (!validation.success) return validation.response
+    const body = validation.data
 
-  let body: z.infer<typeof PatchSchema>
-  try {
-    body = PatchSchema.parse(await request.json())
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
-      { status: 400 },
-    )
-  }
+    const update: Record<string, unknown> = {}
+    if (body.content !== undefined) update.content = body.content
+    if (body.is_pinned !== undefined) update.is_pinned = body.is_pinned
+    if (body.is_active !== undefined) update.is_active = body.is_active
 
-  const update: Record<string, unknown> = {}
-  if (body.content !== undefined) update.content = body.content
-  if (body.is_pinned !== undefined) update.is_pinned = body.is_pinned
-  if (body.is_active !== undefined) update.is_active = body.is_active
+    // Look up the row's company_id and re-check membership before mutating.
+    const { data: existing } = await supabase
+      .from('agent_memory')
+      .select('company_id')
+      .eq('id', id)
+      .maybeSingle()
+    if (!existing) return notFound()
 
-  // Look up the row's company_id and re-check membership before mutating.
-  const { data: existing } = await supabase
-    .from('agent_memory')
-    .select('company_id')
-    .eq('id', id)
-    .maybeSingle()
-  if (!existing) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
+    const { data: membership } = await supabase
+      .from('company_members')
+      .select('role')
+      .eq('company_id', existing.company_id)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!membership) return notFound()
 
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', existing.company_id)
-    .eq('user_id', user.id)
-    .maybeSingle()
-  if (!membership) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
+    const { data, error } = await supabase
+      .from('agent_memory')
+      .update(update)
+      .eq('id', id)
+      .eq('company_id', existing.company_id)
+      .select(
+        'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at',
+      )
+      .maybeSingle()
+    if (error) throw error
+    if (!data) return notFound()
 
-  const { data, error } = await supabase
-    .from('agent_memory')
-    .update(update)
-    .eq('id', id)
-    .eq('company_id', existing.company_id)
-    .select(
-      'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at',
-    )
-    .maybeSingle()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!data) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
-
-  return NextResponse.json({ data })
-}
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

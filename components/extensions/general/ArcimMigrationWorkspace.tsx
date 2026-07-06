@@ -1174,6 +1174,9 @@ function getFYStatus(r: ImportResult): { icon: 'success' | 'warning' | 'error'; 
   if (r.errors.length > 0 || (r.details?.skippedVouchers && r.details.skippedVouchers.total > 0)) {
     return { icon: 'warning', label: 'Delvis importerad' }
   }
+  if (r.details?.untransferredResults && r.details.untransferredResults.length > 0) {
+    return { icon: 'warning', label: 'Importerad med varning' }
+  }
   return { icon: 'success', label: 'Importerad' }
 }
 
@@ -1353,6 +1356,61 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
               </div>
             </div>
           )}
+
+          {/* Untransferred prior-year results — omföring av årets resultat saknas */}
+          {d?.untransferredResults && d.untransferredResults.length > 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                <div>
+                  <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                    Årets resultat är inte omfört till eget kapital
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Följande räkenskapsår saknar omföring av årets resultat. Senare års
+                    balansräkning visar en differens på beloppet tills omföringen bokförs
+                    (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
+                  </p>
+                  <div className="mt-2 space-y-1 text-sm text-muted-foreground tabular-nums">
+                    {d.untransferredResults.map((u) => (
+                      <div key={u.fiscal_period_id} className="flex justify-between gap-6">
+                        <span>{u.period_name}</span>
+                        <span className="font-medium">
+                          {u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Remaining warnings — previously dropped entirely in this flow.
+              Strings covered by structured cards above are filtered out. */}
+          {(() => {
+            const remainingWarnings = result.warnings.filter(
+              (w) =>
+                !(d?.skippedVouchers && d.skippedVouchers.total > 0 && w.includes('hoppades över')) &&
+                !(d?.untransferredResults && d.untransferredResults.length > 0 && w.includes('förts om till eget kapital'))
+            )
+            if (remainingWarnings.length === 0) return null
+            return (
+              <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                      {remainingWarnings.length === 1 ? '1 varning' : `${remainingWarnings.length} varningar`}
+                    </p>
+                    {remainingWarnings.map((w, i) => (
+                      <p key={i} className="text-sm text-muted-foreground">{w}</p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Retry info (only shown if retries happened) */}
           {d && d.retriedBatches > 0 && (

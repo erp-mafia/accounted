@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { AccountNumber } from '@/components/ui/account-number'
 import { AddAccountDialog } from './AddAccountDialog'
 import { EditAccountDialog } from './EditAccountDialog'
+import { PruneAccountsDialog } from './PruneAccountsDialog'
 import {
   Search,
   ChevronDown,
@@ -23,7 +24,7 @@ import {
   BookOpen,
 } from 'lucide-react'
 import type { BASAccount } from '@/types'
-import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
+import { isStandardBASAccount, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,11 +67,13 @@ export default function ChartOfAccountsManager() {
   // Data state
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   const [referenceAccounts, setReferenceAccounts] = useState<ReferenceAccount[]>([])
+  const [usageCounts, setUsageCounts] = useState<Map<string, number>>(new Map())
   const [loading, setLoading] = useState(true)
 
   // Dialog state
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [editAccount, setEditAccount] = useState<BASAccount | null>(null)
+  const [pruneDialogOpen, setPruneDialogOpen] = useState(false)
 
   // Action states
   const [togglingAccount, setTogglingAccount] = useState<string | null>(null)
@@ -93,10 +96,30 @@ export default function ChartOfAccountsManager() {
     setReferenceAccounts(data || [])
   }, [])
 
+  // Per-account posting counts — drives the "Verifikat" column. Non-fatal:
+  // the page works without it, cells just show a dash.
+  const fetchUsage = useCallback(async () => {
+    try {
+      const res = await fetch('/api/bookkeeping/accounts/usage')
+      if (!res.ok) return
+      const { data } = await res.json()
+      setUsageCounts(
+        new Map(
+          (data || []).map((u: { account_number: string; usage_count: number }) => [
+            u.account_number,
+            Number(u.usage_count),
+          ]),
+        ),
+      )
+    } catch {
+      // Leave the map empty — usage display is informational only.
+    }
+  }, [])
+
   useEffect(() => {
     async function load() {
       setLoading(true)
-      await Promise.all([fetchAccounts(), fetchReference()])
+      await Promise.all([fetchAccounts(), fetchReference(), fetchUsage()])
       // Set K2 filter default based on company settings (plan_type)
       if (hideK2Excluded === null) {
         try {
@@ -115,11 +138,11 @@ export default function ChartOfAccountsManager() {
       setLoading(false)
     }
     load()
-  }, [fetchAccounts, fetchReference, hideK2Excluded])
+  }, [fetchAccounts, fetchReference, fetchUsage, hideK2Excluded])
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([fetchAccounts(), fetchReference()])
-  }, [fetchAccounts, fetchReference])
+    await Promise.all([fetchAccounts(), fetchReference(), fetchUsage()])
+  }, [fetchAccounts, fetchReference, fetchUsage])
 
   // -------------------------------------------
   // Actions
@@ -294,10 +317,16 @@ export default function ChartOfAccountsManager() {
         </Tabs>
 
         {view === 'my-accounts' && (
-          <Button size="sm" onClick={() => setAddDialogOpen(true)}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            {t('add_own')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setPruneDialogOpen(true)}>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {t('prune_button')}
+            </Button>
+            <Button size="sm" onClick={() => setAddDialogOpen(true)}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              {t('add_own')}
+            </Button>
+          </div>
         )}
 
         {view === 'bas-catalog' && (
@@ -363,6 +392,7 @@ export default function ChartOfAccountsManager() {
                             <th className="py-2">{t('col_name')}</th>
                             <th className="py-2 w-20 text-center">{t('col_sru')}</th>
                             <th className="py-2 w-24 text-center">{t('col_type')}</th>
+                            <th className="py-2 w-20 text-right">{t('col_usage')}</th>
                             <th className="py-2 w-16 text-center">{t('col_active')}</th>
                             <th className="py-2 w-20 text-right"></th>
                           </tr>
@@ -386,6 +416,11 @@ export default function ChartOfAccountsManager() {
                                       {t('system_badge')}
                                     </span>
                                   )}
+                                  {!isStandardBASAccount(account.account_number) && (
+                                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                      {t('own_badge')}
+                                    </span>
+                                  )}
                                 </span>
                               </td>
                               <td className="py-2 text-center">
@@ -396,6 +431,11 @@ export default function ChartOfAccountsManager() {
                               <td className="py-2 text-center">
                                 <span className="text-xs text-muted-foreground">
                                   {typeLabel(account.account_type)}
+                                </span>
+                              </td>
+                              <td className="py-2 text-right">
+                                <span className="text-xs text-muted-foreground tabular-nums">
+                                  {usageCounts.get(account.account_number) ?? '\u2014'}
                                 </span>
                               </td>
                               <td className="py-2 text-center">
@@ -575,6 +615,12 @@ export default function ChartOfAccountsManager() {
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
         onCreated={refreshAll}
+      />
+
+      <PruneAccountsDialog
+        open={pruneDialogOpen}
+        onOpenChange={setPruneDialogOpen}
+        onPruned={refreshAll}
       />
 
       {editAccount && (

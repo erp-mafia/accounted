@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
-import { getActiveCompanyId, requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { getActiveCompanyId } from '@/lib/company/context'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { AccountingFrameworkSchema } from '@/lib/api/schemas'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -27,20 +27,17 @@ const K3_LATENT_TAX_ACCOUNTS = ['2240', '8940'] as const
  *
  * Never cached: the whole point is that the response reflects the current
  * authoritative value in user_preferences.
+ *
+ * Uses requireAuth() directly (not withRouteContext): a null companyId is a
+ * valid answer here — the wrapper would short-circuit it into an error.
  */
 export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      {
-        status: 401,
-        headers: { 'Cache-Control': 'private, no-store' },
-      },
-    )
+  const auth = await requireAuth()
+  if (auth.error) {
+    auth.error.headers.set('Cache-Control', 'private, no-store')
+    return auth.error
   }
+  const { user, supabase } = auth
 
   const companyId = await getActiveCompanyId(supabase, user.id)
 
@@ -72,17 +69,10 @@ const PatchBodySchema = z.object({
  * entity_type='aktiebolag'. The handler rejects K3 for non-AB to prevent
  * impossible chart-of-accounts states downstream.
  */
-export async function PATCH(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const PATCH = withRouteContext(
+  'company.update_current',
+  async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
 
   const validation = await validateBody(request, PatchBodySchema)
   if (!validation.success) return validation.response
@@ -188,4 +178,6 @@ export async function PATCH(request: Request) {
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)

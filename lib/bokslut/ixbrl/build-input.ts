@@ -368,7 +368,9 @@ export async function buildIxbrlInput(
     },
     programvara: { namn: PROGRAMVARA_NAMN, version: PROGRAMVARA_VERSION },
     entryPointId: entryPoint.id,
-    warnings: [...pdfData.warnings, ...warnings],
+    // Dedupe: buildArsredovisningData now runs the same K2 mapping for the
+    // PDF statements, so its warnings overlap with the ones produced here.
+    warnings: Array.from(new Set([...pdfData.warnings, ...warnings])),
   }
 }
 

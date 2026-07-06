@@ -71,6 +71,7 @@ function mockServiceClient(fromResults: QueuedResult[]) {
   const admin = {
     createUser: vi.fn().mockResolvedValue({ data: { user: { id: 'new-user-uuid' } }, error: null }),
     updateUserById: vi.fn().mockResolvedValue({ data: {}, error: null }),
+    deleteUser: vi.fn().mockResolvedValue({ data: {}, error: null }),
     generateLink: vi.fn().mockResolvedValue({
       data: { properties: { hashed_token: 'magic-token-hash' } },
       error: null,
@@ -186,6 +187,104 @@ describe('POST /bankid/complete', () => {
       expect(admin.createUser).not.toHaveBeenCalled()
       // Only the pnr lookup ran: no profiles query.
       expect(vi.mocked(client.from).mock.calls.map((c) => c[0])).toEqual(['bankid_identities'])
+    })
+  })
+
+  describe('signup mode — rollback on partial failure', () => {
+    // A half-created account strands the user: retrying signup hits
+    // account_exists/already_linked, but the account only has a random
+    // password they never saw. Every failure after createUser must delete
+    // the created user so a retry starts clean.
+
+    it('deletes the created user when the bankid_identities insert fails', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { data: null }, // email lookup → not taken
+        { error: { message: 'insert boom', code: 'XX000' } }, // identity insert FAILS
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(500)
+      expect(body.error).toBe('internal_error')
+      expect(admin.createUser).toHaveBeenCalled()
+      expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+
+    it('deletes the created user when generateLink fails', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { data: null }, // email lookup → not taken
+        { error: null }, // identity insert OK
+      ])
+      admin.generateLink.mockResolvedValueOnce({
+        data: null,
+        error: { message: 'link boom' },
+      } as never)
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(500)
+      expect(body.error).toBe('internal_error')
+      expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
+    })
+
+    it('deletes the created user when the app_metadata update fails', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { data: null }, // email lookup → not taken
+      ])
+      admin.updateUserById.mockResolvedValueOnce({
+        data: null,
+        error: { message: 'meta boom', code: 'XX000' },
+      } as never)
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(500)
+      expect(body.error).toBe('internal_error')
+      expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+
+    it('does NOT delete anything on the happy path', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null },
+        { data: null },
+        { error: null },
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(admin.deleteUser).not.toHaveBeenCalled()
     })
   })
 

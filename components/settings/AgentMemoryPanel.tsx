@@ -52,6 +52,17 @@ const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
   { value: 'correction', label: 'Korrigeringar' },
 ]
 
+// The API returns errors either as a plain string (legacy/validation) or as
+// the canonical { code, message } envelope — extract something renderable.
+function apiErrorText(error: unknown): string | undefined {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && 'message' in error) {
+    const m = (error as { message?: unknown }).message
+    return typeof m === 'string' ? m : undefined
+  }
+  return undefined
+}
+
 export function AgentMemoryPanel() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -74,7 +85,7 @@ export function AgentMemoryPanel() {
     const res = await fetch(`/api/agent/memory?${params.toString()}`)
     const json = await res.json()
     if (!res.ok) {
-      toast({ title: 'Kunde inte hämta minne', description: json.error, variant: 'destructive' })
+      toast({ title: 'Kunde inte hämta minne', description: apiErrorText(json.error), variant: 'destructive' })
       setRows([])
       return
     }
@@ -100,7 +111,7 @@ export function AgentMemoryPanel() {
       })
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Kunde inte uppdatera', description: json.error, variant: 'destructive' })
+        toast({ title: 'Kunde inte uppdatera', description: apiErrorText(json.error), variant: 'destructive' })
         return
       }
       setRows((prev) => prev?.map((r) => (r.id === id ? (json.data as AgentMemoryRow) : r)) ?? null)
@@ -120,7 +131,7 @@ export function AgentMemoryPanel() {
       })
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Kunde inte spara minne', description: json.error, variant: 'destructive' })
+        toast({ title: 'Kunde inte spara minne', description: apiErrorText(json.error), variant: 'destructive' })
         return
       }
       setRows((prev) => [json.data as AgentMemoryRow, ...(prev ?? [])])

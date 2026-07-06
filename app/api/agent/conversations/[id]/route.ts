@@ -1,6 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
 
 // GET /api/agent/conversations/[id]
 //
@@ -18,98 +19,108 @@ const PatchSchema = z.object({
   title: z.string().min(1).max(200).nullable().optional(),
 })
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+const notFound = () =>
+  NextResponse.json(
+    {
+      error: {
+        code: 'CONVERSATION_NOT_FOUND',
+        message: 'Konversationen hittades inte.',
+        message_en: 'Conversation not found.',
+      },
+    },
+    { status: 404 },
+  )
 
-  const { id } = await params
+export const GET = withRouteContext(
+  'agent.conversations.get',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, user } = ctx
 
-  const { data: conv, error: convErr } = await supabase
-    .from('agent_conversations')
-    .select(
-      'id, company_id, user_id, intent_id, context_ref, title, pinned, archived, last_message_at, created_at',
-    )
-    .eq('id', id)
-    .maybeSingle()
-  if (convErr) return NextResponse.json({ error: convErr.message }, { status: 500 })
-  if (!conv) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+    // Conversations are user-scoped: fetched by ownership rather than the
+    // active company, so a user can open their own conversations in any
+    // company they belong to.
+    const { data: conv, error: convErr } = await supabase
+      .from('agent_conversations')
+      .select(
+        'id, company_id, user_id, intent_id, context_ref, title, pinned, archived, last_message_at, created_at',
+      )
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (convErr) throw convErr
+    if (!conv) return notFound()
 
-  // Defense in depth alongside RLS: verify caller is a member of the
-  // conversation's company AND owns the conversation row. Conversations are
-  // user-scoped within a company; one team member should not see another's.
-  if (conv.user_id !== user.id) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
-  }
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', conv.company_id)
-    .eq('user_id', user.id)
-    .maybeSingle()
-  if (!membership) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
-  }
+    // Defense in depth alongside RLS: the caller must still be a member of
+    // the conversation's company (they may have been removed since).
+    const { data: membership } = await supabase
+      .from('company_members')
+      .select('role')
+      .eq('company_id', conv.company_id)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!membership) return notFound()
 
-  const { data: messages, error: msgErr } = await supabase
-    .from('agent_messages')
-    .select('id, role, content, tool_use_id, hidden, created_at')
-    .eq('conversation_id', id)
-    .order('created_at', { ascending: true })
-  if (msgErr) return NextResponse.json({ error: msgErr.message }, { status: 500 })
+    const { data: messages, error: msgErr } = await supabase
+      .from('agent_messages')
+      .select('id, role, content, tool_use_id, hidden, created_at')
+      .eq('conversation_id', id)
+      .order('created_at', { ascending: true })
+    if (msgErr) throw msgErr
 
-  return NextResponse.json({ data: { conversation: conv, messages: messages ?? [] } })
-}
+    return NextResponse.json({ data: { conversation: conv, messages: messages ?? [] } })
+  },
+)
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const PATCH = withRouteContext(
+  'agent.conversations.update',
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, user, log } = ctx
 
-  const { id } = await params
-  let body: z.infer<typeof PatchSchema>
-  try {
-    body = PatchSchema.parse(await request.json())
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
-      { status: 400 },
-    )
-  }
+    const validation = await validateBody(request, PatchSchema, {
+      log,
+      operation: 'agent.conversations.update',
+    })
+    if (!validation.success) return validation.response
+    const body = validation.data
 
-  const update: Record<string, unknown> = {}
-  if (body.pinned != null) update.pinned = body.pinned
-  if (body.archived != null) update.archived = body.archived
-  if (body.title != null) update.title = body.title
-  if (Object.keys(update).length === 0) {
-    return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
-  }
+    const update: Record<string, unknown> = {}
+    if (body.pinned != null) update.pinned = body.pinned
+    if (body.archived != null) update.archived = body.archived
+    if (body.title != null) update.title = body.title
+    if (Object.keys(update).length === 0) {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'NOTHING_TO_UPDATE',
+            message: 'Inget att uppdatera.',
+            message_en: 'Nothing to update.',
+          },
+        },
+        { status: 400 },
+      )
+    }
 
-  // Defense in depth: verify ownership before update so a 404 is returned
-  // (instead of relying solely on RLS, which would silently 0-row).
-  const { data: existing } = await supabase
-    .from('agent_conversations')
-    .select('user_id, company_id')
-    .eq('id', id)
-    .maybeSingle()
-  if (!existing || existing.user_id !== user.id) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
-  }
+    // Defense in depth: verify ownership before update so a 404 is returned
+    // (instead of relying solely on RLS, which would silently 0-row).
+    const { data: existing } = await supabase
+      .from('agent_conversations')
+      .select('user_id, company_id')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!existing) return notFound()
 
-  const { data, error } = await supabase
-    .from('agent_conversations')
-    .update(update)
-    .eq('id', id)
-    .eq('user_id', user.id)
-    .eq('company_id', existing.company_id)
-    .select('id, intent_id, context_ref, title, pinned, archived, last_message_at, created_at')
-    .single()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ data })
-}
+    const { data, error } = await supabase
+      .from('agent_conversations')
+      .update(update)
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .eq('company_id', existing.company_id)
+      .select('id, intent_id, context_ref, title, pinned, archived, last_message_at, created_at')
+      .single()
+    if (error) throw error
+    return NextResponse.json({ data })
+  },
+)

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
   Asset,
   AssetCategory,
@@ -116,19 +117,28 @@ export async function listAssets(
   companyId: string,
   options: { activeOnly?: boolean } = {},
 ): Promise<Asset[]> {
-  let query = supabase
-    .from('assets')
-    .select('*')
-    .eq('company_id', companyId)
-    .order('acquisition_date', { ascending: true })
+  // Paginated past PostgREST's silent 1000-row cap — the depreciation engine
+  // iterates this list, so truncation would silently skip assets at year-end.
+  // Secondary order on id gives the stable total order .range() paging
+  // requires; acquisition_date alone is not unique.
+  try {
+    return await fetchAllRows<Asset>(({ from, to }) => {
+      let query = supabase
+        .from('assets')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('acquisition_date', { ascending: true })
+        .order('id', { ascending: true })
 
-  if (options.activeOnly) {
-    query = query.is('disposed_at', null)
+      if (options.activeOnly) {
+        query = query.is('disposed_at', null)
+      }
+
+      return query.range(from, to)
+    })
+  } catch (err) {
+    throw new Error(`Failed to list assets: ${err instanceof Error ? err.message : String(err)}`)
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(`Failed to list assets: ${error.message}`)
-  return (data ?? []) as Asset[]
 }
 
 export async function getAsset(

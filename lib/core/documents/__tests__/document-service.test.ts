@@ -116,6 +116,53 @@ describe('validateDocumentMagicBytes: application/xhtml+xml', () => {
   })
 })
 
+describe('validateDocumentMagicBytes: application/json', () => {
+  const toBuffer = (text: string, bom = false): ArrayBuffer => {
+    const bytes = new TextEncoder().encode(bom ? `﻿${text}` : text)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  it('accepts a JSON object (raw PSD2 response archive shape)', () => {
+    const psd2Page = JSON.stringify({ transactions: [{ amount: '100.00' }], continuation_key: null })
+    expect(validateDocumentMagicBytes(toBuffer(psd2Page), 'application/json')).toBeNull()
+  })
+
+  it('accepts a JSON array, leading whitespace, and a UTF-8 BOM', () => {
+    expect(validateDocumentMagicBytes(toBuffer('[1, 2, 3]'), 'application/json')).toBeNull()
+    expect(validateDocumentMagicBytes(toBuffer('\n  {"a": 1}'), 'application/json')).toBeNull()
+    expect(validateDocumentMagicBytes(toBuffer('{"a": 1}', true), 'application/json')).toBeNull()
+  })
+
+  it('rejects prose placeholders and bare JSON scalars', () => {
+    expect(validateDocumentMagicBytes(toBuffer('summary of the response'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+    // Scalars parse as JSON but are not a plausible archived API response:
+    // the object/array root requirement keeps the anti-placeholder defense.
+    expect(validateDocumentMagicBytes(toBuffer('"just a string"'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(toBuffer('42'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(toBuffer('null'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+
+  it('rejects truncated JSON', () => {
+    expect(validateDocumentMagicBytes(toBuffer('{"transactions": [{"amount":'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+
+  it('does not loosen validation for other declared types', () => {
+    expect(validateDocumentMagicBytes(toBuffer('{"a": 1}'), 'application/pdf')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+})
+
 describe('validateDocumentMagicBytes: PDF header offset tolerance', () => {
   const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer =>
     bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer

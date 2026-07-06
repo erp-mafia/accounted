@@ -51,8 +51,8 @@ const UpdateAssetSchema = z
     // K3 component depreciation. Accepting `null` lets the caller clear an
     // existing breakdown (the engine then falls back to depreciation_method).
     // Per-component validation runs whenever the field is set to a non-null
-    // value; the cross-sum check needs acquisition_cost so it's deferred to
-    // updateAsset() which can read the existing row.
+    // value; the cross-sum check needs the asset's acquisition_cost so it runs
+    // in the PATCH handler below, which can read the existing row.
     k3_components: z.array(K3ComponentSchema).nullable().optional(),
   })
   .superRefine((value, ctx) => {
@@ -136,8 +136,11 @@ export const PATCH = withRouteContext(
       if (!existing) {
         return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
       }
+      // Validate against the cost that will be in effect after this PATCH —
+      // a body that changes acquisition_cost and k3_components together must
+      // sum to the NEW cost, not the stored one.
       const { errors } = validateComponents({
-        acquisition_cost: Number(existing.acquisition_cost),
+        acquisition_cost: validation.data.acquisition_cost ?? Number(existing.acquisition_cost),
         k3_components: validation.data.k3_components,
       })
       if (errors.length > 0) {

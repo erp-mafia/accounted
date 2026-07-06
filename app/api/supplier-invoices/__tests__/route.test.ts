@@ -100,6 +100,20 @@ describe('GET /api/supplier-invoices', () => {
     expect(status).toBe(200)
   })
 
+  it('applies supplier_id filter', async () => {
+    const invoices = [makeSupplierInvoice({ supplier_id: 'supplier-1' })]
+    enqueue({ data: invoices, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      searchParams: { status: 'all', supplier_id: 'supplier-1' },
+    })
+    const response = await GET(request)
+    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual(invoices)
+  })
+
   it('returns 500 on database error', async () => {
     enqueue({ data: null, error: { message: 'DB error' } })
 

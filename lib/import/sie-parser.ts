@@ -1103,6 +1103,32 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
     warnings.push(`Ingående balanser balanserar inte (differens: ${ibTotal.toFixed(2)} kr). En automatisk justeringspost mot konto 2099 skapas vid import.`)
   }
 
+  // Completed fiscal year whose vouchers leave a residual on P&L accounts:
+  // the year's result was never transferred to equity (omföring saknas).
+  // Later years derive their opening balance from balance-sheet accounts
+  // only, so the residual becomes a permanent balansräkning differens for
+  // every subsequent year. SIE amounts are debit-positive, so the class 3-8
+  // sum is the un-transferred result with flipped sign.
+  const currentFiscalYear = parsed.header.fiscalYears.find((fy) => fy.yearIndex === 0)
+  if (currentFiscalYear?.end && currentFiscalYear.end < formatLocalDate(new Date())) {
+    const plResidual = parsed.vouchers.reduce(
+      (sum, voucher) =>
+        sum +
+        voucher.lines.reduce(
+          (lineSum, line) =>
+            lineSum + (isBalanceSheetAccount(line.account) ? 0 : line.amount),
+          0
+        ),
+      0
+    )
+    if (Math.abs(plResidual) > 0.01) {
+      warnings.push(
+        `Räkenskapsåret är avslutat men filen saknar omföring av årets resultat (${Math.abs(plResidual).toFixed(2)} kr ligger kvar på resultatkonton). ` +
+        `Om senare räkenskapsår importeras kommer balansräkningen att visa en differens på ${Math.abs(plResidual).toFixed(2)} kr tills omföringen bokförs.`
+      )
+    }
+  }
+
   // Add parse issues as errors/warnings
   for (const issue of parsed.issues) {
     if (issue.severity === 'error') {

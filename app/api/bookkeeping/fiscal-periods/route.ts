@@ -1,24 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { validateBody } from '@/lib/api/validate'
 import { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { createLogger } from '@/lib/logger'
 
-const log = createLogger('api/bookkeeping/fiscal-periods')
+// Response shapes are legacy `{ error: string }` (plus one envelope code for
+// the blocked-by-open-periods dialog) — kept for the räkenskapsår UI.
 
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const GET = withRouteContext('period.list', async (_request, ctx) => {
+  const { supabase, companyId } = ctx
 
   const { data, error } = await supabase
     .from('fiscal_periods')
@@ -31,20 +22,12 @@ export async function GET() {
   }
 
   return NextResponse.json({ data })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const POST = withRouteContext(
+  'period.create',
+  async (request, ctx) => {
+  const { supabase, companyId, user, log } = ctx
 
   const validation = await validateBody(request, CreateFiscalPeriodSchema)
   if (!validation.success) return validation.response
@@ -231,13 +214,23 @@ export async function POST(request: Request) {
     const isPrepend = body.period_end < earliest.period_start
     const periodToRelink = isPrepend ? earliest : successor
     if (periodToRelink) {
-      await supabase
+      const { error: relinkError } = await supabase
         .from('fiscal_periods')
         .update({ previous_period_id: data.id })
         .eq('id', periodToRelink.id)
         .eq('company_id', companyId)
+      if (relinkError) {
+        // The period WAS created — don't fail the request, but a broken
+        // continuity chain (BFNAR 2013:2) must never be silent.
+        log.error('failed to relink continuity chain after period create', relinkError, {
+          createdPeriodId: data.id,
+          relinkPeriodId: periodToRelink.id,
+        })
+      }
     }
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)

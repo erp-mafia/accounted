@@ -664,6 +664,11 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
               </div>
             )}
           </div>
+          {!isBalanced && data.imbalance_diagnosis && (
+            <p className="text-sm text-muted-foreground mt-3 pt-3 border-t">
+              {data.imbalance_diagnosis.message}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -948,11 +953,23 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 Balanserar
               </Badge>
             ) : (
-              <Badge variant="destructive" className="text-base px-3 py-1">
-                Balanserar ej
-              </Badge>
+              <div className="text-right">
+                <Badge variant="destructive" className="text-base px-3 py-1">
+                  Balanserar ej
+                </Badge>
+                {data.imbalance_diagnosis && (
+                  <p className="text-sm text-destructive mt-1">
+                    Differens: {formatAmount(Math.abs(data.imbalance_diagnosis.differens))} kr
+                  </p>
+                )}
+              </div>
             )}
           </div>
+          {!data.is_balanced && data.imbalance_diagnosis && (
+            <p className="text-sm text-muted-foreground pt-2 border-t">
+              {data.imbalance_diagnosis.message}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -11,6 +11,16 @@ type BankIdStatus = 'idle' | 'scanning' | 'complete' | 'failed' | 'no_account' |
 /** Max consecutive poll failures before we declare service unavailable */
 const MAX_POLL_FAILURES = 3
 
+/**
+ * Abandon a session that never reaches a terminal state. Safety net for TIC
+ * responses that carry no `status` (e.g. an expired-session 410 body) — without
+ * it the poll loop would spin forever on a dead QR code.
+ */
+const POLL_DEADLINE_MS = 6 * 60 * 1000
+
+/** Min spacing between billable TIC session starts (mirrors the server cooldown). */
+const START_COOLDOWN_MS = 5_000
+
 interface BankIdSession {
   sessionId: string
   autoStartToken: string
@@ -129,6 +139,16 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
   onCompleteRef.current = onComplete
 
   const pollFailureCount = useRef(0)
+  /** True while a poll response is being processed — prevents overlapping ticks. */
+  const pollInFlightRef = useRef(false)
+  /** Set once a terminal poll result has been handled — the completion branch must run at most once. */
+  const completedRef = useRef(false)
+  /** When the current poll loop began, for the POLL_DEADLINE_MS cap. */
+  const pollStartedAtRef = useRef(0)
+  /** Bumped by cancel/unmount so an in-flight startSession stops touching state. */
+  const startGenRef = useRef(0)
+  /** True while startSession is running — collapses double-clicks into one billable session. */
+  const startingRef = useRef(false)
 
   const cleanup = useCallback(() => {
     if (pollRef.current) {
@@ -140,16 +160,43 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
       abortRef.current = null
     }
     pollFailureCount.current = 0
+    pollInFlightRef.current = false
   }, [])
 
-  useEffect(() => cleanup, [cleanup])
+  useEffect(
+    () => () => {
+      startGenRef.current++
+      cleanup()
+    },
+    [cleanup]
+  )
 
   // Poll an in-flight BankID session until it completes, fails, or the service
   // gives up. Extracted from startSession so the resume effect (mobile return)
   // can re-attach to a session that was started before the tab reloaded.
   const beginPolling = useCallback((session: BankIdSession) => {
     abortRef.current = new AbortController()
+    pollStartedAtRef.current = Date.now()
+    completedRef.current = false
+    pollInFlightRef.current = false
     pollRef.current = setInterval(async () => {
+      // Never process two ticks concurrently: a slow response overlapping the
+      // next tick could otherwise run the completion branch twice (double
+      // /complete → double generateLink, which invalidates the first magic
+      // link and fails the login intermittently).
+      if (pollInFlightRef.current || completedRef.current) return
+
+      // Hard cap — a session that never reaches a terminal state (expired
+      // order, TIC response without `status`) must not poll forever.
+      if (Date.now() - pollStartedAtRef.current > POLL_DEADLINE_MS) {
+        cleanup()
+        clearPending()
+        setStatus('failed')
+        setErrorMessage('BankID-sessionen löpte ut. Försök igen.')
+        return
+      }
+
+      pollInFlightRef.current = true
       try {
         const pollRes = await fetch(`${API_BASE}/poll`, {
           method: 'POST',
@@ -159,16 +206,16 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
         })
 
         if (!pollRes.ok) {
-          const pollErr = await pollRes.json().catch(() => ({}))
-          if (pollErr.error === 'service_unavailable' || pollRes.status === 502 || pollRes.status === 503) {
-            pollFailureCount.current++
-            if (pollFailureCount.current >= MAX_POLL_FAILURES) {
-              cleanup()
-              clearPending()
-              setStatus('service_unavailable')
-              setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
-              onCompleteRef.current({ error: 'service_unavailable' })
-            }
+          // Count EVERY failed poll (5xx, 429, unexpected 4xx) — errors that
+          // never increment the counter would otherwise leave the user
+          // silently polling a dead session forever.
+          pollFailureCount.current++
+          if (pollFailureCount.current >= MAX_POLL_FAILURES) {
+            cleanup()
+            clearPending()
+            setStatus('service_unavailable')
+            setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
+            onCompleteRef.current({ error: 'service_unavailable' })
           }
           return
         }
@@ -199,6 +246,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
         }
 
         if (pollData.status === 'complete') {
+          completedRef.current = true
           cleanup()
           clearPending()
           setStatus('complete')
@@ -268,6 +316,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
             })
           }
         } else if (pollData.status === 'failed' || pollData.status === 'cancelled') {
+          completedRef.current = true
           cleanup()
           clearPending()
           setStatus('failed')
@@ -283,15 +332,17 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
           setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
           onCompleteRef.current({ error: 'service_unavailable' })
         }
+      } finally {
+        pollInFlightRef.current = false
       }
     }, 2000)
   }, [cleanup, mode])
 
   const startSession = useCallback(async () => {
-    // Prevent rapid restarts (each start = billable TIC session)
-    const now = Date.now()
-    if (now - lastStartRef.current < 5000) return
-    lastStartRef.current = now
+    // Collapse double-clicks — one billable TIC session per intent.
+    if (startingRef.current) return
+    startingRef.current = true
+    const gen = ++startGenRef.current
 
     cleanup()
     clearPending()
@@ -300,7 +351,20 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
     setErrorMessage('')
 
     try {
+      // Respect the billable-session cooldown by waiting out the remainder
+      // instead of silently dropping the click — a retry button that does
+      // nothing reads as "BankID is broken". Also keeps us under the
+      // server-side per-IP cooldown on /start.
+      const sinceLast = Date.now() - lastStartRef.current
+      if (sinceLast < START_COOLDOWN_MS) {
+        await new Promise((resolve) => setTimeout(resolve, START_COOLDOWN_MS - sinceLast))
+      }
+      if (gen !== startGenRef.current) return // cancelled/unmounted while waiting
+      lastStartRef.current = Date.now()
+
       const res = await fetch(`${API_BASE}/start`, { method: 'POST' })
+      if (gen !== startGenRef.current) return
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         if (err.error === 'service_unavailable' || err.error === 'not_configured' || res.status === 502 || res.status === 503) {
@@ -310,7 +374,17 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
           onCompleteRef.current({ error: 'service_unavailable' })
           return
         }
-        throw new Error(err.message || err.error || 'Failed to start BankID')
+        if (res.status === 429 || err.error === 'rate_limit') {
+          setStatus('failed')
+          setErrorMessage('För många försök. Vänta en stund och försök igen.')
+          return
+        }
+        // Unknown error — server messages are not user-facing copy; keep the
+        // detail in the console and show Swedish.
+        console.error('[bankid] start failed', res.status, err)
+        setStatus('failed')
+        setErrorMessage('Ett oväntat fel uppstod. Försök igen.')
+        return
       }
 
       const { data } = await res.json()
@@ -328,8 +402,12 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
 
       beginPolling(newSession)
     } catch (error) {
+      if (gen !== startGenRef.current) return
+      console.error('[bankid] start failed', error)
       setStatus('failed')
-      setErrorMessage(error instanceof Error ? error.message : 'Ett oväntat fel uppstod')
+      setErrorMessage('Ett oväntat fel uppstod. Försök igen.')
+    } finally {
+      startingRef.current = false
     }
   }, [cleanup, mode, beginPolling])
 
@@ -348,6 +426,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
   }, [])
 
   const handleCancel = useCallback(async () => {
+    startGenRef.current++ // stop an in-flight startSession from resuming
     if (session) {
       fetch(`${API_BASE}/${session.sessionId}`, { method: 'DELETE' }).catch(() => {})
     }

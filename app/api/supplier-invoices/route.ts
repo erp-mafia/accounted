@@ -23,11 +23,18 @@ export const GET = withRouteContext(
 
     const { searchParams } = new URL(request.url)
     const status = searchParams.get('status')
+    const supplierId = searchParams.get('supplier_id')
 
     let query = supabase
       .from('supplier_invoices')
       .select('*, supplier:suppliers(id, name)')
       .eq('company_id', companyId)
+
+    // Optional narrowing to one supplier — the supplier detail page only
+    // needs that supplier's invoices, not the whole company ledger.
+    if (supplierId) {
+      query = query.eq('supplier_id', supplierId)
+    }
 
     if (status && status !== 'all') {
       if (status === 'to_pay') {

@@ -52,6 +52,17 @@ const PROSE =
   '[&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] ' +
   '[&_td]:border-b [&_td]:border-border/60 [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
+// The API returns errors either as a plain string (legacy/validation) or as
+// the canonical { code, message } envelope — extract something renderable.
+function apiErrorText(error: unknown): string | undefined {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && 'message' in error) {
+    const m = (error as { message?: unknown }).message
+    return typeof m === 'string' ? m : undefined
+  }
+  return undefined
+}
+
 export function AgentSkillsPanel() {
   const { toast } = useToast()
 
@@ -64,7 +75,7 @@ export function AgentSkillsPanel() {
     const res = await fetch('/api/agent/skills')
     const json = await res.json()
     if (!res.ok) {
-      toast({ title: 'Kunde inte hämta kunskap', description: json.error, variant: 'destructive' })
+      toast({ title: 'Kunde inte hämta kunskap', description: apiErrorText(json.error), variant: 'destructive' })
       setAtoms([])
       return
     }
@@ -97,7 +108,7 @@ export function AgentSkillsPanel() {
       const res = await fetch(`/api/agent/skills?slug=${encodeURIComponent(atom.id)}`)
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Kunde inte läsa kunskapen', description: json.error, variant: 'destructive' })
+        toast({ title: 'Kunde inte läsa kunskapen', description: apiErrorText(json.error), variant: 'destructive' })
         return
       }
       setBodies((prev) => ({ ...prev, [atom.id]: (json.data?.body as string) ?? '' }))

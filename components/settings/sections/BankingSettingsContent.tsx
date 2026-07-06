@@ -22,6 +22,7 @@ export function BankingSettingsContent() {
   const [bankConnectionError, setBankConnectionError] = useState<string | null>(null)
   const [failedBankName, setFailedBankName] = useState<string | null>(null)
   const [isAccessDenied, setIsAccessDenied] = useState(false)
+  const [showHbPoaHint, setShowHbPoaHint] = useState(false)
   const syncInitiatedRef = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const unmountedRef = useRef(false)
@@ -102,6 +103,12 @@ export function BankingSettingsContent() {
       try { errorMsg = decodeURIComponent(bankError) } catch { errorMsg = bankError }
       const bankName = searchParams.get('bank_name')
       const errorCode = searchParams.get('bank_error_code')
+      const psuType = searchParams.get('psu_type')
+      // The bank often returns a bare "server_error" with no description —
+      // show a human message instead of the raw OAuth error code.
+      if (errorCode === 'server_error' && errorMsg === 'server_error') {
+        errorMsg = t('bank_server_error')
+      }
       toast({
         title: t('connect_failed_title'),
         description: errorMsg,
@@ -110,6 +117,12 @@ export function BankingSettingsContent() {
       setBankConnectionError(errorMsg)
       if (bankName) setFailedBankName(bankName)
       if (errorCode === 'access_denied') setIsAccessDenied(true)
+      // Handelsbanken rejects business connects with server_error when the
+      // company hasn't registered the open banking fullmakt ("Internet
+      // Företag – tilläggstjänst API Företag") — surface the fix steps.
+      if (bankName === 'Handelsbanken' && psuType === 'business' && errorCode === 'server_error') {
+        setShowHbPoaHint(true)
+      }
       router.replace('/settings/banking')
     }
   }, [searchParams, router, toast, t])
@@ -126,6 +139,19 @@ export function BankingSettingsContent() {
                 {t('access_denied_hint', { bankName: failedBankName })}
               </p>
             )}
+            {showHbPoaHint && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {t('hb_business_poa_hint')}{' '}
+                <a
+                  href="https://tilisy.enablebanking.com/guides/SE/Handelsbanken/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  {t('hb_business_poa_link')}
+                </a>
+              </p>
+            )}
             <p className="mt-1 text-sm text-muted-foreground">
               {t('import_fallback_text')}<Link href="/import?mode=bank" className="underline hover:text-foreground">{t('import_fallback_link')}</Link>{t('import_fallback_suffix')}
             </p>
@@ -135,6 +161,7 @@ export function BankingSettingsContent() {
               setBankConnectionError(null)
               setFailedBankName(null)
               setIsAccessDenied(false)
+              setShowHbPoaHint(false)
             }}
             className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground"
             aria-label={t('dismiss_aria')}

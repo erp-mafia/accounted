@@ -1,11 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
+import {
+  mapTrialBalancesToK2,
+  type K2MappingResult,
+  type TrialBalancePair,
+} from '@/lib/bokslut/ixbrl/k2-mapper'
+import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, type NarrativeRow } from './narrative-service'
 import {
   anyAssetHasComponents,
@@ -20,17 +25,10 @@ import type {
   ArsredovisningData,
   EgenKapitalRow,
   FlerarsoversiktRow,
-  IncomeStatementLine,
-  BalanceSheetLine,
   NoteEntry,
   KassaflodesAnalysisSummary,
 } from './types'
-import type {
-  AccountingFramework,
-  Asset,
-  BalanceSheetSection,
-  IncomeStatementSection,
-} from '@/types'
+import type { AccountingFramework, Asset } from '@/types'
 
 /**
  * Pre-populate the K2 årsredovisning data for a fiscal period. Loads:
@@ -51,7 +49,14 @@ export async function buildArsredovisningData(
   fiscalPeriodId: string,
   overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
 ): Promise<ArsredovisningData> {
-  const [periodResult, settingsResult, companyResult, periodList, incomeStatement, balanceSheet, narrative] = await Promise.all([
+  // The RR/BR are rendered at ÅRL post level from the same K2 risbs mapping
+  // that drives the iXBRL filing, never from per-account report rows.
+  // Bolagsverket rejects balans-/resultaträkningar med kontonummer, so the
+  // statement data must not carry account-level granularity at all. Two TB
+  // variants per year (see TrialBalancePair): the FULL trial balance drives
+  // the BR (2099 booked), the PRE-CLOSING one drives the RR (class 3-8
+  // still open).
+  const [periodResult, settingsResult, companyResult, periodList, tbFull, tbPreClosing, narrative] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end, previous_period_id, closing_entry_id')
@@ -79,8 +84,8 @@ export async function buildArsredovisningData(
         .order('period_start', { ascending: false })
         .range(from, to),
     ),
-    generateIncomeStatement(supabase, companyId, fiscalPeriodId),
-    generateBalanceSheet(supabase, companyId, fiscalPeriodId),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
     // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
@@ -116,6 +121,43 @@ export async function buildArsredovisningData(
   // with an empty org number.
   const city = (settings as { city?: string | null } | null)?.city ?? null
 
+  // Previous fiscal year → jämförelsesiffror (ÅRL 3:5 §). Resolved from the
+  // already-fetched period list; a TB failure downgrades to "no comparison
+  // year" with a warning instead of blocking the whole document (partial SIE
+  // imports can leave prior years without IB continuity).
+  const statementWarnings: string[] = []
+  const prevPeriodRow = period.previous_period_id
+    ? ((periodList ?? []) as PeriodRow[]).find((p) => p.id === period.previous_period_id) ?? null
+    : null
+  let previousTb: TrialBalancePair | null = null
+  if (prevPeriodRow) {
+    try {
+      const [prevFull, prevPreClosing] = await Promise.all([
+        generateTrialBalance(supabase, companyId, prevPeriodRow.id),
+        generateTrialBalance(supabase, companyId, prevPeriodRow.id, {
+          excludeYearEndClosing: true,
+        }),
+      ])
+      previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
+    } catch {
+      statementWarnings.push(
+        'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår, balans- och resultaträkningen visas utan jämförelseår. Kontrollera det föregående årets bokföring.',
+      )
+    }
+  }
+  const mapping = mapTrialBalancesToK2(
+    { full: tbFull.rows, preClosing: tbPreClosing.rows },
+    previousTb,
+  )
+  const previousPeriod =
+    prevPeriodRow && previousTb
+      ? {
+          name: prevPeriodRow.name,
+          period_start: prevPeriodRow.period_start,
+          period_end: prevPeriodRow.period_end,
+        }
+      : null
+
   // Merge precedence: caller overrides → persisted narrative → boilerplate
   const persistedDescription = narrative?.description ?? undefined
   const persistedEvents = narrative?.important_events ?? undefined
@@ -130,7 +172,28 @@ export async function buildArsredovisningData(
     accountingFramework,
   )
 
-  const egen_kapital_changes = buildEquityChanges(balanceSheet.equity_liability_sections)
+  const egen_kapital_changes = buildEquityChanges(mapping)
+
+  // Duplicate-value consistency with the RR (mirrors build-input.ts): the
+  // flerårsöversikt is computed from the income statement (ALL class-3
+  // revenue), but nettoomsättning per ÅRL is strictly 3000-3799. Override
+  // the current + previous year so the FB table ties to the RR two pages
+  // later. Older years have no RR in the document and keep the IS values.
+  if (flerarsoversikt.length > 0) {
+    const lastIdx = flerarsoversikt.length - 1
+    flerarsoversikt[lastIdx] = {
+      ...flerarsoversikt[lastIdx],
+      net_revenue: mapping.rr['Nettoomsattning']?.current ?? 0,
+      result_after_financial: mapping.totals.resultatEfterFinansiellaPoster.current,
+    }
+    if (lastIdx > 0 && previousPeriod && flerarsoversikt[lastIdx - 1].year === previousPeriod.name) {
+      flerarsoversikt[lastIdx - 1] = {
+        ...flerarsoversikt[lastIdx - 1],
+        net_revenue: mapping.rr['Nettoomsattning']?.previous ?? 0,
+        result_after_financial: mapping.totals.resultatEfterFinansiellaPoster.previous ?? 0,
+      }
+    }
+  }
 
   // K3 vs K2 split: K3 has a richer note set + a kassaflöde + a separate
   // equity-changes statement. The 18a/b warning that flagged "K3 noter not
@@ -189,19 +252,28 @@ export async function buildArsredovisningData(
       )
     }
 
-    // Equity-changes statement: derived from the saved equity rows + this
-    // year's resultat. We reuse buildEquityChangesNote's roll-forward to
-    // keep one source of truth for the closing total.
-    equity_changes_statement = buildK3EquityChangesStatement(
-      balanceSheet.equity_liability_sections,
-      incomeStatement.net_result,
-    )
+    // Equity-changes statement: derived from the post-level mapping. We
+    // reuse buildEquityChangesNote's roll-forward to keep one source of
+    // truth for the closing total.
+    equity_changes_statement = buildK3EquityChangesStatement(mapping)
   }
 
-  const resultatrakning = flattenIncomeStatement(incomeStatement)
-  const balansrakning = flattenBalanceSheet(balanceSheet)
+  const resultatrakning = buildRrRows(mapping)
+  const brRows = buildBrRows(mapping)
+  const balansrakning = {
+    assets: brRows.assets,
+    total_assets: mapping.totals.tillgangar.current,
+    total_assets_previous: mapping.totals.tillgangar.previous,
+    equity_liabilities: brRows.equityLiabilities,
+    total_equity_liabilities: mapping.totals.egetKapitalSkulder.current,
+    total_equity_liabilities_previous: mapping.totals.egetKapitalSkulder.previous,
+  }
 
-  const warnings: string[] = [...noterWarnings]
+  // mapping.warnings carry the compliance-critical signals (unmapped
+  // accounts whose balances are MISSING from the document, RR ≠ 2099,
+  // obalans, reclass review nudges), surfacing them pre-download is what
+  // keeps a non-fileable PDF from reaching Bolagsverket.
+  const warnings: string[] = [...statementWarnings, ...mapping.warnings, ...noterWarnings]
   if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
@@ -261,6 +333,7 @@ export async function buildArsredovisningData(
       period_start: period.period_start,
       period_end: period.period_end,
     },
+    previous_period: previousPeriod,
     accounting_framework: accountingFramework,
     forvaltningsberattelse: {
       description:
@@ -381,22 +454,31 @@ async function buildFlerarsoversikt(
   return rows
 }
 
-function buildEquityChanges(sections: BalanceSheetSection[]): EgenKapitalRow[] {
-  const equity: EgenKapitalRow[] = []
-  for (const section of sections) {
-    for (const row of section.rows) {
-      if (
-        row.account_number.startsWith('20') ||
-        row.account_number.startsWith('21')
-      ) {
-        equity.push({
-          label: `${row.account_number} ${row.account_name}`,
-          amount: row.amount,
-        })
-      }
-    }
+/**
+ * Förvaltningsberättelsens "Förändring av eget kapital" table, post-level
+ * labels only (no kontonummer). Only genuine equity posts (20xx) appear;
+ * obeskattade reserver are NOT eget kapital and were dropped from the table
+ * when the account-row version was replaced by the mapping-driven one.
+ */
+function buildEquityChanges(mapping: K2MappingResult): EgenKapitalRow[] {
+  const posts: Array<{ label: string; concept: string; alwaysShow?: boolean }> = [
+    { label: 'Aktiekapital', concept: 'Aktiekapital', alwaysShow: true },
+    { label: 'Ej registrerat aktiekapital', concept: 'EjRegistreratAktiekapital' },
+    { label: 'Bunden överkursfond', concept: 'OverkursfondBunden' },
+    { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
+    { label: 'Reservfond', concept: 'Reservfond' },
+    { label: 'Överkursfond', concept: 'Overkursfond' },
+    { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
+    { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
+  ]
+  const rows: EgenKapitalRow[] = []
+  for (const post of posts) {
+    const amount = mapping.br[post.concept]?.current ?? 0
+    if (amount === 0 && !post.alwaysShow) continue
+    rows.push({ label: post.label, amount })
   }
-  return equity
+  rows.push({ label: 'Summa eget kapital', amount: mapping.totals.egetKapital.current })
+  return rows
 }
 
 async function buildK2Noter(
@@ -860,186 +942,56 @@ async function buildK3Noter(
 }
 
 /**
- * K3 separate "Förändring av eget kapital" statement. Reads opening balances
- * from the K3 balance sheet's equity section (account ranges per BAS):
- *   - 2081 (aktiekapital) → opening aktiekapital
- *   - 2085-2089 (övriga bundna reserver) → bundna_reserver
- *   - 2090-2099 (balanserade vinstmedel + årets resultat) → fritt eget kapital
- *
- * Year movements (nyemission, utdelning) aren't trivially derivable from
- * closing balances alone: they require movement analysis. v1 reports the
- * year's net result and leaves nyemission/utdelning at 0; future iterations
- * can extract these from journal entries on specific accounts.
+ * K3 separate "Förändring av eget kapital" statement, derived from the
+ * post-level mapping. With a previous fiscal year the opening balances are
+ * the REAL prior-year UB values (mapping .previous), and the year's
+ * movements are derived so the roll-forward ties exactly to the booked UB:
+ * bundet-EK growth is presented as nyemission, a fritt-EK shortfall beyond
+ * årets resultat as utdelning (the overwhelmingly common cases; a positive
+ * fritt residual, e.g. aktieägartillskott, is folded into nyemission
+ * rather than invent an unbookable row). First fiscal year falls back to
+ * opening = closing - årets resultat.
  */
 function buildK3EquityChangesStatement(
-  sections: BalanceSheetSection[],
-  netResult: number,
+  mapping: K2MappingResult,
 ): { rows: EgenKapitalRow[]; closing_total: number } {
-  // Closing balance from BS: we approximate opening = closing - net result,
-  // which is exact when no equity movements happened outside årets resultat.
-  // For nyemission/utdelning the user can edit the equity-change narrative
-  // in a future enhancement.
-  let aktiekapitalClosing = 0
-  let bundnaClosing = 0
-  let fritProtClosing = 0
-  for (const section of sections) {
-    for (const row of section.rows) {
-      const num = row.account_number
-      // BAS 2081-2084 = aktiekapital + medlemsinsatser
-      // BAS 2085-2087 = bundna reserver (uppskrivningsfond, reservfond, bundna fonder)
-      // BAS 2090-2099 = fritt eget kapital (including årets resultat 2099)
-      if (num >= '2081' && num <= '2084') {
-        aktiekapitalClosing += row.amount
-      } else if (num >= '2085' && num <= '2087') {
-        bundnaClosing += row.amount
-      } else if (num.startsWith('209')) {
-        fritProtClosing += row.amount
-      }
-    }
-  }
-  // Opening fritt eget kapital = closing − net result (årets resultat
-  // already lives in 2099 at closing).
-  const opening = {
-    aktiekapital: Math.round(aktiekapitalClosing * 100) / 100,
-    bundna_reserver: Math.round(bundnaClosing * 100) / 100,
-    balanserade_vinstmedel:
-      Math.round((fritProtClosing - netResult) * 100) / 100,
-  }
-  const changes = {
-    nyemission: 0,
-    utdelning: 0,
-    arets_resultat: Math.round(netResult * 100) / 100,
-  }
-  return buildEquityChangesNote({ opening, changes })
-}
+  const cur = (concept: string): number => mapping.br[concept]?.current ?? 0
+  const prev = (concept: string): number => mapping.br[concept]?.previous ?? 0
 
-function flattenIncomeStatement(is: {
-  revenue_sections: IncomeStatementSection[]
-  total_revenue: number
-  expense_sections: IncomeStatementSection[]
-  total_expenses: number
-  financial_sections: IncomeStatementSection[]
-  total_financial: number
-  net_result: number
-}): IncomeStatementLine[] {
-  const lines: IncomeStatementLine[] = []
-  for (const s of is.revenue_sections) {
-    for (const r of s.rows) {
-      lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
-    }
-  }
-  lines.push({ label: 'Summa rörelseintäkter', amount: is.total_revenue, is_total: true })
-  for (const s of is.expense_sections) {
-    for (const r of s.rows) {
-      lines.push({ label: `${r.account_number} ${r.account_name}`, amount: -r.amount })
-    }
-  }
-  lines.push({
-    label: 'Rörelseresultat',
-    amount: is.total_revenue - is.total_expenses,
-    is_total: true,
-  })
+  const aretsResultat = cur('AretsResultatEgetKapital')
+  const aktiekapitalClosing = cur('Aktiekapital') + cur('EjRegistreratAktiekapital')
+  const bundnaClosing = mapping.totals.bundetEgetKapital.current - aktiekapitalClosing
+  const frittClosing = mapping.totals.frittEgetKapital.current
 
-  // Split financial sections so the RR follows the K2 / ÅRL 3:2 structure:
-  // financial items (80-87) → "Resultat efter finansiella poster" →
-  // bokslutsdispositioner (88) → "Resultat före skatt" → skatt (89) →
-  // "Årets resultat". Without the dispositioner + skatt rows the document
-  // is non-compliant for any AB that posted bolagsskatt or
-  // periodiseringsfond, and the RR doesn't reconcile to BS 2099.
-  const finItems = is.financial_sections.filter(
-    (s) => !/bokslutsdisposition|skatter och årets resultat/i.test(s.title),
-  )
-  const dispositionsSections = is.financial_sections.filter((s) =>
-    /bokslutsdisposition/i.test(s.title),
-  )
-  const skattSections = is.financial_sections.filter((s) =>
-    /skatter och årets resultat/i.test(s.title),
-  )
-  for (const s of finItems) {
-    for (const r of s.rows) {
-      lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
+  const hasPrevious = mapping.totals.egetKapital.previous !== null
+  let opening: { aktiekapital: number; bundna_reserver: number; balanserade_vinstmedel: number }
+  let nyemission = 0
+  let utdelning = 0
+  if (hasPrevious) {
+    const aktiekapitalOpening = prev('Aktiekapital') + prev('EjRegistreratAktiekapital')
+    const bundnaOpening =
+      (mapping.totals.bundetEgetKapital.previous ?? 0) - aktiekapitalOpening
+    const frittOpening = mapping.totals.frittEgetKapital.previous ?? 0
+    opening = {
+      aktiekapital: aktiekapitalOpening,
+      bundna_reserver: bundnaOpening,
+      balanserade_vinstmedel: frittOpening,
     }
-  }
-  const finSubtotal = finItems.reduce((sum, s) => sum + s.subtotal, 0)
-  const resAfterFinancial = is.total_revenue - is.total_expenses + finSubtotal
-  lines.push({
-    label: 'Resultat efter finansiella poster',
-    amount: Math.round(resAfterFinancial * 100) / 100,
-    is_total: true,
-  })
-
-  if (dispositionsSections.length > 0) {
-    for (const s of dispositionsSections) {
-      for (const r of s.rows) {
-        lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
-      }
-    }
-    const dispositionsSubtotal = dispositionsSections.reduce((sum, s) => sum + s.subtotal, 0)
-    lines.push({
-      label: 'Resultat före skatt',
-      amount: Math.round((resAfterFinancial + dispositionsSubtotal) * 100) / 100,
-      is_total: true,
-    })
+    nyemission =
+      aktiekapitalClosing - aktiekapitalOpening + (bundnaClosing - bundnaOpening)
+    const frittResidual = frittClosing - frittOpening - aretsResultat
+    if (frittResidual < 0) utdelning = frittResidual
+    else nyemission += frittResidual
   } else {
-    // No dispositioner posted: keep the simpler "Resultat före skatt" row
-    // immediately after the finansnetto totals so the RR still has the
-    // pre-tax subtotal expected by ÅRL.
-    lines.push({
-      label: 'Resultat före skatt',
-      amount: Math.round(resAfterFinancial * 100) / 100,
-      is_total: true,
-    })
-  }
-
-  if (skattSections.length > 0) {
-    for (const s of skattSections) {
-      for (const r of s.rows) {
-        lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
-      }
+    opening = {
+      aktiekapital: aktiekapitalClosing,
+      bundna_reserver: bundnaClosing,
+      balanserade_vinstmedel: frittClosing - aretsResultat,
     }
   }
-
-  lines.push({ label: 'Årets resultat', amount: is.net_result, is_total: true })
-  return lines
+  return buildEquityChangesNote({
+    opening,
+    changes: { nyemission, utdelning, arets_resultat: aretsResultat },
+  })
 }
 
-function flattenBalanceSheet(bs: {
-  asset_sections: BalanceSheetSection[]
-  total_assets: number
-  equity_liability_sections: BalanceSheetSection[]
-  total_equity_liabilities: number
-}): {
-  assets: BalanceSheetLine[]
-  total_assets: number
-  equity_liabilities: BalanceSheetLine[]
-  total_equity_liabilities: number
-} {
-  const assetLines: BalanceSheetLine[] = []
-  for (const s of bs.asset_sections) {
-    assetLines.push({ label: s.title, amount: s.subtotal, is_total: true, indent: 0 })
-    for (const r of s.rows) {
-      assetLines.push({
-        label: `${r.account_number} ${r.account_name}`,
-        amount: r.amount,
-        indent: 1,
-      })
-    }
-  }
-  const eqLines: BalanceSheetLine[] = []
-  for (const s of bs.equity_liability_sections) {
-    eqLines.push({ label: s.title, amount: s.subtotal, is_total: true, indent: 0 })
-    for (const r of s.rows) {
-      eqLines.push({
-        label: `${r.account_number} ${r.account_name}`,
-        amount: r.amount,
-        indent: 1,
-      })
-    }
-  }
-  return {
-    assets: assetLines,
-    total_assets: bs.total_assets,
-    equity_liabilities: eqLines,
-    total_equity_liabilities: bs.total_equity_liabilities,
-  }
-}

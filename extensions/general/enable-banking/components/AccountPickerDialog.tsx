@@ -109,12 +109,19 @@ export function AccountPickerDialog({
       setCustomDate('')
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
-      // back to currency-based suggestions for accounts the user hasn't mapped yet.
+      // back to currency-based suggestions for accounts the user hasn't mapped
+      // yet. The currency default is suggested at most once — two SEK accounts
+      // both pre-filled with 1930 would collide on the UNIQUE
+      // (company_id, ledger_account) constraint at save; the second account is
+      // left blank so the user picks a distinct slot.
       const initialLedger: Record<string, string> = {}
+      const suggested = new Set<string>()
       for (const a of accounts) {
         const fromStored = a.ledger_account
         const fromDefault = CURRENCY_DEFAULTS[a.currency] ?? ''
-        initialLedger[a.uid] = fromStored ?? fromDefault
+        const pick = fromStored ?? (suggested.has(fromDefault) ? '' : fromDefault)
+        if (pick) suggested.add(pick)
+        initialLedger[a.uid] = pick
       }
       setLedgerByUid(initialLedger)
     }

@@ -1,6 +1,5 @@
 import type {
   EgenKapitalRow,
-  IncomeStatementLine,
   NoteEntry,
 } from './types'
 
@@ -338,7 +337,3 @@ export function anyAssetHasComponents(assets: AssetWithComponents[]): boolean {
 // Re-export so the type-guard signature can be reused by build-data and
 // tests without exposing the local AssetWithComponents structural type.
 export { isComponentArray as isK3ComponentArray }
-
-// Re-export the line type to make integration easier for callers that need
-// to merge with non-K3 lines without re-importing from './types'.
-export type { IncomeStatementLine }

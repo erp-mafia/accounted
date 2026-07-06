@@ -329,6 +329,13 @@ export interface CompanySettings {
   // load-bearing for correctness. Free tier (founder decision 2026-07-02).
   dimensions_enabled: boolean
 
+  // Salary payments (migration 20260508120000 + 20260703190000).
+  // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
+  // retired by the banks during 2026.
+  preferred_payment_format: 'bg_lb' | 'pain001'
+  salary_pay_day: number
+  salary_default_bank: 'swedbank' | 'seb' | 'handelsbanken' | 'nordea' | 'other' | null
+
   // Sandbox
   is_sandbox: boolean
 
@@ -1720,12 +1727,39 @@ export interface BalanceSheetSection {
   subtotal: number
 }
 
+/**
+ * A non-latest fiscal year whose P&L (class 3-8) does not net to zero —
+ * its result was never transferred to equity (omföring av årets resultat
+ * saknas). Every later period that derives its opening balance from prior
+ * class 1-2 lines inherits exactly this residual as a balance-sheet
+ * differens.
+ */
+export interface UntransferredResult {
+  fiscal_period_id: string
+  period_name: string
+  /** Class 3-8 net (credit-positive = profit), rounded to öre. */
+  pl_net: number
+}
+
+/**
+ * Server-built explanation for an unbalanced balance report. The message is
+ * Swedish (user-facing domain messages are Swedish) and names the exact
+ * fiscal years whose results were never moved to equity.
+ */
+export interface BalanceImbalanceDiagnosis {
+  differens: number
+  untransferred_results: UntransferredResult[]
+  message: string
+}
+
 export interface BalanceSheetReport {
   asset_sections: BalanceSheetSection[]
   total_assets: number
   equity_liability_sections: BalanceSheetSection[]
   total_equity_liabilities: number
   period: { start: string; end: string }
+  /** Present only when the report does not balance. */
+  imbalance_diagnosis?: BalanceImbalanceDiagnosis
 }
 
 export interface ResultatrapportRow {
@@ -1807,6 +1841,8 @@ export interface BalansrapportReport {
   beraknat_resultat: number
   is_balanced: boolean
   period: { start: string; end: string }
+  /** Present only when the underlying trial balance does not balance. */
+  imbalance_diagnosis?: BalanceImbalanceDiagnosis
 }
 
 export interface SIEExportOptions {

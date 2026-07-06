@@ -1,8 +1,24 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, CashAccountSource } from '@/types'
 import { createLogger } from '@/lib/logger'
+import { syncMappedAccounts } from '@/lib/import/account-sync'
 
 const log = createLogger('cash-accounts')
+
+/**
+ * Suggested BAS account per currency. Single source — the enable-banking
+ * callback and the AccountPickerDialog both key off these.
+ */
+export const CURRENCY_LEDGER_DEFAULTS: Record<string, string> = {
+  SEK: '1930',
+  EUR: '1932',
+  USD: '1933',
+  GBP: '1934',
+}
+
+export function defaultLedgerForCurrency(currency: string): string {
+  return CURRENCY_LEDGER_DEFAULTS[currency.toUpperCase()] ?? '1930'
+}
 
 /**
  * Canonical read/write surface for cash_accounts.
@@ -113,6 +129,111 @@ export async function findByIban(
     return null
   }
   return (data as CashAccount | null) ?? null
+}
+
+/**
+ * Find a free BAS class-19 slot for a new PSD2 cash account, respecting the
+ * UNIQUE (company_id, ledger_account) constraint. A bank returning N
+ * same-currency accounts must not map them all to the currency default —
+ * that's exactly the collision this prevents.
+ *
+ * Rules:
+ *   - The currency default (1930/1932/1933/1934) is available when no
+ *     PSD2-backed row holds it. A manual holder (the seeded 1930 row) does
+ *     not block it — upsertFromPsd2 promotes that row in place.
+ *   - Overflow walks the free-use 1931–1959 sub-account slots, skipping the
+ *     four currency defaults (reserved as suggestions for their currencies)
+ *     and any slot held by ANY existing row — promoting an unrelated manual
+ *     account (SIE-imported, kassa) would silently steal it.
+ *   - `exclude` carries slots already assigned earlier in the caller's loop
+ *     but not yet visible in the table.
+ *
+ * Returns null when no slot is free (or the lookup fails) — callers fall back
+ * to their previous behavior and surface the error.
+ */
+export async function findFreeLedgerAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  currency: string,
+  exclude: ReadonlySet<string> = new Set(),
+): Promise<string | null> {
+  const preferred = defaultLedgerForCurrency(currency)
+
+  const { data: rows, error } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account, bank_connection_id')
+    .eq('company_id', companyId)
+
+  if (error) {
+    log.error('findFreeLedgerAccount lookup failed', { companyId, error: error.message })
+    return null
+  }
+
+  const anyTaken = new Set<string>()
+  const connectedTaken = new Set<string>()
+  for (const row of (rows ?? []) as Array<{ ledger_account: string; bank_connection_id: string | null }>) {
+    anyTaken.add(row.ledger_account)
+    if (row.bank_connection_id !== null) connectedTaken.add(row.ledger_account)
+  }
+
+  if (!exclude.has(preferred) && !connectedTaken.has(preferred)) return preferred
+
+  const reserved = new Set(Object.values(CURRENCY_LEDGER_DEFAULTS))
+  for (let n = 1931; n <= 1959; n++) {
+    const candidate = String(n)
+    if (reserved.has(candidate)) continue
+    if (exclude.has(candidate) || anyTaken.has(candidate)) continue
+    return candidate
+  }
+
+  log.warn('findFreeLedgerAccount exhausted 1931–1959', { companyId, currency })
+  return null
+}
+
+/**
+ * Allocate a ledger slot for a new PSD2 account AND make sure that account
+ * number exists in the company's chart of accounts — cash_accounts has no FK
+ * to the chart, but booking (and the AccountPicker, which only lists chart
+ * accounts) breaks on numbers the chart doesn't know. Sub-accounts outside
+ * the BAS reference (1931, …) are created with metadata derived from the
+ * account number; standard numbers get their BAS name.
+ */
+export async function allocatePsd2LedgerAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string> },
+): Promise<string | null> {
+  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set())
+  if (!ledger) return null
+
+  const name = input.accountName?.trim() || `Bankkonto ${input.currency.toUpperCase()}`
+  const sync = await syncMappedAccounts(
+    supabase,
+    companyId,
+    userId,
+    [
+      {
+        sourceAccount: ledger,
+        sourceName: name,
+        targetAccount: ledger,
+        targetName: name,
+        confidence: 1,
+        matchType: 'exact',
+        isOverride: false,
+      },
+    ],
+    false,
+  )
+  if (sync.error) {
+    log.error('allocatePsd2LedgerAccount chart sync failed', {
+      companyId,
+      ledger,
+      error: sync.error,
+    })
+    return null
+  }
+  return ledger
 }
 
 /**

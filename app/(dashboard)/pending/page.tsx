@@ -223,8 +223,33 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  // The exact journal lines the approval will post (net cost line, VAT line,
+  // gross bank line, SEK) — staged by the server since the preview-lines fix.
+  const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
   const vatLines = (data.vat_lines as Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>) || []
 
+  if (lines.length > 0) {
+    return (
+      <div className="space-y-1 text-sm">
+        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+        {lines.map((line, i) => {
+          const debitAmt = typeof line.debit_amount === 'number' ? line.debit_amount : 0
+          const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
+          return (
+            <div key={i} className="flex justify-between gap-4 font-mono text-xs">
+              <span className="truncate">{line.account_number ?? '?'}{line.description ? ` ${line.description}` : ''}</span>
+              <span className="tabular-nums shrink-0">
+                {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // Legacy summary for operations staged before the preview carried full
+  // lines: debit/credit accounts + gross amount + separate VAT rows.
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">

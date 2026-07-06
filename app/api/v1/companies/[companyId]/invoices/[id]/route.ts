@@ -57,13 +57,13 @@ const ALLOWED_EXPAND = ['items', 'payments'] as const
 // VAT treatment, conversion, FX, and notes, but still drops user_id and
 // company_id (internal scoping).
 const INVOICE_DETAIL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const CUSTOMER_DETAIL_COLUMNS =
   'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const INVOICE_ITEM_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
+  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions, created_at'
 
 // Payment projection: drops invoice_id (redundant on the parent), user_id,
 // company_id (internal scoping).

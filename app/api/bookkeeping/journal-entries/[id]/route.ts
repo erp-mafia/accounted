@@ -1,7 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -17,50 +14,30 @@ const logger = createLogger('journal-entries')
 
 ensureInitialized()
 
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal_entry.get',
+  async (_request, { supabase, companyId }, { params }) => {
+    const { id } = await params
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 404 })
+    }
 
-  const { data, error } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
+    return NextResponse.json({ data })
+  },
+)
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 404 })
-  }
-
-  return NextResponse.json({ data })
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal_entry.delete',
+  async (_request, { supabase, companyId, user }, { params }) => {
+    const { id } = await params
 
   // Read source_type/source_id BEFORE deleting so we can revert the linked
   // invoice/supplier_invoice status afterwards. The GL row gets cancelled by
@@ -107,13 +84,14 @@ export async function DELETE(
   })
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * PATCH: edit a DRAFT verifikat in place (header + lines). Only drafts are
  * editable; updateDraftEntry rejects committed entries with a 409, and the DB
- * immutability trigger is the backstop. Uses withRouteContext (MFA + write gate):
- * the GET/DELETE above predate that wrapper and are intentionally left as-is.
+ * immutability trigger is the backstop.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.update',

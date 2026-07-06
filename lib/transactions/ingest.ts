@@ -298,6 +298,12 @@ export async function ingestTransactions(
   // no date stamps every row at today's rate, which is wrong for historical
   // imports (issue #442). fetchExchangeRate already falls back to the last
   // 7 days when the requested day is a weekend/holiday.
+  //
+  // Concurrency is bounded: a 90-day first-sync backfill of a foreign-
+  // currency account used to fire every pair at Riksbanken simultaneously
+  // and got the whole batch rate-limited. Passing `supabase` gives
+  // fetchExchangeRate the persistent exchange_rates cache, so repeat dates
+  // cost a DB lookup instead of an API call.
   if (!options?.rawInsertOnly) {
     const uniquePairs = new Map<string, { currency: Currency; date: string }>()
     for (const t of rawTransactions) {
@@ -311,22 +317,26 @@ export async function ingestTransactions(
 
     if (uniquePairs.size > 0) {
       const pairs = Array.from(uniquePairs.entries())
-      const settled = await Promise.allSettled(
-        pairs.map(([, { currency, date }]) =>
-          fetchExchangeRate(currency, new Date(date))
+      const RATE_FETCH_CONCURRENCY = 4
+      for (let i = 0; i < pairs.length; i += RATE_FETCH_CONCURRENCY) {
+        const chunk = pairs.slice(i, i + RATE_FETCH_CONCURRENCY)
+        const settled = await Promise.allSettled(
+          chunk.map(([, { currency, date }]) =>
+            fetchExchangeRate(currency, new Date(date), supabase)
+          )
         )
-      )
-      for (let i = 0; i < pairs.length; i++) {
-        const [key] = pairs[i]
-        const outcome = settled[i]
-        if (outcome.status === 'fulfilled' && outcome.value) {
-          exchangeRatesByDate.set(key, outcome.value)
+        for (let j = 0; j < chunk.length; j++) {
+          const [key] = chunk[j]
+          const outcome = settled[j]
+          if (outcome.status === 'fulfilled' && outcome.value) {
+            exchangeRatesByDate.set(key, outcome.value)
+          }
+          // A null/rejected outcome leaves the key unset: the transaction is
+          // inserted without amount_sek/exchange_rate and remains repairable
+          // via /api/transactions/[id]/refresh-exchange-rate. Rates are never
+          // made up, fetchExchangeRate's last resort is the most recent
+          // CACHED observation, not a hardcoded number.
         }
-        // Network failures resolve inside fetchExchangeRate to getFallbackRate()
-        // (non-null, today's date), so they still populate the key. The key
-        // only stays unset when the API returns an empty observation array
-        // or the promise rejects outright; in that case amount_sek and
-        // exchange_rate remain null on the inserted transaction.
       }
     }
   }

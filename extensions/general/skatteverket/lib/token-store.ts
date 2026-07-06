@@ -181,3 +181,67 @@ export async function deleteTokens(
     .delete()
     .eq('user_id', userId)
 }
+
+/**
+ * Terminal auth-error codes: the stored token can never recover on its own —
+ * only a fresh BankID consent fixes it. SESSION_EXPIRED qualifies because
+ * SKV's `per`-flow refresh tokens live 65 minutes: once expired there is
+ * nothing left to refresh with.
+ */
+export const RECONSENT_ERROR_CODES = [
+  'SESSION_EXPIRED',
+  'REFRESH_EXHAUSTED',
+  'MISSING_SCOPE',
+  'TOKEN_CORRUPTED',
+] as const
+
+/**
+ * Flag a connection as needing re-consent so crons stop retrying it every
+ * night and the UI can prompt proactively. storeTokens() (delete + insert)
+ * resets the row to status 'active' on the next successful consent.
+ * Best-effort: health bookkeeping must never mask the original auth error.
+ */
+export async function markNeedsReconsent(
+  _supabase: SupabaseClient,
+  userId: string,
+  errorCode: string,
+): Promise<void> {
+  const db = getServiceClient()
+  const { error } = await db
+    .from('skatteverket_tokens')
+    .update({
+      status: 'needs_reconsent',
+      last_error_code: errorCode,
+      last_error_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId)
+  if (error) {
+    log.warn('failed to mark token row needs_reconsent', {
+      userId,
+      errorCode,
+      error: error.message,
+    })
+  }
+}
+
+/**
+ * Read the persisted connection health for a user's token row.
+ * Returns null when no row exists (not connected).
+ */
+export async function getTokenHealth(
+  _supabase: SupabaseClient,
+  userId: string,
+): Promise<{ status: string; last_error_code: string | null; last_error_at: string | null } | null> {
+  const db = getServiceClient()
+  const { data, error } = await db
+    .from('skatteverket_tokens')
+    .select('status, last_error_code, last_error_at')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error || !data) return null
+  return {
+    status: (data.status as string | null) ?? 'active',
+    last_error_code: (data.last_error_code as string | null) ?? null,
+    last_error_at: (data.last_error_at as string | null) ?? null,
+  }
+}

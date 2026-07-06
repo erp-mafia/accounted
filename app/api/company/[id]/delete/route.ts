@@ -25,10 +25,11 @@ const DeleteCompanySchema = z.object({
  *
  * Rules:
  *  - Only callers with role='owner' in company_members may delete.
- *  - The body must include confirm_name matching the company's display name.
- *    The UI shows company_settings.company_name (companies.name may be stale),
- *    so we validate against that, falling back to companies.name. Either value
- *    is accepted so the confirm gate never blocks a legitimate deletion.
+ *  - The body must include confirm_name matching the company's display name
+ *    exactly as the UI shows it: company_settings.company_name, falling back
+ *    to companies.name only when no settings row exists. ONLY that single
+ *    name is accepted (see step 3) — accepting alternates would weaken the
+ *    confirmation gate on an irreversible action.
  *  - Already-archived companies return 404 (treated as not found).
  */
 export async function POST(
@@ -137,7 +138,9 @@ export async function POST(
 
   // 6. Write audit log row. companies has no auto-audit trigger, so do it
   // explicitly. Service client bypasses audit_log RLS (no INSERT policy).
-  await service.from('audit_log').insert({
+  // The archive already happened — don't fail the request, but an audit
+  // write failing on an irreversible action must never be silent.
+  const { error: auditError } = await service.from('audit_log').insert({
     user_id: user.id,
     company_id: companyId,
     action: 'DELETE',
@@ -148,6 +151,12 @@ export async function POST(
     new_state: { archived_at: archivedAt, archived_by: user.id },
     description: `Company archived: ${company.name}`,
   })
+  if (auditError) {
+    log.error('Failed to write audit_log row for company archive', {
+      companyId,
+      error: auditError.message,
+    })
+  }
 
   // 7. Emit event
   await eventBus.emit({

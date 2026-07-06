@@ -21,16 +21,45 @@ export default async function AgentOnboardingPage() {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
+  // Everything that doesn't depend on the TIC snapshot loads in one batch:
+  // the settings row (carrying the is_sandbox gate + the onboarding-form
+  // data, moms_period, fiscal_year_start_month, f_skatt, city, …, that
+  // never makes it onto `companies` proper), the greeting profile, any
+  // existing agent profile, and the atom registry titles ("Konsult It"-style
+  // slug labels look ugly; the registry has them as authored).
+  const [
+    { data: settings },
+    { data: profile },
+    { data: existingProfile },
+    { data: atomRows },
+    hdrs,
+  ] = await Promise.all([
+    supabase
+      .from('company_settings')
+      .select(
+        'is_sandbox, city, address_line1, postal_code, f_skatt, vat_registered, moms_period, fiscal_year_start_month, employee_count, has_employees',
+      )
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase.from('profiles').select('full_name').eq('id', user.id).single(),
+    supabase
+      .from('agent_profiles')
+      .select('company_id, profile_summary, verified_at')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('agent_atom_registry')
+      .select('id, title')
+      .eq('is_active', true)
+      .is('parent_atom_id', null), // skill titles only; reference children never appear as profile chips
+    headers(),
+  ])
+
   // Sandbox companies ship with a pre-built verified agent_profile: the
   // build flow on this page would call TIC and the gated composer stream,
   // both of which 403. Send them back to the dashboard where the demo
   // assistant is already visible via the sheet preview.
-  const { data: settingsForSandbox } = await supabase
-    .from('company_settings')
-    .select('is_sandbox')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (settingsForSandbox?.is_sandbox) redirect('/')
+  if (settings?.is_sandbox) redirect('/')
 
   // Trigger the TIC live-fetch + cache before the field-resolving query
   // below. ensureTicSnapshot is fast on cache-hit (single SELECT) and
@@ -38,7 +67,6 @@ export default async function AgentOnboardingPage() {
   // streaming endpoint; this just lets the initial Phase B render show the
   // SNI/verksamhetsbeskrivning when the user returns to the page after
   // stream completion.
-  const hdrs = await headers()
   const cookieHeader = hdrs.get('cookie') ?? ''
   const host = hdrs.get('host') ?? 'localhost:3000'
   const proto = hdrs.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https')
@@ -51,30 +79,13 @@ export default async function AgentOnboardingPage() {
 
   // Fetch the small handful of fields we render directly into Phase B so the
   // user sees real values (not "Laddar…") the moment the stream finishes.
-  // company_settings is a separate fetch because it carries the onboarding-
-  // form data (moms_period, fiscal_year_start_month, f_skatt, city, …) that
-  // never makes it onto `companies` proper.
-  const [{ data: company }, { data: profile }, { data: existingProfile }, { data: settings }] =
-    await Promise.all([
-      supabase
-        .from('companies')
-        .select('name, entity_type, org_number, tic_snapshot')
-        .eq('id', companyId)
-        .single(),
-      supabase.from('profiles').select('full_name').eq('id', user.id).single(),
-      supabase
-        .from('agent_profiles')
-        .select('company_id, profile_summary, verified_at')
-        .eq('company_id', companyId)
-        .maybeSingle(),
-      supabase
-        .from('company_settings')
-        .select(
-          'city, address_line1, postal_code, f_skatt, vat_registered, moms_period, fiscal_year_start_month, employee_count, has_employees',
-        )
-        .eq('company_id', companyId)
-        .maybeSingle(),
-    ])
+  // Must run AFTER ensureTicSnapshot, it reads the tic_snapshot that call
+  // may have just written.
+  const { data: company } = await supabase
+    .from('companies')
+    .select('name, entity_type, org_number, tic_snapshot')
+    .eq('id', companyId)
+    .single()
 
   if (!company) redirect('/onboarding')
 
@@ -83,14 +94,6 @@ export default async function AgentOnboardingPage() {
   // before the stream completes so the layout doesn't jump.
   const initialFields = buildInitialFields(company, settings)
 
-  // Atom titles: slug-derived labels look ugly ("Konsult It",
-  // "Single Shareholder Ab Fmb"). Fetch the registry titles once and pass them
-  // to the review card so chips render as authored.
-  const { data: atomRows } = await supabase
-    .from('agent_atom_registry')
-    .select('id, title')
-    .eq('is_active', true)
-    .is('parent_atom_id', null) // skill titles only; reference children never appear as profile chips
   const atomTitles: Record<string, string> = {}
   for (const row of (atomRows ?? []) as { id: string; title: string }[]) {
     atomTitles[row.id] = row.title

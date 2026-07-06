@@ -637,6 +637,144 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
+
+  it('persists default_dimensions + items[].dimensions on the draft', async () => {
+    withInvoiceWriteScope()
+    const createdInvoice = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      invoice_number: null,
+      customer_id: CUSTOMER_ID,
+      status: 'draft',
+      document_type: 'invoice',
+    }
+    let insertedInvoice: Record<string, unknown> | null = null
+    let insertedItems: Array<Record<string, unknown>> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        if (table === 'invoices') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'insert') {
+                return (row: Record<string, unknown>) => {
+                  insertedInvoice = row
+                  return new Proxy({}, {
+                    get(_t2, prop2) {
+                      if (prop2 === 'then') {
+                        return (r: (v: unknown) => void) => r({ data: createdInvoice, error: null })
+                      }
+                      return () => new Proxy({}, this!)
+                    },
+                  })
+                }
+              }
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) => r({ data: createdInvoice, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        if (table === 'invoice_items') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'insert') {
+                return (rows: Array<Record<string, unknown>>) => {
+                  insertedItems = rows
+                  return new Proxy({}, {
+                    get(_t2, prop2) {
+                      if (prop2 === 'then') {
+                        return (r: (v: unknown) => void) => r({ data: null, error: null })
+                      }
+                      return () => new Proxy({}, this!)
+                    },
+                  })
+                }
+              }
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) => r({ data: null, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        return new Proxy({}, {
+          get(_t, prop) {
+            if (prop === 'then') {
+              const data = table === 'company_members'
+                ? { company_id: COMPANY_ID, role: 'owner' }
+                : table === 'customers'
+                  ? SWEDISH_BUSINESS_CUSTOMER
+                  : null
+              return (r: (v: unknown) => void) => r({ data, error: null })
+            }
+            return () => new Proxy({}, this!)
+          },
+        })
+      },
+    })
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        default_dimensions: { '6': 'P001' },
+        items: [
+          {
+            description: 'Konsultation',
+            quantity: 8,
+            unit: 'tim',
+            unit_price: 1250,
+            dimensions: { '1': 'KS01' },
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedInvoice).not.toBeNull()
+    expect(insertedInvoice!.default_dimensions).toEqual({ '6': 'P001' })
+    expect(insertedItems).not.toBeNull()
+    expect(insertedItems![0].dimensions).toEqual({ '1': 'KS01' })
+  })
+
+  it('dry-run preview carries default_dimensions and per-item dimensions', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?dry_run=true`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        default_dimensions: { '6': 'P001' },
+        items: [
+          {
+            description: 'Konsultation',
+            quantity: 8,
+            unit: 'tim',
+            unit_price: 1250,
+            dimensions: { '1': 'KS01' },
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.preview.default_dimensions).toEqual({ '6': 'P001' })
+    expect(body.data.preview.items[0].dimensions).toEqual({ '1': 'KS01' })
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────

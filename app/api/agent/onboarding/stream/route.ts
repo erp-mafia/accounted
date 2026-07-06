@@ -102,6 +102,14 @@ export async function POST(request: Request) {
   if (!membership) {
     return NextResponse.json({ error: 'Not a member of this company' }, { status: 403 })
   }
+  // The pipeline upserts agent_profiles — a mutation, so viewers are refused
+  // (same rule as /api/agent/profile and /verify).
+  if (membership.role === 'viewer') {
+    return NextResponse.json(
+      { error: 'Du har endast läsbehörighet i detta företag.' },
+      { status: 403 },
+    )
+  }
 
   // No live composer run for sandbox companies: they ship with a pre-built
   // verified agent_profile so the chrome is visible without burning Bedrock.

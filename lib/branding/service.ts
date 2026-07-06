@@ -11,7 +11,7 @@
  * client-readable, BRANDING_* for server-only) or registers a branding
  * extension via registerBrandingService().
  *
- * See WHITELABEL.md for the full env var reference and fork checklist.
+ * See docs/WHITELABEL.md for the full env var reference and fork checklist.
  */
 
 export interface BrandingConfig {

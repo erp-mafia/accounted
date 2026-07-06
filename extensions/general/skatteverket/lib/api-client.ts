@@ -164,7 +164,24 @@ async function refreshTokenForUser(
     )
   }
 
-  const refreshed = await refreshAccessToken(tokens.refresh_token, tokens.refresh_count)
+  let refreshed
+  try {
+    refreshed = await refreshAccessToken(tokens.refresh_token, tokens.refresh_count)
+  } catch (err) {
+    // SKV's `per`-flow refresh tokens live 65 minutes. Any daily cron (or a
+    // user returning the next day) therefore always finds a dead token and
+    // gets 404 id_not_found back — that's ordinary session expiry, not a
+    // runtime error. Classify it so the crons' quiet buckets and the UI's
+    // reconnect flow catch it instead of a raw Error escaping to the logs.
+    const message = err instanceof Error ? err.message : String(err)
+    if (/\b404\b/.test(message) && /id_not_found|refresh token is not found/i.test(message)) {
+      throw new SkatteverketAuthError(
+        'Sessionen har gått ut. Logga in med BankID igen.',
+        'SESSION_EXPIRED'
+      )
+    }
+    throw err
+  }
   const updatedTokens: SkatteverketTokens = {
     ...refreshed,
     scope: tokens.scope,
@@ -256,8 +273,10 @@ export async function skvRequest(
     // Diagnostic detail (headers, body) belongs in server-side logs only,
     // not in user-facing error messages. The structured logger redacts
     // sensitive keys and we further cap body length and strip Bearer tokens
-    // so the diagnostic is bounded.
-    log.error('401 from Skatteverket API', {
+    // so the diagnostic is bounded. warn, not error: auth rejections are
+    // expected states (expired sessions, stale scopes) and the thrown
+    // SkatteverketAuthError below carries the signal to the caller.
+    log.warn('401 from Skatteverket API', {
       url,
       statusCode: 401,
       body: safeBodyForLog(text),
@@ -368,7 +387,7 @@ export async function skvRequest(
     const text = await response.text().catch(() => '')
     // Same diagnostic-vs-user-message split as the 401 path: log the body
     // server-side, surface only the actionable Swedish guidance.
-    log.error('403 from Skatteverket API', {
+    log.warn('403 from Skatteverket API', {
       url,
       statusCode: 403,
       body: safeBodyForLog(text),

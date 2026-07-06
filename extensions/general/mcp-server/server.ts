@@ -10,7 +10,7 @@ import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
-import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { eventBus } from '@/lib/events/bus'
@@ -537,6 +537,9 @@ async function categorizeTransactionCore(
   amount: number
   currency: string
   vat_lines?: Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>
+  // The exact journal lines the commit executor will post (net cost line,
+  // VAT line, gross bank line) — always in SEK, matching the booked entry.
+  lines?: Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>
   message?: string
   transaction?: Transaction
   underlag?: {
@@ -656,6 +659,12 @@ async function categorizeTransactionCore(
 
   // Preview mode: return what would happen without executing
   if (!confirm) {
+    // Materialize the exact lines the commit executor will post — including
+    // the gross→net split on the cost line. Historically the preview only
+    // carried { debit/credit account, gross amount, vat_lines }, which reads
+    // as an unbalanced "gross on cost account + VAT debit" entry and misled
+    // both users and agents into rejecting correct proposals.
+    const entryLines = buildTransactionEntryLines(transaction as Transaction, mappingResult)
     return {
       preview: true,
       category,
@@ -663,6 +672,12 @@ async function categorizeTransactionCore(
       credit_account: mappingResult.credit_account,
       amount: Math.abs(transaction.amount),
       currency: transaction.currency,
+      lines: entryLines.map(l => ({
+        account_number: l.account_number,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        description: l.line_description ?? '',
+      })),
       vat_lines: mappingResult.vat_lines.map(v => ({
         account_number: v.account_number,
         debit_amount: v.debit_amount,
@@ -2864,7 +2879,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. vat_amount overrides computed moms; reverse_charge is rejected when the underlag shows the seller charged VAT. Optional dimensions tag the business lines.',
+    description: 'Categorize a bank transaction. Stages the verifikat — cost line booked NET of moms, bank line gross; preview.lines shows the exact entry. Commit via gnubok_approve_pending_operation. vat_amount overrides computed moms; reverse_charge rejected when the underlag shows seller VAT.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2984,6 +2999,11 @@ export const tools: McpTool[] = [
           credit_account: result.credit_account,
           amount: result.amount,
           currency: result.currency,
+          // Exact journal lines the approval will post (net cost line, VAT
+          // line, gross bank line, SEK). The summary fields above pair the
+          // GROSS amount with the cost account — read alone they misled
+          // users and agents into seeing an unbalanced entry.
+          lines: result.lines ?? [],
           vat_lines: result.vat_lines || [],
           category: result.category,
           underlag: result.underlag ?? null,

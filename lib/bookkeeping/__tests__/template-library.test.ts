@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, TEMPLATE_CATEGORY_LABELS } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, TEMPLATE_CATEGORY_LABELS } from '../template-library'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -91,6 +91,94 @@ describe('applyTemplate', () => {
     // 333.33 * 0.25 / 1.25 = 66.666 → 66.67
     expect(result[1].debit_amount).toBe('66.67')
     expect(result[2].credit_amount).toBe('333.33')
+  })
+})
+
+describe('deriveTemplateLinesFromBooking', () => {
+  it('classifies cost + input VAT + settlement (the Bokför direkt shape)', () => {
+    // Mirrors the screenshot: 2641 D 96.40, 5420 D 385.40, 2893 K 481.80.
+    const lines = deriveTemplateLinesFromBooking(
+      [
+        { account_number: '2641', debit_amount: '96.40', credit_amount: '' },
+        { account_number: '5420', debit_amount: '385.40', credit_amount: '' },
+        { account_number: '2893', debit_amount: '', credit_amount: '481.80' },
+      ],
+      { '2641': 'Debiterad ingående moms', '5420': 'Programvaror', '2893': 'Avräkning ägare' },
+    )
+
+    const vat = lines.find((l) => l.account === '2641')!
+    expect(vat.type).toBe('vat')
+    expect(vat.vat_rate).toBe(0.25)
+    expect(vat.side).toBe('debit')
+
+    const cost = lines.find((l) => l.account === '5420')!
+    expect(cost.type).toBe('business')
+    expect(cost.label).toBe('Programvaror')
+
+    const settlement = lines.find((l) => l.account === '2893')!
+    expect(settlement.type).toBe('settlement')
+    expect(settlement.ratio).toBe(1)
+    expect(settlement.side).toBe('credit')
+
+    // Exactly one business + one settlement → convertible for the tx picker.
+    expect(convertLibraryToBookingTemplate(
+      { id: 'x', company_id: null, team_id: null, created_by: null, name: 'n', description: '', category: 'other', entity_type: 'all', lines, is_system: false, is_active: true, created_at: '', updated_at: '' },
+    )).not.toBeNull()
+  })
+
+  it('re-applying the derived template reproduces the original split (± öre)', () => {
+    const source = [
+      { account_number: '5420', debit_amount: '385.40', credit_amount: '' },
+      { account_number: '2641', debit_amount: '96.40', credit_amount: '' },
+      { account_number: '2893', debit_amount: '', credit_amount: '481.80' },
+    ]
+    const applied = applyTemplate(deriveTemplateLinesFromBooking(source), 481.8)
+    const byAccount = Object.fromEntries(applied.map((l) => [l.account_number, l]))
+    expect(Number(byAccount['5420'].debit_amount)).toBeCloseTo(385.4, 1)
+    expect(Number(byAccount['2641'].debit_amount)).toBeCloseTo(96.36, 1)
+    expect(Number(byAccount['2893'].credit_amount)).toBeCloseTo(481.8, 2)
+  })
+
+  it('derives a simple two-line transfer (one business + one settlement)', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '1630', debit_amount: '10000', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '10000' },
+    ])
+    expect(lines).toHaveLength(2)
+    expect(lines.filter((l) => l.type === 'settlement')).toHaveLength(1)
+    expect(lines.filter((l) => l.type === 'business')).toHaveLength(1)
+    // The credit leg is tagged settlement on an equal-amount tie.
+    expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+  })
+
+  it('falls back to the account number when no name is supplied', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '1630', debit_amount: '500', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '500' },
+    ])
+    expect(lines.every((l) => l.label.length > 0)).toBe(true)
+    expect(lines.find((l) => l.account === '1630')!.label).toBe('1630')
+  })
+
+  it('drops rows without a 4-digit account or amount and returns [] below two lines', () => {
+    expect(
+      deriveTemplateLinesFromBooking([
+        { account_number: '', debit_amount: '100', credit_amount: '' },
+        { account_number: '19', debit_amount: '', credit_amount: '100' },
+        { account_number: '1930', debit_amount: '0', credit_amount: '' },
+      ]),
+    ).toEqual([])
+  })
+
+  it('snaps a 12% VAT line to the reduced rate', () => {
+    // Hotel: 5820 net 1000, 2641 VAT 120, 1930 gross 1120.
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '5820', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2641', debit_amount: '120', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1120' },
+    ])
+    expect(lines.find((l) => l.account === '2641')!.vat_rate).toBe(0.12)
+    expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
   })
 })
 

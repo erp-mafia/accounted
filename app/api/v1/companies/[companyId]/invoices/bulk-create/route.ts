@@ -260,6 +260,9 @@ async function createOneInvoice(
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
+      // Dimensions PR7: per-item bag, merged over the invoice's
+      // default_dimensions on the revenue line when the JE posts at :send.
+      dimensions: item.dimensions ?? {},
     }
   })
 
@@ -314,6 +317,9 @@ async function createOneInvoice(
       our_reference: input.our_reference,
       notes: input.notes,
       document_type: documentType,
+      // Dimensions PR7: invoice-level bag; the :send JE generator applies it
+      // to every line (items[].dimensions win per key).
+      default_dimensions: input.default_dimensions ?? {},
     })
     .select(INVOICE_BULK_RESPONSE_COLUMNS)
     .single()

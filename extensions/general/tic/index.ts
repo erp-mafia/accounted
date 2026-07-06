@@ -878,11 +878,12 @@ export const ticExtension: Extension = {
             )
           }
 
-          // Verify BankID session is complete
+          // Verify BankID session is complete. The message surfaces directly
+          // in the register-page toast, so it must be Swedish.
           const session = await collectBankIdResult(sessionId)
           if (session.status !== 'complete' || !session.user) {
             return NextResponse.json(
-              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
             )
           }
@@ -984,20 +985,45 @@ export const ticExtension: Extension = {
           if (createError || !newUser?.user) {
             log.error('createUser failed', { email: trimmedEmail, status: createError?.status, code: createError?.code, message: createError?.message })
             return NextResponse.json(
-              { error: 'Failed to create account', message: createError?.message },
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
             )
           }
 
           const userId = newUser.user.id
 
+          // All-or-nothing signup: if any step after createUser fails, delete
+          // the just-created user so the same email/BankID can retry cleanly.
+          // Leaving the half-created account behind strands the user — a retry
+          // hits account_exists/already_linked, but the account only has a
+          // random password they never saw, so "log in instead" requires a
+          // password reset. bankid_identities cascades on user delete.
+          const rollbackSignup = async (step: string) => {
+            const { error: deleteError } = await supabase.auth.admin.deleteUser(userId)
+            if (deleteError) {
+              log.error(`signup rollback after failed ${step} could not delete user — orphaned account`, {
+                userId,
+                message: deleteError.message,
+              })
+            }
+          }
+
           // Mark user as BankID-linked (skips TOTP MFA) and record that they
           // do not have a password yet: the BankID signup gave them a random
           // server-side password they will never see. This flag gates MFA
           // enrollment (see lib/auth/has-password.ts).
-          await supabase.auth.admin.updateUserById(userId, {
+          const { error: metaError } = await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { bankid_linked: true, has_password: false },
           })
+
+          if (metaError) {
+            log.error('signup app_metadata update failed', { message: metaError.message, code: metaError.code })
+            await rollbackSignup('app_metadata update')
+            return NextResponse.json(
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
+              { status: 500 }
+            )
+          }
 
           // Store BankID identity
           const { error: insertError } = await supabase
@@ -1012,8 +1038,9 @@ export const ticExtension: Extension = {
 
           if (insertError) {
             log.error('insert bankid_identities failed', { message: insertError.message, code: insertError.code })
+            await rollbackSignup('bankid_identities insert')
             return NextResponse.json(
-              { error: 'Failed to link BankID identity' },
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
             )
           }
@@ -1026,8 +1053,9 @@ export const ticExtension: Extension = {
 
           if (linkError || !link?.properties?.hashed_token) {
             log.error('generateLink failed for signup', { message: linkError?.message, code: linkError?.code })
+            await rollbackSignup('generateLink')
             return NextResponse.json(
-              { error: 'Account created but failed to create session' },
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
             )
           }
@@ -1201,9 +1229,17 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'Failed to unlink BankID' }, { status: 500 })
           }
 
-          // Clear app_metadata.bankid_linked so MFA enforcement resumes
+          // Clear app_metadata.bankid_linked so MFA enforcement resumes.
+          // Read-merge-write: updateUserById REPLACES app_metadata wholesale
+          // (same rationale as /bankid/link above). Writing only
+          // { bankid_linked: false } would wipe has_password — a BankID-only
+          // user (has_password: false) would then be inferred as HAVING a
+          // password (lib/auth/has-password.ts) and could strand themselves
+          // with no working login method.
+          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const priorMeta = priorUser?.user?.app_metadata ?? {}
           await supabase.auth.admin.updateUserById(ctx.userId, {
-            app_metadata: { bankid_linked: false },
+            app_metadata: { ...priorMeta, bankid_linked: false },
           })
 
           return NextResponse.json({ data: { unlinked: true } })

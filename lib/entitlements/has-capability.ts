@@ -172,11 +172,17 @@ export async function getCompanyCapabilities(
   if (isPaywallBypassed()) return [...PAID_CAPABILITIES]
   if (!isUuid(companyId)) return [] // fail-closed: never interpolate a non-UUID
 
-  const { data: company } = await supabase
-    .from('companies')
-    .select('team_id')
-    .eq('id', companyId)
-    .maybeSingle()
+  // The disabled-config subtraction only needs companyId, so it runs in
+  // parallel with the team lookup — this function sits on the dashboard
+  // layout's critical path, where each serialized round-trip is latency.
+  const [{ data: company }, { data: configs }] = await Promise.all([
+    supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
+    supabase
+      .from('company_capability_config')
+      .select('capability_key, enabled')
+      .eq('company_id', companyId)
+      .eq('enabled', false),
+  ])
   const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
   const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
 
@@ -200,11 +206,6 @@ export async function getCompanyCapabilities(
   if (entitled.size === 0) return []
 
   // Subtract any explicitly-disabled (enablement axis).
-  const { data: configs } = await supabase
-    .from('company_capability_config')
-    .select('capability_key, enabled')
-    .eq('company_id', companyId)
-    .eq('enabled', false)
   for (const c of configs ?? []) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }

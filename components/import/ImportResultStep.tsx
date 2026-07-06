@@ -18,6 +18,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
+import { formatCurrency } from '@/lib/utils'
 import type { ImportResult } from '@/lib/import/types'
 
 interface ImportResultStepProps {
@@ -41,11 +42,15 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
   }
   const hasErrors = result.errors.length > 0
   const skipped = result.details?.skippedVouchers
+  const untransferred = result.details?.untransferredResults
 
-  // Filter out raw "hoppades över" warnings when we have structured data
-  const otherWarnings = skipped && skipped.total > 0
+  // Filter out raw warnings when we have structured data for them
+  let otherWarnings = skipped && skipped.total > 0
     ? result.warnings.filter((w) => !w.includes('hoppades över'))
     : result.warnings
+  if (untransferred && untransferred.length > 0) {
+    otherWarnings = otherWarnings.filter((w) => !w.includes('förts om till eget kapital'))
+  }
 
   return (
     <div className="space-y-6">
@@ -254,6 +259,35 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
                   </p>
                 </div>
               )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Untransferred prior-year results — the year-end omföring is missing */}
+      {untransferred && untransferred.length > 0 && (
+        <Card className="border-warning/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-warning">
+              <AlertCircle className="h-5 w-5" />
+              Årets resultat är inte omfört
+            </CardTitle>
+            <CardDescription>
+              Följande räkenskapsår saknar omföring av årets resultat till eget kapital.
+              Senare års balansräkning visar en differens på beloppet tills omföringen
+              bokförs (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {untransferred.map((u) => (
+                <div key={u.fiscal_period_id} className="text-sm flex justify-between gap-4">
+                  <span className="font-medium">{u.period_name}</span>
+                  <span className="tabular-nums">
+                    {formatCurrency(u.pl_net, 'SEK', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>

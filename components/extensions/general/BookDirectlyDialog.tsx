@@ -15,11 +15,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, AlertTriangle, Search, Check } from 'lucide-react'
+import { Loader2, Plus, Trash2, AlertTriangle, Search, Check, BookmarkPlus } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
+import { TemplateForm } from '@/components/settings/TemplateForm'
+import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -30,7 +32,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
-import type { BASAccount, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
+import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
@@ -67,6 +69,15 @@ interface FormLine {
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '' }
+
+// Swedish entity labels for the "Spara som mall" editor. Hard-coded to match
+// this dialog's Swedish-only surface (the shared TemplateForm handles the rest
+// of its own strings bilingually).
+const TEMPLATE_ENTITY_LABELS: Record<string, string> = {
+  all: 'Alla',
+  enskild_firma: 'Enskild firma',
+  aktiebolag: 'Aktiebolag',
+}
 
 interface Props {
   open: boolean
@@ -195,6 +206,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const [txSearch, setTxSearch] = useState('')
 
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // "Spara som mall" — derive amount-parameterised template lines from the
+  // current konteringsrader so the user can save the pattern they just worked
+  // out. Labels come from the loaded BAS chart; the user reviews/edits in the
+  // shared TemplateForm before saving.
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false)
 
   // Reset state when a different item opens the dialog. We pass bankAccount
   // here but it may still be null (fetch in flight): in that case '1930' is
@@ -425,6 +442,19 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       diff: Math.round((roundedDebit - roundedCredit) * 100) / 100,
     }
   }, [lines])
+
+  // Account number → BAS name, so derived template lines get meaningful labels.
+  const accountNameMap = useMemo(
+    () => Object.fromEntries(accounts.map((a) => [a.account_number, a.account_name])),
+    [accounts],
+  )
+
+  // Template lines derived from the current booking. Empty (<2 usable lines)
+  // disables the "Spara som mall" button.
+  const derivedTemplateLines = useMemo(
+    () => deriveTemplateLinesFromBooking(lines, accountNameMap),
+    [lines, accountNameMap],
+  )
 
   const updateLine = useCallback((idx: number, patch: Partial<FormLine>) => {
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
@@ -841,6 +871,21 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                       : targetSek ?? undefined
                   }
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSaveTemplate(true)}
+                  disabled={isSubmitting || derivedTemplateLines.length < 2}
+                  title={
+                    derivedTemplateLines.length < 2
+                      ? 'Fyll i minst två konteringsrader med konto och belopp'
+                      : undefined
+                  }
+                >
+                  <BookmarkPlus className="h-3.5 w-3.5 mr-1.5" />
+                  Spara som mall
+                </Button>
               </div>
               {totals.balanced ? (
                 <Badge variant="success" className="text-[11px]">
@@ -914,6 +959,45 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         onConfirm={confirmActivation}
         onCancel={cancelActivation}
       />
+
+      {/* Save the current kontering as a reusable template. Amounts are stored
+          as ratios of the total, so the user picks a fresh amount when applying
+          the mall later. The shared TemplateForm re-seeds from the derived lines
+          each time the dialog opens (Radix unmounts its content when closed). */}
+      <Dialog open={showSaveTemplate} onOpenChange={setShowSaveTemplate}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Spara som bokföringsmall</DialogTitle>
+            <DialogDescription>
+              Spara den här konteringen som en återanvändbar mall. Beloppen sparas
+              som andelar av totalsumman — du anger ett nytt belopp när du använder
+              mallen. Kontrollera raderna nedan innan du sparar.
+            </DialogDescription>
+          </DialogHeader>
+          {showSaveTemplate && (
+            <TemplateForm
+              mode="create"
+              entityLabels={TEMPLATE_ENTITY_LABELS}
+              initialTemplate={{
+                id: '',
+                company_id: null,
+                team_id: null,
+                created_by: null,
+                name: description.trim(),
+                description: '',
+                category: 'other',
+                entity_type: company?.entity_type ?? 'all',
+                lines: derivedTemplateLines,
+                is_system: false,
+                is_active: true,
+                created_at: '',
+                updated_at: '',
+              } satisfies BookingTemplateLibrary}
+              onSaved={() => setShowSaveTemplate(false)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

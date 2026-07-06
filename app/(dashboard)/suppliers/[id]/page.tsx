@@ -55,10 +55,12 @@ export default function SupplierDetailPage() {
   }
 
   async function fetchInvoices() {
-    const res = await fetch(`/api/supplier-invoices?status=all`)
+    const res = await fetch(
+      `/api/supplier-invoices?status=all&supplier_id=${encodeURIComponent(String(params.id))}`,
+    )
     const { data } = await res.json()
     if (data) {
-      setInvoices(data.filter((inv: SupplierInvoice) => inv.supplier_id === params.id))
+      setInvoices(data as SupplierInvoice[])
     }
   }
 

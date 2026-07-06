@@ -75,6 +75,26 @@ export const POST = withRouteContext(
         return errorResponseFromCode('OB_PERIOD_LOCKED', opLog, { requestId })
       }
 
+      // Company-wide lock date pre-flight. The enforce_company_lock_date
+      // trigger blocks BOTH the corrected IB and the storno of the old one
+      // (each books at period_start), and a trigger rejection surfaces as a
+      // retryable-500 BOOKKEEPING_DATABASE_ERROR with a generic message —
+      // which invites blind retries (prod incident: 3× against a covering
+      // lock date). Pre-flight it and return an actionable 409 instead.
+      const { data: settings } = await supabase
+        .from('company_settings')
+        .select('bookkeeping_locked_through')
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      const lockDate = settings?.bookkeeping_locked_through as string | null
+      if (lockDate && period.period_start <= lockDate) {
+        return errorResponseFromCode('OB_COMPANY_LOCK_DATE', opLog, {
+          requestId,
+          details: { lockDate, entryDate: period.period_start },
+        })
+      }
+
       if (!period.opening_balances_set || !period.opening_balance_entry_id) {
         return errorResponseFromCode('OB_CORRECT_NO_EXISTING', opLog, { requestId })
       }
@@ -240,6 +260,16 @@ export const POST = withRouteContext(
         },
       })
     } catch (err) {
+      // Belt-and-braces: if the lock-date trigger fired anyway (lock date set
+      // between the pre-flight and the write), return the same actionable
+      // envelope instead of the generic retryable BOOKKEEPING_DATABASE_ERROR.
+      const message = err instanceof Error ? err.message : ''
+      if (/Bokföringen är låst/i.test(message)) {
+        return errorResponseFromCode('OB_COMPANY_LOCK_DATE', opLog, {
+          requestId,
+          details: { reason: message },
+        })
+      }
       if (isBookkeepingError(err)) {
         return errorResponse(err, opLog, { requestId })
       }

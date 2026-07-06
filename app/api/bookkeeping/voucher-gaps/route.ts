@@ -1,21 +1,19 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { VoucherGapQuerySchema, SaveGapExplanationSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+// Voucher gap detection + explanations (BFNAR 2013:2 — gaps in voucher
+// sequences must be documented). Response shapes are legacy `{ data }` /
+// `{ error: string }`.
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export const GET = withRouteContext('voucher_gaps.list', async (request, ctx) => {
+  const { supabase, companyId, log } = ctx
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const validation = validateQuery(request, VoucherGapQuerySchema)
+  const validation = validateQuery(request, VoucherGapQuerySchema, {
+    log,
+    operation: 'voucher_gaps.list',
+  })
   if (!validation.success) return validation.response
   const { fiscal_period_id, voucher_series } = validation.data
 
@@ -30,7 +28,11 @@ export async function GET(request: Request) {
     seriesQuery = seriesQuery.eq('voucher_series', voucher_series)
   }
 
-  const { data: seriesRows } = await seriesQuery
+  const { data: seriesRows, error: seriesError } = await seriesQuery
+  if (seriesError) {
+    log.error('voucher series lookup failed', seriesError)
+    return NextResponse.json({ error: seriesError.message }, { status: 500 })
+  }
 
   if (!seriesRows || seriesRows.length === 0) {
     return NextResponse.json({
@@ -53,15 +55,20 @@ export async function GET(request: Request) {
       p_series: row.voucher_series,
     })
 
-    if (!gapsError && gaps && gaps.length > 0) {
-      for (const gap of gaps as Array<{ gap_start: number; gap_end: number }>) {
-        allGaps.push({
-          series: row.voucher_series,
-          gap_start: gap.gap_start,
-          gap_end: gap.gap_end,
-          explanation: null,
-        })
-      }
+    // A failing detection MUST surface — silently dropping the series would
+    // render "no gaps" on a compliance view when the check didn't run.
+    if (gapsError) {
+      log.error('detect_voucher_gaps failed', gapsError, { series: row.voucher_series })
+      return NextResponse.json({ error: gapsError.message }, { status: 500 })
+    }
+
+    for (const gap of (gaps ?? []) as Array<{ gap_start: number; gap_end: number }>) {
+      allGaps.push({
+        series: row.voucher_series,
+        gap_start: gap.gap_start,
+        gap_end: gap.gap_end,
+        explanation: null,
+      })
     }
   }
 
@@ -102,52 +109,49 @@ export async function GET(request: Request) {
       unexplainedGaps: unexplained,
     },
   })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+export const POST = withRouteContext(
+  'voucher_gaps.explain',
+  async (request, ctx) => {
+    const { supabase, companyId, user, log } = ctx
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const validation = await validateBody(request, SaveGapExplanationSchema, {
+      log,
+      operation: 'voucher_gaps.explain',
+    })
+    if (!validation.success) return validation.response
+    const { fiscal_period_id, voucher_series, gap_start, gap_end, explanation } = validation.data
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const validation = await validateBody(request, SaveGapExplanationSchema)
-  if (!validation.success) return validation.response
-  const { fiscal_period_id, voucher_series, gap_start, gap_end, explanation } = validation.data
-
-  // Upsert explanation (RLS enforces owner/admin role)
-  const { data, error } = await supabase
-    .from('voucher_gap_explanations')
-    .upsert(
-      {
-        company_id: companyId,
-        user_id: user.id,
-        fiscal_period_id,
-        voucher_series,
-        gap_start,
-        gap_end,
-        explanation,
-      },
-      { onConflict: 'company_id,fiscal_period_id,voucher_series,gap_start,gap_end' }
-    )
-    .select()
-    .single()
-
-  if (error) {
-    if (error.code === '42501') {
-      return NextResponse.json(
-        { error: 'Only company owners and admins can document gap explanations' },
-        { status: 403 }
+    // Upsert explanation (RLS enforces owner/admin role)
+    const { data, error } = await supabase
+      .from('voucher_gap_explanations')
+      .upsert(
+        {
+          company_id: companyId,
+          user_id: user.id,
+          fiscal_period_id,
+          voucher_series,
+          gap_start,
+          gap_end,
+          explanation,
+        },
+        { onConflict: 'company_id,fiscal_period_id,voucher_series,gap_start,gap_end' }
       )
-    }
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+      .select()
+      .single()
 
-  return NextResponse.json({ data })
-}
+    if (error) {
+      if (error.code === '42501') {
+        return NextResponse.json(
+          { error: 'Only company owners and admins can document gap explanations' },
+          { status: 403 }
+        )
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

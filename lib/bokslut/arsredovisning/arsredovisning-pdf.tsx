@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
-import type { ArsredovisningData } from './types'
+import type { ArsredovisningData, StatementRow } from './types'
 
 const styles = StyleSheet.create({
   page: {
@@ -103,6 +103,51 @@ function fmt(amount: number): string {
   return Math.round(amount).toLocaleString('sv-SE')
 }
 
+/**
+ * Renders ÅRL post-level statement rows (see statement-rows.ts) with a
+ * jämförelseår column. Headings carry no amounts; totals get the bordered
+ * bold style. The previous-year column stays empty for the company's first
+ * fiscal year.
+ */
+function StatementTable({
+  rows,
+  hasPrevious,
+}: {
+  rows: StatementRow[]
+  hasPrevious: boolean
+}) {
+  return (
+    <>
+      {rows.map((line, i) => {
+        const indentPad = (line.indent ?? 0) * 12
+        if (line.is_heading) {
+          return (
+            <View key={i} style={styles.tableRow}>
+              <Text
+                style={{
+                  flex: 1,
+                  fontFamily: 'Helvetica-Bold',
+                  paddingLeft: indentPad,
+                  marginTop: 6,
+                }}
+              >
+                {line.label}
+              </Text>
+            </View>
+          )
+        }
+        return (
+          <View key={i} style={line.is_total ? styles.tableRowTotal : styles.tableRow}>
+            <Text style={{ flex: 1, paddingLeft: indentPad }}>{line.label}</Text>
+            <Text style={styles.colAmount}>{fmt(line.current ?? 0)}</Text>
+            <Text style={styles.colAmount}>{hasPrevious ? fmt(line.previous ?? 0) : ''}</Text>
+          </View>
+        )
+      })}
+    </>
+  )
+}
+
 function PageChrome({
   data,
   pageLabel,
@@ -194,56 +239,37 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
       </Page>
 
-      {/* Resultaträkning */}
-      <Page size="A4" style={styles.page}>
+      {/* Resultaträkning — ÅRL post level, no account numbers. */}
+      <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} pageLabel="Resultaträkning" />
         <Text style={styles.sectionTitle}>Resultaträkning (kr)</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>Post</Text>
           <Text style={styles.colAmount}>{data.fiscal_period.name}</Text>
+          <Text style={styles.colAmount}>{data.previous_period?.name ?? ''}</Text>
         </View>
-        {data.resultatrakning.map((line, i) => (
-          <View key={i} style={line.is_total ? styles.tableRowTotal : styles.tableRow}>
-            <Text style={styles.colLabel}>{line.label}</Text>
-            <Text style={styles.colAmount}>{fmt(line.amount)}</Text>
-          </View>
-        ))}
+        <StatementTable rows={data.resultatrakning} hasPrevious={data.previous_period !== null} />
       </Page>
 
-      {/* Balansräkning */}
-      <Page size="A4" style={styles.page}>
+      {/* Balansräkning — ÅRL post level, no account numbers. */}
+      <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} pageLabel="Balansräkning" />
         <Text style={styles.sectionTitle}>Tillgångar (kr)</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>Post</Text>
           <Text style={styles.colAmount}>{data.fiscal_period.period_end}</Text>
+          <Text style={styles.colAmount}>{data.previous_period?.period_end ?? ''}</Text>
         </View>
-        {data.balansrakning.assets.map((line, i) => (
-          <View key={i} style={line.is_total ? styles.tableRowTotal : styles.tableRow}>
-            <Text style={line.indent ? styles.colLabelIndent : styles.colLabel}>
-              {line.label}
-            </Text>
-            <Text style={styles.colAmount}>{fmt(line.amount)}</Text>
-          </View>
-        ))}
-        <View style={styles.tableRowTotal}>
-          <Text style={styles.colLabel}>Summa tillgångar</Text>
-          <Text style={styles.colAmount}>{fmt(data.balansrakning.total_assets)}</Text>
-        </View>
+        <StatementTable
+          rows={data.balansrakning.assets}
+          hasPrevious={data.previous_period !== null}
+        />
 
         <Text style={styles.sectionTitle}>Eget kapital och skulder (kr)</Text>
-        {data.balansrakning.equity_liabilities.map((line, i) => (
-          <View key={i} style={line.is_total ? styles.tableRowTotal : styles.tableRow}>
-            <Text style={line.indent ? styles.colLabelIndent : styles.colLabel}>
-              {line.label}
-            </Text>
-            <Text style={styles.colAmount}>{fmt(line.amount)}</Text>
-          </View>
-        ))}
-        <View style={styles.tableRowTotal}>
-          <Text style={styles.colLabel}>Summa eget kapital och skulder</Text>
-          <Text style={styles.colAmount}>{fmt(data.balansrakning.total_equity_liabilities)}</Text>
-        </View>
+        <StatementTable
+          rows={data.balansrakning.equity_liabilities}
+          hasPrevious={data.previous_period !== null}
+        />
       </Page>
 
       {/* Noter */}

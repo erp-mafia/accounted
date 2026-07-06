@@ -258,11 +258,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 // POST: register supplier invoice
 // ──────────────────────────────────────────────────────────────────
 
+// default_dimensions must stay in this projection: the inserted row is passed
+// straight to createSupplierInvoiceRegistrationEntry, which reads the bag off
+// the row — dropping the column here silently untags the registration JE.
 const SI_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, notes, default_dimensions, created_at, updated_at'
 
 const SI_ITEMS_RESPONSE_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate'
+  'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions'
 
 const SupplierInvoiceCreated = z.object({
   id: z.string().uuid(),
@@ -299,6 +302,7 @@ registerEndpoint({
     'Under faktureringsmetoden the registration JE is posted atomically with the SI row. JE failure aborts the whole call and no SI row is left behind (strict-mode).',
     'supplier_id must reference an existing, non-archived supplier in the same company: 404 SUPPLIER_NOT_FOUND otherwise.',
     'Duplicate (supplier_id, supplier_invoice_number) returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER. Use the credit flow on the original instead of re-registering with a tweaked number.',
+    'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
   ],
   example: {
     request: {
@@ -306,6 +310,7 @@ registerEndpoint({
       supplier_invoice_number: '2026-1234',
       invoice_date: '2026-05-10',
       due_date: '2026-06-09',
+      default_dimensions: { '6': 'P001' },
       items: [
         { description: 'Office supplies', amount: 1000, account_number: '5410', vat_rate: 0.25 },
       ],
@@ -344,6 +349,7 @@ interface ComputedItem {
   vat_rate: number
   vat_amount: number
   reverse_charge_rate: number | null
+  dimensions: Record<string, string>
 }
 
 // Swedish VAT rates per ML 2 kap 1 § + Skatteverket's 2026 satser. Allow
@@ -388,6 +394,9 @@ function computeItemsAndTotals(input: z.infer<typeof CreateSupplierInvoiceSchema
       // line vat_rate is 0 (validated below); the engine self-assesses at this
       // rate, defaulting to 25% huvudregeln when null.
       reverse_charge_rate: item.reverse_charge_rate ?? null,
+      // Dimensions PR7: per-item bag, merged over the invoice's
+      // default_dimensions on the expense line at booking.
+      dimensions: item.dimensions ?? {},
     })
   }
   const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
@@ -551,6 +560,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           remaining_amount: total,
           is_credit_note: false,
           notes: body.notes ?? null,
+          default_dimensions: body.default_dimensions ?? {},
           items,
           // Indicate what the live commit would do; the actual JE row is not
           // staged in pending_operations because the SI write path is
@@ -599,6 +609,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         total_sek: totalSek,
         remaining_amount: total,
         notes: body.notes ?? null,
+        // Dimensions PR7: invoice-level bag; generators apply it to every line.
+        default_dimensions: body.default_dimensions ?? {},
       })
       .select(SI_RESPONSE_COLUMNS)
       .single()

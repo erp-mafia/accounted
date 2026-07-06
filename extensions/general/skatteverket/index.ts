@@ -9,7 +9,7 @@ import {
 } from '@/lib/salary/agi/kontrollera-schemas'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
-import { storeTokens, getTokens, deleteTokens } from './lib/token-store'
+import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
 import { skvAuthCodeToStructured } from './lib/error-map'
@@ -403,10 +403,17 @@ export const skatteverketExtension: Extension = {
         const expired = tokens.expires_at < Date.now()
         const canRefresh = tokens.refresh_token !== null && tokens.refresh_count < 10
 
+        // Persisted health, written by the crons when they hit a terminal
+        // auth state. Lets the settings panel prompt for re-consent
+        // proactively instead of only after a live failure.
+        const health = await getTokenHealth(ctx.supabase, ctx.userId)
+
         return NextResponse.json({
           connected: true,
           expired,
           canRefresh,
+          needsReconsent: health?.status === 'needs_reconsent',
+          lastErrorCode: health?.last_error_code ?? null,
           scope: tokens.scope,
           expiresAt: new Date(tokens.expires_at).toISOString(),
           environment,

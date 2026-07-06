@@ -1,6 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
-import type { BalanceSheetReport, BalanceSheetSection, TrialBalanceRow } from '@/types'
+import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import type {
+  BalanceImbalanceDiagnosis,
+  BalanceSheetReport,
+  BalanceSheetSection,
+  TrialBalanceRow,
+} from '@/types'
 
 /**
  * Generate Balance Sheet (Balansräkning)
@@ -89,15 +95,41 @@ export async function generateBalanceSheet(
     })
   }
 
-  const totalAssets = assetSections.reduce((sum, s) => sum + s.subtotal, 0)
-  const totalEquityLiabilities = equityLiabilitySections.reduce((sum, s) => sum + s.subtotal, 0)
+  const totalAssets =
+    Math.round(assetSections.reduce((sum, s) => sum + s.subtotal, 0) * 100) / 100
+  const totalEquityLiabilities =
+    Math.round(equityLiabilitySections.reduce((sum, s) => sum + s.subtotal, 0) * 100) / 100
+
+  // Explain a broken balance instead of leaving a bare differens. The usual
+  // cause after multi-year migrations is a prior year whose result was never
+  // transferred to equity (see imbalance-diagnosis.ts). Only runs on the
+  // unbalanced path and must never break the report itself.
+  let imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined
+  const differens = Math.round((totalAssets - totalEquityLiabilities) * 100) / 100
+  if (Math.abs(differens) >= 0.01) {
+    try {
+      const { data: period } = await supabase
+        .from('fiscal_periods')
+        .select('period_start')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+      const untransferred = await findUntransferredResults(supabase, companyId, {
+        beforePeriodStart: period?.period_start,
+      })
+      imbalanceDiagnosis = buildImbalanceDiagnosis(untransferred, differens) ?? undefined
+    } catch {
+      // Best-effort diagnosis only — the report still renders without it.
+    }
+  }
 
   return {
     asset_sections: assetSections.filter((s) => s.rows.length > 0),
-    total_assets: Math.round(totalAssets * 100) / 100,
+    total_assets: totalAssets,
     equity_liability_sections: equityLiabilitySections.filter((s) => s.rows.length > 0),
-    total_equity_liabilities: Math.round(totalEquityLiabilities * 100) / 100,
+    total_equity_liabilities: totalEquityLiabilities,
     period: { start: '', end: '' },
+    ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),
   }
 }
 

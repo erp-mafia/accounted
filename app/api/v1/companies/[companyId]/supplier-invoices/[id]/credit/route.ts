@@ -31,8 +31,11 @@ import { eventBus } from '@/lib/events'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
+// default_dimensions stays in this projection: the inserted credit-note row is
+// handed to createSupplierCreditNoteEntry, which reads the bag off the row so
+// the reversing JE nets against the same dimension cells as the original.
 const SI_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, default_dimensions, created_at, updated_at'
 
 // GDPR Art.25 data minimisation: the original SI's `user_id` (the row's
 // historical creator) is never used in the credit flow: the new credit-note
@@ -55,9 +58,9 @@ const SI_FULL_COLUMNS = `
   currency, exchange_rate,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
   vat_treatment, reverse_charge, remaining_amount,
-  is_credit_note, credited_invoice_id, arrival_number,
+  is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
   supplier:suppliers(id, name, supplier_type),
-  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate)
+  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions)
 `
 
 const SupplierInvoiceCredited = z.object({
@@ -154,6 +157,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       credited_invoice_id: string | null
       supplier_invoice_number: string
       arrival_number: number
+      default_dimensions: Record<string, string> | null
       supplier: SupplierObj | SupplierObj[] | null
       items?: Array<{
         sort_order: number
@@ -167,6 +171,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         vat_rate: number
         vat_amount: number
         reverse_charge_rate: number | null
+        dimensions: Record<string, string> | null
       }>
     } & Record<string, unknown>
 
@@ -278,6 +283,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         remaining_amount: 0,
         is_credit_note: true,
         credited_invoice_id: typed.id,
+        // Copy the original's dimension bag so the credit-note verifikat nets
+        // against the same dimension cells in reports (dimensions PR7).
+        default_dimensions: typed.default_dimensions ?? {},
       })
       .select(SI_RESPONSE_COLUMNS)
       .single()
@@ -311,6 +319,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // Preserve the self-assessed RC rate so the credit note reverses fiktiv
       // moms at the same rate the original was booked at.
       reverse_charge_rate: item.reverse_charge_rate,
+      // Same reasoning: the reversal must carry the exact per-item bag the
+      // original booked with (dimensions PR7).
+      dimensions: item.dimensions ?? {},
     }))
     if (creditItems.length > 0) {
       const { error: itemsErr } = await ctx.supabase

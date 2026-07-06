@@ -1,17 +1,15 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * GET /api/company/members
  * Returns members and pending invitations for the current company.
+ * Service client on purpose: profiles/emails of other members aren't readable
+ * through the caller's RLS context; every query still scopes by companyId.
  */
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const GET = withRouteContext('company_members.list', async (_request, ctx) => {
+  const { companyId, user } = ctx
   const serviceClient = await createServiceClient()
 
   // Fetch members (source column may not exist if migration not yet applied)
@@ -77,4 +75,4 @@ export async function GET() {
       canInvite,
     },
   })
-}
+})

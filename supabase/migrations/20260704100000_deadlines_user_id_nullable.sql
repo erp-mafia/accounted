@@ -1,0 +1,15 @@
+-- Drop NOT NULL on deadlines.user_id.
+--
+-- The multi-tenant company refactor (20260330130000) moved deadlines to
+-- company ownership: company_id column + company-scoped RLS, and the tax
+-- deadline generator (lib/tax/deadline-generator.ts) stopped sending user_id.
+-- The refactor dropped NOT NULL on user_id for audit_log and company_settings
+-- (and later fiscal_periods, narrative_signatures) but missed deadlines —
+-- since then every auto-generation insert fails with 23502, and because the
+-- generator deletes existing system deadlines before inserting, affected
+-- companies lost their tax deadlines entirely.
+--
+-- user_id stays as an optional "created by" attribution for manually created
+-- deadlines (app/api/deadlines/route.ts still sends it). Ownership is
+-- company_id.
+ALTER TABLE public.deadlines ALTER COLUMN user_id DROP NOT NULL;
