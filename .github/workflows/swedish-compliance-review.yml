@@ -11,6 +11,8 @@ name: Swedish Accounting Compliance Review
 
 on:
   workflow_run:
+    # Must match the `name:` field in swedish-compliance-diff.yml exactly.
+    # A rename there silently stops this trigger from firing on all subsequent PRs.
     workflows: ["Compliance diff"]
     types: [completed]
 
@@ -22,6 +24,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Only act on PR-triggered diffs that actually produced an artifact.
     if: >
       github.event.workflow_run.event == 'pull_request' &&

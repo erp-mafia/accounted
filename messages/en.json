@@ -2889,6 +2889,8 @@
     "invoice_number_missing_description": "Enter the supplier's invoice number.",
     "account_missing_title": "Account missing",
     "account_missing_description": "Select an expense account for line {row}.",
+    "illegal_vat_rate_title": "Invalid VAT rate",
+    "illegal_vat_rate_description": "Line {row} has VAT rate {rate} %. The legal Swedish VAT rates are 25, 12, 6 or 0 %.",
     "expense_registered_title": "Expense registered",
     "invoice_registered_title": "Invoice registered",
     "arrival_number_label": "Arrival number: {number}",

@@ -37,7 +37,23 @@ export interface ReconciliationRunResult {
   matches: ReconciliationMatch[]
   applied: number
   errors: number
+  /**
+   * Matches the matcher proposed but the apply loop skipped because their
+   * confidence fell below the caller's confidenceThreshold. They stay in
+   * `matches` (reported, not silently dropped) so the caller can surface them
+   * for human review. Always 0 on dry runs and when no threshold was given.
+   */
+  skippedBelowThreshold: number
 }
+
+/**
+ * Confidence floor for UNATTENDED auto-apply (nightly enable-banking sync,
+ * cron). Mirrors the default of the gnubok_auto_match_period MCP tool (0.9):
+ * high enough that auto_fuzzy (0.75) and auto_date_range (0.85) matches are
+ * never committed without human review, while auto_exact (0.95) and
+ * auto_reference (0.90) still apply.
+ */
+export const DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD = 0.9
 
 export interface ReconciliationStatus {
   bank_transaction_total: number
@@ -112,6 +128,17 @@ export interface ReconciliationOptions {
    * match set rather than trusting the client's pairs blindly.
    */
   applyOnly?: Array<{ transactionId: string; journalEntryId: string }>
+  /**
+   * Server-side confidence floor for the apply path (0..1; out-of-range values
+   * are clamped, mirroring gnubok_auto_match_period). Matches below it are NOT
+   * applied: they stay in `matches` and are counted in skippedBelowThreshold.
+   * Ignored on dry runs (the preview always returns every proposal). Omit for
+   * the legacy behavior: apply every proposed match, including auto_fuzzy at
+   * 0.75. Unattended callers must pass a floor (see
+   * DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD) so fuzzy matches are never
+   * committed without human review.
+   */
+  confidenceThreshold?: number
 }
 
 /**
@@ -262,6 +289,7 @@ export async function runReconciliation(
     cashAccountId,
     includeUnassigned = true,
     applyOnly,
+    confidenceThreshold,
   } = options
 
   // Fetch unlinked GL lines via RPC
@@ -285,14 +313,14 @@ export async function runReconciliation(
   })
 
   if (transactions.length === 0 || glLines.length === 0) {
-    return { matches: [], applied: 0, errors: 0 }
+    return { matches: [], applied: 0, errors: 0, skippedBelowThreshold: 0 }
   }
 
   // Run greedy matching, highest confidence first
   let matches = greedyMatch(transactions, glLines, currency)
 
   if (dryRun) {
-    return { matches, applied: 0, errors: 0 }
+    return { matches, applied: 0, errors: 0, skippedBelowThreshold: 0 }
   }
 
   // When the caller reviewed a dry-run and ticked a subset, apply ONLY pairs
@@ -305,11 +333,24 @@ export async function runReconciliation(
     )
   }
 
+  // Confidence floor: never auto-apply a match below the caller's threshold.
+  // Skipped matches are not errors: they remain in `matches` (with their
+  // confidence) so the caller can report them for human review, and are
+  // counted separately. This is the server-side guardrail for unattended
+  // callers (nightly sync / cron), where nobody reviews a dry-run first.
+  let toApply = matches
+  let skippedBelowThreshold = 0
+  if (confidenceThreshold !== undefined) {
+    const floor = Math.max(0, Math.min(1, confidenceThreshold))
+    toApply = matches.filter((m) => m.confidence >= floor)
+    skippedBelowThreshold = matches.length - toApply.length
+  }
+
   // Apply matches
   let applied = 0
   let errors = 0
 
-  for (const match of matches) {
+  for (const match of toApply) {
     try {
       // .is('journal_entry_id', null) is an optimistic-lock guard: if a
       // concurrent user (or another surface) linked this transaction between
@@ -352,7 +393,7 @@ export async function runReconciliation(
     }
   }
 
-  return { matches, applied, errors }
+  return { matches, applied, errors, skippedBelowThreshold }
 }
 
 // ============================================================

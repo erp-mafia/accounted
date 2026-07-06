@@ -25,6 +25,13 @@ const RunRequest = z
     // '1932' (EUR). Defaults to '1930'. Required for multi-account companies to
     // reconcile anything other than their primary SEK account.
     account_number: z.string().regex(/^\d{4}$/).optional(),
+    // Server-side confidence floor for a non-dry run (0..1), mirroring the
+    // gnubok_auto_match_period MCP tool's parameter (default 0.9 there).
+    // Matches below it are returned but NOT applied (counted in
+    // skipped_below_threshold). Omitted = legacy behavior: every proposed
+    // match applies, including auto_fuzzy at 0.75. Unattended callers should
+    // pass 0.9.
+    confidence_threshold: z.number().min(0).max(1).optional(),
   })
   // Bound the window so a key with no explicit range can't trigger an
   // unbounded join across years. 366 days covers a full räkenskapsår + a
@@ -59,6 +66,10 @@ const RunResponse = z.object({
   // race). Documented as z.array(z.string()) until 2026-07: the lib has always
   // returned a number.
   errors: z.number().int(),
+  // Matches proposed but not applied because their confidence fell below the
+  // request's confidence_threshold. They still appear in `matches` (with their
+  // confidence) for review. Always 0 on dry runs and when no threshold is set.
+  skipped_below_threshold: z.number().int(),
 })
 
 registerEndpoint({
@@ -76,13 +87,13 @@ registerEndpoint({
     'date_from / date_to default to the company\'s full bank history if omitted. Specify a window for predictable performance.',
     'account_number defaults to 1930. Multi-account companies must pass the BAS code of the account they are reconciling (e.g. 1932 for a EUR account), or it silently reconciles 1930.',
     'Idempotency-Key is mandatory.',
-    'A non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75: there is no internal confidence threshold. Dry-run first and review matches.confidence before applying.',
+    'Without confidence_threshold, a non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75. Pass confidence_threshold (0.9 recommended, matching gnubok_auto_match_period) for unattended runs, or dry-run first and review matches.confidence before applying. Matches below the threshold are returned but not applied (skipped_below_threshold counts them).',
     'The 366-day window bound only applies when BOTH date_from and date_to are set; a single-sided or absent window scans full history.',
   ],
   example: {
-    request: { date_from: '2026-05-01', date_to: '2026-05-31' },
+    request: { date_from: '2026-05-01', date_to: '2026-05-31', confidence_threshold: 0.9 },
     response: {
-      data: { matches: [], applied: 0, errors: 0 },
+      data: { matches: [], applied: 0, errors: 0, skipped_below_threshold: 0 },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
@@ -151,6 +162,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         // Only the primary account claims unassigned (NULL cash_account_id) rows.
         includeUnassigned: Boolean(cashAccount?.is_primary),
         dryRun: ctx.dryRun,
+        confidenceThreshold: body.confidence_threshold,
       })
     } catch (err) {
       ctx.log.error('reconciliation.bank.run: pipeline failed', err as Error)
@@ -175,6 +187,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       matches,
       applied: result.applied,
       errors: result.errors,
+      skipped_below_threshold: result.skippedBelowThreshold,
     }
 
     if (ctx.dryRun) {

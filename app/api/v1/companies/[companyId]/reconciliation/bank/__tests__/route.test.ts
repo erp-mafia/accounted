@@ -42,6 +42,7 @@ const { runRecMock, statusMock } = vi.hoisted(() => ({
     ],
     applied: 1,
     errors: 0,
+    skippedBelowThreshold: 0,
   }),
   // The REAL ReconciliationStatus shape from lib/reconciliation. The mock used
   // to return the registry's invented shape (matched_transactions, bank_balance,
@@ -149,12 +150,69 @@ describe('POST /reconciliation/bank/run', () => {
     const body = await res.json()
     expect(body.data.matches).toHaveLength(1)
     expect(body.data.applied).toBe(1)
+    expect(body.data.skipped_below_threshold).toBe(0)
     expect(runRecMock).toHaveBeenCalledWith(
       expect.anything(),
       COMPANY_ID,
       'user-1',
-      expect.objectContaining({ dryRun: false, accountNumber: '1930', cashAccountId: 'ca-1930' }),
+      // No confidence_threshold in the body: the lib gets undefined (legacy
+      // apply-everything behavior), never a silent server-invented default.
+      expect.objectContaining({
+        dryRun: false,
+        accountNumber: '1930',
+        cashAccountId: 'ca-1930',
+        confidenceThreshold: undefined,
+      }),
     )
+  })
+
+  it('passes confidence_threshold through to the matcher and surfaces skipped matches', async () => {
+    runRecMock.mockResolvedValueOnce({
+      matches: [],
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 2,
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
+      }),
+    )
+    const res = await runPOST(
+      postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
+        confidence_threshold: 0.9,
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.skipped_below_threshold).toBe(2)
+    expect(runRecMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ confidenceThreshold: 0.9 }),
+    )
+  })
+
+  it('rejects an out-of-range confidence_threshold with 400', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
+      }),
+    )
+    for (const bad of [-0.1, 1.5]) {
+      const res = await runPOST(
+        postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
+          confidence_threshold: bad,
+        }),
+        { params: Promise.resolve({ companyId: COMPANY_ID }) },
+      )
+      expect(res.status).toBe(400)
+    }
+    expect(runRecMock).not.toHaveBeenCalled()
   })
 
   it('rejects an unknown settlement account', async () => {

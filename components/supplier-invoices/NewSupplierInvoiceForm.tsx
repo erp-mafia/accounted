@@ -1059,6 +1059,26 @@ export default function NewSupplierInvoiceForm({
       })
       return
     }
+    // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The free-text
+    // VatRateCell clamps to [0, 100] but accepts anything in between, so block
+    // illegal rates here. Reverse-charge invoices skip this: their line vat_rate
+    // is forced to 0 and RcRateSelect already restricts the self-assessed rate.
+    if (!data.reverse_charge) {
+      const rowWithIllegalRate = data.items.findIndex(
+        (item) => !VAT_RATE_PRESETS.includes(item.vat_rate),
+      )
+      if (rowWithIllegalRate !== -1) {
+        toast({
+          title: t('illegal_vat_rate_title'),
+          description: t('illegal_vat_rate_description', {
+            row: rowWithIllegalRate + 1,
+            rate: rateToPctString(data.items[rowWithIllegalRate].vat_rate),
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+    }
     // A row with an open periodisering panel must carry a complete period of
     // at least two calendar months before the invoice can be booked.
     const invalidAccrual = canUseAccrual && data.items.some((item) => {

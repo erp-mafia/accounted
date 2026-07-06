@@ -2889,6 +2889,8 @@
     "invoice_number_missing_description": "Ange leverantörens fakturanummer.",
     "account_missing_title": "Konto saknas",
     "account_missing_description": "Välj ett bokföringskonto för rad {row}.",
+    "illegal_vat_rate_title": "Ogiltig momssats",
+    "illegal_vat_rate_description": "Rad {row} har momssats {rate} %. Tillåtna momssatser är 25, 12, 6 eller 0 %.",
     "expense_registered_title": "Utlägg registrerat",
     "invoice_registered_title": "Faktura registrerad",
     "arrival_number_label": "Ankomstnummer: {number}",

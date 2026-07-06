@@ -44,6 +44,11 @@ export default function OpeningBalancePeriodStep({
     totalDebit = Math.round((totalDebit + row.debit_amount) * 100) / 100
     totalCredit = Math.round((totalCredit + row.credit_amount) * 100) / 100
   }
+  // Compare in whole öre, mirroring the engine's validateBalance: a float
+  // epsilon like (< 0.01) would misclassify exact 1-öre imbalances as
+  // balanced, since e.g. 0.03 - 0.02 evaluates to just under 0.01.
+  const balanceDiff = Math.round((totalDebit - totalCredit) * 100) / 100
+  const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0
 
   useEffect(() => {
     async function fetchPeriods() {
@@ -83,6 +88,7 @@ export default function OpeningBalancePeriodStep({
     !!selectedPeriodId &&
     !periodIsClosed &&
     !periodIsLocked &&
+    isBalanced &&
     !isLoading
 
   const handleExecute = useCallback(() => {
@@ -160,10 +166,23 @@ export default function OpeningBalancePeriodStep({
               {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK
             </span>
           </div>
-          <div className="flex items-center gap-2 pt-1 border-t text-sm">
-            <CheckCircle2 className="h-4 w-4 text-success" />
-            <span className="text-success font-medium">Balanserar</span>
-          </div>
+          {isBalanced ? (
+            <div className="flex items-center gap-2 pt-1 border-t text-sm">
+              <CheckCircle2 className="h-4 w-4 text-success" />
+              <span className="text-success font-medium">Balanserar</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 pt-1 border-t text-sm">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+              <span className="text-destructive font-medium">
+                Balanserar inte (differens{' '}
+                <span className="tabular-nums">
+                  {balanceDiff.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                </span>{' '}
+                SEK)
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Error */}

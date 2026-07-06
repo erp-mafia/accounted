@@ -43,17 +43,30 @@ function getDiff() {
   // secrets and handed to us as an artifact. We read it as DATA: we never run
   // fork code here. See .github/workflows/swedish-compliance-{diff,review}.yml.
   const diffFile = process.env.DIFF_FILE;
-  if (diffFile && existsSync(diffFile)) {
+  if (diffFile) {
+    // Fail loud: if DIFF_FILE is set but missing, the artifact download failed.
+    // Falling through to the legacy git path would produce an empty diff (stage-2
+    // checkout is the base repo HEAD, not the PR head) and post "No diff detected"
+    // as a misleading green signal.
+    if (!existsSync(diffFile)) {
+      throw new Error(
+        `DIFF_FILE is set to "${diffFile}" but the file does not exist: artifact download likely failed`,
+      );
+    }
     const raw = readFileSync(diffFile, 'utf8');
     const filesFile = process.env.FILES_FILE;
     const files =
       filesFile && existsSync(filesFile)
         ? readFileSync(filesFile, 'utf8').trim()
-        : raw
-            .split('\n')
-            .filter((l) => l.startsWith('+++ b/'))
-            .map((l) => l.slice('+++ b/'.length))
-            .join('\n');
+        : // Fallback: infer filenames from diff headers. Capture both +++ b/ (added/modified)
+          // and --- a/ (deleted) so delete-only PRs aren't silently omitted.
+          Array.from(
+            raw.split('\n').reduce((set, l) => {
+              if (l.startsWith('+++ b/')) set.add(l.slice('+++ b/'.length));
+              else if (l.startsWith('--- a/')) set.add(l.slice('--- a/'.length));
+              return set;
+            }, new Set()),
+          ).join('\n');
     return { files, ...truncate(raw) };
   }
 

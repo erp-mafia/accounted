@@ -526,6 +526,51 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect('dimensions' in params.items[0]).toBe(false)
   })
 
+  it('invoice_date_override rescues an inbox item with no extracted invoiceDate', async () => {
+    const extractedNoDate = {
+      ...baseExtracted,
+      invoice: { ...baseExtracted.invoice, invoiceDate: null },
+    }
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-10',
+        status: 'received',
+        extracted_data: extractedNoDate,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-10',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-10', dry_run: true, invoice_date_override: '2025-07-15' },
+      'company-1', 'user-1', supabase,
+    )) as { dry_run: boolean; preview: { invoice_date: string } }
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview.invoice_date).toBe('2025-07-15')
+  })
+
+  it('rejects a non-ISO invoice_date_override before staging', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-11',
+        status: 'received',
+        extracted_data: baseExtracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-11',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    await expect(
+      tool.execute(
+        { inbox_item_id: 'inbox-11', dry_run: true, invoice_date_override: '15/07/2025' },
+        'company-1', 'user-1', supabase,
+      ),
+    ).rejects.toThrow(/invoice_date_override must be an ISO date/)
+  })
+
   it('throws when extracted_data is missing', async () => {
     const supabase = makeMock({
       inbox: {

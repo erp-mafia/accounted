@@ -516,6 +516,123 @@ describe('runReconciliation', () => {
     expect(result.errors).toBe(0)
   })
 
+  it('skips matches below confidenceThreshold in apply mode but still reports them', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // auto_exact (0.95): above the 0.9 floor, must apply.
+    const txExact = makeTransaction({ id: 'tx-exact', amount: 1000, date: '2024-06-15', currency: 'SEK' })
+    const lineExact = makeGLLine({
+      line_id: 'line-exact',
+      journal_entry_id: 'je-exact',
+      debit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+    // auto_fuzzy (0.75): below the 0.9 floor, must be skipped, not applied.
+    const txFuzzy = makeTransaction({ id: 'tx-fuzzy', amount: -999.99, date: '2024-06-15', currency: 'SEK' })
+    const lineFuzzy = makeGLLine({
+      line_id: 'line-fuzzy',
+      journal_entry_id: 'je-fuzzy',
+      credit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [lineExact, lineFuzzy] })
+    enqueue({ data: [txExact, txFuzzy] })
+    // Exactly ONE update runs: the exact match. If the fuzzy match were
+    // applied too, the queue would be short and this enqueue insufficient.
+    enqueue({ data: [{ id: 'tx-exact' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      confidenceThreshold: 0.9,
+    })
+
+    // Both matches are REPORTED (skipped is not silently dropped) ...
+    expect(result.matches).toHaveLength(2)
+    // ... but only the high-confidence one is applied.
+    expect(result.applied).toBe(1)
+    expect(result.errors).toBe(0)
+    expect(result.skippedBelowThreshold).toBe(1)
+    const skipped = result.matches.find((m) => m.transaction.id === 'tx-fuzzy')
+    expect(skipped?.method).toBe('auto_fuzzy')
+  })
+
+  it('applies a match exactly at the threshold (floor is inclusive)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // auto_date_range scores exactly 0.85: with threshold 0.85 it must apply.
+    const tx = makeTransaction({ id: 'tx-1', amount: 750, date: '2024-06-17', currency: 'SEK' })
+    const line = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      debit_amount: 750,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [line] })
+    enqueue({ data: [tx] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      confidenceThreshold: 0.85,
+    })
+
+    expect(result.applied).toBe(1)
+    expect(result.skippedBelowThreshold).toBe(0)
+  })
+
+  it('dry run is unaffected by confidenceThreshold: every proposal is returned', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const txFuzzy = makeTransaction({ id: 'tx-fuzzy', amount: -999.99, date: '2024-06-15', currency: 'SEK' })
+    const lineFuzzy = makeGLLine({
+      line_id: 'line-fuzzy',
+      journal_entry_id: 'je-fuzzy',
+      credit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [lineFuzzy] })
+    enqueue({ data: [txFuzzy] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: true,
+      confidenceThreshold: 0.9,
+    })
+
+    // The preview always shows the full proposal set: filtering happens only
+    // on apply, so the user can still review + tick fuzzy matches manually.
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].method).toBe('auto_fuzzy')
+    expect(result.applied).toBe(0)
+    expect(result.skippedBelowThreshold).toBe(0)
+  })
+
+  it('applies every match, including fuzzy, when no threshold is given (legacy behavior)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const txFuzzy = makeTransaction({ id: 'tx-fuzzy', amount: -999.99, date: '2024-06-15', currency: 'SEK' })
+    const lineFuzzy = makeGLLine({
+      line_id: 'line-fuzzy',
+      journal_entry_id: 'je-fuzzy',
+      credit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [lineFuzzy] })
+    enqueue({ data: [txFuzzy] })
+    enqueue({ data: [{ id: 'tx-fuzzy' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+    })
+
+    expect(result.applied).toBe(1)
+    expect(result.errors).toBe(0)
+    expect(result.skippedBelowThreshold).toBe(0)
+  })
+
   it('ignores applyOnly on dry runs and returns the full match set', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 
