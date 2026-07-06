@@ -15,6 +15,8 @@ import {
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
 
@@ -106,6 +108,9 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Company context required' }, { status: 400 })
         }
         const companyId = ctx.companyId
+
+        const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
+        if (blocked) return blocked
 
         const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId } = await request.json()
 
@@ -409,6 +414,9 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Company context required' }, { status: 400 })
         }
         const companyId = ctx.companyId
+
+        const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
+        if (blocked) return blocked
 
         const rl = await checkRateLimit({
           prefix: 'enable-banking:sync',

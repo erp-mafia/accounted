@@ -18,6 +18,9 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 vi.mock('@/lib/email/service', () => ({ getEmailService: vi.fn() }))
+vi.mock('@/lib/entitlements/has-capability', () => ({
+  requireCapability: vi.fn().mockResolvedValue(null),
+}))
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appUrl: 'https://app.example.test' }),
 }))
@@ -78,6 +81,20 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
     expect(response.status).toBe(401)
+  })
+
+  it('returns 403 when the company lacks the email_send capability', async () => {
+    const { requireCapability } = await import('@/lib/entitlements/has-capability')
+    vi.mocked(requireCapability).mockResolvedValueOnce(
+      NextResponse.json({ capability_blocked: true }, { status: 403 }),
+    )
+    const { supabase } = createQueuedMockSupabase()
+    authed(supabase)
+    mockEmail({ success: true })
+
+    const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(403)
   })
 
   it('returns 404 when the run does not exist', async () => {

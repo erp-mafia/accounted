@@ -8,6 +8,8 @@ import {
   AGI_KONTROLLERA_MAX_BYTES,
 } from '@/lib/salary/agi/kontrollera-schemas'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
@@ -110,6 +112,18 @@ import type { VatPeriodType } from '@/types'
 const AGI_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
 
 /**
+ * Paywall gate for routes that talk to Skatteverket's API. The declaration
+ * FILE download is always free (manual filing is never blocked); the direct
+ * API interaction (connect, validate, draft, lock, submit, sync) is the paid
+ * convenience. Returns null when entitled, a 403 capability_blocked response
+ * otherwise. Unlock (DELETE /declaration/lock) is deliberately NOT gated so a
+ * lapsed company can always recover a draft it locked while entitled.
+ */
+async function requireSkvCapability(ctx: ExtensionContext): Promise<NextResponse | null> {
+  return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.skatteverket)
+}
+
+/**
  * Defense-in-depth RBAC check for AGI write/validate endpoints. Ctx
  * presence alone (set by middleware) only confirms the user is signed in
  * and has a resolved company; it does NOT prove they are entitled to
@@ -161,6 +175,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
 
         const state = crypto.randomUUID()
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -446,6 +462,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
 
         try {
           const { redovisare, redovisningsperiod, momsuppgift } =
@@ -492,6 +510,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
 
         try {
           const { redovisare, redovisningsperiod, momsuppgift } =
@@ -625,6 +645,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
 
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
@@ -811,6 +833,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
         try {
           const { arbetsgivare, period, salaryRunId, xml } = await loadAGIXml(request, ctx)
 
@@ -934,6 +958,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
         try {
           const body = (await request.json()) as { inlamningId?: number; salaryRunId?: string }
           const inlamningId = Number(body.inlamningId)
@@ -1335,6 +1361,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
         const rbac = await requireAgiWriteRole(ctx)
         if (rbac) return rbac
 
@@ -1444,6 +1472,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
         const rbac = await requireAgiWriteRole(ctx)
         if (rbac) return rbac
 
@@ -1551,6 +1581,8 @@ export const skatteverketExtension: Extension = {
       path: '/agi/las',
       handler: async (request: Request, ctx?: ExtensionContext) => {
         if (!ctx) return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
         try {
           const url = new URL(request.url)
           const arbetsgivare = url.searchParams.get('arbetsgivare')
@@ -1727,6 +1759,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
         try {
           const result = await syncSkattekonto(ctx)
           return NextResponse.json({ data: result })

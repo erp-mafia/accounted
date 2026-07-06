@@ -21,6 +21,8 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -358,6 +360,16 @@ async function sendInvoiceFromSchedule(
   if (!emailService.isConfigured()) {
     log.warn('email service not configured; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
+    })
+    return false
+  }
+  // Paywall: email sending is a paid capability. The invoice itself is still
+  // created (bookkeeping stays free); it just isn't emailed, and the schedule
+  // surfaces the standard manual-send warning (freeze-and-retain).
+  if (!(await hasCapability(supabase, companyId, CAPABILITY.email_send))) {
+    log.warn('company lacks email_send capability; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      companyId,
     })
     return false
   }
