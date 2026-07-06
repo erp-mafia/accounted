@@ -171,6 +171,13 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
+  // Resolve the active company at most once per request: both the MFA
+  // enrollment gate and the company-context block below need it, and the
+  // resolution costs DB round trips.
+  let resolvedCompany: { companyId: string | null; locale: string | null } | null = null
+  const resolveCompanyOnce = async () =>
+    (resolvedCompany ??= await resolveCompanyForMiddleware(supabase, user.id, request))
+
   // MFA enforcement (application-side only, not RLS)
   if (shouldEnforceMfa(user)) {
     const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
@@ -182,7 +189,7 @@ export async function updateSession(request: NextRequest) {
 
     // MFA required but user has no factor enrolled yet → force enrollment
     // Skip for users with no companies (still setting up)
-    const { companyId: companyIdForMfa } = await resolveCompanyForMiddleware(supabase, user.id, request)
+    const { companyId: companyIdForMfa } = await resolveCompanyOnce()
     if (companyIdForMfa) {
       const { data: factors } = await supabase.auth.mfa.listFactors()
       const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
@@ -199,7 +206,7 @@ export async function updateSession(request: NextRequest) {
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const { companyId, locale: dbLocale } = await resolveCompanyForMiddleware(supabase, user.id, request)
+  const { companyId, locale: dbLocale } = await resolveCompanyOnce()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it.
@@ -293,16 +300,34 @@ async function resolveCompanyForMiddleware(
   userId: string,
   _request: NextRequest
 ): Promise<{ companyId: string | null; locale: string | null }> {
-  // 1. user_preferences (authoritative)
-  const { data: prefs } = await supabase
-    .from('user_preferences')
-    .select('active_company_id, locale')
-    .eq('user_id', userId)
-    .maybeSingle()
+  // 1. user_preferences (authoritative) + first membership, fetched in
+  // parallel: the fallback query result doubles as validation when the
+  // preferred company happens to be the first membership, which is the
+  // common single-company case, so most requests pay one round trip
+  // instead of two sequential ones.
+  const [{ data: prefs }, { data: firstCompany }] = await Promise.all([
+    supabase
+      .from('user_preferences')
+      .select('active_company_id, locale')
+      .eq('user_id', userId)
+      .maybeSingle(),
+    supabase
+      .from('company_members')
+      .select('company_id, companies!inner(archived_at)')
+      .eq('user_id', userId)
+      .is('companies.archived_at', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ])
 
   const locale = (prefs?.locale as string | undefined) ?? null
 
   if (prefs?.active_company_id) {
+    if (prefs.active_company_id === firstCompany?.company_id) {
+      return { companyId: firstCompany.company_id, locale }
+    }
+
     const { data: membership } = await supabase
       .from('company_members')
       .select('company_id, companies!inner(archived_at)')
@@ -314,16 +339,7 @@ async function resolveCompanyForMiddleware(
     if (membership) return { companyId: membership.company_id, locale }
   }
 
-  // 2. Fallback: first non-archived membership by created_at
-  const { data: firstCompany } = await supabase
-    .from('company_members')
-    .select('company_id, companies!inner(archived_at)')
-    .eq('user_id', userId)
-    .is('companies.archived_at', null)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
+  // 2. Fallback: first non-archived membership (already fetched above)
   if (!firstCompany) return { companyId: null, locale }
 
   // Write the fallback back to user_preferences so future RLS lookups

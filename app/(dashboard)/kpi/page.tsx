@@ -5,10 +5,24 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import dynamic from 'next/dynamic'
 import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
-import { KPITrendChart } from '@/components/kpi/KPITrendChart'
-import { KPIExpenseMixChart } from '@/components/kpi/KPIExpenseMixChart'
-import { KPITopSuppliersChart } from '@/components/kpi/KPITopSuppliersChart'
+
+// Recharts is ~180KB: defer the chart components so the KPI page shell and
+// hero cards render without waiting for the charting bundle.
+const chartFallback = () => <Skeleton className="h-[300px] w-full" />
+const KPITrendChart = dynamic(
+  () => import('@/components/kpi/KPITrendChart').then((m) => m.KPITrendChart),
+  { ssr: false, loading: chartFallback },
+)
+const KPIExpenseMixChart = dynamic(
+  () => import('@/components/kpi/KPIExpenseMixChart').then((m) => m.KPIExpenseMixChart),
+  { ssr: false, loading: chartFallback },
+)
+const KPITopSuppliersChart = dynamic(
+  () => import('@/components/kpi/KPITopSuppliersChart').then((m) => m.KPITopSuppliersChart),
+  { ssr: false, loading: chartFallback },
+)
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'

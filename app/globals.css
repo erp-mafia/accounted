@@ -262,10 +262,22 @@ h1, h2, h3 {
   animation: typingDot 1.1s ease-in-out infinite;
 }
 
+/* Marching-ants dashed border used by the import entity selector. */
+@keyframes marchingAnts {
+  to { stroke-dashoffset: -14; }
+}
+
+.animate-marching-ants {
+  animation: marchingAnts 1.2s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-typing-dot {
     animation: gentlePulse 1.6s ease-in-out infinite;
     transform: none;
+  }
+  .animate-marching-ants {
+    animation: none;
   }
 }
 

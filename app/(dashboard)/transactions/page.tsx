@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import Link from 'next/link'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
@@ -84,6 +85,36 @@ function buildSupplierInvoiceMap(
     acc[inv.id] = inv
     return acc
   }, {})
+}
+
+// Fetch the potential invoice/supplier-invoice matches referenced by a page
+// of transactions in one parallel round trip. A single-query PostgREST embed
+// on potential_supplier_invoice_id is blocked until that FK exists in the
+// prod schema cache (see DECISIONS.md 2026-07-06).
+async function fetchPotentialMatches(
+  supabase: SupabaseClient,
+  rows: { potential_invoice_id: string | null; potential_supplier_invoice_id: string | null }[],
+) {
+  const potentialInvoiceIds = rows
+    .filter((t) => t.potential_invoice_id)
+    .map((t) => t.potential_invoice_id)
+  const potentialSupplierInvoiceIds = rows
+    .filter((t) => t.potential_supplier_invoice_id)
+    .map((t) => t.potential_supplier_invoice_id)
+
+  const [invoiceResult, supplierInvoiceResult] = await Promise.all([
+    potentialInvoiceIds.length > 0
+      ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
+      : Promise.resolve({ data: null }),
+    potentialSupplierInvoiceIds.length > 0
+      ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
+      : Promise.resolve({ data: null }),
+  ])
+
+  return {
+    invoiceMap: buildInvoiceMap(invoiceResult.data),
+    supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResult.data),
+  }
 }
 
 interface QuickReviewState {
@@ -371,24 +402,7 @@ export default function TransactionsPage() {
       }
 
       const rows = txData || []
-      const potentialInvoiceIds = rows
-        .filter((t) => t.potential_invoice_id)
-        .map((t) => t.potential_invoice_id)
-      const potentialSupplierInvoiceIds = rows
-        .filter((t) => t.potential_supplier_invoice_id)
-        .map((t) => t.potential_supplier_invoice_id)
-
-      const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-        potentialInvoiceIds.length > 0
-          ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
-          : Promise.resolve({ data: null }),
-        potentialSupplierInvoiceIds.length > 0
-          ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
-          : Promise.resolve({ data: null }),
-      ])
-
-      const invoiceMap = buildInvoiceMap(invoiceResult.data)
-      const supplierInvoiceMap = buildSupplierInvoiceMap(supplierInvoiceResult.data)
+      const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, rows)
 
       const transactionsWithInvoices: TransactionWithInvoice[] = rows.map((t) => ({
         ...t,
@@ -451,24 +465,7 @@ export default function TransactionsPage() {
 
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const potentialInvoiceIds = txData
-      .filter((t) => t.potential_invoice_id)
-      .map((t) => t.potential_invoice_id)
-    const potentialSupplierInvoiceIds = txData
-      .filter((t) => t.potential_supplier_invoice_id)
-      .map((t) => t.potential_supplier_invoice_id)
-
-    const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-      potentialInvoiceIds.length > 0
-        ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
-        : Promise.resolve({ data: null }),
-      potentialSupplierInvoiceIds.length > 0
-        ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
-        : Promise.resolve({ data: null }),
-    ])
-
-    const invoiceMap = buildInvoiceMap(invoiceResult.data)
-    const supplierInvoiceMap = buildSupplierInvoiceMap(supplierInvoiceResult.data)
+    const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, txData)
 
     const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
       ...t,

@@ -28,10 +28,24 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useCompanySettings } from '@/components/settings/useSettings'
-import { TrialBalanceChart } from '@/components/reports/TrialBalanceChart'
-import { VatCompositionChart } from '@/components/reports/VatCompositionChart'
+import dynamic from 'next/dynamic'
 import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
-import { IncomeExpenseChart } from '@/components/reports/IncomeExpenseChart'
+
+// Recharts is ~180KB: defer the chart components so report tables (the
+// regulated content) render without waiting for the charting bundle.
+const chartFallback = () => <Skeleton className="h-64 w-full" />
+const TrialBalanceChart = dynamic(
+  () => import('@/components/reports/TrialBalanceChart').then((m) => m.TrialBalanceChart),
+  { ssr: false, loading: chartFallback },
+)
+const VatCompositionChart = dynamic(
+  () => import('@/components/reports/VatCompositionChart').then((m) => m.VatCompositionChart),
+  { ssr: false, loading: chartFallback },
+)
+const IncomeExpenseChart = dynamic(
+  () => import('@/components/reports/IncomeExpenseChart').then((m) => m.IncomeExpenseChart),
+  { ssr: false, loading: chartFallback },
+)
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import type {
   ReportSourceLine,

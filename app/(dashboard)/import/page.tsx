@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
-import { motion } from 'framer-motion'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -1861,7 +1860,7 @@ function CSVDataImportWizard() {
                   aria-hidden
                   className="pointer-events-none absolute -inset-[3px] h-[calc(100%+6px)] w-[calc(100%+6px)] overflow-visible"
                 >
-                  <motion.rect
+                  <rect
                     x="1"
                     y="1"
                     width="calc(100% - 2px)"
@@ -1872,9 +1871,7 @@ function CSVDataImportWizard() {
                     stroke="currentColor"
                     strokeWidth="1.25"
                     strokeDasharray="3 4"
-                    className="text-foreground/45"
-                    animate={{ strokeDashoffset: [0, -14] }}
-                    transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+                    className="animate-marching-ants text-foreground/45"
                   />
                 </svg>
               )}

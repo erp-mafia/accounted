@@ -42,6 +42,9 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
+  experimental: {
+    optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
+  },
   async redirects() {
     return [
       {

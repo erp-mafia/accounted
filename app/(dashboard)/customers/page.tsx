@@ -449,7 +449,21 @@ function CustomersPageInner() {
 
 export default function CustomersPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <div className="space-y-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <Skeleton className="h-9 w-40" />
+            <Skeleton className="h-10 w-32" />
+          </div>
+          <div className="space-y-3">
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        </div>
+      }
+    >
       <CustomersPageInner />
     </Suspense>
   )

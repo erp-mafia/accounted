@@ -149,12 +149,28 @@ export default function SalaryPage() {
   }
 
   if (loading) {
+    // Real header renders immediately; only the data surfaces are skeletons.
     return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-9 w-40" />
-          <Skeleton className="h-9 w-32" />
-        </div>
+      <div className="space-y-8">
+        <PageHeader
+          title={t('title')}
+          action={
+            <div className="flex gap-2">
+              <Button variant="outline" asChild>
+                <Link href="/salary/employees">
+                  <Users className="mr-2 h-4 w-4" />
+                  {t('employees')}
+                </Link>
+              </Button>
+              {canWrite && (
+                <Button disabled>
+                  <Plus className="mr-2 h-4 w-4" />
+                  {t('start_run')}
+                </Button>
+              )}
+            </div>
+          }
+        />
         <Skeleton className="h-28 rounded-lg" />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
