@@ -117,10 +117,12 @@ export default function TransactionBookingDialog({
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [bankAccount, setBankAccount] = useState<string | null>(null)
+  const [bankAccountName, setBankAccountName] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open || !transaction) return
     setBankAccount(null)
+    setBankAccountName(null)
     let cancelled = false
     fetch('/api/cash-accounts')
       .then((r) => {
@@ -135,7 +137,12 @@ export default function TransactionBookingDialog({
           transaction.cash_account_id ?? null,
           transaction.currency ?? 'SEK',
         )
+        // Use the matched account's own name instead of a generic label.
+        const matched =
+          accounts.find((a) => a.id === transaction.cash_account_id) ??
+          accounts.find((a) => a.ledger_account === account)
         setBankAccount(account)
+        setBankAccountName(matched?.name ?? null)
       })
       .catch(() => {
         if (!cancelled) setBankAccount('1930')
@@ -362,7 +369,7 @@ export default function TransactionBookingDialog({
                 initialLines={
                   preselectedTemplate
                     ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                    : buildInitialLines(transaction, t('bank_line_description'), bankAccount)
+                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}
