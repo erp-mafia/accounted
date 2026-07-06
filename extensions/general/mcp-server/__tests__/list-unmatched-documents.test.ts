@@ -6,7 +6,7 @@ import { tools } from '../server'
  * Regression guard for a reported bug: documents booked directly as a
  * journal entry (created_journal_entry_id set, e.g. via SIE import) kept
  * showing up in gnubok_list_unmatched_documents even though nothing was left
- * to do with them — gnubok_list_inbox_items(unprocessed_only) already
+ * to do with them, while gnubok_list_inbox_items(unprocessed_only) already
  * considered them terminal-linked and correctly omitted them. The two tools
  * disagreed because this query only excluded created_supplier_invoice_id and
  * a transactions.document_id match, never created_journal_entry_id.
@@ -14,7 +14,7 @@ import { tools } from '../server'
  * lib/pending-operations/__tests__/inbox-link-status.pg.test.ts already
  * documents the intended contract ("the link column alone drops the row out
  * of the 'needs action' filter (the UI and list_unmatched_documents read
- * it)") — this test locks the query actually doing that.
+ * it)"); this test locks the query actually doing that.
  */
 const tool = tools.find((t) => t.name === 'gnubok_list_unmatched_documents')!
 
