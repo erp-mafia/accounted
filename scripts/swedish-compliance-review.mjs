@@ -50,7 +50,7 @@ function getDiff() {
     // as a misleading green signal.
     if (!existsSync(diffFile)) {
       throw new Error(
-        `DIFF_FILE is set to "${diffFile}" but the file does not exist — artifact download likely failed`,
+        `DIFF_FILE is set to "${diffFile}" but the file does not exist: artifact download likely failed`,
       );
     }
     const raw = readFileSync(diffFile, 'utf8');
