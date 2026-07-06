@@ -52,7 +52,7 @@ interface Ctx {
 }
 
 function fmtRange(start: string, end: string): string {
-  return `${start} – ${end}`
+  return `${start} till ${end}`
 }
 
 /** Two-amount row where the concept is tagged in both year columns. */
@@ -90,7 +90,7 @@ function sectionRow(label: string, cls: 'section' | 'subsection' = 'section'): s
 }
 
 function pageHeader(input: IxbrlArsredovisningInput, page: number, total: number): string {
-  // el() treats its content argument as raw markup — build it exclusively
+  // el() treats its content argument as raw markup: build it exclusively
   // from escapeText() output joined with builder-emitted tags so no user
   // value can ever reach the string unescaped.
   const identity = [
@@ -125,7 +125,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   }
   // Flerårsöversikt reaches further back: register period2/3 + balans2/3 from
   // the explicit ranges build-input aligned with the rows (never derived from
-  // row count — broken fiscal years would corrupt the contexts).
+  // row count: broken fiscal years would corrupt the contexts).
   input.forvaltningsberattelse.flerarsPerioder.forEach((range, index) => {
     if (index < 2) return // period0/period1 already registered
     writer.addDurationContext(`period${index}`, range.start, range.end)
@@ -166,10 +166,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   const totalPages = 6
   const pages: string[] = []
 
-  // ====== Page 1 — titel + innehåll + fastställelseintyg ======
+  // ====== Page 1: titel + innehåll + fastställelseintyg ======
   {
     const fb = input.faststallelseintyg
-    // A missing AGM date renders as a visible placeholder — never today's
+    // A missing AGM date renders as a visible placeholder: never today's
     // date. Preflight 1103 blocks the submission path until the date exists.
     const arsstammaFact =
       fb.arsstammaDatum !== null
@@ -283,7 +283,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     )
   }
 
-  // ====== Page 2 — förvaltningsberättelse ======
+  // ====== Page 2: förvaltningsberättelse ======
   {
     const fb = input.forvaltningsberattelse
     const parts: string[] = [
@@ -300,7 +300,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       ),
     ]
 
-    // Flerårsöversikt — column per year; whole SEK everywhere keeps repeated
+    // Flerårsöversikt: column per year; whole SEK everywhere keeps repeated
     // facts trivially consistent across scales (TA §2.7.3).
     if (fb.flerarsoversikt.length > 0) {
       const header = el(
@@ -367,7 +367,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     const hasOvriga = ek.ovrigaPoster.ib !== 0 || ek.ovrigaPoster.ub !== 0
     if (hasOvriga) {
       warnings.push(
-        'Eget kapital innehåller poster utöver aktiekapital/balanserat resultat/årets resultat (t.ex. reservfond eller överkursfond). Kolumnen "Övriga poster" i förändringstabellen är inte XBRL-taggad — granska innan inlämning.',
+        'Eget kapital innehåller poster utöver aktiekapital/balanserat resultat/årets resultat (t.ex. reservfond eller överkursfond). Kolumnen "Övriga poster" i förändringstabellen är inte XBRL-taggad: granska innan inlämning.',
       )
     }
     const ekHead = el(
@@ -475,7 +475,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     }
     if (ek.ovrigForandringBalanserat !== 0) {
       warnings.push(
-        `Förändringen av balanserat resultat innehåller en post om ${ek.ovrigForandringBalanserat} kr som inte kan härledas till utdelning eller balansering — raden "Övrig förändring" är otaggad, granska den.`,
+        `Förändringen av balanserat resultat innehåller en post om ${ek.ovrigForandringBalanserat} kr som inte kan härledas till utdelning eller balansering: raden "Övrig förändring" är otaggad, granska den.`,
       )
       ekRows.push(
         el(
@@ -542,7 +542,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
 
     // Resultatdisposition. BalanseratResultat/AretsResultatEgetKapital/
     // Overkursfond are repeated from the BR in the same balans0 context, so
-    // the values MUST be byte-identical (TA §2.7.3) — fri överkursfond gets
+    // the values MUST be byte-identical (TA §2.7.3): fri överkursfond gets
     // its own row tagged with its own concept instead of being folded into
     // balanserat resultat.
     const rd = fb.resultatdisposition
@@ -632,7 +632,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     pages.push(el('div', { class: 'ar-page', id: 'ar-page-2' }, parts.join('\n')))
   }
 
-  // ====== Page 3 — resultaträkning ======
+  // ====== Page 3: resultaträkning ======
   {
     const rr = input.rr
     const totals = input.totals
@@ -879,7 +879,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     )
   }
 
-  // ====== Page 4 — balansräkning ======
+  // ====== Page 4: balansräkning ======
   {
     const br = input.br
     const totals = input.totals
@@ -896,7 +896,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     const subtotal = (label: string, concept: string, amountValue: ConceptAmount): string =>
       moneyRow(writer, label, concept, amountValue, balCtx, { rowClass: 'subtotal', alwaysShow: true })
 
-    const assetRows: string[] = [head('Balansräkning — Tillgångar (kr)')]
+    const assetRows: string[] = [head('Balansräkning: Tillgångar (kr)')]
     assetRows.push(
       moneyRow(writer, 'Tecknat men ej inbetalt kapital', 'TecknatEjInbetaltKapital', br['TecknatEjInbetaltKapital'], balCtx, {}),
     )
@@ -983,7 +983,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       }),
     )
 
-    const eqRows: string[] = [head('Balansräkning — Eget kapital och skulder (kr)')]
+    const eqRows: string[] = [head('Balansräkning: Eget kapital och skulder (kr)')]
     eqRows.push(sectionRow('Eget kapital'))
     eqRows.push(sectionRow('Bundet eget kapital', 'subsection'))
     eqRows.push(
@@ -1067,7 +1067,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     )
   }
 
-  // ====== Page 5 — noter ======
+  // ====== Page 5: noter ======
   {
     const parts: string[] = [pageHeader(input, 5, totalPages), el('h2', {}, 'Noter')]
     for (const note of input.noter) {
@@ -1128,7 +1128,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     pages.push(el('div', { class: 'ar-page', id: 'ar-page-5' }, parts.join('\n')))
   }
 
-  // ====== Page 6 — underskrifter ======
+  // ====== Page 6: underskrifter ======
   {
     const u = input.underskrifter
     const parts: string[] = [pageHeader(input, 6, totalPages), el('h2', {}, 'Underskrifter')]
@@ -1181,7 +1181,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
           }),
         )
       }
-      // Per-signer date — mandatory for FY ending 2021-12-31+ (TA §2.9.1,
+      // Per-signer date: mandatory for FY ending 2021-12-31+ (TA §2.9.1,
       // kontrollera 1107/1214). An unsigned request has signedDate null: the
       // fact is omitted (never fabricated) and preflight 1214 blocks filing.
       if (signer.signedDate !== null) {
@@ -1203,7 +1203,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   const xmlnsAttrs = Object.entries(entryPoint.namespaces)
     .map(([prefix, uri]) => `xmlns:${prefix}="${escapeAttr(uri)}"`)
     .join('\n      ')
-  const title = `Årsredovisning ${input.company.name} ${input.company.orgNumber} räkenskapsåret ${input.period.start}–${input.period.end}`
+  const title = `Årsredovisning ${input.company.name} ${input.company.orgNumber} räkenskapsåret ${input.period.start}-${input.period.end}`
 
   const head = el(
     'head',
@@ -1234,7 +1234,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
  * Insert the Bolagsverket-computed kontrollsumma meta tags into a generated
  * document (TA §4.5.2). Run AFTER skapa-kontrollsumma since the checksum is
  * computed over the file content excluding fastställelseintyg/underskrifts-
- * datum/meta tags — adding the meta tags does not invalidate it.
+ * datum/meta tags: adding the meta tags does not invalidate it.
  */
 export function embedKontrollsumma(xhtml: string, kontrollsumma: string, algoritm: string): string {
   const meta =

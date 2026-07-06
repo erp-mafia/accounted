@@ -1,8 +1,8 @@
 /**
- * Processing history (behandlingshistorik) — append helper.
+ * Processing history (behandlingshistorik): append helper.
  *
  * Uses a service-role client internally (no INSERT RLS policy on
- * processing_history — matching the event_log pattern). Company scoping
+ * processing_history: matching the event_log pattern). Company scoping
  * is enforced by companyId in the event payload, not by RLS.
  * Throws on failure.
  *
@@ -35,7 +35,7 @@ const PII_PATTERNS = [
 ]
 
 // UUIDs (RFC 4122, 8-4-4-4-12 hex layout) frequently contain all-digit segments
-// that incorrectly match the 8+4 personnummer pattern — e.g. `57484518-3409-...`.
+// that incorrectly match the 8+4 personnummer pattern: e.g. `57484518-3409-...`.
 // Strip UUID-shaped substrings before PII matching so legitimate identifiers
 // aren't rejected. Personnummer always sit outside the UUID shape, so this keeps
 // the original safety intent intact.
@@ -85,7 +85,7 @@ export interface AppendEventInput {
   payloadSchemaVersion?: number
   actor: ProcessingHistoryActor
   rubricVersion?: string
-  occurredAt: Date  // mandatory — no default. Caller must set explicitly.
+  occurredAt: Date  // mandatory: no default. Caller must set explicitly.
 }
 
 // ── Append functions ────────────────────────────────────────────
@@ -94,7 +94,7 @@ export interface AppendEventInput {
  * Append a single event to processing_history.
  *
  * Uses a service-role client internally (bypasses RLS) since processing_history
- * has no INSERT policy — matching the event_log pattern. Company scoping is
+ * has no INSERT policy: matching the event_log pattern. Company scoping is
  * enforced by the companyId in the event payload, not by RLS.
  *
  * Returns the generated event_id (pre-generated client-side for causation chaining).

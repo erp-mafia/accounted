@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 /**
- * RFC 9728 — Protected Resource Metadata.
+ * RFC 9728: Protected Resource Metadata.
  * Tells MCP clients which authorization server to use.
  */
 export async function GET() {

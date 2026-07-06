@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { PUBLIC_OAUTH_METADATA_SCOPES } from '@/lib/auth/api-keys'
 
 /**
- * RFC 8414 — OAuth 2.0 Authorization Server Metadata.
+ * RFC 8414: OAuth 2.0 Authorization Server Metadata.
  * Tells MCP clients where the authorize/token endpoints are.
  */
 export async function GET() {

@@ -23,7 +23,7 @@ import {
   Edit2,
   Trash2,
   Loader2,
-  Receipt,
+  ReceiptText,
   Lock,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -204,7 +204,7 @@ export default function CustomerDetailPage({
             </div>
             <div>
               <h1 className="font-display text-2xl md:text-3xl tracking-tight">{customer.name}</h1>
-              <Badge variant="secondary">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</Badge>
+              <p className="text-sm text-muted-foreground">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</p>
             </div>
           </div>
         </div>
@@ -313,7 +313,7 @@ export default function CustomerDetailPage({
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
-              <Receipt className="h-4 w-4 text-muted-foreground" />
+              <ReceiptText className="h-4 w-4 text-muted-foreground" />
               <span>{t('invoice_count', { count: customer.invoices?.length || 0 })}</span>
             </div>
           </CardContent>
@@ -336,10 +336,10 @@ export default function CustomerDetailPage({
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Receipt className="h-4 w-4" />
+            <ReceiptText className="h-4 w-4" />
             {t('section_invoices')}
             {customer.invoices?.length > 0 && (
-              <Badge variant="secondary">{customer.invoices.length}</Badge>
+              <span className="text-sm text-muted-foreground tabular-nums">({customer.invoices.length})</span>
             )}
           </CardTitle>
         </CardHeader>

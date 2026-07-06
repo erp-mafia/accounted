@@ -3,7 +3,7 @@ import { registerBrandingService } from '@/lib/branding/service'
 
 // Register the whitelabel branding values immediately when this extension is loaded.
 // Edit the values below to match your brand. Any field omitted falls back to the
-// Accounted default (and to whatever you've set via env vars). See WHITELABEL.md.
+// Accounted default (and to whatever you've set via env vars). See docs/WHITELABEL.md.
 registerBrandingService({
   // appName: 'YourBrand',
   // appDescription: 'Bokföring & redovisning',

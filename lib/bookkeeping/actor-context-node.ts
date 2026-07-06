@@ -6,7 +6,7 @@ import { bindActorStore, type CommitActor } from './actor-context'
  * the split exists). Importing this module binds the AsyncLocalStorage into
  * the isomorphic registry so getActor() works wherever engine.ts runs on the
  * server. Only ever import this from server-side code (pending-operation
- * commit paths, API routes) — never from anything reachable by a client
+ * commit paths, API routes): never from anything reachable by a client
  * component bundle.
  */
 const actorStorage = new AsyncLocalStorage<CommitActor>()

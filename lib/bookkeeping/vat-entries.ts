@@ -42,7 +42,7 @@ export function getVatRate(treatment: VatTreatment): number {
  * Expense/basis accounts that already populate momsdeklaration ruta 20-24
  * directly when debited (the basbelopp for a reverse-charge purchase). If an RC
  * item is booked straight to one of these, the engine must NOT add the parallel
- * basbeloppsrader — that would double-count ruta 20-24.
+ * basbeloppsrader: that would double-count ruta 20-24.
  *
  *   ruta 20  EU goods             4515/4516/4517
  *   ruta 21  EU services          4535/4536/4537
@@ -68,13 +68,13 @@ export function isReverseChargeBasisAccount(account: string): boolean {
  * Under omvänd skattskyldighet the supplier charges no VAT, so the line's own
  * `vat_rate` is 0 (the v1 supplier-invoice API mandates this). The buyer must
  * still self-assess output + input VAT at the Swedish statutory rate that would
- * apply to the service domestically — 25% under huvudregeln for EU services
+ * apply to the service domestically: 25% under huvudregeln for EU services
  * (ML 6 kap 34 §), 12%/6% for reduced-rated services. Resolution order:
  *
  *   1. explicit per-item `reverse_charge_rate` (the UI's self-assessment picker)
  *   2. a positive `vat_rate` on the line (legacy/API callers that encoded the
  *      self-assessment rate directly on vat_rate)
- *   3. 25% huvudregel default — never silently drop the fiktiv-moms lines.
+ *   3. 25% huvudregel default: never silently drop the fiktiv-moms lines.
  *
  * Keeping this in one place means the booking engine and the review-dialog
  * preview can never drift. The original bug was two independent copies of a
@@ -135,7 +135,7 @@ export function generateSalesVatLines(config: VatEntryConfig): CreateJournalEntr
  * The fiktiv-moms pair (2645/26x4 or 2647/26x4) only carries the VAT amounts
  * (ruta 30-32 and the offsetting part of ruta 48). The underlying basbelopp
  * (vad köpet de facto kostade) must also land on the 44xx/45xx series so
- * Skatteverket sees ruta 20-24 populated — ML 13 kap kräver att både underlag
+ * Skatteverket sees ruta 20-24 populated: ML 13 kap kräver att både underlag
  * och moms redovisas. SKV avvisar deklarationer med ruta 30-32 men tom 20-24
  * (felkod FK004 "Eftersom det finns ett belopp i någon momsuppgift som avser
  * utgående moms på inköp (30-32) måste det finnas ett belopp i någon av
@@ -207,7 +207,7 @@ function pickBasisAccount(
       label: 'Inköp tjänster land utanför EU',
     }
   }
-  // swedish_business — domestic RC (byggtjänster m.m.)
+  // swedish_business: domestic RC (byggtjänster m.m.)
   return {
     account: ['4425', '4426', '4427'][rateIdx],
     label: 'Inköp tjänster i Sverige omvänd skattskyldighet',

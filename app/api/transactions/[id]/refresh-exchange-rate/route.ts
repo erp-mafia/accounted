@@ -33,7 +33,7 @@ export const POST = withRouteContext(
       return NextResponse.json({ data: transaction })
     }
 
-    const rate = await fetchExchangeRate(transaction.currency as Currency, new Date(transaction.date))
+    const rate = await fetchExchangeRate(transaction.currency as Currency, new Date(transaction.date), supabase)
     if (!rate) {
       return errorResponseFromCode('TX_EXCHANGE_RATE_UNAVAILABLE', log, {
         requestId,

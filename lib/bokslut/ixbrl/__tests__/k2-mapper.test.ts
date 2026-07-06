@@ -15,7 +15,7 @@ const row = (
 })
 
 describe('mapTrialBalancesToK2', () => {
-  // Realistic post-bokslut pairs: full TB has class 3–8 zeroed + 2099 booked;
+  // Realistic post-bokslut pairs: full TB has class 3-8 zeroed + 2099 booked;
   // preClosing TB has the RR accounts open (see fixtures.ts).
   const result = mapTrialBalancesToK2(CURRENT, PREVIOUS)
 
@@ -95,7 +95,7 @@ describe('mapTrialBalancesToK2', () => {
   // Regression for the year-end-closing split: a realistic post-bokslut TB
   // pair must yield NON-ZERO RR concepts (from the pre-closing TB) AND a BR
   // that ties (from the full TB). Mapping a single TB can never do both: the
-  // closing entry zeroes class 3–8, so RR concepts would collapse to 0.
+  // closing entry zeroes class 3-8, so RR concepts would collapse to 0.
   it('regression: post-bokslut pair gives non-zero RR and a balancing BR', () => {
     const res = mapTrialBalancesToK2(CURRENT, PREVIOUS)
     expect(res.rr['Nettoomsattning'].current).toBe(1_000_000)
@@ -104,7 +104,7 @@ describe('mapTrialBalancesToK2', () => {
     expect(res.totals.tillgangar.current).toBe(res.totals.egetKapitalSkulder.current)
     expect(res.warnings).toEqual([])
 
-    // Sanity: the full TB really has the RR accounts zeroed — mapping it as
+    // Sanity: the full TB really has the RR accounts zeroed: mapping it as
     // the RR source would produce an all-zero resultaträkning.
     const wrong = mapTrialBalancesToK2(
       { full: CURRENT.full, preClosing: CURRENT.full },
@@ -164,7 +164,7 @@ describe('mapTrialBalancesToK2', () => {
   })
 })
 
-describe('mapTrialBalancesToK2 — öre-rounding residual smoothing', () => {
+describe('mapTrialBalancesToK2: öre-rounding residual smoothing', () => {
   it('absorbs a ±1 kr BR residual into the largest equity/liability post', () => {
     // Assets round UP twice (.50 each), liabilities round once up once down:
     // rounded Tillgångar 202 vs rounded EK+skulder 201 although the TB ties

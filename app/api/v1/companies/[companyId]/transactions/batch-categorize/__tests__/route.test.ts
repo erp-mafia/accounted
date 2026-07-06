@@ -46,7 +46,7 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
     findUnresolvableAccounts: findMissingAccountsMock,
   }
 })
-// category mapping is real — gives the route real BAS accounts to validate.
+// category mapping is real: gives the route real BAS accounts to validate.
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
@@ -185,7 +185,7 @@ describe('POST batch-categorize', () => {
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
       }),
     )
-    // Pre-validation passes — race where an account got deactivated between
+    // Pre-validation passes: race where an account got deactivated between
     // our chart_of_accounts read and the engine's resolveAccountIds read.
     findMissingAccountsMock.mockResolvedValueOnce([])
     const { AccountsNotInChartError } = await import('@/lib/bookkeeping/errors')

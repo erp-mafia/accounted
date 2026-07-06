@@ -8,17 +8,17 @@
  * the auth wrapper's stamping cover them. Public routes are an exception
  * because they're plain `NextResponse.json/text` returns with caching.
  *
- *   X-Content-Type-Options: nosniff   — block MIME sniffing on text/json
- *   Referrer-Policy: strict-origin... — limit referrer leakage if a link is
+ *   X-Content-Type-Options: nosniff  : block MIME sniffing on text/json
+ *   Referrer-Policy: strict-origin...: limit referrer leakage if a link is
  *                                       embedded somewhere unexpected
- *   X-Frame-Options: DENY             — discovery surfaces should never
+ *   X-Frame-Options: DENY            : discovery surfaces should never
  *                                       legitimately render in a frame
  */
 
 /**
  * Headers applied to BOTH public discovery routes and authenticated v1
  * responses. Includes CSP, HSTS, and frame/sniff/referrer protections, but
- * NOT X-Robots-Tag — discovery routes (llms.txt, skills index, OpenAPI)
+ * NOT X-Robots-Tag: discovery routes (llms.txt, skills index, OpenAPI)
  * exist to be crawled by AI agents; authenticated routes get an additional
  * X-Robots-Tag at the wrapper level via WRAPPED_RESPONSE_NOAI_HEADERS.
  */
@@ -26,11 +26,11 @@ export const PUBLIC_SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'DENY',
-  // Discovery routes return JSON or plain text — no script, style, image, or
+  // Discovery routes return JSON or plain text: no script, style, image, or
   // form contexts. `default-src 'none'` is the strictest possible CSP and
   // costs nothing here.
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
-  // HSTS — every Accounted deployment is HTTPS-only. 1 year is the standard
+  // HSTS: every Accounted deployment is HTTPS-only. 1 year is the standard
   // production value; includeSubDomains because the apex serves everything.
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
 }

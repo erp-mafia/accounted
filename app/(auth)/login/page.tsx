@@ -412,13 +412,12 @@ function LoginPageContent() {
                     {tAuth('bankid_no_account_body')}
                   </p>
                   <p className="mt-2">
-                    <button
-                      type="button"
-                      onClick={() => setBankIdNoAccount(null)}
+                    <Link
+                      href="/register"
                       className="text-xs text-amber-600 underline underline-offset-2 hover:text-amber-800 dark:text-amber-400"
                     >
                       {tAuth('bankid_no_account_create')}
-                    </button>
+                    </Link>
                   </p>
                 </div>
               ) : (

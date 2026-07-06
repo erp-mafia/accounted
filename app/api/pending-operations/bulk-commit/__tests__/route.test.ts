@@ -182,7 +182,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       {
         id: VALID_ID_2,
         status: 'skipped',
-        error: 'Hög risk — kräver individuellt godkännande',
+        error: 'Hög risk: kräver individuellt godkännande',
       },
     ])
     expect(body.data.summary).toEqual({

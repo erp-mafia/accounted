@@ -27,7 +27,12 @@ const MONTH_LABELS = [
 export async function generateMonthlyBreakdown(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options?: {
+    /** SIE dim → code filter ({"6":"P001"}). Without it a dimension-scoped
+     *  KPI view would silently chart company-wide months. */
+    dimensions?: Record<string, string>
+  }
 ): Promise<MonthlyBreakdown> {
 
   // Get the fiscal period date range
@@ -46,8 +51,8 @@ export async function generateMonthlyBreakdown(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let lines: any[]
   try {
-    lines = await fetchAllRows(({ from, to }) =>
-      supabase
+    lines = await fetchAllRows(({ from, to }) => {
+      let query = supabase
         .from('journal_entry_lines')
         .select(`
           account_number,
@@ -63,10 +68,15 @@ export async function generateMonthlyBreakdown(
         .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
         .eq('journal_entries.company_id', companyId)
         .eq('journal_entries.status', 'posted')
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
+
+      if (options?.dimensions && Object.keys(options.dimensions).length > 0) {
+        // jsonb containment (@>): served by idx_jel_dimensions_gin.
+        query = query.contains('dimensions', options.dimensions)
+      }
+
+      // Stable total order for correct paging (see fetch-all.ts).
+      return query.order('id', { ascending: true }).range(from, to)
+    })
   } catch {
     return { months: [] }
   }
@@ -113,7 +123,7 @@ export async function generateMonthlyBreakdown(
       bucket.expenses = Math.round((bucket.expenses + line.debit_amount - line.credit_amount) * 100) / 100
     } else if (accountClass === 8 && line.account_number !== '8999') {
       // Financial items (class 8): interest, exchange gains/losses, etc.
-      // 8999 "Årets resultat" is a year-end closing account — its debit/credit
+      // 8999 "Årets resultat" is a year-end closing account: its debit/credit
       // mirrors the computed profit, so including it here would cancel the
       // period's income-vs-expense signal on the month of closing.
       const amount = line.credit_amount - line.debit_amount

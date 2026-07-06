@@ -1,6 +1,6 @@
 'use client'
 
-// Periodiseringar — löpande accrual schedules (förutbetalda kostnader 17xx /
+// Periodiseringar: löpande accrual schedules (förutbetalda kostnader 17xx /
 // förutbetalda intäkter 29xx) skapade från fakturarader. Djupt regulatorisk
 // bokföringsyta → svenska i båda locales, i linje med bokslutsguiden.
 
@@ -122,7 +122,7 @@ export default function AccrualSchedulesPage() {
             : 'Periodiseringar bokförda',
         description:
           result.failed > 0
-            ? `${result.posted} verifikat bokfördes, ${result.failed} misslyckades — se felmeddelandet på respektive månad.`
+            ? `${result.posted} verifikat bokfördes, ${result.failed} misslyckades: se felmeddelandet på respektive månad.`
             : `${result.posted} verifikat bokfördes.`,
         variant: result.failed > 0 ? 'destructive' : undefined,
       })
@@ -194,7 +194,7 @@ export default function AccrualSchedulesPage() {
               </p>
               <p className="text-muted-foreground">
                 {blockedInstallments > 0
-                  ? `${blockedInstallments} ${blockedInstallments === 1 ? 'månad kunde' : 'månader kunde'} inte bokföras automatiskt — öppna raden för felmeddelandet.`
+                  ? `${blockedInstallments} ${blockedInstallments === 1 ? 'månad kunde' : 'månader kunde'} inte bokföras automatiskt: öppna raden för felmeddelandet.`
                   : 'Förfallna månader bokförs automatiskt varje natt, eller direkt här.'}
               </p>
             </div>
@@ -283,7 +283,7 @@ export default function AccrualSchedulesPage() {
                         </TableCell>
                         <TableCell className="max-w-[320px]">
                           <span className="block truncate" title={schedule.description ?? ''}>
-                            {schedule.description || '—'}
+                            {schedule.description || '-'}
                           </span>
                           {sourceHref && (
                             <Link
@@ -299,7 +299,7 @@ export default function AccrualSchedulesPage() {
                           {schedule.balance_account} → {schedule.target_account}
                         </TableCell>
                         <TableCell className="tabular-nums">
-                          {formatDate(schedule.period_start)} – {formatDate(schedule.period_end)}
+                          {formatDate(schedule.period_start)} till {formatDate(schedule.period_end)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(schedule.total_amount)}
@@ -372,7 +372,7 @@ export default function AccrualSchedulesPage() {
                                             Öppna verifikat
                                           </Link>
                                         ) : (
-                                          <span className="text-xs text-muted-foreground">—</span>
+                                          <span className="text-xs text-muted-foreground">-</span>
                                         )}
                                       </td>
                                     </tr>
@@ -410,7 +410,7 @@ export default function AccrualSchedulesPage() {
             <p className="font-medium">{dissolveTarget.description || 'Periodisering'}</p>
             <p className="tabular-nums text-muted-foreground">
               {dissolveTarget.target_account} ← {dissolveTarget.balance_account} ·{' '}
-              {formatDate(dissolveTarget.period_start)} – {formatDate(dissolveTarget.period_end)}
+              {formatDate(dissolveTarget.period_start)} till {formatDate(dissolveTarget.period_end)}
             </p>
           </div>
         </ConfirmationDialog>

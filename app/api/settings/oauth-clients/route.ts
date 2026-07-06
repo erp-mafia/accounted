@@ -4,13 +4,13 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { z } from 'zod'
 
 /**
- * GET  /api/settings/oauth-clients — list the current user's registered
+ * GET  /api/settings/oauth-clients: list the current user's registered
  *                                    redirect URIs.
- * POST /api/settings/oauth-clients — register a new redirect URI for use
+ * POST /api/settings/oauth-clients: register a new redirect URI for use
  *                                    with the MCP OAuth flow.
  *
  * Built-in patterns (claude.ai, claude.com, localhost) bypass this table
- * entirely — registrations here are only for self-hosted custom apps.
+ * entirely: registrations here are only for self-hosted custom apps.
  */
 
 const RegistrationSchema = z.object({

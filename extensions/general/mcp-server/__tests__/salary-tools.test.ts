@@ -4,10 +4,10 @@
  * After the staging refactor (Phase: ship readiness of the in-app agent),
  * gnubok_create_salary_run and gnubok_generate_agi STAGE a pending_operation
  * instead of writing directly. Approval (and the actual library call) goes
- * through lib/pending-operations/commit.ts — separately covered.
+ * through lib/pending-operations/commit.ts: separately covered.
  *
  * gnubok_calculate_salary_run still calls the calculation lib synchronously
- * (no side effects to stage — pure compute against an existing draft run).
+ * (no side effects to stage: pure compute against an existing draft run).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -38,7 +38,7 @@ beforeEach(() => {
 })
 
 describe('gnubok_calculate_salary_run', () => {
-  it('calls runSalaryCalculation directly — never a self-fetch', async () => {
+  it('calls runSalaryCalculation directly: never a self-fetch', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     mockRunSalaryCalculation.mockResolvedValue({ ok: true, run: { status: 'draft' }, warnings: ['w1'] })
     const { supabase } = createQueuedMockSupabase()

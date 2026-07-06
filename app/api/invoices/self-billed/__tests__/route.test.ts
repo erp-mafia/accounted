@@ -176,7 +176,7 @@ describe('POST /api/invoices/self-billed', () => {
     expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'invoice.created' }))
   })
 
-  it('does NOT book at registration under kontantmetoden (cash) — books at payment instead', async () => {
+  it('does NOT book at registration under kontantmetoden (cash), books at payment instead', async () => {
     mockDomesticVat()
     const customer = makeCustomer({ id: VALID_UUID })
     const created = makeInvoice({ id: 'inv-1', invoice_number: null, is_self_billed: true, external_invoice_number: 'KUND-55012' })
@@ -222,7 +222,7 @@ describe('POST /api/invoices/self-billed', () => {
     mockDomesticVat()
     // fetchExchangeRate is mocked to resolve null (rate unavailable for the
     // invoice date). Booking would otherwise fall through to a silent 1:1 SEK
-    // conversion, so the route must refuse up front — before any insert.
+    // conversion, so the route must refuse up front, before any insert.
     enqueue({ data: makeCustomer({ id: VALID_UUID }), error: null }) // fetch customer
 
     const request = createMockRequest('/api/invoices/self-billed', {

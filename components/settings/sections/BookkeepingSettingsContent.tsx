@@ -12,6 +12,7 @@ import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { PeriodiseringAutoDetectToggle } from '@/components/settings/PeriodiseringAutoDetectToggle'
+import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -51,7 +52,7 @@ export function BookkeepingSettingsContent() {
 
     // Write-through: the booking engine resolves the series from the
     // per-source-type map, NOT from default_voucher_series. So when the user
-    // changes the global default, propagate it across the map — but only for
+    // changes the global default, propagate it across the map, but only for
     // types that were still following the previous default, leaving explicit
     // per-type overrides (set via VoucherSeriesPerSourceTypeForm) untouched.
     // Without this the "Standardserie" dropdown is a no-op for bookkeeping.
@@ -147,7 +148,7 @@ export function BookkeepingSettingsContent() {
         <FiscalYearsManager />
       </div>
 
-      {/* Voucher series — per-source-type mapping */}
+      {/* Voucher series: per-source-type mapping */}
       <div className="border-t border-border pt-8">
         <VoucherSeriesPerSourceTypeForm
           settings={settings}
@@ -155,7 +156,7 @@ export function BookkeepingSettingsContent() {
         />
       </div>
 
-      {/* Voucher series — read-only display */}
+      {/* Voucher series: read-only display */}
       <div className="border-t border-border pt-8">
         <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
       </div>
@@ -165,6 +166,11 @@ export function BookkeepingSettingsContent() {
         <PeriodiseringAutoDetectToggle />
       </div>
 
+      {/* Kostnadsställen & projekt (dimensions) toggle */}
+      <div className="border-t border-border pt-8">
+        <DimensionsToggle />
+      </div>
+
       {/* Cross-links */}
       <div className="border-t border-border pt-8 space-y-3">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
@@ -172,14 +178,7 @@ export function BookkeepingSettingsContent() {
         </h2>
         <div className="flex flex-col gap-2">
           <Link
-            href="/bookkeeping"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            {t('related_fiscal_year')}
-          </Link>
-          <Link
-            href="/bookkeeping"
+            href="/bookkeeping?tab=accounts"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ExternalLink className="h-3.5 w-3.5" />

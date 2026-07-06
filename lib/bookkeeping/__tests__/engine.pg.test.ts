@@ -6,7 +6,7 @@ import {
   seedCompany,
 } from '@/tests/pg/fixtures'
 
-describe('engine.pg — triggers & RPCs that mocks cannot catch', () => {
+describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
   it('rejects INSERT into journal_entries when the fiscal period is closed', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany({ isClosed: true })
 
@@ -24,7 +24,7 @@ describe('engine.pg — triggers & RPCs that mocks cannot catch', () => {
     await insertBalancedLines(entryB)
 
     // Two dedicated clients so the row-level lock on voucher_sequences is
-    // actually exercised — not just a single connection serialising calls.
+    // actually exercised: not just a single connection serialising calls.
     const clientA = await getPool().connect()
     const clientB = await getPool().connect()
     try {
@@ -71,11 +71,11 @@ describe('engine.pg — triggers & RPCs that mocks cannot catch', () => {
   })
 
   it('next_voucher_number falls back to the company owner when auth.uid() is NULL', async () => {
-    // The superuser pg connection has no Supabase JWT, so auth.uid() IS NULL —
+    // The superuser pg connection has no Supabase JWT, so auth.uid() IS NULL:
     // exactly the service-role shape (repair scripts, cron) that used to fail
     // the voucher_sequences user_id NOT NULL check before ON CONFLICT could
     // arbitrate (commit_journal_entry got the fallback in 20260421170500;
-    // next_voucher_number — the storno/correction path — did not until
+    // next_voucher_number (the storno/correction path) did not until
     // 20260623130000).
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 

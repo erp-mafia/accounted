@@ -22,7 +22,7 @@ type CachedResult = CheckResult & { expires: number }
 // In-memory cache shared across requests in the same process. Docker's
 // healthcheck polls every 30 s, so the cache always returns fresh data to it,
 // but a public flood (multiple requests/second) is served from RAM and never
-// reaches Postgres. The cache is intentionally tiny — one entry — because the
+// reaches Postgres. The cache is intentionally tiny (one entry) because the
 // endpoint takes no parameters.
 let cached: CachedResult | null = null
 
@@ -36,7 +36,7 @@ let pending: Promise<CheckResult> | null = null
  * GET /api/health
  * Public health check endpoint (no auth required).
  *
- * Error details are logged server-side only — never echoed to the response
+ * Error details are logged server-side only: never echoed to the response
  * body, which would expose Postgres error text on a public endpoint. The
  * logger receives only error.code/error.message; raw Supabase error objects
  * may include schema names, table names, or query fragments that should

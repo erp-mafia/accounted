@@ -42,7 +42,7 @@ async function insertTeamMember(params: {
   )
 }
 
-describe('create_company_with_owner — team_id authorization', () => {
+describe('create_company_with_owner: team_id authorization', () => {
   it('raises when caller is not a member of the requested team', async () => {
     const ownerId = await insertAuthUser()
     const intruderId = await insertAuthUser()

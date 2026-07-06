@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -117,7 +116,7 @@ export default function BankFileConfirmStep({
                 <span className="text-xs">Period</span>
               </div>
               <p className="text-sm font-medium">
-                {date_from} – {date_to}
+                {date_from}: {date_to}
               </p>
             </div>
 
@@ -169,17 +168,15 @@ export default function BankFileConfirmStep({
 
           {/* Additional info */}
           {refsCount > 0 && (
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline" className="text-primary border-primary/30">
-                <Link2 className="mr-1 h-3 w-3" />
-                {refsCount} med OCR/referens
-              </Badge>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Link2 className="h-3 w-3" />
+              {refsCount} med OCR/referens
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Skipped rows — surfaced here because the manual-mapping path skips the
+      {/* Skipped rows: surfaced here because the manual-mapping path skips the
           preview step where these warnings would otherwise be shown. */}
       {warnings.length > 0 && (
         <Card>

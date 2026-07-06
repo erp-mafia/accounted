@@ -66,7 +66,7 @@ describe('calculateTraktamente', () => {
     expect(result.taxFree).toBe(300) // 150 × 2
   })
 
-  it('applies tremånadersregeln — 70% after 3 months', () => {
+  it('applies tremånadersregeln: 70% after 3 months', () => {
     const result = calculateTraktamente({
       tripType: 'full_day',
       days: 1,
@@ -79,7 +79,7 @@ describe('calculateTraktamente', () => {
     expect(result.taxable).toBe(Math.round((300 - 210) * 100) / 100) // 90
   })
 
-  it('applies tremånadersregeln — 50% after 2 years', () => {
+  it('applies tremånadersregeln: 50% after 2 years', () => {
     const result = calculateTraktamente({
       tripType: 'full_day',
       days: 1,
@@ -91,7 +91,7 @@ describe('calculateTraktamente', () => {
     expect(result.taxable).toBe(150) // 300 - 150
   })
 
-  it('reduces for meals provided — lunch reduces by 35%', () => {
+  it('reduces for meals provided: lunch reduces by 35%', () => {
     const result = calculateTraktamente({
       tripType: 'full_day',
       days: 1,
@@ -103,7 +103,7 @@ describe('calculateTraktamente', () => {
     expect(result.taxFree).toBe(Math.round((300 - mealReduction) * 100) / 100)
   })
 
-  it('reduces for all meals — 85%', () => {
+  it('reduces for all meals: 85%', () => {
     const result = calculateTraktamente({
       tripType: 'full_day',
       days: 1,

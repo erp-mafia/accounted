@@ -111,7 +111,7 @@ export async function withProviderCall<T>(
       throw wrapped
     }
 
-    // Unknown shape — re-throw so the outer handler can decide. We still log it.
+    // Unknown shape: re-throw so the outer handler can decide. We still log it.
     log.error('provider call failed (unknown)', raw as Error, { latencyMs })
     throw raw
   }
@@ -143,7 +143,7 @@ function mapResponseError(res: Response, provider: string): ProviderCallError {
       { status: res.status },
     )
   }
-  // 4xx other than 401/403/429 is application-level — surface as upstream so
+  // 4xx other than 401/403/429 is application-level: surface as upstream so
   // the user gets a meaningful Swedish message; the actual cause is in logs.
   return new ProviderCallError(
     'PROVIDER_UPSTREAM_ERROR',
@@ -210,7 +210,7 @@ export function classifyProviderError(error: unknown): ProviderCallErrorCode | n
 
 /**
  * True when a provider token/OAuth failure means the integration license is
- * missing or inactive — NOT an ordinary expired/revoked grant.
+ * missing or inactive, NOT an ordinary expired/revoked grant.
  *
  * Fortnox answers its token endpoint with `error_missing_license` when the
  * customer's Fortnox account no longer carries the integration license. The

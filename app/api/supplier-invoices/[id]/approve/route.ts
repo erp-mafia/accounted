@@ -44,7 +44,7 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SI_APPROVE_UPDATE_FAILED', log, { requestId })
     }
 
-    // Event emission is non-blocking — the registration entry is created by
+    // Event emission is non-blocking: the registration entry is created by
     // the supplier-invoice handler bound to this event. If the handler throws,
     // bus.ts persists an EventHandlerFailed row for traceability.
     try {

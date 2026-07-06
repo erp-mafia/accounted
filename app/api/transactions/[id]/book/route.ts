@@ -60,7 +60,7 @@ export async function POST(
 
   // Booking-time duplicate guard: if another transaction with the same
   // date+amount+account is already booked, booking this one would double-count
-  // one real event (two verifikationer — felaktig bokföring per BFL). Warn; the
+  // one real event (two verifikationer: felaktig bokföring per BFL). Warn; the
   // user confirms with force=true bound to the reviewed sibling. Mirrors the
   // match-invoice soft-duplicate guard.
   const dupLog = createLogger('transactions.book', { companyId, userId: user.id })
@@ -105,9 +105,9 @@ export async function POST(
       })
       // Persist the dismissal to behandlingshistorik (BFNAR 2013:2 kap 8): the
       // decision to book over a DETECTED possible double-booking is a
-      // bookkeeping act that must leave a durable, queryable record — a warn in
+      // bookkeeping act that must leave a durable, queryable record; a warn in
       // the application log is ephemeral and does not satisfy the requirement.
-      // Best-effort — a logging failure must never block a legitimate booking.
+      // Best-effort: a logging failure must never block a legitimate booking.
       try {
         await appendProcessingHistory({
           companyId,

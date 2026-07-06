@@ -88,7 +88,7 @@ export function BillingSettingsContent() {
           <span>
             {daysLeft > 0
               ? `Din provperiod löper ut om ${daysLeft} ${daysLeft === 1 ? 'dag' : 'dagar'}${
-                  trialEndsAt ? ` — ${formatDateLong(trialEndsAt)}` : ''
+                  trialEndsAt ? ` (${formatDateLong(trialEndsAt)})` : ''
                 }. Lägg till betalning nu så fortsätter allt utan avbrott.`
               : 'Din provperiod har löpt ut. Aktivera abonnemanget för att få tillbaka AI, bankkoppling och inlämning.'}
           </span>

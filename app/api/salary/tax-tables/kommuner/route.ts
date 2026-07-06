@@ -8,7 +8,7 @@ import { fetchKommunTaxRates } from '@/lib/salary/tax-tables'
  * Returns every Swedish municipality mapped to its derived skattetabell number
  * (29-42), sourced from Skatteverket's open-data API via fetchKommunTaxRates().
  * Powers the folkbokföringskommun picker on the employee form so the user only
- * has to choose their town — the tax table derives itself.
+ * has to choose their town: the tax table derives itself.
  *
  * The mapping changes once a year, so the result is cached in-process per year.
  */

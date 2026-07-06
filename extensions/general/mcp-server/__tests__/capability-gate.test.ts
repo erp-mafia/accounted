@@ -3,7 +3,7 @@
  *
  * The paid external-service tools (send_invoice → email_send, the two
  * Skatteverket submissions → skatteverket) must be blocked server-side when the
- * company isn't entitled — BEFORE tool.execute() runs, so no pending op is
+ * company isn't entitled: BEFORE tool.execute() runs, so no pending op is
  * staged. The gate sits right after the API-key scope check and mirrors its
  * shape, so the test key holds the required SCOPE but the company may lack the
  * CAPABILITY. Self-hosted short-circuits hasCapability to all-on (covered in
@@ -20,7 +20,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
-  // A minimal chainable Supabase stub — only reached if the gate lets a call
+  // A minimal chainable Supabase stub: only reached if the gate lets a call
   // through to execute(); resolves everything to null so execute fails with a
   // plain execution error (never capability_blocked).
   const chain: unknown = new Proxy(
@@ -40,9 +40,11 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     validateApiKey: vi.fn().mockResolvedValue({
       userId: 'user-1',
       companyId: '11111111-1111-4111-8111-111111111111',
-      // Holds the SCOPES for all three paid tools so the scope gate passes and
-      // the CAPABILITY gate is what we exercise.
-      scopes: ['invoices:write', 'skatteverket:write', 'reports:read'],
+      // Holds the SCOPES for every paid tool under test (send_invoice →
+      // invoices:write, agi_submit → skatteverket:write, upload_document →
+      // transactions:write) so the scope gate passes and the CAPABILITY gate is
+      // what we exercise.
+      scopes: ['invoices:write', 'skatteverket:write', 'reports:read', 'transactions:write'],
       apiKeyId: 'key-1',
       apiKeyName: 'Test Key',
     }),
@@ -98,7 +100,7 @@ describe('MCP capability gate', () => {
     eventBus.clear()
   })
 
-  it('blocks gnubok_send_invoice when email_send is not entitled — before execute()', async () => {
+  it('blocks gnubok_send_invoice when email_send is not entitled: before execute()', async () => {
     mockHasCapability.mockResolvedValue(false)
     const eventPromise = captureNextToolCalled()
 
@@ -129,12 +131,30 @@ describe('MCP capability gate', () => {
     expect(mockHasCapability).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111', 'skatteverket')
   })
 
+  it('blocks gnubok_upload_document when ai is not entitled: the paid Bedrock OCR path', async () => {
+    // gnubok_upload_document runs extractInvoiceFields (Bedrock OCR) inline in
+    // its handler, NOT through the entitlement-gated uploadAndExtract. The
+    // central dispatch map is therefore the ONLY paywall on this transport.
+    // This test locks it so a free-tier connector key can never reach OCR.
+    mockHasCapability.mockResolvedValue(false)
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_upload_document', { file_name: 'faktura.pdf', file_content_base64: 'JVBERi0=' }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect((payload.error as Record<string, unknown>).capability_blocked).toBe(true)
+    expect((payload.error as Record<string, unknown>).capability).toBe('ai')
+    expect(mockHasCapability).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111', 'ai')
+  })
+
   it('lets a free tool through without consulting the capability gate', async () => {
     mockHasCapability.mockResolvedValue(false)
 
     await handleMcpRequest(mcpToolCall('gnubok_list_skills', {}))
 
-    // gnubok_list_skills has no MCP_TOOL_CAPABILITY_MAP entry — the gate is skipped entirely.
+    // gnubok_list_skills has no MCP_TOOL_CAPABILITY_MAP entry: the gate is skipped entirely.
     expect(mockHasCapability).not.toHaveBeenCalled()
   })
 

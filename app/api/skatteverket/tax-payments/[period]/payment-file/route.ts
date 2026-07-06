@@ -150,7 +150,7 @@ export async function GET(
 /**
  * Tax payment deadline = the 12th of the month *following* the AGI period.
  * (Skatteverket also accepts the 17th in Jan/Aug for turnover ≤40 MSEK, but
- * the conservative date is the 12th — money must be on the Skattekonto by
+ * the conservative date is the 12th: money must be on the Skattekonto by
  * then to avoid kostnadsränta.)
  */
 function computeTaxPaymentDate(periodYear: number, periodMonth: number): string {

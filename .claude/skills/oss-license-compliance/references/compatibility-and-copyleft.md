@@ -22,9 +22,9 @@ Sync the matrix on a scheduled cadence (daily is sufficient) and pin the snapsho
 
 A pairwise lookup returns one of:
 
-* **Compatible** — combination is permitted.
-* **Incompatible** — combination violates one or both licenses; the matrix gives the contradiction reason in `matrixseqexpl.json`.
-* **Conditional** — combination is permitted only if specific conditions are met (e.g., dynamic linking, system library exception). Requires reading the explanation field.
+* **Compatible**: combination is permitted.
+* **Incompatible**: combination violates one or both licenses; the matrix gives the contradiction reason in `matrixseqexpl.json`.
+* **Conditional**: combination is permitted only if specific conditions are met (e.g., dynamic linking, system library exception). Requires reading the explanation field.
 
 ### Tooling
 
@@ -32,7 +32,7 @@ A pairwise lookup returns one of:
 
 * Compatibility verification across an entire dependency tree (input: SPDX SBOM).
 * Candidate outbound license suggestion given a set of inbound licenses.
-* Policy file evaluation — supply your organization's outbound license and a list of disallowed licenses; `flict` returns a verdict.
+* Policy file evaluation: supply your organization's outbound license and a list of disallowed licenses; `flict` returns a verdict.
 
 Wrap `flict` as a CI step rather than reimplementing matrix lookup logic in scanner code.
 
@@ -60,8 +60,8 @@ MIT, BSD-2-Clause, BSD-3-Clause, ISC, Apache 2.0 (with the patent-clause caveat 
 
 The Lesser GPL is the only mainstream copyleft that allows proprietary code to use the LGPL component without the proprietary code becoming LGPL-licensed. The mechanism depends on linking:
 
-* **Dynamic linking** (proprietary code calls LGPL library at runtime) — proprietary code remains proprietary; user must be able to relink against a modified LGPL library.
-* **Static linking** (LGPL library compiled into proprietary binary) — proprietary code must allow the user to substitute a modified library, typically by shipping object files or statically linkable artifacts.
+* **Dynamic linking** (proprietary code calls LGPL library at runtime): proprietary code remains proprietary; user must be able to relink against a modified LGPL library.
+* **Static linking** (LGPL library compiled into proprietary binary): proprietary code must allow the user to substitute a modified library, typically by shipping object files or statically linkable artifacts.
 
 The scanner cannot determine link model from manifests alone. Surface the LGPL finding with a flag for human review of the build configuration, or use agentic reasoning over the `Makefile` / `CMakeLists.txt` / `Cargo.toml` link configuration.
 
@@ -71,7 +71,7 @@ GPLv2 and GPLv3 both contain a "system library" exception: a GPL-incompatible li
 
 ## Copyleft contamination policy
 
-If the scanner detects a strong copyleft license (GPL, AGPL, EUPL, OSL, CDDL with linking restrictions) in any dependency — direct or transitive — within a repository flagged for proprietary commercial distribution, the pipeline should:
+If the scanner detects a strong copyleft license (GPL, AGPL, EUPL, OSL, CDDL with linking restrictions) in any dependency (direct or transitive) within a repository flagged for proprietary commercial distribution, the pipeline should:
 
 1. Fail the build on the PR with a clear, specific error message naming the dependency, the license, and the contamination path.
 2. Block the merge.
@@ -90,7 +90,7 @@ Consequences if triggered:
 
 * The full corresponding source of the modified AGPL component must be made available to every user who interacts with the running service over a network.
 * "Corresponding source" includes scripts to control installation and modifications, per GPLv3 definition incorporated by reference.
-* Internal proprietary backend code that has been combined with the AGPL component is potentially within the scope of "Corresponding Source" — this is the contamination risk.
+* Internal proprietary backend code that has been combined with the AGPL component is potentially within the scope of "Corresponding Source": this is the contamination risk.
 
 ### Detection
 
@@ -165,8 +165,8 @@ This is not deterministic. The scanner detects the BSL component (deterministic)
 
 Significant license-change events have spawned forks designed to preserve permissive licensing:
 
-* **OpenTofu** — fork of Terraform, MPL 2.0, hosted under the Linux Foundation.
-* **OpenBao** — fork of Vault, MPL 2.0.
+* **OpenTofu**: fork of Terraform, MPL 2.0, hosted under the Linux Foundation.
+* **OpenBao**: fork of Vault, MPL 2.0.
 
 Where a fork is viable and feature-complete, the cleanest resolution to a BSL finding is migration to the fork.
 

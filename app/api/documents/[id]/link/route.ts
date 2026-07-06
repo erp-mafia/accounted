@@ -8,13 +8,13 @@ import { LinkDocumentSchema } from '@/lib/api/schemas'
 ensureInitialized()
 
 /**
- * POST /api/documents/[id]/link — link a document to a journal entry.
+ * POST /api/documents/[id]/link: link a document to a journal entry.
  *
  * Body: { journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string, transaction_id?: string }
  *
  * When `inbox_item_id` is supplied (the "choose from inbox" flow), the inbox
  * item is stamped with the verifikat id after a successful link so it drops out
- * of the active inbox into "Bokförda" — reusing the inbox's own
+ * of the active inbox into "Bokförda": reusing the inbox's own
  * created_journal_entry_id lifecycle. The document link is the legally-relevant
  * write and happens first; the inbox stamp is operational housekeeping, so a
  * stamp failure is logged but does not fail the request (the doc is correctly
@@ -23,7 +23,7 @@ ensureInitialized()
  * When `transaction_id` is supplied (booking-flow callers that link underlag
  * right after booking a bank transaction), the doc is also pinned to the
  * transaction row (transactions.document_id) so the /transactions list shows
- * the underlag indicator. Only set when the tx has no pin yet — first linked
+ * the underlag indicator. Only set when the tx has no pin yet: first linked
  * doc wins, and an existing räkenskapsinformation pin is never swapped (which
  * would trip the immutability trigger). Same best-effort posture as the inbox
  * stamp: a failure is logged but does not fail the request.
@@ -64,13 +64,13 @@ export const POST = withRouteContext(
           .update({ created_journal_entry_id: body.journal_entry_id })
           .eq('id', body.inbox_item_id)
           .eq('company_id', companyId!)
-          // Only stamp the inbox item that actually owns this document — a
+          // Only stamp the inbox item that actually owns this document: a
           // mismatched pairing becomes a safe no-op rather than mis-marking an
           // unrelated item as consumed.
           .eq('document_id', id)
           .select('id')
         if (inboxError) {
-          // Non-fatal — the verifikat ↔ underlag link already succeeded.
+          // Non-fatal: the verifikat ↔ underlag link already succeeded.
           opLog.warn('inbox item stamp after link failed', {
             inboxItemId: body.inbox_item_id,
             reason: inboxError.message,
@@ -96,7 +96,7 @@ export const POST = withRouteContext(
           // for multi-doc bookings and avoids the BFL immutability trigger.
           .is('document_id', null)
         if (pinError) {
-          // Non-fatal — the verifikat ↔ underlag link already succeeded; the
+          // Non-fatal: the verifikat ↔ underlag link already succeeded; the
           // pin is row-level UX on the /transactions list.
           opLog.warn('transaction pin after link failed', {
             transactionId: body.transaction_id,

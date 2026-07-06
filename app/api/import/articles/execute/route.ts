@@ -28,7 +28,7 @@ function nameKey(value: string | null): string | null {
  * POST /api/import/articles/execute
  *
  * Imports validated article rows. Duplicates (matched by article number, then
- * by name) are either updated (merge — only non-empty fields overwrite) or
+ * by name) are either updated (merge: only non-empty fields overwrite) or
  * skipped based on `update_duplicates`. An optional BAS revenue-account override
  * is kept only when it is an active class-3 account; unknown/inactive accounts
  * are dropped (with a warning) rather than mutating the chart of accounts.
@@ -86,8 +86,8 @@ export const POST = withRouteContext(
           droppedAccounts.add(acc)
           warnings.push(
             status === 'activatable'
-              ? `Försäljningskonto ${acc} är inte aktiverat i kontoplanen — artiklar importerades utan kontoöverstyrning.`
-              : `Försäljningskonto ${acc} är ogiltigt — ignorerades.`,
+              ? `Försäljningskonto ${acc} är inte aktiverat i kontoplanen. Artiklar importerades utan kontoöverstyrning.`
+              : `Försäljningskonto ${acc} är ogiltigt, ignorerades.`,
           )
         }
         return null
@@ -147,7 +147,7 @@ export const POST = withRouteContext(
           continue
         }
 
-        // No match — create.
+        // No match, create.
         const { data, error } = await supabase
           .from('articles')
           .insert({
@@ -170,7 +170,7 @@ export const POST = withRouteContext(
           .single()
 
         if (error) {
-          // Unique violation on (company_id, article_number) — treat as a soft
+          // Unique violation on (company_id, article_number): treat as a soft
           // skip (manual number collided with an existing or in-batch article).
           if (error.code === '23505') {
             skipped++

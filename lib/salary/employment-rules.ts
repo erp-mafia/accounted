@@ -4,7 +4,7 @@ import type { EntityType } from '@/types'
  * Employment policy: which employment types an entity type may put on payroll.
  *
  * An enskild firma is not a separate legal person from its owner, so the owner
- * cannot be their own employee and cannot be paid lön — owner compensation is
+ * cannot be their own employee and cannot be paid lön: owner compensation is
  * *egna uttag* (BAS 2013), booked against equity, never a salary cost. Board
  * members (styrelse) are an aktiebolag concept and likewise don't exist for an
  * EF. Ordinary employees (employment_type 'employee') are fully allowed for an
@@ -13,7 +13,7 @@ import type { EntityType } from '@/types'
  *
  * This module is the application-layer mirror of the
  * `enforce_ef_no_owner_employee` database trigger (the load-bearing,
- * all-paths enforcement). Keep the two in sync — the forbidden set below must
+ * all-paths enforcement). Keep the two in sync: the forbidden set below must
  * match the trigger's. See issue #782.
  */
 export const EF_FORBIDDEN_EMPLOYMENT_TYPES = ['company_owner', 'board_member'] as const

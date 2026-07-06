@@ -34,7 +34,7 @@ const CreateAssetSchema = z
     name: z.string().min(1),
     category: z.enum(ASSET_CATEGORIES as unknown as [AssetCategory, ...AssetCategory[]]),
     acquisition_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    // Positive — a zero-value asset would dodge the depreciation engine and
+    // Positive: a zero-value asset would dodge the depreciation engine and
     // create a no-op row that confuses the balance sheet.
     acquisition_cost: z.number().positive(),
     salvage_value: z.number().nonnegative().optional(),
@@ -51,7 +51,7 @@ const CreateAssetSchema = z
     bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
     bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
     // K3 component depreciation (BFNAR 2012:1 ch.17.4). Only meaningful for
-    // companies with accounting_framework='k3' — the route handler rejects
+    // companies with accounting_framework='k3': the route handler rejects
     // K3_REQUIRED_FOR_COMPONENTS for K2 companies. When present, the engine
     // dispatches to per-component linear depreciation instead of the
     // asset-level depreciation_method.
@@ -122,7 +122,7 @@ function validateRestvardeTarget(
       code: z.ZodIssueCode.custom,
       path: ['restvarde_target'],
       message:
-        'restvarde_target måste vara lägre än anskaffningsvärdet — annars finns inget kvar att skriva av.',
+        'restvarde_target måste vara lägre än anskaffningsvärdet: annars finns inget kvar att skriva av.',
     })
   }
 }
@@ -141,7 +141,7 @@ function validateBasOverrides(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['bas_asset_account'],
-      message: `Account must be in range ${ranges.asset[0]}–${ranges.asset[1]} for ${value.category}`,
+      message: `Account must be in range ${ranges.asset[0]}-${ranges.asset[1]} for ${value.category}`,
     })
   }
   if (
@@ -151,14 +151,14 @@ function validateBasOverrides(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['bas_accumulated_account'],
-      message: `Account must be in range ${ranges.accumulated[0]}–${ranges.accumulated[1]} for ${value.category}`,
+      message: `Account must be in range ${ranges.accumulated[0]}-${ranges.accumulated[1]} for ${value.category}`,
     })
   }
   if (value.bas_expense_account && !inRange(value.bas_expense_account, ranges.expense)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['bas_expense_account'],
-      message: `Account must be in range ${ranges.expense[0]}–${ranges.expense[1]} for ${value.category}`,
+      message: `Account must be in range ${ranges.expense[0]}-${ranges.expense[1]} for ${value.category}`,
     })
   }
   // Anskaffningskonto and ackumulerade-avskrivningar-konto live in the same
@@ -207,7 +207,7 @@ export const GET = withRouteContext('assets.list', async (request, ctx) => {
 
     // Annotate each asset with whether any depreciation has been posted
     // against it. The UI uses this to lock the acquisition-basis fields
-    // (date/cost/category) — once avskrivningar are booked a correction must
+    // (date/cost/category): once avskrivningar are booked a correction must
     // go through storno (the service enforces the same rule server-side).
     const postedAssetIds = new Set<string>()
     if (data.length > 0) {

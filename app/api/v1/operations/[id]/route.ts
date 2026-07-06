@@ -6,7 +6,7 @@
  * result (on success), and error (on failure).
  *
  * The operation_id is global (cross-company in the URL) but every read is
- * scoped to the caller's company in `getOperation()` — so two companies'
+ * scoped to the caller's company in `getOperation()`: so two companies'
  * UUIDs can never collide into the wrong tenant. The wrapper has already
  * validated company membership.
  *
@@ -46,9 +46,9 @@ registerEndpoint({
   description:
     'Returns the current snapshot of a v1 async operation: status (queued / running / succeeded / failed / cancelled), progress (jsonb, free-form), result (on success), and error (on failure). The operation_id is returned by the POST endpoints that initiate async work (period close, year-end, currency revaluation, SIE import).',
   useWhen:
-    'You started an async operation and need to know whether it has finished. Poll every 5–30 seconds; switch to the `operation.completed` webhook for production integrations.',
+    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds; switch to the `operation.completed` webhook for production integrations.',
   doNotUseFor:
-    'Fetching the resource the operation produced — once status=succeeded, read the result field or call the resource-specific GET endpoint. Cancelling a running operation (no cancel endpoint exists in v1).',
+    'Fetching the resource the operation produced: once status=succeeded, read the result field or call the resource-specific GET endpoint. Cancelling a running operation (no cancel endpoint exists in v1).',
   pitfalls: [
     'Terminal statuses (`succeeded`, `failed`, `cancelled`) are final; the row never transitions out of them.',
     'progress is free-form jsonb; agents should treat it as opaque except for the documented fields `phase` (string), `current` / `total` (numbers for percent calculation).',
@@ -124,7 +124,7 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
       .maybeSingle()
 
     if (!membership) {
-      // Enumeration hardening — wrong id and cross-tenant id are
+      // Enumeration hardening: wrong id and cross-tenant id are
       // indistinguishable from outside.
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,
@@ -138,7 +138,7 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
     })
 
     if (!row) {
-      // Race between the membership read and the operation read — extremely
+      // Race between the membership read and the operation read, extremely
       // unlikely but defended.
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,

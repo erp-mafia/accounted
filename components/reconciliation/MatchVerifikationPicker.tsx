@@ -9,7 +9,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 /**
- * Map the endpoint's 0–1 match confidence (attached only when candidates are
+ * Map the endpoint's 0-1 match confidence (attached only when candidates are
  * ranked for a specific transaction) to a labelled strength badge, so the user
  * can tell an exact-amount hit from a fuzzy guess before vouching for an
  * immutable verifikat. Returns null when no confidence was attached.
@@ -25,7 +25,7 @@ function confidenceBadge(
 
 /**
  * A posted journal entry line on a cash account (e.g. 1930) not yet linked to
- * any bank transaction — a candidate for manual reconciliation. Mirrors the
+ * any bank transaction: a candidate for manual reconciliation. Mirrors the
  * `UnlinkedGLLine` returned by GET /api/reconciliation/bank/unmatched-entries.
  *
  * Defined here (not imported from lib/reconciliation/bank-reconciliation) so the
@@ -46,7 +46,7 @@ export interface UnlinkedGLLine {
   source_type: string
   confidence?: number
   /** How many bank transactions already point at this entry. > 0 means the
-   *  voucher is already matched — surfaced (behind the "visa matchade" opt-in)
+   *  voucher is already matched: surfaced (behind the "visa matchade" opt-in)
    *  so a second/third transaction can be attached to it (N:1). */
   linked_transaction_count?: number
 }
@@ -61,7 +61,7 @@ interface MatchPickerProps {
    * Render the candidate list in normal document flow (always visible below the
    * search box) instead of as an absolutely-positioned overlay. Use inside a
    * Dialog or any `overflow-y-auto` container: an absolute dropdown is clipped at
-   * the container's edge (the "klipper i dialogerna" bug — the list got cut off
+   * the container's edge (the "klipper i dialogerna" bug: the list got cut off
    * and the dialog couldn't scroll to it). The reconciliation view keeps the
    * compact overlay (one picker per transaction row); the modal uses inline.
    */
@@ -96,7 +96,7 @@ export function MatchVerifikationPicker({
 
   useEffect(() => {
     // Inline mode shows the list permanently, so there's nothing to close on an
-    // outside click — the overlay-only dismissal handler would be dead weight.
+    // outside click: the overlay-only dismissal handler would be dead weight.
     if (inline || !open) return
     function onDocMouseDown(e: MouseEvent) {
       if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
@@ -127,7 +127,7 @@ export function MatchVerifikationPicker({
   if (selected) {
     const amount = selected.debit_amount > 0 ? selected.debit_amount : -selected.credit_amount
     // Suppress the match-strength badge on an already-matched verifikat so a
-    // green "Stark träff" can't visually encourage an accidental double-match —
+    // green "Stark träff" can't visually encourage an accidental double-match:
     // "Redan matchad" is the signal that matters there (N:1 stays opt-in).
     const strength =
       (selected.linked_transaction_count ?? 0) > 0 ? null : confidenceBadge(selected.confidence)
@@ -162,7 +162,7 @@ export function MatchVerifikationPicker({
     )
   }
 
-  // The candidate list — shared by the inline and overlay layouts below.
+  // The candidate list: shared by the inline and overlay layouts below.
   const listContent =
     filtered.length === 0 ? (
       <div className="px-3 py-4 text-sm text-muted-foreground text-center">
@@ -180,7 +180,7 @@ export function MatchVerifikationPicker({
               type="button"
               className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-secondary/60 focus:bg-secondary/60 focus:outline-none"
               onMouseDown={(e) => {
-                // mousedown beats blur — without this the popover closes
+                // mousedown beats blur: without this the popover closes
                 // before the click registers when the user has tabbed
                 // through and uses keyboard.
                 e.preventDefault()
@@ -212,7 +212,7 @@ export function MatchVerifikationPicker({
         })}
         {glLines.length > filtered.length && (
           <div className="px-3 py-2 text-[11px] text-muted-foreground border-t border-border bg-secondary/30">
-            Visar {filtered.length} av {glLines.length} — sök för att filtrera fler.
+            Visar {filtered.length} av {glLines.length}: sök för att filtrera fler.
           </div>
         )}
       </div>

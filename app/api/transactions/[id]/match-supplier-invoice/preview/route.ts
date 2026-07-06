@@ -98,7 +98,7 @@ export const GET = withRouteContext(
       // same way the committed verifikat does. The bank SEK is only known when
       // the transaction is in SEK or carries a stored amount_sek; for a foreign
       // transaction without it we fall back to the invoice's own rate (the raw
-      // foreign amount must never be used — that would render 19 USD as 19 kr).
+      // foreign amount must never be used: that would render 19 USD as 19 kr).
       const bankSek =
         transaction.currency === 'SEK'
           ? Math.abs(transaction.amount)
@@ -112,7 +112,7 @@ export const GET = withRouteContext(
 
       // Mirror createSupplierInvoiceCashEntry: per-item expense debit + VAT
       // debit + bank credit. We only need a faithful preview, not exact
-      // account-mapping fidelity — show one aggregate expense line per item
+      // account-mapping fidelity: show one aggregate expense line per item
       // (or a single fallback line if items are missing).
       let totalAmountSek = 0
       let totalVatSek = 0
@@ -132,7 +132,7 @@ export const GET = withRouteContext(
         }
       } else {
         // Pass null for the pre-computed SEK so cashRate (payment-date rate)
-        // drives the translation — resolveSekAmount would otherwise prefer the
+        // drives the translation: resolveSekAmount would otherwise prefer the
         // invoice-rate *_sek columns and ignore the rate.
         const subSek = resolveSekAmount(si.subtotal, null, si.currency, cashRate)
         const vatSek = resolveSekAmount(si.vat_amount, null, si.currency, cashRate)
@@ -166,8 +166,8 @@ export const GET = withRouteContext(
       const si = invoice as SupplierInvoice
       const isPureSek = transaction.currency === 'SEK' && si.currency === 'SEK'
       if (isPureSek) {
-        // Shared builder so the previewed lines — including any 3740
-        // öresavrundning row — are byte-identical to what the POST commits.
+        // Shared builder so the previewed lines (including any 3740
+        // öresavrundning row) are byte-identical to what the POST commits.
         const remainingSek = si.remaining_amount ?? si.total
         const bankSek = Math.abs(transaction.amount)
         const { lines: clearingLines, oreDiffSek } = buildSupplierPaymentClearingLines({

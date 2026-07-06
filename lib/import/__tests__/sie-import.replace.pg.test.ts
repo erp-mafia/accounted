@@ -368,6 +368,27 @@ describe('sie_imports: partial unique index + replace flow', () => {
     expect(untouched.rows[0]?.journal_entry_id).toBe(manualEntry)
   })
 
+  it('replace_sie_import and undo_sie_import carry a raised statement_timeout', async () => {
+    // Regression for the 8s-timeout cancellation (migration 20260629160000):
+    // these RPCs run on the service-role REST client, which still inherits the
+    // authenticator login role's 8s statement_timeout (service_role.rolconfig
+    // is NULL). A large import's delete exceeded that and was cancelled, so the
+    // functions now set a function-local statement_timeout well above 8s.
+    const { rows } = await getPool().query<{ proname: string; proconfig: string[] | null }>(
+      `SELECT proname, proconfig
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND proname IN ('replace_sie_import', 'undo_sie_import')`,
+    )
+    expect(rows.length).toBe(2)
+    for (const fn of rows) {
+      const timeout = (fn.proconfig ?? []).find(c => c.startsWith('statement_timeout='))
+      expect(timeout, `${fn.proname} should set statement_timeout`).toBeTruthy()
+      const seconds = Number(/statement_timeout=(\d+)s/.exec(timeout!)?.[1] ?? 0)
+      expect(seconds).toBeGreaterThan(8)
+    }
+  })
+
   it('replace_sie_import on an already-replaced import raises', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
 

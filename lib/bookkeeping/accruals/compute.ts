@@ -1,8 +1,8 @@
 /**
  * Pure date/amount math for periodisering (accrual schedules).
  *
- * All dates are ISO strings (YYYY-MM-DD) handled numerically — never via
- * `new Date()` — so the result is independent of server timezone. Amounts
+ * All dates are ISO strings (YYYY-MM-DD) handled numerically: never via
+ * `new Date()`: so the result is independent of server timezone. Amounts
  * round via `roundOre` from `@/lib/money`, never `toFixed()`.
  */
 
@@ -59,7 +59,7 @@ export function listCalendarMonths(periodStart: string, periodEnd: string): stri
  * Even split in öre; the remainder öre are distributed one per month from
  * the first month, so no installment differs by more than 1 öre.
  *
- * Throws when the total is too small to give every month at least 1 öre —
+ * Throws when the total is too small to give every month at least 1 öre:
  * the DB CHECK requires every installment amount > 0.
  */
 export function computeInstallmentAmounts(totalAmount: number, months: number): number[] {

@@ -46,7 +46,7 @@ async function main() {
   }
 
   if (!before) {
-    // No settings row yet — need to insert. Pull entity_type from companies.
+    // No settings row yet: need to insert. Pull entity_type from companies.
     const { data: company } = await supabase
       .from('companies')
       .select('id, name, entity_type')
@@ -56,7 +56,7 @@ async function main() {
       console.error(`Company ${companyId} not found`)
       process.exit(1)
     }
-    console.log(`No company_settings row for ${company.name} — inserting one.`)
+    console.log(`No company_settings row for ${company.name}: inserting one.`)
     const { error: insertErr } = await supabase
       .from('company_settings')
       .insert({ company_id: companyId, org_number: org, entity_type: company.entity_type })
@@ -74,7 +74,7 @@ async function main() {
   console.log(`  entity_type: ${before.entity_type}`)
 
   if (before.org_number === org) {
-    console.log(`\nNo change — already ${org}.`)
+    console.log(`\nNo change: already ${org}.`)
     return
   }
   if (before.org_number && !force) {

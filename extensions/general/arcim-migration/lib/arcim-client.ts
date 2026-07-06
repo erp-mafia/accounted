@@ -204,7 +204,7 @@ async function fetchAllPages<T>(
 export async function fetchCompanyInfo(
   consentId: string
 ): Promise<CompanyInformationDto | null> {
-  // CompanyInformation is a singleton resource — gateway returns { data: object }
+  // CompanyInformation is a singleton resource: gateway returns { data: object }
   const result = await request<{ data: CompanyInformationDto }>(
     `/api/v1/consents/${consentId}/companyinformation`
   )

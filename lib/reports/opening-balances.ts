@@ -5,7 +5,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  * Get opening balances (ingående balans) for a fiscal period.
  *
  * Uses the opening_balance_entry set by year-end closing when available
- * (O(accounts) — typically ~50 rows). Falls back to a server-side
+ * (O(accounts): typically ~50 rows). Falls back to a server-side
  * aggregate via the compute_prior_opening_balances RPC when no OB entry
  * is set, which returns one row per balance-sheet account (class 1-2)
  * regardless of how many prior journal lines there are.
@@ -37,7 +37,7 @@ export async function getOpeningBalances(
 
   if (obEntryId) {
     // Use the explicit opening balance entry (set by year-end closing).
-    // Typically ~50 rows — one per balance sheet account. Uses fetchAllRows
+    // Typically ~50 rows: one per balance sheet account. Uses fetchAllRows
     // for consistency (avoids silent truncation) and joins journal_entries
     // to enforce company_id ownership (defense in depth alongside RLS).
     const obLines = await fetchAllRows<{
@@ -67,7 +67,7 @@ export async function getOpeningBalances(
     // Fallback: server-side aggregate of all prior posted/reversed lines.
     // The RPC filters to balance-sheet accounts (class 1-2) and returns
     // one row per account. P&L accounts (class 3-8) reset to zero at each
-    // year transition — their balances are absorbed into årets resultat
+    // year transition: their balances are absorbed into årets resultat
     // (2099) and rolled into equity, so carrying them forward as IB would
     // violate BFNAR 2013:2. Filtering them in SQL keeps the payload small
     // and the round-trip count at one regardless of history size.

@@ -18,6 +18,8 @@ type Status =
       connected: true
       expired: boolean
       canRefresh: boolean
+      needsReconsent?: boolean
+      lastErrorCode?: string | null
       scope: string
       expiresAt: string
       environment?: Environment
@@ -167,6 +169,12 @@ export function SkatteverketConnectPanel() {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {status.needsReconsent && (
+          <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
+            <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+            <p>{t('needs_reconsent_message')}</p>
+          </div>
+        )}
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-muted-foreground">{t('token_expires_label')}</dt>
@@ -218,7 +226,7 @@ export function SkatteverketConnectPanel() {
         )}
 
         <div className="flex gap-2 pt-2">
-          {(status.expired || !status.canRefresh || !scopes.includes('skattekonto') || !scopes.includes('agd')) && (
+          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('skattekonto') || !scopes.includes('agd')) && (
             <Button
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket}
@@ -254,7 +262,7 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
   }
   if (environment === 'test') {
     return (
-      <Badge variant="outline" className="border-amber-400 text-amber-700 dark:border-amber-600 dark:text-amber-400">
+      <Badge variant="warning">
         <FlaskConical className="mr-1 h-3 w-3" />
         {t('env_test')}
       </Badge>
@@ -262,7 +270,7 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
   }
   if (environment === 'prod') {
     return (
-      <Badge variant="outline" className="border-emerald-400 text-emerald-700 dark:border-emerald-600 dark:text-emerald-400">
+      <Badge variant="success">
         {t('env_prod')}
       </Badge>
     )

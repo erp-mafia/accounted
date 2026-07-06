@@ -84,7 +84,7 @@ export default function Step4VatAccounting({
   const accountingMethod = watch('accounting_method')
 
   // Auto-fill VAT number when vat_registered toggles on. Derive via the shared
-  // helper so a 12-digit personnummer (enskild firma) gets its century dropped —
+  // helper so a 12-digit personnummer (enskild firma) gets its century dropped:
   // building SE${orgNumber}01 verbatim produced SE + 14 digits and failed
   // validation on save.
   useEffect(() => {

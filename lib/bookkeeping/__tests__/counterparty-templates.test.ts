@@ -17,6 +17,8 @@ import {
   populateTemplatesFromSieVouchers,
 } from '../counterparty-templates'
 import type { TemplateUpsertParams } from '../counterparty-templates'
+import type { LinePatternEntry } from '@/types'
+import type { SIETransactionLine } from '@/lib/import/types'
 
 describe('counterparty-templates', () => {
   // ── Normalization ──────────────────────────────────────────
@@ -81,9 +83,9 @@ describe('counterparty-templates', () => {
     })
 
     it('does not strip multi-letter trailing words or 3+ letter brands', () => {
-      // Conservative guard: only 1–2 char all-caps initials and month tokens go.
+      // Conservative guard: only 1-2 char all-caps initials and month tokens go.
       expect(normalizeCounterpartyName('SWISH ANDERS JOHANSSON')).toBe('anders johansson')
-      expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars — kept
+      expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars: kept
       expect(normalizeCounterpartyName('KLARNA')).toBe('klarna')         // single token kept
     })
   })
@@ -459,7 +461,7 @@ describe('counterparty-templates', () => {
 
       await insertOrUpdateTemplate(supabase as never, 'user-1', baseParams, existing)
 
-      // Should NOT have queried for existing — only the update call
+      // Should NOT have queried for existing: only the update call
       // The from() call count indicates no select was made before update
       expect(supabase.from).toHaveBeenCalledTimes(1)
     })
@@ -481,7 +483,7 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
-    it('respects source priority — sie_import does not overwrite user_approved', async () => {
+    it('respects source priority: sie_import does not overwrite user_approved', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       const existing = makeCategorizationTemplate({
         debit_account: '5410', // Different accounts = correction
@@ -744,6 +746,153 @@ describe('counterparty-templates', () => {
 
       const result = await populateTemplatesFromSieVouchers(supabase as never, 'user-1', vouchers)
       expect(result).toBe(2)
+    })
+  })
+})
+
+// ── dimensions propagation (PR7) ─────────────────────────────
+
+describe('dimensions propagation (PR7)', () => {
+  describe('buildMappingResultFromCounterpartyTemplate: multi-line pattern', () => {
+    it('materialized business lines carry the pattern bag; VAT and tax lines stay untagged', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 0.8, dimensions: { '1': 'KS01' } },
+          // Even a (bogus) bag on a tax entry must not materialize: only
+          // business lines are tagged.
+          { account: '2710', type: 'tax', side: 'debit', ratio: 0.2, dimensions: { '1': 'KS01' } },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1250 })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.all_lines_complete).toBe(true)
+      const business = result.vat_lines.find((l) => l.account_number === '5410')
+      expect(business?.dimensions).toEqual({ '1': 'KS01' })
+      expect(result.vat_lines.find((l) => l.account_number === '2641')?.dimensions).toBeUndefined()
+      expect(result.vat_lines.find((l) => l.account_number === '2710')?.dimensions).toBeUndefined()
+    })
+
+    it('a pattern business line without a bag materializes untagged', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '5410', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1000 })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.vat_lines.find((l) => l.account_number === '5410')?.dimensions).toBeUndefined()
+    })
+  })
+
+  describe('populateTemplatesFromSieVouchers: line-pattern dimension learning', () => {
+    /**
+     * Queue-based supabase mock that also records `.insert()` payloads per
+     * table, so assertions can inspect the stored line_pattern. Follows the
+     * capture pattern in lib/pending-operations/__tests__/create-invoice-executor.test.ts.
+     */
+    function createCapturingSupabase(results: Array<{ data?: unknown; error?: unknown }>) {
+      const queue = [...results]
+      const inserts: Record<string, unknown[]> = {}
+
+      const from = vi.fn((_table: string) => {
+        const raw = queue.shift() ?? { data: null, error: null }
+        const result = { data: raw.data ?? null, error: raw.error ?? null }
+        const chain: object = new Proxy(
+          {},
+          {
+            get(_target, prop) {
+              if (prop === 'then') {
+                return (resolve: (v: unknown) => void) => resolve(result)
+              }
+              if (prop === 'insert') {
+                return (payload: unknown) => {
+                  ;(inserts[_table] ??= []).push(payload)
+                  return chain
+                }
+              }
+              return () => chain
+            },
+          },
+        )
+        return chain
+      })
+
+      return { supabase: { from }, inserts }
+    }
+
+    function capturedLinePattern(inserts: Record<string, unknown[]>): LinePatternEntry[] {
+      const rows = inserts['categorization_templates']
+      expect(rows).toHaveLength(1)
+      const row = rows[0] as { line_pattern: LinePatternEntry[] | null }
+      expect(row.line_pattern).not.toBeNull()
+      return row.line_pattern!
+    }
+
+    it('preserves a business line bag only when EVERY voucher occurrence has the identical bag', async () => {
+      // Two business accounts → not "simple", so the pattern is stored as
+      // line_pattern JSONB. All three vouchers tag both accounts identically.
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Projektbygget AB',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1100 },
+            { account: '6212', amount: 600, dimensions: { '1': 'KS01' } },
+            { account: '5410', amount: 500, dimensions: { '6': 'P001' } },
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] }, // pre-fetch existing templates
+        { data: null }, // insert
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const pattern = capturedLinePattern(inserts)
+      expect(pattern.find((e) => e.account === '6212')?.dimensions).toEqual({ '1': 'KS01' })
+      expect(pattern.find((e) => e.account === '5410')?.dimensions).toEqual({ '6': 'P001' })
+    })
+
+    it('drops the bag when a voucher disagrees, or leaves the line untagged', async () => {
+      // 6212 conflicts across vouchers (KS01 vs KS02); 5410 is untagged in one
+      // voucher. Both must lose the bag: a template must never invent a tag
+      // history does not consistently support.
+      const linesFor = (v: number): SIETransactionLine[] => [
+        { account: '1930', amount: -1100 },
+        { account: '6212', amount: 600, dimensions: v === 2 ? { '1': 'KS02' } : { '1': 'KS01' } },
+        v === 2
+          ? { account: '5410', amount: 500 }
+          : { account: '5410', amount: 500, dimensions: { '6': 'P001' } },
+      ]
+      const vouchers = [1, 2, 3].map((v) =>
+        makeSIEVoucher({ description: 'Projektbygget AB', number: v, lines: linesFor(v) })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] }, // pre-fetch existing templates
+        { data: null }, // insert
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const pattern = capturedLinePattern(inserts)
+      expect(pattern.find((e) => e.account === '6212')?.dimensions).toBeUndefined()
+      expect(pattern.find((e) => e.account === '5410')?.dimensions).toBeUndefined()
     })
   })
 })

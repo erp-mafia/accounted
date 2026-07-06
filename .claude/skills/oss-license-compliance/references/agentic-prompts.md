@@ -50,7 +50,7 @@ The deterministic scanner identifies the presence of a high-risk license. It can
 
 ## Prompt template: SSPL §13 service-source-code evaluation
 
-**When to invoke**: scanner has identified an SSPL-licensed component (MongoDB ≥ 4.0.3, Elasticsearch 7.11–7.16 / 7.16+ partial, Redis ≥ 7.4 dual SSPL, etc.) in a repository that may offer the component's functionality as a service.
+**When to invoke**: scanner has identified an SSPL-licensed component (MongoDB ≥ 4.0.3, Elasticsearch 7.11-7.16 / 7.16+ partial, Redis ≥ 7.4 dual SSPL, etc.) in a repository that may offer the component's functionality as a service.
 
 **Inputs to provide**: same as AGPL template, plus the Service Source Code definition language from SSPL §13.
 

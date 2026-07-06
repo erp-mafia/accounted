@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 /**
  * Per-user rate limiter for the in-app AI agent's LLM endpoints
  * (/api/agent/invoke, /onboarding/stream, /composer). Backed by the
- * `check_and_increment_agent_quota` Postgres RPC (atomic check + increment) —
+ * `check_and_increment_agent_quota` Postgres RPC (atomic check + increment):
  * same shared store the rest of the app uses, no Upstash/env dependency.
  *
  * Limits are deliberately GENEROUS: a normal heavy user (dozens of turns a day)
@@ -29,7 +29,7 @@ export async function checkAgentRateLimit(
     p_day_max: DAY_MAX,
   })
   if (error) {
-    // Fail open on infra error — the limiter is defense-in-depth; better to
+    // Fail open on infra error: the limiter is defense-in-depth; better to
     // serve a real user than to 429 them because the RPC blipped.
     console.error('[agent-rate-limit] RPC failed:', error)
     return { ok: true }

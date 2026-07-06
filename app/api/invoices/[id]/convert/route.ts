@@ -17,7 +17,7 @@ ensureInitialized()
  *
  * Ordering note: ensureInvoiceNumber() is the LAST side effect. The F-series
  * counter only advances after items are inserted and the proforma is marked
- * cancelled — so a partial failure in any earlier step rolls back the orphan
+ * cancelled, so a partial failure in any earlier step rolls back the orphan
  * row without leaking a number.
  */
 export async function POST(
@@ -90,6 +90,8 @@ export async function POST(
       notes: proforma.notes,
       document_type: 'invoice',
       converted_from_id: id,
+      // Dimensions PR7: the converted invoice books with the proforma's bag.
+      default_dimensions: proforma.default_dimensions ?? {},
     })
     .select()
     .single()
@@ -98,7 +100,7 @@ export async function POST(
     return NextResponse.json({ error: invoiceError.message }, { status: 500 })
   }
 
-  const items = (proforma.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number }) => ({
+  const items = (proforma.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; dimensions?: Record<string, string> }) => ({
     invoice_id: invoice.id,
     sort_order: item.sort_order,
     line_type: item.line_type ?? 'product',
@@ -107,6 +109,7 @@ export async function POST(
     unit: item.unit,
     unit_price: item.unit_price,
     line_total: item.line_total,
+    dimensions: item.dimensions ?? {},
   }))
 
   if (items.length > 0) {
@@ -121,7 +124,7 @@ export async function POST(
   }
 
   // Cancel the proforma. If this fails, the new (still unnumbered) invoice
-  // is an orphan — delete it so the user can retry without ending up with
+  // is an orphan: delete it so the user can retry without ending up with
   // two active invoices for the same proforma. invoice_items cascade.
   const previousProformaStatus = proforma.status
   const { error: cancelError } = await supabase

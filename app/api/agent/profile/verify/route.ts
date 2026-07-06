@@ -1,37 +1,42 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 // POST /api/agent/profile/verify
 //
 // Stamps verified_at + verified_by_user_id on agent_profiles when the user
-// clicks "Det här ser rätt ut — kör" in Phase B. Idempotent: re-verifying
+// clicks "Det här ser rätt ut, kör" in Phase B. Idempotent: re-verifying
 // updates the timestamp; this is desirable for "Bygg om" rebuild flows.
 
 const BodySchema = z.object({
   company_id: z.string().uuid().optional(),
 })
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const POST = withRouteContext('agent.profile.verify', async (request, ctx) => {
+  const { supabase, companyId: activeCompanyId, user } = ctx
 
-  let body: z.infer<typeof BodySchema>
-  try {
-    body = BodySchema.parse(await request.json().catch(() => ({})))
-  } catch (err) {
+  // Tolerant parse: the review card POSTs with an empty body when verifying
+  // the active company.
+  const raw = await request.json().catch(() => ({}))
+  const parsed = BodySchema.safeParse(raw)
+  if (!parsed.success) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
+      {
+        error: 'Validation failed',
+        type: 'validation_error',
+        errors: parsed.error.issues.map((issue) => ({
+          field: issue.path.join('.'),
+          message: issue.message,
+          code: issue.code,
+        })),
+      },
       { status: 400 },
     )
   }
 
-  const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
+  const companyId = parsed.data.company_id ?? activeCompanyId
 
-  // Defense in depth alongside RLS — confirm membership for the target
+  // Defense in depth alongside RLS: confirm membership for the target
   // company; a non-viewer role is required to stamp verified_at.
   const { data: membership } = await supabase
     .from('company_members')
@@ -41,7 +46,13 @@ export async function POST(request: Request) {
     .maybeSingle()
   if (!membership || membership.role === 'viewer') {
     return NextResponse.json(
-      { error: 'Du har endast läsbehörighet i detta företag.' },
+      {
+        error: {
+          code: 'WRITE_PERMISSION_REQUIRED',
+          message: 'Du har endast läsbehörighet i detta företag.',
+          message_en: 'You only have read access in this company.',
+        },
+      },
       { status: 403 },
     )
   }
@@ -55,7 +66,7 @@ export async function POST(request: Request) {
     .eq('company_id', companyId)
     .select('company_id, verified_at, verified_by_user_id')
     .single()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) throw error
 
   return NextResponse.json({ data })
-}
+})

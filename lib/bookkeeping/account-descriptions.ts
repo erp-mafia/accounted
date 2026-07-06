@@ -175,7 +175,7 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
     name: 'Försäljning varor/tjänster 25%',
     classLabel: 'Intäkter',
     type: 'revenue',
-    explanation: 'Intäkter från försäljning med 25% moms — den vanligaste intäktsraden.',
+    explanation: 'Intäkter från försäljning med 25% moms: den vanligaste intäktsraden.',
   },
   '3002': {
     name: 'Försäljning varor/tjänster 12%',
@@ -345,7 +345,7 @@ export function getAccountDescription(accountNumber: string): AccountDescription
       }
     }
   } catch {
-    // BAS reference not available — that's fine
+    // BAS reference not available: that's fine
   }
 
   return undefined

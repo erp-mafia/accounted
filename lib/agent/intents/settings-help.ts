@@ -1,7 +1,7 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
 
-// settings.help — "Vad gör den här inställningen?" from a settings panel.
+// settings.help: "Vad gör den här inställningen?" from a settings panel.
 //
 // Light-touch intent: progressive disclosure of atoms (the agent loads
 // what it needs via gnubok_load_skill) keeps the system prompt cheap.

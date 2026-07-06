@@ -3,11 +3,11 @@
  *
  * The matching is accounting-method aware (company_settings.accounting_method):
  *   • Faktureringsmetoden (accrual): match verifikat that CREDIT an AR account
- *     (default 1510, covers 151x) — e.g. a SIE-imported payment voucher or a
+ *     (default 1510, covers 151x): e.g. a SIE-imported payment voucher or a
  *     manually-entered receipt that clears the receivable.
  *   • Kontantmetoden (cash): no 1510 is ever booked (revenue is recognised at
- *     payment — debit 19xx / credit 30xx+26xx), so instead match verifikat that
- *     DEBIT a liquid-funds account (BAS class 19 — kassa/bank, covers
+ *     payment: debit 19xx / credit 30xx+26xx), so instead match verifikat that
+ *     DEBIT a liquid-funds account (BAS class 19: kassa/bank, covers
  *     1910/1920/1930/1940…). That voucher IS the payment the user already
  *     booked; linking just marks the invoice paid without a duplicate entry.
  *
@@ -33,18 +33,18 @@ import type { Invoice, Customer } from '@/types'
 
 const log = createLogger('voucher-matching')
 
-/** AR account range. Default 1510 (Kundfordringar) — covers all 151x. Used on
+/** AR account range. Default 1510 (Kundfordringar): covers all 151x. Used on
  *  faktureringsmetoden, where the issuance verifikat books the receivable. */
 const AR_ACCOUNT_PREFIX = '151'
 
-/** Liquid-funds range (Kassa och bank, BAS class 19 — 1910/1920/1930/1940…).
+/** Liquid-funds range (Kassa och bank, BAS class 19: 1910/1920/1930/1940…).
  *  Used on kontantmetoden, where the payment verifikat debits a bank/cash
  *  account instead of crediting 1510. */
 const CASH_ACCOUNT_PREFIX = '19'
 
 /**
  * Read the company's accounting method. Defaults to 'accrual' when the settings
- * row or column is absent — mirrors mark-paid / propose-payment-lines.
+ * row or column is absent: mirrors mark-paid / propose-payment-lines.
  */
 async function resolveAccountingMethod(
   supabase: SupabaseClient,
@@ -57,7 +57,7 @@ async function resolveAccountingMethod(
     .maybeSingle()
   if (error) {
     // A transient failure here would silently flip a cash company to the
-    // accrual (151x) search and render an empty candidate list — make the
+    // accrual (151x) search and render an empty candidate list: make the
     // fallback visible so an intermittent empty state is diagnosable.
     log.warn('accounting_method lookup failed; falling back to accrual', {
       companyId,
@@ -136,9 +136,9 @@ const EXCLUDED_SOURCE_TYPES = ['opening_balance', 'storno']
  * Find posted journal entries that could plausibly be the payment for this
  * invoice and return up to `limit` ranked candidates. On faktureringsmetoden
  * those are vouchers crediting an AR account (151x); on kontantmetoden they are
- * vouchers debiting a liquid-funds account (19xx) — see the module header.
+ * vouchers debiting a liquid-funds account (19xx): see the module header.
  *
- * The query is intentionally generous on filtering — we let the validator
+ * The query is intentionally generous on filtering: we let the validator
  * make the final call at commit time. Ranking mirrors
  * `findMatchingInvoices()`: exact amount + customer match wins, then exact,
  * then fuzzy (±1% capped at 500 SEK), with a small bump for date proximity
@@ -184,7 +184,7 @@ export async function findMatchingVouchersForInvoice(
   // from journal_entry_lines joined up to the entry. PostgREST executes the
   // FROM table first: driving from lines means scanning `account LIKE '19%'`
   // across ALL tenants and running the lines RLS policy (a per-row EXISTS via
-  // current_active_company_id()) thousands of times — on a cash company every
+  // current_active_company_id()) thousands of times: on a cash company every
   // bank receipt is a 19xx debit, and the query blows the authenticated
   // statement_timeout (8s). Driving from entries hits company+date+status
   // indexes first (a handful of rows), so the per-line RLS check only runs for
@@ -224,8 +224,8 @@ export async function findMatchingVouchersForInvoice(
     .lte(`journal_entry_lines.${amountColumn}`, amountCeil)
     .limit(limit * 10)
   if (error) {
-    // Surface transient failures instead of silently rendering "no candidates"
-    // — a swallowed error looks like a match that intermittently vanishes.
+    // Surface transient failures instead of silently rendering "no candidates":
+    // a swallowed error looks like a match that intermittently vanishes.
     log.warn('voucher candidate query failed', {
       companyId,
       invoiceId: invoice.id,
@@ -267,7 +267,7 @@ export async function findMatchingVouchersForInvoice(
   if (byEntry.size === 0) return []
 
   // Fetch the already-linked payments (for dedup) and the fiscal-period locks
-  // (informational "låst period" badge) concurrently — both depend only on the
+  // (informational "låst period" badge) concurrently: both depend only on the
   // grouped entries, so there is no reason to pay two sequential round-trips.
   // Computing locks for entries that dedup later drops is harmless.
   const candidateEntryIds = Array.from(byEntry.keys())
@@ -296,7 +296,7 @@ export async function findMatchingVouchersForInvoice(
   for (const id of alreadyLinked) byEntry.delete(id)
   if (byEntry.size === 0) return []
 
-  // Linking is allowed in locked periods (no JE mutation) — this flag is just
+  // Linking is allowed in locked periods (no JE mutation): this flag is just
   // informational for the candidate preview.
   const lockedPeriods = new Set(
     (periods ?? [])
@@ -446,7 +446,7 @@ export async function validateVoucherForInvoiceLink(
     return { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID' }
   }
 
-  // Match the bank/cash debit (cash) or the AR credit (accrual) — see header.
+  // Match the bank/cash debit (cash) or the AR credit (accrual): see header.
   const isCash = (await resolveAccountingMethod(supabase, companyId)) === 'cash'
   const accountPrefix = isCash ? CASH_ACCOUNT_PREFIX : AR_ACCOUNT_PREFIX
 
@@ -510,7 +510,7 @@ export async function validateVoucherForInvoiceLink(
     }
   }
 
-  // Already linked to this invoice? (Final, authoritative check — the DB
+  // Already linked to this invoice? (Final, authoritative check: the DB
   // partial unique index is the last line of defence at insert time.)
   const { data: existingLinks } = await supabase
     .from('invoice_payments')
@@ -553,7 +553,7 @@ export interface LinkInvoiceToVoucherResult {
   journalEntryId: string
   /** Bank transaction auto-reconciled to the linked voucher, if exactly one
    *  unbooked line matched it; null when nothing was safely linkable. Lets the
-   *  inbox row leave the Transactions list — the gap this whole flow fixes. */
+   *  inbox row leave the Transactions list: the gap this whole flow fixes. */
   reconciledTransactionId: string | null
 }
 
@@ -583,7 +583,7 @@ interface RpcLinkInvoiceErr {
  * and emits invoice.match_confirmed (reusing the existing event so reminder
  * cancellation + automations fire without a new event channel).
  *
- * Re-validates inside the same call to defend against stage→commit drift —
+ * Re-validates inside the same call to defend against stage→commit drift:
  * voucher reversed, invoice paid by another flow, etc. Any structured
  * rejection is returned as { ok: false, code } so callers can map it to a
  * stable HTTP status + auto-reject the pending op.
@@ -603,7 +603,7 @@ export async function linkInvoiceToVoucher(
   // transaction, so concurrent linkers serialize and a failure on either write
   // rolls back automatically. The previous TS implementation did
   // UPDATE-then-INSERT with a manual rollback that restored from a STALE
-  // pre-link snapshot — under concurrent linking it could clobber a sibling's
+  // pre-link snapshot: under concurrent linking it could clobber a sibling's
   // successful write while leaving its payment row in place (audit C2; mirrors
   // the supplier-side link_supplier_invoice_to_voucher fix from PR #602).
   const { data: rpcData, error: rpcError } = await supabase.rpc('link_invoice_to_voucher', {
@@ -633,7 +633,7 @@ export async function linkInvoiceToVoucher(
     return { ok: false, code: rpc.code, details: rpc.details }
   }
 
-  // Fetch the now-updated invoice (with customer) for event emission — the RPC
+  // Fetch the now-updated invoice (with customer) for event emission: the RPC
   // committed before this read, so the row reflects post-link state. Mirrors
   // the supplier-side wrapper.
   const { data: invoice } = await supabase
@@ -663,7 +663,7 @@ export async function linkInvoiceToVoucher(
   // Close the loop on the bank feed: the invoice→voucher link above only
   // advanced the invoice, so the bank transaction that paid it kept sitting in
   // the Transactions inbox (journal_entry_id still null). Reconcile it to the
-  // same verifikat when it can be done unambiguously. Best-effort — the invoice
+  // same verifikat when it can be done unambiguously. Best-effort: the invoice
   // link has already committed, so a failure here must not fail the whole call.
   let reconciledTransactionId: string | null = null
   try {

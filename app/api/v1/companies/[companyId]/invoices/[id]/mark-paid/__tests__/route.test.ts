@@ -237,7 +237,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(res.status).toBe(200)
 
     const invoiceSelects = calls.filter((c) => c.table === 'invoices' && c.method === 'select')
-    // Pre-flight select must fetch journal_entry_id — invoiceAlreadyBooked
+    // Pre-flight select must fetch journal_entry_id: invoiceAlreadyBooked
     // routing reads it; omitting it silently forces the cash path.
     expect(invoiceSelects.length).toBeGreaterThanOrEqual(2)
     expect(String(invoiceSelects[0].args[0])).toContain('journal_entry_id')
@@ -270,7 +270,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     )
 
     expect(res.status).toBe(200)
-    // Already-booked → clearing entry (Dr 1930 / Cr 1510), NOT a cash entry —
+    // Already-booked → clearing entry (Dr 1930 / Cr 1510), NOT a cash entry:
     // a cash entry here would re-recognise revenue + VAT (double-booking).
     expect(mockPayment).toHaveBeenCalled()
     expect(mockCash).not.toHaveBeenCalled()

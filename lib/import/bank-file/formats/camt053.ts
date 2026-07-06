@@ -5,12 +5,12 @@
  * Namespace: urn:iso:std:iso:20022:tech:xsd:camt.053.001.XX (various versions)
  *
  * Key elements:
- * - <BkToCstmrStmt> — root container
- * - <Stmt> — one statement per account
- * - <Ntry> — individual transaction entries
- * - <NtryRef> / <AcctSvcrRef> — unique entry reference (external_id)
- * - <CdtDbtInd> — CRDT/DBIT indicator
- * - <RmtInf><Strd><CdtrRefInf> — structured remittance (OCR/Bankgiro reference)
+ * - <BkToCstmrStmt>: root container
+ * - <Stmt>: one statement per account
+ * - <Ntry>: individual transaction entries
+ * - <NtryRef> / <AcctSvcrRef>: unique entry reference (external_id)
+ * - <CdtDbtInd>: CRDT/DBIT indicator
+ * - <RmtInf><Strd><CdtrRefInf>: structured remittance (OCR/Bankgiro reference)
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'

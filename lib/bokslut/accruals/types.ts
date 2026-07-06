@@ -27,7 +27,7 @@ export interface AccrualProposal {
   lines: CreateJournalEntryLineInput[]
   /** Date the entry should be reversed on (typically Jan 1 of next FY), or
    *  null for accruals that intentionally do NOT reverse (e.g. semesterlöne-
-   *  skuld carries forward — see proposeVacationLiabilityChange). Phase 4
+   *  skuld carries forward, see proposeVacationLiabilityChange). Phase 4
    *  ships this as metadata; the actual auto-reversal cron is follow-up
    *  infra. Using null instead of an empty string keeps the future cron's
    *  filter (`reverses_on IS NOT NULL`) unambiguous. */

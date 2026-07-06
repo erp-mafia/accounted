@@ -5,10 +5,10 @@ import { getJournalEntryUnderlagReferences } from '@/lib/core/bookkeeping/journa
 /**
  * GET /api/bookkeeping/journal-entries/[id]/references
  *
- * Resolves the verifikation's followable underlag references — the linked
+ * Resolves the verifikation's followable underlag references, the linked
  * customer / supplier invoices that identify the affärshändelse. Lets the
  * verifikat view make the verifieringskedja traceable from the verifikat side,
- * not only from the invoice side (BFL 5 kap 7§ — hänvisning till underlag;
+ * not only from the invoice side (BFL 5 kap 7§, hänvisning till underlag;
  * BFNAR 2013:2). Read-only.
  *
  * An id that doesn't belong to the active company resolves to no references

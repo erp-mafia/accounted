@@ -2,7 +2,7 @@
  * pg-real smoke tests for the migrations introduced by the AI-native streams
  * (actor model, expanded op types, idempotency).
  *
- * These don't replicate the unit-test coverage — they prove the schema and
+ * These don't replicate the unit-test coverage: they prove the schema and
  * constraints behave as the application code assumes when running against a
  * real Postgres with the migrations applied.
  */

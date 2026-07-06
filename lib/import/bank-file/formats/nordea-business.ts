@@ -175,14 +175,14 @@ export const nordeaBusinessFormat: BankFileFormat = {
 
       let description: string
       if (name || subject) {
-        // Classic format: Namn — Rubrik
-        description = [name, subject].filter(Boolean).join(' — ') || 'Unknown'
+        // Classic format: Namn - Rubrik
+        description = [name, subject].filter(Boolean).join(' - ') || 'Unknown'
       } else if (ytterligareDetaljer) {
         // Format D: "Ytterligare detaljer" has the full description
         description = ytterligareDetaljer
       } else if (text) {
         // Alternate format: use Text/Meddelande column
-        description = [paymentType, text].filter(Boolean).join(' — ') || text
+        description = [paymentType, text].filter(Boolean).join(' - ') || text
       } else {
         description = 'Unknown'
       }

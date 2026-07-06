@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock the tic-client functions. /lookup now only calls
-// searchCompanyByOrgNumber — the Phase 2 fetchers stay mocked because the
+// searchCompanyByOrgNumber: the Phase 2 fetchers stay mocked because the
 // /profile handler shares the module, but we don't expect /lookup to invoke
 // them.
 vi.mock('../lib/tic-client', () => ({
@@ -42,7 +42,7 @@ function makeRequest(orgNumber?: string): Request {
 const lookupHandler = ticExtension.apiRoutes![0].handler
 
 // Search-public document now carries everything /lookup needs at the top
-// level — sniCodes, bankAccounts, emailAddresses, phoneNumbers,
+// level: sniCodes, bankAccounts, emailAddresses, phoneNumbers,
 // mostRecentFinancialSummary. The previous Phase 2 fan-out duplicated these.
 const mockDoc: TICCompanyDocument = {
   companyId: 42,

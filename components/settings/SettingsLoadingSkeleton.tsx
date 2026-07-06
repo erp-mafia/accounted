@@ -2,8 +2,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 /**
  * Placeholder shown while a settings section's data loads. Mirrors the real shape
- * of the section forms — an uppercase section heading followed by stacked
- * label/field rows, with a hairline divider between blocks — so the swap to live
+ * of the section forms: an uppercase section heading followed by stacked
+ * label/field rows, with a hairline divider between blocks: so the swap to live
  * content doesn't jump from a mismatched layout.
  */
 export function SettingsLoadingSkeleton() {

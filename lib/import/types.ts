@@ -29,7 +29,7 @@ export interface SIEHeader {
   flagga: number | null            // #FLAGGA (0 = not imported, 1 = already imported)
   program: string | null           // #PROGRAM
   programVersion: string | null
-  generatedDate: string | null     // #GEN — "YYYY-MM-DD"
+  generatedDate: string | null     // #GEN: "YYYY-MM-DD"
   format: string | null            // #FORMAT (PC8 = CP437)
 
   // Company info
@@ -84,6 +84,27 @@ export interface SIETransactionLine {
   quantity?: number
   signature?: string
   objectId?: string
+  /** Object list ({dimNo "code" …}) as SIE dim number → object code. */
+  dimensions?: Record<string, string>
+}
+
+/**
+ * Dimension declaration from #DIM or #UNDERDIM
+ */
+export interface SIEDimension {
+  sieDimNo: number
+  name: string
+  /** Set when declared via #UNDERDIM: the parent dimension number. */
+  parentSieDimNo?: number
+}
+
+/**
+ * Dimension value from #OBJEKT
+ */
+export interface SIEDimensionValue {
+  sieDimNo: number
+  code: string
+  name: string
 }
 
 /**
@@ -126,6 +147,10 @@ export interface ParsedSIEFile {
 
   // Transactions (SIE4 only)
   vouchers: SIEVoucher[]
+
+  // Dimension registry records (#DIM / #UNDERDIM / #OBJEKT)
+  dimensions: SIEDimension[]
+  dimensionValues: SIEDimensionValue[]
 
   // Parse issues
   issues: ParseIssue[]
@@ -274,6 +299,20 @@ export interface ImportResultDetails {
     accountsAdjusted: number
   }
 
+  /**
+   * Non-latest fiscal years whose P&L doesn't net to zero — their result
+   * was never transferred to equity (omföring av årets resultat saknas).
+   * Each corrupts every later derived opening balance by exactly pl_net,
+   * which surfaces as a balansräkning differens. Structurally identical to
+   * UntransferredResult in @/types.
+   */
+  untransferredResults?: Array<{
+    fiscal_period_id: string
+    period_name: string
+    /** Class 3-8 net (credit-positive = profit), rounded to öre. */
+    pl_net: number
+  }>
+
   /** Number of batches that needed retries (0 = clean run) */
   retriedBatches: number
 
@@ -308,7 +347,7 @@ export interface ImportResult {
 
   // If a prior-year backfill triggered IB resync on the immediately-following
   // fiscal period (storno + recreate of its opening_balance entry), the
-  // details of what happened — populated only when the resync ran.
+  // details of what happened: populated only when the resync ran.
   nextPeriodIBResync?: {
     nextPeriodId: string
     nextPeriodName: string
@@ -319,6 +358,16 @@ export interface ImportResult {
   // If the next period's IB needed resync but we couldn't do it (locked,
   // closed, or no existing IB), the human-readable reason.
   nextPeriodIBResyncSkipped?: { reason: string; nextPeriodName: string } | null
+
+  // Populated when the file carried dimension data (#DIM/#OBJEKT/object
+  // lists): what landed in the registry and whether the import flipped
+  // company_settings.dimensions_enabled on (with a UI notice).
+  dimensionsImported?: {
+    dimensions: number
+    values: number
+    taggedLines: number
+    toggleEnabled: boolean
+  } | null
 }
 
 /**
@@ -389,7 +438,7 @@ export interface MigrationDocumentation {
   }
 
   // Chart-of-accounts renames applied from the file's #KONTO records
-  // (behandlingshistorik per BFNAR 2013:2 — who/when is carried by
+  // (behandlingshistorik per BFNAR 2013:2, who/when is carried by
   // importedBy/importedAt on this record). Absent when nothing was renamed
   // and on imports recorded before this field existed.
   accountRenames?: Array<{ accountNumber: string; from: string; to: string }>

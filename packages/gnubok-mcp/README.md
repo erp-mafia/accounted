@@ -2,7 +2,7 @@
 
 Connect [Claude Desktop](https://claude.ai/download) (or any stdio MCP client) to your [Accounted](https://app.gnubok.se) bookkeeping account. This is a thin stdio → HTTPS bridge: it forwards JSON-RPC over stdio to the hosted Accounted MCP server, which exposes 90+ bookkeeping tools (invoices, transactions, VAT/momsdeklaration, payroll, reports, year-end).
 
-Write tools stage a pending operation that you confirm before anything is booked — the bridge never books on its own.
+Write tools stage a pending operation that you confirm before anything is booked: the bridge never books on its own.
 
 ## Quickstart
 
@@ -40,13 +40,13 @@ Restart Claude Desktop. The Accounted tools appear in the client and you can sta
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `GNUBOK_API_KEY` | yes | — | Your `gnubok_sk_*` API key. |
+| `GNUBOK_API_KEY` | yes | - | Your `gnubok_sk_*` API key. |
 | `GNUBOK_URL` | no | `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp` | Override the MCP endpoint (e.g. for self-hosted Accounted). |
-| `GNUBOK_CLIENT` | no | — | Distribution-channel marker (e.g. `openclaw`), sent as `X-Gnubok-Client`. Telemetry only — never affects auth or behavior. |
+| `GNUBOK_CLIENT` | no | - | Distribution-channel marker (e.g. `openclaw`), sent as `X-Gnubok-Client`. Telemetry only: never affects auth or behavior. |
 
 ## Alternative: claude.ai connector (no API key)
 
-If you use **claude.ai** or Claude Desktop's custom-connector flow, you can skip this bridge entirely and add Accounted as an OAuth 2.1 custom connector instead — paste the connector URL `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?client=claude-connector` and authorise on the Accounted consent screen (read-only scopes by default; write scopes are ticked explicitly).
+If you use **claude.ai** or Claude Desktop's custom-connector flow, you can skip this bridge entirely and add Accounted as an OAuth 2.1 custom connector instead: paste the connector URL `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?client=claude-connector` and authorise on the Accounted consent screen (read-only scopes by default; write scopes are ticked explicitly).
 
 ## Docs
 

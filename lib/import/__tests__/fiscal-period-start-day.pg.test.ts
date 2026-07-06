@@ -4,7 +4,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 
 // Covers enforce_first_of_month_for_subsequent_periods (migration
 // 20260418120000). The trigger only blocks mid-month period_start when a
-// strictly earlier period exists — so importing a company's chronologically
+// strictly earlier period exists: so importing a company's chronologically
 // first fiscal year (förlängt första räkenskapsår) via SIE must succeed even
 // after a later period was created during onboarding.
 //
@@ -46,10 +46,10 @@ describe('fiscal_periods: subsequent-period start-day trigger', () => {
   it('allows importing an earlier mid-month period after a later day-1 period exists', async () => {
     const { companyId } = await seedCompany()
 
-    // Onboarding-created period (day 1, year N) — sits before the seeded 2026.
+    // Onboarding-created period (day 1, year N): sits before the seeded 2026.
     await insertPeriod(companyId, 'Räkenskapsår 2025', '2025-01-01', '2025-12-31')
 
-    // SIE import of förlängt första räkenskapsår — earlier in time,
+    // SIE import of förlängt första räkenskapsår: earlier in time,
     // mid-month start. This used to fail with the old trigger.
     const { rows } = await insertPeriod(
       companyId,
@@ -65,7 +65,7 @@ describe('fiscal_periods: subsequent-period start-day trigger', () => {
 
     await insertPeriod(companyId, 'Räkenskapsår 2024', '2024-01-01', '2024-12-31')
 
-    // Mid-month start in 2025 — strictly later than 2024 and not overlapping
+    // Mid-month start in 2025: strictly later than 2024 and not overlapping
     // with the seeded 2026 period → only the start-day trigger should fire.
     await expect(
       insertPeriod(companyId, 'Räkenskapsår 2025 (bad)', '2025-06-15', '2025-12-31'),

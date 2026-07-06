@@ -261,7 +261,7 @@ async function runStream(
           }
 
           if (event.step === 'prewarm') {
-            // Pre-warm runs after finalize — surface nothing in the UI; the
+            // Pre-warm runs after finalize: surface nothing in the UI; the
             // user has already moved to Phase B by then.
             continue
           }
@@ -273,7 +273,7 @@ async function runStream(
             cbs.onComplete()
           }
         } catch {
-          // Malformed JSON line — keep reading.
+          // Malformed JSON line: keep reading.
         }
       }
     }

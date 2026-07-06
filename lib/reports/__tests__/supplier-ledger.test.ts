@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue
+// Mock: sequential result queue
 // ============================================================
 
 let resultIdx: number

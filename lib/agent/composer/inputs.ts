@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SourceSignals } from './schemas'
 
-// Atom registry index row — the metadata-only shape the composer sees when
+// Atom registry index row: the metadata-only shape the composer sees when
 // picking a loadout. We never send full atom bodies to the Opus call;
 // metadata is enough for selection.
 export interface AtomRegistryIndexRow {
@@ -46,7 +46,7 @@ export async function loadCompanyTicSnapshot(
   }
 }
 
-// Known facts from `company_settings` — the onboarding form persists these
+// Known facts from `company_settings`: the onboarding form persists these
 // (moms_period, fiscal_year_start_month, f_skatt, employees, city). Composer
 // uses them as KNOWN inputs so it stops generating verification questions
 // about already-settled values.
@@ -84,13 +84,13 @@ export async function loadCompanySettings(
 // ownership in the user's mouth.
 //
 // We match the user's enrichment row against this company's org_number.
-// `companyId` is the Accounted UUID — we need to read the orgnr from
+// `companyId` is the Accounted UUID: we need to read the orgnr from
 // `companies` to do the match. Cheap (single SELECT each) and only runs once
 // per agent build.
 //
 // Director-like positions per Bolagsverket: 'ceo', 'boardMember', 'chairman',
 // 'externalSignatory'. Deputy positions ('deputyBoardMember') and external
-// auditors are intentionally excluded — they don't run the company day-to-day.
+// auditors are intentionally excluded: they don't run the company day-to-day.
 const DIRECTOR_POSITION_TYPES = new Set([
   'ceo',
   'boardMember',
@@ -107,7 +107,7 @@ export async function loadUserDirectorship(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<{ confirmedDirector: boolean }> {
-  // Read this company's org_number — the BankID CompanyRoles row keys on
+  // Read this company's org_number: the BankID CompanyRoles row keys on
   // companyRegistrationNumber, not the Accounted company UUID.
   const { data: companyRow } = await supabase
     .from('companies')
@@ -119,7 +119,7 @@ export async function loadUserDirectorship(
 
   // Read the active user's enrichment row. Composer runs inside the user's
   // request context (RLS-scoped client), so .maybeSingle() only sees the row
-  // for the authenticated user — no need to join through company_members.
+  // for the authenticated user: no need to join through company_members.
   const { data: enrichmentRow } = await supabase
     .from('bankid_enrichment')
     .select('company_roles')
@@ -152,7 +152,7 @@ interface SieSummary {
 
 // Build a coarse SIE summary from the most-recent imported SIE for the
 // company. Used by the composer as a verticality signal (e.g. a top-spend
-// account 1465 — alcohol inventory — strongly suggests restaurang).
+// account 1465, alcohol inventory, strongly suggests restaurang).
 //
 // Returns null when no SIE has been imported. The composer must still work
 // without SIE data; TIC sniCodes carry most of the signal on their own.
@@ -187,7 +187,7 @@ export async function loadSieSummary(
     p_limit: 20,
   })
 
-  // RPC is optional — if it doesn't exist yet, fall back to an inline group-by.
+  // RPC is optional: if it doesn't exist yet, fall back to an inline group-by.
   // Either way, we tolerate missing data and return what we have.
   let topAccounts: { account: string; abs_amount: number }[] = []
   if (!linesErr && Array.isArray(lines)) {
@@ -198,8 +198,8 @@ export async function loadSieSummary(
   }
 
   // Coarse counterparty rollup off the bank-statement description string.
-  // `transactions.description` is the raw text from the bank — not
-  // normalized — so this is a noisy signal. The composer treats it as a hint
+  // `transactions.description` is the raw text from the bank (not
+  // normalized) so this is a noisy signal. The composer treats it as a hint
   // alongside TIC sniCodes, which carry the strong industry signal.
   const { data: tx } = await supabase
     .from('transactions')
@@ -233,13 +233,13 @@ interface BankingCounterparty {
   abs_amount: number
   // 'in'  → money coming in (income / refund / loan disbursement)
   // 'out' → money going out (cost / supplier payment / repayment)
-  // 'mixed' → both directions present (rare — typically transfers or
+  // 'mixed' → both directions present (rare: typically transfers or
   //           returns). The composer should not assume a category from
   //           mixed counterparties.
   direction: 'in' | 'out' | 'mixed'
   // True when at least one transaction for this counterparty still has
   // journal_entry_id IS NULL. Composer should only generate verification
-  // questions about counterparties where this is true — the others are
+  // questions about counterparties where this is true: the others are
   // already settled and re-asking wastes the user's time.
   has_unbooked: boolean
 }
@@ -256,7 +256,7 @@ interface BankingSummary {
 //
 // Booking-aware: each rolled-up counterparty carries `direction` (sign of
 // the transactions) and `has_unbooked` (any row without journal_entry_id).
-// Both signals exist to keep the composer from asking dumb questions —
+// Both signals exist to keep the composer from asking dumb questions:
 // "is this a cost or an income?" when the sign is clearly negative,
 // "how should this be booked?" when there's no unbooked transaction left.
 export async function loadBankingSummary(

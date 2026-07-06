@@ -6,15 +6,15 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Invoice } from '@/types'
 
-ensureInitialized() // Module-level — loads extensions so invoice.created handlers are wired.
+ensureInitialized() // Module-level: loads extensions so invoice.created handlers are wired.
 
 /**
- * POST /api/invoices/[id]/finalize — "Granska och skapa".
+ * POST /api/invoices/[id]/finalize: "Granska och skapa".
  *
  * Turns an unnumbered draft (saved via "Spara som utkast") into a real, issued
  * invoice: allocates the F-series number and emits invoice.created (which drives
  * webhooks + the audit log). After this the invoice behaves exactly like one
- * created directly — it can be sent or cancelled (makulerad), but no longer
+ * created directly: it can be sent or cancelled (makulerad), but no longer
  * hard-deleted, because the number now belongs to the gap-free series
  * (ML 17 kap 24§).
  *
@@ -67,7 +67,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('id', id)
       .single()
 
-    // The number was already allocated, so the invoice is finalized in the DB —
+    // The number was already allocated, so the invoice is finalized in the DB,
     // but if the re-read fails we cannot emit invoice.created with a complete
     // payload, which would silently drop the audit-log entry, webhooks, and any
     // extension wired to the event. Surface it as a 500 rather than returning

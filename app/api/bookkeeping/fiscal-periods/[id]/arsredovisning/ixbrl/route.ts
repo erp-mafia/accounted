@@ -7,7 +7,7 @@ import { generateK2IxbrlDocument } from '@/lib/bokslut/ixbrl/document/k2-documen
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl
  *
  * Generates the iXBRL (XHTML) årsredovisning for the period. The document IS
- * the presentation (per TILLAMPNINGSANVISNING) — the wizard renders it in an
+ * the presentation (per TILLAMPNINGSANVISNING): the wizard renders it in an
  * iframe as the authoritative preview, and `?download=1` hands the same bytes
  * to the user for manual filing at bolagsverket.se (the self-hosted path).
  *

@@ -5,11 +5,11 @@ import type { ProposedDisposition } from '../types'
 export const SLP_RATE = 0.2426
 
 export interface SlpComputation {
-  /** Total pension cost during the period — sum of posted debits on accounts
-   *  7410–7419 (pensionsförsäkringspremier, individuella pensioner, etc.). */
+  /** Total pension cost during the period: sum of posted debits on accounts
+   *  7410-7419 (pensionsförsäkringspremier, individuella pensioner, etc.). */
   pensionCostsBooked: number
-  /** Optional manual adjustment — e.g. avsättning till pensionsskuld on 2210
-   *  bokad under perioden som inte ligger på 7410–7419 men ska SLP-belastas. */
+  /** Optional manual adjustment: e.g. avsättning till pensionsskuld on 2210
+   *  bokad under perioden som inte ligger på 7410-7419 men ska SLP-belastas. */
   manualAdjustment: number
   /** Base for SLP = pensionCostsBooked + manualAdjustment. */
   base: number
@@ -25,7 +25,7 @@ export interface SlpComputation {
  * på 7410-7419 (tjänstepensionspremier) och avsättningar till pensionsskuld.
  *
  * Caller can supply `manualAdjustment` to include pensionsavsättningar made on
- * 2210 (avsättning för pensioner) that aren't reflected in 7410-7419 — common
+ * 2210 (avsättning för pensioner) that aren't reflected in 7410-7419: common
  * when companies book direct to the avsättningskonto rather than via a cost
  * account.
  */
@@ -52,7 +52,7 @@ export async function calculateSarskildLoneskatt(
 
   type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
   const pensionCostsBooked = ((data ?? []) as Row[]).reduce((sum, row) => {
-    // Cost account — normal balance is debit, so net = debit − credit.
+    // Cost account: normal balance is debit, so net = debit − credit.
     return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))
   }, 0)
 

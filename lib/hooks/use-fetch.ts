@@ -19,7 +19,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  *  - exposes `refetch()` for retry / post-mutation refresh.
  *
  * Behaviour notes (intentional):
- *  - `data` is NOT cleared on `refetch()` or url change — it keeps the previous
+ *  - `data` is NOT cleared on `refetch()` or url change: it keeps the previous
  *    result while the new request is in flight (keep-previous-data), so lists
  *    don't blank out on refresh. Read `loading` to show a pending indicator.
  *  - When `url`/`enabled` start inactive and later become active, `loading`

@@ -21,14 +21,14 @@ function digits(value: string | null): string {
 /**
  * Check the third digit of a Swedish org/personnummer.
  *
- * Personnummer: month digit (00-12) — third digit ≤ 1.
+ * Personnummer: month digit (00-12): third digit ≤ 1.
  * Företag: third digit ≥ 2 (per Skatteverket's allocation rules).
  */
 function looksLikePersonnummer(orgNumber: string | null): boolean {
   const d = digits(orgNumber)
   // 12 digits = full personnummer (YYYYMMDDXXXX)
   if (d.length === 12) return true
-  // 10 digits — disambiguate by month (positions 3-4 are month, 01-12)
+  // 10 digits: disambiguate by month (positions 3-4 are month, 01-12)
   if (d.length === 10) {
     const month = parseInt(d.substring(2, 4), 10)
     if (month >= 1 && month <= 12 && d[2] <= '1') return true
@@ -80,7 +80,7 @@ export function classifyCustomer(args: {
 }
 
 /**
- * Auto-classify a supplier. Suppliers cannot be 'individual' — Swedish business
+ * Auto-classify a supplier. Suppliers cannot be 'individual': Swedish business
  * with personnummer is still 'swedish_business' (a sole trader supplier).
  */
 export function classifySupplier(args: {

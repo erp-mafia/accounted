@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — table-keyed result queues
+// Mock: table-keyed result queues
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown }
@@ -94,8 +94,8 @@ describe('generateJournalRegister', () => {
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       ],
       journal_entry_lines: [
-        { data: [...filler, rentLine], error: null }, // page 1 — full → triggers page 2
-        { data: [rentLine], error: null },            // page 2 — duplicate of the 5010 line
+        { data: [...filler, rentLine], error: null }, // page 1: full → triggers page 2
+        { data: [rentLine], error: null },            // page 2: duplicate of the 5010 line
       ],
       chart_of_accounts: [
         {

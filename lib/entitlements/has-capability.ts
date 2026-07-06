@@ -3,30 +3,47 @@ import { NextResponse } from 'next/server'
 import { PAID_CAPABILITIES, type CapabilityKey } from './keys'
 
 /**
- * Entitlement gate — the single primitive behind the paywall ("non-payer loses
+ * Entitlement gate: the single primitive behind the paywall ("non-payer loses
  * functionality") AND the vision's modularity-out ("hide a module this company
  * doesn't need"). Both are the same question: does this company hold the
  * capability, fail-closed, resolved server-side?
  *
  * Two orthogonal axes, AND-ed together (see migration
  * 20260628140000_capability_grants_and_metered_events):
- *   ENTITLEMENT — an unexpired capability_grant on the company OR its firm/team.
- *   ENABLEMENT  — not explicitly disabled in company_capability_config (absent == enabled).
+ *   ENTITLEMENT: an unexpired capability_grant on the company OR its firm/team.
+ *   ENABLEMENT : not explicitly disabled in company_capability_config (absent == enabled).
  *
  * Mirrors the shape of lib/sandbox/guard.ts so it drops in at the same call
  * sites. The company is resolved by the CALLER (requireCompanyId for web, the
- * validated API key for MCP) — never taken from untrusted input here.
+ * validated API key for MCP): never taken from untrusted input here.
  */
 
-/** Self-hosted deployments are all-on — the gate never withholds anything. */
+/** Self-hosted deployments are all-on: the gate never withholds anything. */
 function isSelfHosted(): boolean {
   return process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+}
+
+/**
+ * Local development is all-on so every gated feature is testable without a
+ * subscription. Two triggers, both fail-safe for prod:
+ *   - NODE_ENV === 'development' (i.e. `npm run dev`). NOT 'test': the
+ *     entitlement suite must still exercise the real gate, and NOT
+ *     'production'.
+ *   - DISABLE_PAYWALL === 'true': explicit escape hatch for a local
+ *     production build. Never set this in a hosted environment.
+ */
+function isPaywallBypassed(): boolean {
+  return (
+    isSelfHosted() ||
+    process.env.NODE_ENV === 'development' ||
+    process.env.DISABLE_PAYWALL === 'true'
+  )
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /**
  * Only server-resolved UUIDs may be interpolated into the PostgREST `.or()`
- * filter below — commas/dots/parens are filter syntax. companyId/teamId always
+ * filter below: commas/dots/parens are filter syntax. companyId/teamId always
  * come from the DB, but we validate at this boundary as defense in depth.
  */
 function isUuid(v: string): boolean {
@@ -38,7 +55,7 @@ export async function hasCapability(
   companyId: string,
   key: CapabilityKey,
 ): Promise<boolean> {
-  if (isSelfHosted()) return true
+  if (isPaywallBypassed()) return true
   if (!isUuid(companyId)) return false // fail-closed: never interpolate a non-UUID
 
   // Resolve the company's firm/team (firm-scoped grants cascade to clients).
@@ -112,7 +129,7 @@ export interface CapabilityBlockedError {
 
 /**
  * Transport-free counterpart to capabilityBlockedResponse, for call sites that
- * don't return a NextResponse — the MCP dispatcher (folded into the JSON-RPC
+ * don't return a NextResponse: the MCP dispatcher (folded into the JSON-RPC
  * `isError` envelope) and the pending-operation commit executor. Same copy and
  * the same `capability_blocked: true` marker so every surface upsells alike.
  */
@@ -152,14 +169,20 @@ export async function getCompanyCapabilities(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<CapabilityKey[]> {
-  if (isSelfHosted()) return [...PAID_CAPABILITIES]
+  if (isPaywallBypassed()) return [...PAID_CAPABILITIES]
   if (!isUuid(companyId)) return [] // fail-closed: never interpolate a non-UUID
 
-  const { data: company } = await supabase
-    .from('companies')
-    .select('team_id')
-    .eq('id', companyId)
-    .maybeSingle()
+  // The disabled-config subtraction only needs companyId, so it runs in
+  // parallel with the team lookup — this function sits on the dashboard
+  // layout's critical path, where each serialized round-trip is latency.
+  const [{ data: company }, { data: configs }] = await Promise.all([
+    supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
+    supabase
+      .from('company_capability_config')
+      .select('capability_key, enabled')
+      .eq('company_id', companyId)
+      .eq('enabled', false),
+  ])
   const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
   const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
 
@@ -183,11 +206,6 @@ export async function getCompanyCapabilities(
   if (entitled.size === 0) return []
 
   // Subtract any explicitly-disabled (enablement axis).
-  const { data: configs } = await supabase
-    .from('company_capability_config')
-    .select('capability_key, enabled')
-    .eq('company_id', companyId)
-    .eq('enabled', false)
   for (const c of configs ?? []) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }

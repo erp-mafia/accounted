@@ -62,7 +62,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 import { POST } from '../route'
-// Mocked above — imported here as a spy handle to assert FX rate provenance
+// Mocked above: imported here as a spy handle to assert FX rate provenance
 // lands in the audit trail (PR #615 review).
 import { logMatchEvent } from '@/lib/invoices/match-log'
 
@@ -79,10 +79,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
-    // Default to no soft-duplicate detected — happy-path tests don't care.
+    // Default to no soft-duplicate detected: happy-path tests don't care.
     mockDetectDuplicate.mockResolvedValue(null)
     // Clearing path delegates to findFiscalPeriod + createJournalEntry (FX fix
-    // PR #614 round 6 — see lib/bookkeeping/invoice-payment-lines.ts). Give
+    // PR #614 round 6: see lib/bookkeeping/invoice-payment-lines.ts). Give
     // both safe defaults; tests that exercise the clearing path override
     // mockCreateJournalEntry to assert the result id.
     mockFindFiscalPeriod.mockResolvedValue('fp-1')
@@ -343,7 +343,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down — manual rate used instead
+    mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down: manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
 
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -359,7 +359,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const { status } = await parseJsonResponse<{ success: boolean }>(response)
 
     expect(status).toBe(200)
-    // Manual rate skips the Riksbanken lookup — confirm by inspecting that
+    // Manual rate skips the Riksbanken lookup: confirm by inspecting that
     // mockCreateJournalEntry got the FX-computed line set (1000 / 10.5 =
     // 95.2381 USD; arSek = 95.2381 × 9.30 = 885.71). Skipping Riksbanken is
     // intentional: when the user types a rate from their bank statement we
@@ -508,7 +508,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-conflict')
   })
 
-  it('returns 500 when storno fails — no partial state change', async () => {
+  it('returns 500 when storno fails: no partial state change', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
       amount: 12500,
@@ -535,7 +535,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Storno failures bubble up through the bookkeeping engine; the wrapper
     // routes any non-typed error to INTERNAL_ERROR.
     expect((body.error as unknown as { code: string }).code).toBe('INTERNAL_ERROR')
-    // Invoice should NOT have been updated — no further DB calls after storno failure
+    // Invoice should NOT have been updated: no further DB calls after storno failure
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
@@ -586,7 +586,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
   it('cash method ignores cash entry when invoice was already booked (accrual→cash migration)', async () => {
     // Regression: customer sent invoices under accrual (1510 was debited on
     // send), then switched to kontantmetoden before the bank receipt arrived.
-    // Old logic posted createInvoiceCashEntry — orphaning 1510 and double-
+    // Old logic posted createInvoiceCashEntry: orphaning 1510 and double-
     // counting revenue + VAT. Fix: route on invoice.journal_entry_id, not on
     // the current accounting_method setting.
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
@@ -650,7 +650,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
-    // Hard-duplicate check is skipped for partially_paid status — no enqueue needed.
+    // Hard-duplicate check is skipped for partially_paid status: no enqueue needed.
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -1005,7 +1005,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check: clean
 
-    // Detection returns null — the duplicate the caller saw has resolved.
+    // Detection returns null: the duplicate the caller saw has resolved.
     mockDetectDuplicate.mockResolvedValueOnce(null)
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {

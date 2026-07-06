@@ -6,7 +6,7 @@
  *   - ROT: 30% of labor cost, max 50 000 kr per person per year.
  *   - RUT: 50% of labor cost, max 75 000 kr per person per year.
  *
- * The deduction applies to labor only — material costs and travel time are
+ * The deduction applies to labor only: material costs and travel time are
  * NOT eligible. In this v1 we treat the entire invoice item amount as labor
  * when the user flags it ROT/RUT; the user is expected to either invoice
  * labor on its own row or split materials onto a non-flagged row. A future
@@ -14,10 +14,10 @@
  *
  * We CAN'T verify that the customer has remaining yearly headroom (they may
  * have claimed elsewhere). We surface a warning when the per-invoice total
- * already exceeds the statutory max — the customer must then handle the
+ * already exceeds the statutory max: the customer must then handle the
  * excess outside of fakturamodellen.
  *
- * All functions are pure and deterministic. No I/O, no DB calls — easy to
+ * All functions are pure and deterministic. No I/O, no DB calls: easy to
  * unit-test and easy to embed in the API validator and the live total
  * preview in the invoice editor.
  */
@@ -37,9 +37,13 @@ export const RUT_MAX = 75000
 export type DeductionType = 'rot' | 'rut'
 
 /** Skatteverket work codes used by Husavdragstjänsten. Maps a free-text */
-/** "what the worker did" label to the official code the Skatteverket file */
-/** will need. v1 stores both — the label is shown on the PDF; the code is */
-/** stored as `work_type` for the future submission file. */
+/** "what the worker did" label to the official code. The code drives which */
+/** element the begäran-om-utbetalning file (Begaran.xsd V6) reports the */
+/** hours under: see WORK_TYPE_ELEMENTS in lib/invoices/rot-rut-file.ts. */
+/** The lists mirror the XSD exactly: rot work types are the seven */
+/** ArendeUtfortArbeteRotTYPE elements (IT-tjänster is a RUT service and was */
+/** removed from the rot list 2026-07); rut covers all thirteen */
+/** ArendeUtfortArbeteRutTYPE elements incl. the two schablontjänster. */
 export const ROT_WORK_TYPES = [
   { code: 'BYGG', label: 'Byggnadsarbete' },
   { code: 'EL', label: 'Elarbete' },
@@ -48,20 +52,24 @@ export const ROT_WORK_TYPES = [
   { code: 'MURNING', label: 'Murnings- och putsarbete' },
   { code: 'MALNING', label: 'Mål- och tapetseringsarbete' },
   { code: 'VVS', label: 'VVS-arbete' },
-  { code: 'IT', label: 'IT-tjänster i hemmet' },
 ] as const
 
 export const RUT_WORK_TYPES = [
-  { code: 'STAD', label: 'Städning, tvätt och vård av kläder' },
-  { code: 'KLAD', label: 'Klädvård i hemmet' },
+  { code: 'STAD', label: 'Städning' },
+  { code: 'KLAD', label: 'Kläd- och textilvård' },
+  { code: 'SNOSKOTTNING', label: 'Snöskottning' },
   { code: 'TRADGARD', label: 'Trädgårdsarbete' },
   { code: 'BARNPASS', label: 'Barnpassning' },
   { code: 'PERSONLIG_OMS', label: 'Personlig omsorg' },
-  { code: 'FLYTT', label: 'Flytthjälp' },
-  { code: 'REPARATION', label: 'Reparation av vitvaror' },
+  { code: 'FLYTT', label: 'Flyttjänster' },
   { code: 'IT', label: 'IT-tjänster i hemmet' },
-  { code: 'MOBLERING', label: 'Möblering och tillsyn av bostad' },
-  { code: 'TRANSPORT', label: 'Transport till och från återvinning' },
+  { code: 'REPARATION', label: 'Reparation av vitvaror' },
+  { code: 'MOBLERING', label: 'Möblering' },
+  { code: 'TILLSYN', label: 'Tillsyn av bostad' },
+  // Schablontjänster: reported as utförd/ej utförd in the Skatteverket file,
+  // never with hours or material.
+  { code: 'TRANSPORT', label: 'Transport till försäljning (schablon)' },
+  { code: 'TVATT', label: 'Tvätt vid tvättinrättning (schablon)' },
 ] as const
 
 export interface ItemForDeduction {
@@ -91,7 +99,7 @@ export function computeDeduction(item: ItemForDeduction): number {
   if (lineTotal <= 0) return 0
   const percent = item.deduction_type === 'rot' ? ROT_PERCENT : RUT_PERCENT
   const raw = lineTotal * percent
-  // Cap at line total — defensive against future rule changes that would
+  // Cap at line total: defensive against future rule changes that would
   // push percent past 1.0.
   const capped = Math.min(raw, lineTotal)
   return Math.round(capped * 100) / 100

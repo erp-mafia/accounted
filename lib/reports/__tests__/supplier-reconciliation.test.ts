@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue
+// Mock: sequential result queue
 // ============================================================
 
 let resultIdx: number
@@ -71,7 +71,7 @@ describe('generateReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
   })
 
-  it('paginates the 2440 ledger query — sums >1000 lines instead of truncating at 1000', async () => {
+  it('paginates the 2440 ledger query: sums >1000 lines instead of truncating at 1000', async () => {
     // Regression guard for the silent PostgREST 1000-row cap: fetchAllRows must
     // page through ALL ledger lines. A full first page (length === PAGE_SIZE)
     // forces a second fetch.
@@ -79,7 +79,7 @@ describe('generateReconciliation', () => {
     const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `p1-${i}`, debit_amount: 0, credit_amount: 10 }))
     const page2 = Array.from({ length: 500 }, (_, i) => ({ id: `p2-${i}`, debit_amount: 0, credit_amount: 10 }))
     results = [
-      { data: [], error: null },     // 0: supplier_invoices — none open
+      { data: [], error: null },     // 0: supplier_invoices, none open
       { data: page1, error: null },  // 1: 2440 lines page 1 (full → triggers next page)
       { data: page2, error: null },  // 2: 2440 lines page 2 (partial → stop)
     ]
@@ -92,14 +92,14 @@ describe('generateReconciliation', () => {
 
   it('detects mismatch when difference != 0', async () => {
     results = [
-      // 0: supplier_invoices — total 5000
+      // 0: supplier_invoices, total 5000
       {
         data: [
           { remaining_amount: 5000 },
         ],
         error: null,
       },
-      // 1: journal_entry_lines — balance 7000
+      // 1: journal_entry_lines, balance 7000
       {
         data: [
           { debit_amount: 0, credit_amount: 7000, journal_entry_id: 'e1' },
@@ -172,7 +172,7 @@ describe('generateReconciliation', () => {
     // Reproduces the production bug: 225 EUR + 1 000 SEK was reported as 1 225
     // against a 2440 balance of 3 475, flagging a false discrepancy.
     results = [
-      // 0: supplier_invoices — 225 EUR at 11, plus 1 000 SEK
+      // 0: supplier_invoices, 225 EUR at 11, plus 1 000 SEK
       {
         data: [
           { remaining_amount: 225, currency: 'EUR', exchange_rate: 11 },
@@ -203,7 +203,7 @@ describe('generateReconciliation', () => {
     // sum must not silently add raw foreign currency. The row is excluded and
     // counted, so the UI can warn that the reconciliation may be unreliable.
     results = [
-      // 0: supplier_invoices — 100 EUR with no rate (excluded), 1 000 SEK control
+      // 0: supplier_invoices, 100 EUR with no rate (excluded), 1 000 SEK control
       {
         data: [
           { remaining_amount: 100, currency: 'EUR', exchange_rate: null },
@@ -237,11 +237,11 @@ describe('generateReconciliation', () => {
     // invoices were registered, corrected via the storno flow, and fully paid.
     // The corrected registrations flip to status='reversed'. The leverantörs-
     // reskontra shows 0 outstanding, and over posted+reversed the 2440 balance is
-    // 0 too — but a posted-only query saw only the storno + correction + payment
+    // 0 too, but a posted-only query saw only the storno + correction + payment
     // legs and reported a phantom −41 121,25 kr debit. The query must include the
     // reversed registration leg so both reconcile.
     results = [
-      // 0: supplier_invoices — both paid, nothing outstanding
+      // 0: supplier_invoices, both paid, nothing outstanding
       { data: [], error: null },
       // 1: 2440 lines as returned by the posted+reversed query for one corrected,
       //    paid invoice of 11 231,25: registration (reversed credit), storno

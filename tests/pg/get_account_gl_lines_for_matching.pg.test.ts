@@ -49,7 +49,7 @@ async function insertPostedJournalEntry(params: {
   return id
 }
 
-describe('get_account_gl_lines_for_matching RPC — N:1 candidates', () => {
+describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
   it('returns already-matched vouchers (with link count) only when p_include_matched is true', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -70,7 +70,7 @@ describe('get_account_gl_lines_for_matching RPC — N:1 candidates', () => {
     await insertTransaction({ companyId, userId, currency: 'SEK', journalEntryId: matchedEntry })
     await insertTransaction({ companyId, userId, currency: 'SEK', journalEntryId: matchedEntry })
 
-    // Default (p_include_matched=false): parity with get_unlinked_gl_lines — only
+    // Default (p_include_matched=false): parity with get_unlinked_gl_lines: only
     // the unmatched voucher, count 0.
     const { rows: unmatchedOnly } = await getPool().query(
       `SELECT journal_entry_id, linked_transaction_count
@@ -101,7 +101,7 @@ describe('get_account_gl_lines_for_matching RPC — N:1 candidates', () => {
     })
 
     // These book-only / IB vouchers have no bank-feed counterpart and can never
-    // be a match target — the include_matched opt-in must not resurrect them.
+    // be a match target: the include_matched opt-in must not resurrect them.
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1, amount: 50000,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -22,6 +22,7 @@ import { SettingsShell } from './SettingsShell'
  */
 export function SettingsModal({ sectionId }: { sectionId?: string }) {
   const router = useRouter()
+  const pathname = usePathname()
   const { company } = useCompany()
   const t = useTranslations('settings_modal')
 
@@ -37,6 +38,14 @@ export function SettingsModal({ sectionId }: { sectionId?: string }) {
   function onOpenChange(open: boolean) {
     if (!open) router.back()
   }
+
+  // Parallel-route safety net. This modal lives in the @settingsModal slot and
+  // should only ever show on /settings/* routes. On a soft navigation to a
+  // non-settings route (e.g. a cross-link inside the modal like "Kontoplan"),
+  // Next.js can keep this intercepted slot mounted over the new page. Once the
+  // URL is no longer a settings route, render nothing so those links actually
+  // leave the modal instead of appearing to do nothing.
+  if (!pathname.startsWith('/settings')) return null
 
   return (
     <Dialog open onOpenChange={onOpenChange}>

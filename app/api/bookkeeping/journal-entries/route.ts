@@ -1,25 +1,19 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 
 ensureInitialized()
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
+// Query params are hand-parsed with per-param clamping/regex validation (see
+// each param's comment) rather than a Zod schema; response shapes are legacy
+// `{ data, count }` / `{ error: string }` for the verifikat list UI.
+export const GET = withRouteContext('bookkeeping.journal_entries.list', async (request, ctx) => {
+  const { supabase, companyId } = ctx
 
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
@@ -40,14 +34,14 @@ export async function GET(request: Request) {
   const dateFrom = searchParams.get('date_from')
   const dateTo = searchParams.get('date_to')
   const sortDate = searchParams.get('sort_date') // 'asc' | 'desc'
-  // 'series' optional filter — single uppercase letter A–Z. Ignored if any
+  // 'series' optional filter: single uppercase letter A-Z. Ignored if any
   // other value is passed (defense against trivial injection / typos).
   const seriesRaw = searchParams.get('series')
   const seriesFilter = seriesRaw && /^[A-Z]$/.test(seriesRaw) ? seriesRaw : null
   // Free-text search over the voucher description (verifikationstext). When set,
   // we take the direct-query path below (the include_related RPC can't search),
   // which filters strictly by fiscal_period_id. So search is scoped to the
-  // selected fiscal period / company and — like voucher sort — does NOT surface
+  // selected fiscal period / company and (like voucher sort) does NOT surface
   // cross-period follow-up entries: every result stays inside the selected
   // year's series (the BFL-compliant per-year view). It narrows the period, it
   // never widens it.
@@ -68,10 +62,10 @@ export async function GET(request: Request) {
 
   // Voucher-sort path: include_related RPC doesn't support voucher ordering,
   // so fall through to the direct query below. This means voucher sort is
-  // *strict by fiscal_period_id* — cross-period follow-up entries that the
+  // *strict by fiscal_period_id*: cross-period follow-up entries that the
   // RPC normally surfaces under date sort are excluded under voucher sort.
   // That's intentional: voucher numbers are series-scoped within a fiscal
-  // year (BFL 5 kap 6–7 §§), so showing series A1, A2 … alongside entries
+  // year (BFL 5 kap 6-7 §§), so showing series A1, A2 … alongside entries
   // belonging to a different year's series would be misleading. The trade-off
   // is that the visible row count may differ between sort modes for the same
   // period; the strict count is the BFL-compliant view of that year.
@@ -153,7 +147,7 @@ export async function GET(request: Request) {
 
   if (search) {
     // Escape LIKE wildcards (\ % _) so they match literally, and cap the needle
-    // length (≤200 chars) — both handled by the shared escapeLikePattern helper.
+    // length (≤200 chars): both handled by the shared escapeLikePattern helper.
     // The cap bounds DB work against oversized/pathological inputs (compliance
     // A.8.28 / ASVS V1.2.5); escaping prevents silent over-matching on values
     // like "50%". Supabase parameterises the value, so this is not about SQLi.
@@ -187,20 +181,12 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ data, count })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const POST = withRouteContext(
+  'bookkeeping.journal_entries.create',
+  async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
 
   const validation = await validateBody(request, CreateJournalEntrySchema)
   if (!validation.success) return validation.response
@@ -222,4 +208,6 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
-}
+  },
+  { requireWrite: true },
+)

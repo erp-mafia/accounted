@@ -15,7 +15,7 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
 
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 
-describe('gnubok_auto_match_period — registration', () => {
+describe('gnubok_auto_match_period: registration', () => {
   it('is registered', () => {
     const tool = tools.find((t) => t.name === 'gnubok_auto_match_period')
     expect(tool).toBeDefined()
@@ -60,7 +60,7 @@ function makeTxMock(transactions: unknown[]) {
   } as never
 }
 
-describe('gnubok_auto_match_period — dry run', () => {
+describe('gnubok_auto_match_period: dry run', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -74,7 +74,7 @@ describe('gnubok_auto_match_period — dry run', () => {
     const supabase = makeTxMock(txs)
 
     vi.mocked(findMatchingInvoices)
-      // t1: high confidence — should propose
+      // t1: high confidence: should propose
       .mockResolvedValueOnce([
         { invoice: { id: 'i1', invoice_number: 'INV-1', total: 1000, customer: { name: 'Acme' } } as never, confidence: 0.95, matchReason: 'Exakt belopp + kund' },
       ])

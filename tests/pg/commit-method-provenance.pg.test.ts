@@ -9,7 +9,7 @@ import { getPool } from '@/tests/pg/setup'
 /**
  * Covers 20260618120001_commit_method_agent_provenance:
  *   - journal_entries.commit_method accepts the new 'agent' and 'api_key'
- *     values (MCP-relayed approvals — agent_first_vision.md §8 P0-1).
+ *     values (MCP-relayed approvals: agent_first_vision.md §8 P0-1).
  *   - The pre-existing values are still accepted.
  *   - Unknown values are still rejected by the CHECK constraint.
  *   - Exactly one commit_method constraint exists (guards against the
@@ -21,7 +21,7 @@ async function postWithCommitMethod(commitMethod: string): Promise<string> {
   const { userId, companyId, fiscalPeriodId } = await seedCompany()
   const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
   await insertBalancedLines(entryId)
-  // draft → posted with commit metadata — same transition the commit RPC does.
+  // draft → posted with commit metadata: same transition the commit RPC does.
   await getPool().query(
     `UPDATE public.journal_entries
        SET status = 'posted', voucher_number = 1, commit_method = $2
@@ -31,7 +31,7 @@ async function postWithCommitMethod(commitMethod: string): Promise<string> {
   return entryId
 }
 
-describe('journal_entries.commit_method — agent provenance values', () => {
+describe('journal_entries.commit_method: agent provenance values', () => {
   it.each(['agent', 'api_key', 'user_accept', 'bulk_accept'])(
     'accepts commit_method=%s',
     async (method) => {

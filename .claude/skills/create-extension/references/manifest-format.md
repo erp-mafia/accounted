@@ -48,7 +48,7 @@ Every extension has a `manifest.json` in `extensions/<sector>/<name>/`.
 |-------|----------|-------------|
 | `name` | Yes | Display name |
 | `category` | Yes | `"import"` / `"operations"` / `"reports"` / `"accounting"` |
-| `icon` | Yes | Lucide icon name (e.g., `"Camera"`, `"Sparkles"`, `"Bell"`) — falls back to `"Puzzle"` |
+| `icon` | Yes | Lucide icon name (e.g., `"Camera"`, `"Sparkles"`, `"Bell"`): falls back to `"Puzzle"` |
 | `dataPattern` | Yes | `"core"` (reads core tables) / `"manual"` (own data) / `"both"` |
 | `description` | Yes | Short marketplace card text |
 | `longDescription` | Yes | Longer detail page text |

@@ -69,7 +69,7 @@ import {
 } from '../schemas'
 
 // ============================================================
-// Helpers — minimal valid objects for composition
+// Helpers: minimal valid objects for composition
 // ============================================================
 
 const validUuid = '550e8400-e29b-41d4-a716-446655440000'
@@ -401,7 +401,7 @@ describe('UpdateInvoiceSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('drops save_as_draft — editing a draft never re-creates it', () => {
+  it('drops save_as_draft: editing a draft never re-creates it', () => {
     const result = UpdateInvoiceSchema.safeParse(validInvoice({ save_as_draft: true }))
     expect(result.success).toBe(true)
     if (result.success) {
@@ -424,6 +424,27 @@ describe('CreateInvoiceItemSchema', () => {
   it('rejects non-numeric quantity', () => {
     const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: 'ten' }))
     expect(result.success).toBe(false)
+  })
+
+  it('accepts orgnr-shaped brf_org_number values', () => {
+    for (const value of ['769600-0000', '7696000000', '167696000000']) {
+      const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: value }))
+      expect(result.success).toBe(true)
+    }
+  })
+
+  it('normalizes an empty brf_org_number to null', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.brf_org_number).toBeNull()
+  })
+
+  it('rejects malformed brf_org_number values', () => {
+    // incl. a 12-digit value without the mandatory sekelsiffra 16 prefix
+    for (const value of ['---', '123', '76-96000000', 'ABC600-0000', '123456789012']) {
+      const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: value }))
+      expect(result.success).toBe(false)
+    }
   })
 
   it('rejects a product row with an empty description', () => {
@@ -1307,6 +1328,82 @@ describe('UpdateSettingsSchema', () => {
       expect(result.success).toBe(true)
     })
   })
+
+  describe('invoice_email_texts', () => {
+    it('accepts a valid nested partial', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { body: 'Tack för din beställning!' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.invoice_email_texts).toEqual({
+          sv: { body: 'Tack för din beställning!' },
+        })
+      }
+    })
+
+    it('accepts both languages with all four fields', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: {
+          sv: {
+            subject: 'Faktura {fakturanummer}',
+            greeting: 'Hejsan,',
+            body: 'Här kommer fakturan.',
+            signoff: 'Allt gott,',
+          },
+          en: {
+            subject: 'Invoice {fakturanummer}',
+            greeting: 'Hello,',
+            body: 'Please find the invoice attached.',
+            signoff: 'Best,',
+          },
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts null to clear all overrides', () => {
+      const result = UpdateSettingsSchema.safeParse({ invoice_email_texts: null })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.invoice_email_texts).toBeNull()
+    })
+
+    it('rejects body over 2000 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { body: 'x'.repeat(2001) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects subject over 200 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { subject: 'x'.repeat(201) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects a non-string field value', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { subject: 123 } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('strips unknown keys inside a language object', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { body: 'Hej', subjct: 'typo' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.invoice_email_texts).toEqual({ sv: { body: 'Hej' } })
+      }
+    })
+
+    it('rejects a bare string as the column value', () => {
+      const result = UpdateSettingsSchema.safeParse({ invoice_email_texts: 'Tack!' })
+      expect(result.success).toBe(false)
+    })
+  })
 })
 
 // ============================================================
@@ -1492,7 +1589,7 @@ describe('CreateDeadlineSchema', () => {
       deadline_type: 'tax',
       due_time: '25:00',
     })
-    // Note: regex accepts 25:00 — business logic validates actual time values
+    // Note: regex accepts 25:00: business logic validates actual time values
     // This test documents the current behavior
     const parsed = CreateDeadlineSchema.safeParse({
       title: 'Test',

@@ -90,7 +90,7 @@ export async function POST(
   // Upsert via DELETE+INSERT on the natural key (employee, date, type) so the
   // notes/hours/run-link can be replaced cleanly. The unique index makes ON
   // CONFLICT viable too, but Supabase's typed client doesn't expose
-  // onConflict for our composite key without a named constraint name —
+  // onConflict for our composite key without a named constraint name:
   // delete-then-insert keeps the pattern consistent with token-store.ts.
   const { error: deleteError } = await supabase
     .from('salary_absence_days')

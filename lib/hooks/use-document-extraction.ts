@@ -9,10 +9,10 @@ import { useEffect, useState } from 'react'
 // "Disabled" semantics: if the document-extraction extension isn't enabled
 // (the column stays NULL forever), we don't know server-side. Instead we
 // stop polling after EXTRACTION_TIMEOUT_MS and bubble status='disabled' so
-// the UI can quietly fall back ("Uppladdat" without an AI hint) — no scary
+// the UI can quietly fall back ("Uppladdat" without an AI hint): no scary
 // error for a feature the customer didn't pay for.
 //
-// Reasonable timeout: typical extraction takes 2–8s on Sonnet via Bedrock.
+// Reasonable timeout: typical extraction takes 2-8s on Sonnet via Bedrock.
 // 30s is generous and keeps the UX responsive on flaky links.
 
 const POLL_INTERVAL_MS = 1500
@@ -73,7 +73,7 @@ export function useDocumentExtraction(documentId: string | null | undefined): St
         // Non-ok responses fall through to retry; transient 5xx shouldn't
         // collapse the UI to "failed".
       } catch {
-        // Network blip — keep polling.
+        // Network blip: keep polling.
       }
 
       setTimeout(() => {

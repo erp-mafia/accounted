@@ -144,7 +144,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     }
   }, [computedVat, selectedVatOpt, vatAutoCalc])
 
-  // Jämkning eligibility — derived from asset + disposal date.
+  // Jämkning eligibility, derived from asset + disposal date.
   const eligibility = useMemo(() => {
     if (!asset) return null
     return assessJamkningEligibility({
@@ -378,7 +378,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
               </Select>
               {periodLocked && (
                 <p className="text-xs text-destructive">
-                  Vald period är låst eller stängd — välj en öppen period.
+                  Vald period är låst eller stängd: välj en öppen period.
                 </p>
               )}
             </div>
@@ -489,7 +489,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
               {eligibility.totalCorrectionMonths})
             </Badge>
           ) : (
-            <Badge variant="secondary">Utanför korrigeringstid — ingen jämkning behövs</Badge>
+            <Badge variant="secondary">Utanför korrigeringstid: ingen jämkning behövs</Badge>
           )}
 
           <div className="flex items-center gap-3">

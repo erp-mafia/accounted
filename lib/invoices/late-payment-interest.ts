@@ -8,7 +8,7 @@
  * Formula:
  *   interest = overdueAmount × annualRate × overdueDays / 365
  *
- * We use 365 days (not 360) — this matches Swedish practice and is what
+ * We use 365 days (not 360): this matches Swedish practice and is what
  * Skatteverket / Kronofogden use in their late-payment calculators.
  *
  * Companies may override the statutory rate via
@@ -53,7 +53,7 @@ const LATE_PAYMENT_PREMIUM = 0.08 // 8 procentenheter per Räntelagen §6
  * Returns the rate as a decimal fraction (e.g. 0.025 = 2.5%).
  *
  * If the requested date is before the earliest entry in the table we fall
- * back to the earliest entry (this is a defensive measure — should never
+ * back to the earliest entry (this is a defensive measure, should never
  * happen in practice since Accounted was launched after 2022).
  */
 export function getReferensrantaAt(date: string): number {

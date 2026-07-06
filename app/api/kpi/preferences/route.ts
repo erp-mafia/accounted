@@ -46,7 +46,7 @@ export async function PUT(request: Request) {
 
   const prefs = body as Partial<KPIPreferences>
 
-  // Validate account overrides — must be 4-digit numeric strings
+  // Validate account overrides: must be 4-digit numeric strings
   if (prefs.accountOverrides) {
     for (const [kpiId, accounts] of Object.entries(prefs.accountOverrides)) {
       if (!Array.isArray(accounts)) {
@@ -58,7 +58,7 @@ export async function PUT(request: Request) {
       for (const acc of accounts) {
         if (typeof acc !== 'string' || !/^\d{4}$/.test(acc)) {
           return NextResponse.json(
-            { error: `Invalid account number "${acc}" in ${kpiId} — must be 4 digits` },
+            { error: `Invalid account number "${acc}" in ${kpiId}: must be 4 digits` },
             { status: 400 }
           )
         }

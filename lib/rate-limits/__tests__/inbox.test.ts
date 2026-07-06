@@ -38,7 +38,7 @@ describe('checkInboxUploadRateLimit', () => {
     expect(result.retryAfterSec).toBe(3600)
   })
 
-  it('fails open (ok=true) when the RPC errors — better to accept than 500 a real user', async () => {
+  it('fails open (ok=true) when the RPC errors: better to accept than 500 a real user', async () => {
     const supabase = makeSupabase({ data: null, error: { message: 'boom' } })
     // Silence the console.error the helper emits on infra error.
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})

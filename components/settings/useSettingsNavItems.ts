@@ -20,7 +20,7 @@ export interface SettingsNavGroup {
   items: SettingsNavItem[]
 }
 
-// Rail group order — personal first (Konto), then company-scoped buckets.
+// Rail group order: personal first (Konto), then company-scoped buckets.
 const GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', 'accounting', 'sales', 'tools']
 
 /**
@@ -52,7 +52,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     { id: 'bookkeeping', href: '/settings/bookkeeping', label: t('bookkeeping'), group: 'accounting', show: hasCompany },
     { id: 'tax', href: '/settings/tax', label: t('tax'), group: 'accounting', show: hasCompany },
     // Lön settings follow the sidebar: every aktiebolag, plus any company that
-    // has registered as an employer (pays_salaries) — e.g. an enskild firma
+    // has registered as an employer (pays_salaries): e.g. an enskild firma
     // with staff. #782
     { id: 'salary', href: '/settings/salary', label: t('salary'), group: 'accounting', show: hasCompany && (company?.entity_type === 'aktiebolag' || !!company?.pays_salaries) },
     { id: 'invoicing', href: '/settings/invoicing', label: t('invoicing'), group: 'sales', show: hasCompany },

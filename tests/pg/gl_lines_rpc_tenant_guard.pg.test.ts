@@ -44,7 +44,7 @@ async function insertPostedJournalEntry(params: {
 const UNLINKED = `SELECT journal_entry_id FROM public.get_unlinked_gl_lines($1)`
 const MATCHING = `SELECT journal_entry_id FROM public.get_account_gl_lines_for_matching($1, '1930', NULL, NULL, true)`
 
-describe('GL-line read RPCs — tenant-isolation guard', () => {
+describe('GL-line read RPCs: tenant-isolation guard', () => {
   it('lets a member read its own company but blocks an authenticated non-member', async () => {
     const a = await seedCompany() // userA is owner-member of companyA
     const b = await seedCompany() // userB belongs to companyB only
@@ -56,7 +56,7 @@ describe('GL-line read RPCs — tenant-isolation guard', () => {
       voucherNumber: 1,
     })
 
-    // Direct / superuser connection (no JWT role) — the trusted bypass that this
+    // Direct / superuser connection (no JWT role): the trusted bypass that this
     // harness, migrations and the service-role cron rely on. Data is visible.
     const bare = await getPool().query(UNLINKED, [a.companyId])
     expect(bare.rows.map((r) => r.journal_entry_id)).toContain(entryA)
@@ -69,7 +69,7 @@ describe('GL-line read RPCs — tenant-isolation guard', () => {
       expect(m.rows.map((r) => r.journal_entry_id)).toContain(entryA)
     })
 
-    // A member of company B probing company A gets nothing — the cross-tenant
+    // A member of company B probing company A gets nothing: the cross-tenant
     // read that SECURITY DEFINER + anon/authenticated EXECUTE used to allow.
     await withUserContext(b.userId, async (client) => {
       const u = await client.query(UNLINKED, [a.companyId])
@@ -79,7 +79,7 @@ describe('GL-line read RPCs — tenant-isolation guard', () => {
     })
   })
 
-  it('rejects an anon (unauthenticated) caller outright — EXECUTE revoked from anon + PUBLIC', async () => {
+  it('rejects an anon (unauthenticated) caller outright: EXECUTE revoked from anon + PUBLIC', async () => {
     const a = await seedCompany()
     await insertPostedJournalEntry({
       userId: a.userId,
@@ -92,7 +92,7 @@ describe('GL-line read RPCs — tenant-isolation guard', () => {
     // Each probe runs in its own transaction: a permission-denied error aborts
     // the transaction, so the two can't share one. anon has no EXECUTE (revoked
     // from its own grant AND from PUBLIC, of which anon is a member), so the call
-    // is rejected at the privilege layer — defense in depth on top of the
+    // is rejected at the privilege layer: defense in depth on top of the
     // in-function tenant guard.
     const callAsAnon = async (sql: string): Promise<void> => {
       const client = await getPool().connect()

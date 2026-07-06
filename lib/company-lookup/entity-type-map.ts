@@ -4,11 +4,11 @@ import type { EntityType } from '@/types'
  * Explicit allow-lists for TIC/Bolagsverket `legalEntityType` → Accounted
  * EntityType. Strict (not substring) matching avoids misclassifications like
  * "Enskild stiftelse" → enskild_firma, which would provision with K1/
- * kontantmetoden defaults — an ML/BFL correctness risk.
+ * kontantmetoden defaults: an ML/BFL correctness risk.
  *
  * Publikt aktiebolag is included because the bookkeeping regime (K2/K3) and
  * VAT treatment are identical to a privat AB. Specialized AB forms
- * (Bankaktiebolag, Försäkringsaktiebolag) are deliberately excluded — they
+ * (Bankaktiebolag, Försäkringsaktiebolag) are deliberately excluded: they
  * follow FFFS and need manual setup.
  *
  * Extend only with values whose bookkeeping regime is known to match.

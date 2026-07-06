@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -20,8 +21,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
   }
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const data = await generateMonthlyBreakdown(supabase, companyId, periodId)
+    const data = await generateMonthlyBreakdown(supabase, companyId, periodId, {
+      dimensions: dimFilter.dimensions,
+    })
     return NextResponse.json({ data })
   } catch {
     return NextResponse.json({ error: 'Failed to generate monthly breakdown' }, { status: 500 })

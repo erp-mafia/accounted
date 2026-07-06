@@ -191,7 +191,7 @@ describe('validateQuery', () => {
 
     expect(result.success).toBe(false)
     if (!result.success) {
-      // The response is a NextResponse — we verify it's a 400
+      // The response is a NextResponse: we verify it's a 400
       expect(result.response.status).toBe(400)
     }
   })

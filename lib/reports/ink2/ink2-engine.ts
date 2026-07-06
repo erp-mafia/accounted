@@ -562,7 +562,7 @@ export const INK2R_ACCOUNT_MAPPINGS: INK2AccountMapping[] = [
     normalBalance: 'debit',
     accountRanges: [{ start: '8500', end: '8599' }],
   },
-  // Bokslutsdispositioner — account numbers per BAS 2020 (verified against
+  // Bokslutsdispositioner: account numbers per BAS 2020 (verified against
   // lib/bookkeeping/bas-data/class-8-financial.ts).
   {
     sruCode: '7525',
@@ -783,7 +783,7 @@ export async function generateINK2Declaration(
   for (const [accountNumber, balance] of accountBalances) {
     if (Math.abs(balance) < 0.01) continue
 
-    // Skip account 8999 — årets resultat is calculated
+    // Skip account 8999: årets resultat is calculated
     if (accountNumber === '8999') continue
 
     let mapped = false
@@ -881,7 +881,7 @@ export async function generateINK2Declaration(
   }
 
   // Add calculated result to fritt eget kapital for balance
-  // During open fiscal year, 2099 may have no balance — the result only exists
+  // During open fiscal year, 2099 may have no balance; the result only exists
   // as net of income statement accounts. Adding it here handles both cases.
   const adjustedEquityLiabilities = totalEquityLiabilities + resultAfterFinancial
 
@@ -902,7 +902,7 @@ export async function generateINK2Declaration(
     '7114': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }
 
-  // Build INK2S (skattemässiga justeringar — auto-derived basics only)
+  // Build INK2S (skattemässiga justeringar, auto-derived basics only)
   const ink2s: INK2SRutor = {
     '7011': fyStart,
     '7012': fyEnd,
@@ -915,7 +915,7 @@ export async function generateINK2Declaration(
 
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
-    warnings.push('Räkenskapsåret är inte stängt — deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+    warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
   }
 
   if (totalAssets === 0 && totalEquityLiabilities === 0 && ink2r['7410'] === 0) {

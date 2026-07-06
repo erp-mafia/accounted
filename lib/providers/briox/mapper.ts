@@ -13,7 +13,7 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
-/** Briox often serializes numbers as strings ("250.00") — coerce defensively. */
+/** Briox often serializes numbers as strings ("250.00"): coerce defensively. */
 function num(value: unknown): number | undefined {
   if (value == null || value === '') return undefined;
   const n = Number(value);
@@ -24,7 +24,7 @@ function num(value: unknown): number | undefined {
  * Single source of truth for "is this invoice fully settled?", used by BOTH
  * deriveInvoiceStatus and the paymentStatus.paid flag so they can never
  * diverge (mirrors the Fortnox mapper). An ABSENT balance is treated as NOT
- * paid — only an explicit paid status/flag, or a present non-positive balance
+ * paid: only an explicit paid status/flag, or a present non-positive balance
  * on a positive-total invoice, counts as paid.
  */
 function isFullyPaid(raw: Record<string, unknown>): boolean {
@@ -79,7 +79,7 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
   // Line-level amounts arrive from the same string-serializing API as the
-  // header amounts — coerce ALL numerics through num(), never blind casts.
+  // header amounts: coerce ALL numerics through num(), never blind casts.
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
     id: String(row['id'] ?? idx + 1),
     description: row['description'] as string | undefined,
@@ -138,7 +138,7 @@ export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): Supplie
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
   // Same string-coercion hardening as the sales path (Briox serializes
-  // numbers as strings) — route every numeric line field through num().
+  // numbers as strings): route every numeric line field through num().
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => ({
     id: String(row['id'] ?? idx + 1),
     description: row['description'] as string | undefined,

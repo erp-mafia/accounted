@@ -21,7 +21,7 @@ import { getPool } from '@/tests/pg/setup'
  *       transaction_voucher_links references the tx
  *     …and false otherwise.
  *
- * Tests write via the superuser pool (bypass RLS) — the goal is to exercise
+ * Tests write via the superuser pool (bypass RLS): the goal is to exercise
  * trigger logic + the helper's SQL truth, not the policy layer.
  */
 

@@ -13,21 +13,23 @@ import { getLibrarySections, type ReportDescriptor } from '@/lib/reports/catalog
 import type { EntityType } from '@/types'
 
 /**
- * The report library — the calm landing for /reports. Reports grouped by
+ * The report library: the calm landing for /reports. Reports grouped by
  * accounting taxonomy, each section a single DataList. One report = one row =
  * one destination; no data preview, so the landing stays a fast index.
  */
 export function ReportLibrary({
   entityType,
   hasEmployees,
+  dimensionsEnabled,
   onOpen,
 }: {
   entityType?: EntityType
   hasEmployees?: boolean
+  dimensionsEnabled?: boolean
   onOpen: (slug: string) => void
 }) {
   const t = useTranslations('reports')
-  const sections = getLibrarySections(entityType, hasEmployees)
+  const sections = getLibrarySections(entityType, hasEmployees, dimensionsEnabled)
 
   return (
     <div className="space-y-8">
@@ -63,7 +65,9 @@ export function ReportLibrary({
 }
 
 function EntityBadge({ item }: { item: ReportDescriptor }) {
-  if (item.entityType === 'enskild_firma') return <Badge variant="outline">EF</Badge>
-  if (item.entityType === 'aktiebolag') return <Badge variant="outline">AB</Badge>
+  if (item.entityType === 'enskild_firma')
+    return <span className="text-xs text-muted-foreground">EF</span>
+  if (item.entityType === 'aktiebolag')
+    return <span className="text-xs text-muted-foreground">AB</span>
   return null
 }

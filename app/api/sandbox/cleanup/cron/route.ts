@@ -4,7 +4,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/sandbox/cleanup/cron — daily 04:00 UTC.
+ * GET /api/sandbox/cleanup/cron: daily 04:00 UTC.
  * Removes expired sandbox users (>24h old).
  */
 export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx) => {

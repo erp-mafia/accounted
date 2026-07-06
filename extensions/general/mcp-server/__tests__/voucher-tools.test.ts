@@ -3,7 +3,7 @@
  *
  * The executor-level gates (period lock, balance, status === 'posted' for
  * correct_entry) are tested in lib/pending-operations/__tests__/. This file
- * covers the pre-staging gates added to the MCP tool layer for UX — explicit
+ * covers the pre-staging gates added to the MCP tool layer for UX: explicit
  * fiscal_period_id validation, inactive/missing account rejection, and the
  * source_type-not-staged invariant.
  */
@@ -36,7 +36,7 @@ const balancedLines = [
   { account_number: '1930', debit_amount: 0, credit_amount: 250 },
 ]
 
-describe('gnubok_create_voucher — staging gates', () => {
+describe('gnubok_create_voucher: staging gates', () => {
   it('is registered and mapped to bookkeeping:write scope', async () => {
     const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')
     expect(createVoucher).toBeDefined()
@@ -97,7 +97,7 @@ describe('gnubok_create_voucher — staging gates', () => {
 
   it('rejects when an explicit fiscal_period_id does not exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: null }) // fiscal_periods fetch — not found
+    enqueue({ data: null, error: null }) // fiscal_periods fetch: not found
 
     await expect(
       createVoucher.execute(
@@ -154,7 +154,7 @@ describe('gnubok_create_voucher — staging gates', () => {
       },
       error: null,
     })
-    // chart_of_accounts returns nothing — both accounts unknown
+    // chart_of_accounts returns nothing: both accounts unknown
     enqueue({ data: [], error: null })
 
     await expect(
@@ -261,7 +261,7 @@ describe('gnubok_create_voucher — staging gates', () => {
     }
     expect(schema.properties.inbox_item_id).toBeDefined()
     expect(schema.properties.inbox_item_id?.type).toBe('string')
-    // Must NOT be required — voucher creation works standalone too.
+    // Must NOT be required: voucher creation works standalone too.
     expect(schema.required ?? []).not.toContain('inbox_item_id')
   })
 
@@ -300,7 +300,7 @@ describe('gnubok_create_voucher — staging gates', () => {
     const result = (await createVoucher.execute(
       {
         entry_date: '2026-05-12',
-        description: 'Kvitto från Clas Ohlson — adapter',
+        description: 'Kvitto från Clas Ohlson: adapter',
         fiscal_period_id: 'fp-1',
         inbox_item_id: 'inbox-1',
         lines: [
@@ -456,7 +456,7 @@ describe('gnubok_create_voucher — staging gates', () => {
   })
 })
 
-describe('gnubok_correct_entry — registration', () => {
+describe('gnubok_correct_entry: registration', () => {
   it('is registered with bookkeeping:write scope and is not read-only', async () => {
     const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')
     expect(correctEntry).toBeDefined()
@@ -483,7 +483,7 @@ describe('gnubok_correct_entry — registration', () => {
   })
 })
 
-describe('gnubok_reverse_journal_entry — staging gates', () => {
+describe('gnubok_reverse_journal_entry: staging gates', () => {
   it('is registered with bookkeeping:write scope and is not read-only', async () => {
     const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')
     expect(reverseEntry).toBeDefined()
@@ -551,7 +551,7 @@ describe('gnubok_reverse_journal_entry — staging gates', () => {
   })
 })
 
-describe('entry_id resolution — voucher refs and hallucinated UUIDs', () => {
+describe('entry_id resolution: voucher refs and hallucinated UUIDs', () => {
   // These tests cover the resolveJournalEntryRef helper as exercised through
   // gnubok_correct_entry. The same resolution path is wired into
   // gnubok_reverse_journal_entry, so one tool is enough to lock the behaviour.
@@ -659,7 +659,7 @@ describe('entry_id resolution — voucher refs and hallucinated UUIDs', () => {
   })
 })
 
-describe('agent memory tools — agent:write scope gate', () => {
+describe('agent memory tools: agent:write scope gate', () => {
   const rememberFact = tools.find((t) => t.name === 'gnubok_remember_fact')
   const forgetFact = tools.find((t) => t.name === 'gnubok_forget_fact')
 

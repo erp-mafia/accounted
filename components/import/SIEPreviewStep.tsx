@@ -1,8 +1,10 @@
 'use client'
 
+import { useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { formatCurrency } from '@/lib/utils'
 import {
   Building2,
@@ -39,9 +41,20 @@ export default function SIEPreviewStep({
   const errors = issues.filter((i) => i.severity === 'error')
   const warnings = issues.filter((i) => i.severity === 'warning')
 
+  // Opening-balance imbalance. The importer plugs any diff > 0.01 to 2099, but a
+  // diff under ~1 SEK is genuine öresavrundning. Anything larger is a real
+  // imbalance (incomplete export: missing liabilities / unappropriated prior-year
+  // result) that would silently book a bogus amount to 2099. Mirrors the importer's
+  // own `fileImbalance > 1.00` "serious" threshold (lib/import/sie-import.ts).
+  const ibDiff = Math.round((preview.trialBalance.totalDebit - preview.trialBalance.totalCredit) * 100) / 100
+  const significantImbalance = !preview.trialBalance.isBalanced && Math.abs(ibDiff) > 1
+  const [ackImbalance, setAckImbalance] = useState(false)
+
   // Only block on actual parsing errors, not unmapped accounts
-  // (users need to proceed to mapping step to fix unmapped accounts)
+  // (users need to proceed to mapping step to fix unmapped accounts).
+  // A significant IB imbalance is a soft block: the user must acknowledge it.
   const hasBlockingErrors = errors.length > 0
+  const blockContinue = hasBlockingErrors || (significantImbalance && !ackImbalance)
 
   return (
     <div className="space-y-6">
@@ -164,11 +177,42 @@ export default function SIEPreviewStep({
                 <Badge variant="success">Balanserar</Badge>
               ) : (
                 <Badge variant="secondary">
-                  Diff: {formatCurrency(preview.trialBalance.totalDebit - preview.trialBalance.totalCredit)}
+                  Diff: {formatCurrency(ibDiff)}
                 </Badge>
               )}
             </div>
           </div>
+
+          {/* Significant imbalance: explain + require acknowledgement before continuing */}
+          {significantImbalance && (
+            <div className="mt-4 space-y-3 rounded-lg border border-warning/40 bg-warning/5 px-4 py-3">
+              <div className="flex items-start gap-2 text-sm">
+                <AlertCircle className="h-4 w-4 text-warning mt-0.5 flex-shrink-0" />
+                <div className="space-y-1">
+                  <p className="font-medium text-warning">
+                    Ingående balanser balanserar inte ({formatCurrency(Math.abs(ibDiff))})
+                  </p>
+                  <p className="text-muted-foreground">
+                    Det betyder oftast att exporten från ditt bokföringssystem är ofullständig:
+                    t.ex. att skulder saknas eller att föregående års resultat inte är disponerat.
+                    Om du fortsätter bokförs differensen på konto 2099 (Årets resultat), vilket
+                    nästan alltid blir fel. Vi rekommenderar att du rättar exporten i källsystemet
+                    och laddar upp filen på nytt.
+                  </p>
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <Checkbox
+                  checked={ackImbalance}
+                  onCheckedChange={(v) => setAckImbalance(v === true)}
+                  className="mt-0.5"
+                />
+                <span className="text-muted-foreground">
+                  Jag förstår att differensen bokförs på 2099 och vill fortsätta ändå.
+                </span>
+              </label>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -228,7 +272,7 @@ export default function SIEPreviewStep({
         <div className="flex items-start gap-2 rounded-lg border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
           <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>
-            {preview.excludedSystemAccounts.length} internt systemkonto från källsystemet exkluderades ({preview.excludedSystemAccounts.map((a) => a.number).join(', ')}) — inte bokföringskonton
+            {preview.excludedSystemAccounts.length} internt systemkonto från källsystemet exkluderades ({preview.excludedSystemAccounts.map((a) => a.number).join(', ')}), inte bokföringskonton
           </span>
         </div>
       )}
@@ -243,7 +287,7 @@ export default function SIEPreviewStep({
             </CardTitle>
             <CardDescription>
               {missingAccounts.length} konton från SIE-filen finns inte i din kontoplan ännu.
-              Klicka nedan för att skapa dem — de kopplas sedan automatiskt i nästa steg.
+              Klicka nedan för att skapa dem: de kopplas sedan automatiskt i nästa steg.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -343,7 +387,7 @@ export default function SIEPreviewStep({
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={onContinue} disabled={hasBlockingErrors}>
+        <Button className="min-h-11" onClick={onContinue} disabled={blockContinue}>
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
             ? 'Granska mappningar'
             : 'Fortsätt'}

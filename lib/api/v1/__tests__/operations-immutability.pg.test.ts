@@ -34,7 +34,7 @@ async function insertOperation(params: {
   return id
 }
 
-describe('operations-immutability.pg — terminal-status rows are immutable', () => {
+describe('operations-immutability.pg: terminal-status rows are immutable', () => {
   // Sanity: the regular running → succeeded transition (the path used by
   // completeOperation in lib/api/v1/operations.ts) is NOT blocked. The
   // trigger reads OLD.status; the legitimate UPDATE has OLD.status='running'

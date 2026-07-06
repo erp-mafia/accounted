@@ -1,15 +1,15 @@
 /**
- * /api/v1/companies/{companyId}/webhooks/{id} — get / update / delete.
+ * /api/v1/companies/{companyId}/webhooks/{id}: get / update / delete.
  *
- * GET    — return the full webhook row (no secret).
- * PATCH  — update name, description, webhook_url, active. Cannot change
+ * GET   : return the full webhook row (no secret).
+ * PATCH : update name, description, webhook_url, active. Cannot change
  *          event_type (immutable: would require re-pinning api_version).
  *          Cannot rotate the secret here (separate flow, deferred to
  *          Phase 6 follow-up).
- * DELETE — hard delete the webhook. The webhook_deliveries.webhook_id FK
+ * DELETE: hard delete the webhook. The webhook_deliveries.webhook_id FK
  *          is ON DELETE SET NULL (declared in migration 20260515170000),
  *          so the delivery audit trail SURVIVES webhook deletion
- *          (BFNAR 2013:2 kap 8 § behandlingshistorik — accounting-event
+ *          (BFNAR 2013:2 kap 8 § behandlingshistorik: accounting-event
  *          deliveries must be retained for 7 years). Pending/failed
  *          deliveries become dormant (the dispatcher skips
  *          webhook_id IS NULL rows); terminal rows stay queryable via
@@ -56,7 +56,7 @@ const PatchWebhookSchema = z
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required.' })
 
 // ──────────────────────────────────────────────────────────────────
-// GET — detail
+// GET: detail
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -113,7 +113,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — update
+// PATCH: update
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -122,11 +122,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks/:id',
   summary: 'Update a webhook subscription.',
   description:
-    'Update the URL, name, description, or active flag. event_type is immutable — delete and recreate to change it. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410.',
+    'Update the URL, name, description, or active flag. event_type is immutable: delete and recreate to change it. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410.',
   useWhen: 'You need to point an existing webhook at a new URL or temporarily pause delivery.',
   doNotUseFor: 'Rotating the signing secret (delete and recreate). Changing event_type.',
   pitfalls: [
-    'Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled — those need POST /webhook-deliveries/{id}/retry.',
+    'Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled: those need POST /webhook-deliveries/{id}/retry.',
   ],
   example: {
     request: { active: true },
@@ -184,7 +184,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
     const body = parsed.data
 
-    // SSRF guard on webhook_url change — same DNS/IP-class validation as
+    // SSRF guard on webhook_url change: same DNS/IP-class validation as
     // POST /webhooks. Skip when webhook_url isn't being changed.
     if (body.webhook_url !== undefined) {
       const urlCheck = await validateWebhookUrl(body.webhook_url)
@@ -215,7 +215,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
 
     // Capture prior state for the audit_log old_state field. One extra
-    // SELECT — cost is negligible for a manual webhook PATCH and the
+    // SELECT: cost is negligible for a manual webhook PATCH and the
     // before/after pair is what makes the audit row reconstructible.
     const { data: prior } = await ctx.supabase
       .from('webhooks')
@@ -235,10 +235,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     if (!data) return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
 
-    // V16 audit log — webhook lifecycle event. Record the diff.
+    // V16 audit log: webhook lifecycle event. Record the diff.
     //
     // new_state is populated from the DB-confirmed returned row (`data`)
-    // through an explicit field allowlist — NOT from the spread
+    // through an explicit field allowlist: NOT from the spread
     // `update` object. Two reasons: (a) the post-UPDATE state is the
     // ground truth, and a future column-level CHECK/trigger that
     // rejects a field would leave the request-body-derived shape
@@ -283,10 +283,10 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks/:id',
   summary: 'Delete a webhook subscription.',
   description:
-    'Hard-deletes the webhook. The delivery audit trail SURVIVES — both terminal (delivered, dead) and non-terminal (pending, failed) delivery rows persist with webhook_id = NULL so the BFNAR 2013:2 kap 8 § behandlingshistorik (7-year retention) for accounting-event deliveries is preserved. Non-terminal rows go dormant (the dispatcher skips them).',
+    'Hard-deletes the webhook. The delivery audit trail SURVIVES: both terminal (delivered, dead) and non-terminal (pending, failed) delivery rows persist with webhook_id = NULL so the BFNAR 2013:2 kap 8 § behandlingshistorik (7-year retention) for accounting-event deliveries is preserved. Non-terminal rows go dormant (the dispatcher skips them).',
   useWhen: 'You no longer want this webhook to receive events.',
   doNotUseFor:
-    'Temporarily pausing delivery — use PATCH with active=false instead so the configuration survives.',
+    'Temporarily pausing delivery: use PATCH with active=false instead so the configuration survives.',
   pitfalls: ['Audit history survives DELETE; only the receiver subscription is removed. To suppress future events without retaining the registration use PATCH active=false.'],
   example: {
     response: {
@@ -309,7 +309,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
 
     // Atomic delete + returning. One round trip captures both the
     // deletion-confirmation row count and the deleted row's prior state
-    // for the audit_log entry — eliminates the pre-read TOCTOU window
+    // for the audit_log entry: eliminates the pre-read TOCTOU window
     // a separate SELECT introduced (V8.2.1). Idempotent DELETE: a 0-row
     // delete (already-deleted webhook) still returns 204 because the
     // resource is gone, which is the desired end state.
@@ -323,8 +323,8 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
 
-    // V16 audit log — webhook lifecycle event. Records the deletion
-    // UNCONDITIONALLY. When `deleted` is null (no row matched —
+    // V16 audit log: webhook lifecycle event. Records the deletion
+    // UNCONDITIONALLY. When `deleted` is null (no row matched:
     // idempotent re-delete or cross-tenant id), the audit row still
     // captures the attempt: record_id + actor_id + action + timestamp
     // is the minimum CC6.3 attribution contract; old_state degrades

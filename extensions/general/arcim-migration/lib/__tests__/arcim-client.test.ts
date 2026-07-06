@@ -180,7 +180,7 @@ describe('arcim-client', () => {
     it('increases delay on successive retries', async () => {
       const delays: number[] = []
       const realSetTimeout = globalThis.setTimeout
-      // Only intercept retry delays (1000–10000ms range), pass abort timers through
+      // Only intercept retry delays (1000-10000ms range), pass abort timers through
       vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn, ms) => {
         if (ms && ms >= 1000 && ms < 120_000) {
           delays.push(ms as number)

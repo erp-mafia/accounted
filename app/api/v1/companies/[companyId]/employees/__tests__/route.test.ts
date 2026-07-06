@@ -108,7 +108,7 @@ beforeEach(() => {
   })
 })
 
-// 12-digit synthetic personnummer — passes the schema's `^\d{12}$` regex
+// 12-digit synthetic personnummer: passes the schema's `^\d{12}$` regex
 // while being obviously not a real birthdate (year 1900, day 1, zero
 // suffix). ISO A.5.34 / GDPR Art.5(1)(c): test fixtures must not look like
 // production-format PII. Last-4 is '0000' so the mask assertion is still
@@ -168,7 +168,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
     const body = await res.json()
     expect(body.data).toHaveLength(1)
     expect(body.data[0].first_name).toBe('Anna')
-    // GDPR Art.5(1)(c) — birthdate visible, last-4 hidden.
+    // GDPR Art.5(1)(c): birthdate visible, last-4 hidden.
     expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
     // The full personnummer must NEVER appear in the response, even in
     // unrelated fields.
@@ -229,7 +229,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.id).toBe(EMPLOYEE_ID)
-    // Detail endpoint deliberately returns the full personnummer — the
+    // Detail endpoint deliberately returns the full personnummer: the
     // caller already has read scope and the id.
     expect(body.data.personnummer).toBe(SAMPLE_PERSONNUMMER)
   })
@@ -398,7 +398,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(fromSpy).not.toHaveBeenCalledWith('employees')
     // The dry-run preview must mask personnummer the same way the live
-    // response shape does — never echo back the supplied identifier.
+    // response shape does: never echo back the supplied identifier.
     const body = await res.json()
     expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -431,7 +431,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     const res = await createEmployee(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
         method: 'POST',
-        // 10-digit form — the schema requires the 12-digit YYYYMMDDNNNN form.
+        // 10-digit form: the schema requires the 12-digit YYYYMMDDNNNN form.
         body: JSON.stringify({ ...validBody, personnummer: '8504121234' }),
       }),
       companyParams(COMPANY_ID),
@@ -459,7 +459,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
           employment_start: '2024-02-01',
           salary_type: 'monthly',
           monthly_salary: 30000,
-          // Deliberately missing tax_table_number — superRefine should fail.
+          // Deliberately missing tax_table_number: superRefine should fail.
         }),
       }),
       companyParams(COMPANY_ID),
@@ -498,7 +498,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     const body = await res.json()
     expect(body.data.monthly_salary).toBe(38000)
     // GDPR Art.5(1)(c): PATCH success response masks personnummer (write
-    // shape) — the full value is only echoed by the GET drill-in.
+    // shape): the full value is only echoed by the GET drill-in.
     expect(body.data.personnummer_masked).toBe('19000101XXXX')
     expect(body.data.personnummer).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -555,7 +555,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
   })
 
   it('returns a dry-run preview with masked personnummer', async () => {
-    // GDPR Art.5(1)(c) — the dry-run preview is a write-shape so it follows
+    // GDPR Art.5(1)(c): the dry-run preview is a write-shape so it follows
     // the same masking rule as POST and PATCH success. The full value is
     // only echoed by the GET drill-in.
     mockServiceClient.mockReturnValue(
@@ -603,7 +603,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(204)
   })
 
-  it('is idempotent — deleting an already-inactive employee returns 204', async () => {
+  it('is idempotent: deleting an already-inactive employee returns 204', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

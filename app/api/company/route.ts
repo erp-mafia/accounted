@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 
 /**
  * GET /api/company?owned=true&archived=false
@@ -9,12 +9,13 @@ import { NextResponse } from 'next/server'
  *  - archived=false → only non-archived companies (default)
  *
  * Used by the account danger zone to show a blockers list before
- * allowing account deletion.
+ * allowing account deletion. User-level (spans ALL memberships), so it uses
+ * requireAuth() directly — no single active-company context applies.
  */
 export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { user, supabase } = auth
 
   const url = new URL(request.url)
   const ownedOnly = url.searchParams.get('owned') === 'true'

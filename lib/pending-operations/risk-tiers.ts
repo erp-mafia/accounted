@@ -21,12 +21,17 @@ export type RiskLevel = 'low' | 'medium' | 'high'
 export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Low: pure data, no booking impact ─────────────────────────────
   create_customer: 'low',
-  // Article catalog (artikelregister) is app-level master data — no journal
+  // Article catalog (artikelregister) is app-level master data: no journal
   // impact, no external side-effect. Unlike create_supplier it carries no
   // payment-routing fields, so there's no BEC/fraud surface; both create and
   // update sit at the lowest tier next to create_customer.
   create_article: 'low',
   update_article: 'low',
+  // Dimension values (kostnadsställe/projekt object codes, SIE #OBJEKT) are
+  // reporting master data: no journal impact, no external side-effect, no
+  // payment-routing surface. Staged (agents never silently mint reporting
+  // values) but at the lowest tier next to create_customer/create_article.
+  create_dimension_value: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
@@ -34,7 +39,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // Link an existing posted verifikat as payment for an invoice. Reversible by
   // deleting the invoice_payments row and reverting invoice status; no journal
   // entry is created or modified. Sits next to match_transaction_invoice
-  // semantically — both attach an existing booking to an invoice.
+  // semantically: both attach an existing booking to an invoice.
   link_invoice_voucher: 'medium',
   // Supplier-side mirror of link_invoice_voucher: link an existing posted
   // verifikat (Dr 2440) as payment for a leverantörsfaktura. Reversible by
@@ -58,6 +63,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (BFL 5 kap 6 §) and becomes immutable once the JE is posted. Medium so a
   // human confirms the doc-to-verifikat pairing before it locks.
   link_document_to_voucher: 'medium',
+  // Dimension-only diff on posted lines (verifikat stays immutable), fully
+  // audited via dimension_retag_log, but it rewrites reporting history, so
+  // it crosses a human at medium.
+  retag_line_dimensions: 'medium',
 
   // ── High: irreversible, compliance-critical, or external side-effects
   send_invoice: 'high',          // emails the customer
@@ -72,7 +81,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   run_year_end: 'high',
   run_currency_revaluation: 'high',
   // Planenlig avskrivning: one journal entry per asset, each independently
-  // reversible (storno). Mid-stakes bokslut posting — staged and human-reviewed,
+  // reversible (storno). Mid-stakes bokslut posting: staged and human-reviewed,
   // but not the irreversible tier that year-end close / period lock occupy.
   post_annual_depreciation: 'medium',
   import_sie: 'high',
@@ -92,7 +101,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   convert_invoice: 'medium',
 
   // ── Phase 4: arbitrary-line bookkeeping primitives ─────────────────
-  // Both accept caller-supplied account/amount/period — unlike
+  // Both accept caller-supplied account/amount/period: unlike
   // uncategorize_transaction (medium), which mirrors an existing entry.
   // The arbitrary-line capability is what makes these compliance-critical.
   create_voucher: 'high',
@@ -103,7 +112,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // Salary run creation materialises a draft + per-employee base lines. The
   // run is reversible while still draft, so 'medium' aligns with other
   // create-draft operations. AGI generation produces the Skatteverket
-  // underlag (XML, BFL 7-year retention) — statutory artifact, always
+  // underlag (XML, BFL 7-year retention): statutory artifact, always
   // staged.
   create_salary_run: 'medium',
   generate_agi: 'high',
@@ -111,16 +120,22 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Multi-tx flows (PRs #603/#606/#608/#610) ───────────────────────
   // Allocate 1 bank tx across N customer or supplier invoices into one
   // combined verifikat. Reversible via storno + invoice_payments delete,
-  // so 'medium' (same tier as match_transaction_invoice — its single-
+  // so 'medium' (same tier as match_transaction_invoice: its single-
   // invoice counterpart).
   match_batch_allocate: 'medium',
   // Bulk-book N bank txs into 1 verifikat. The create-new branch posts
   // a verifikat with caller-supplied lines (template-expanded or manual),
   // the same compliance-critical surface as create_voucher. 'high'.
   bulk_book_transactions: 'high',
+  // Bulk-book N selected Underlag (Dokumentinkorgen): one posted verifikat per
+  // matched bank transaction, each with VAT (incl. reverse charge) derived from
+  // a shared category. Posting N verifikat at once is the same compliance-
+  // critical surface as bulk_book_transactions, so 'high': never auto-commit;
+  // approval requires confirmed=true.
+  bulk_book_inbox_items: 'high',
   // Link a single bank tx to an already-posted verifikat (no new JE created).
   // Reversible by clearing transactions.journal_entry_id and deleting any
-  // invoice_payments row — sits next to link_invoice_voucher semantically;
+  // invoice_payments row: sits next to link_invoice_voucher semantically;
   // both attach an existing booking to a different entity.
   link_transaction_journal_entry: 'medium',
 
@@ -133,7 +148,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
 }
 
 export function getRiskLevel(operationType: string): RiskLevel {
-  // Default to 'high' for unknown ops — fail-safe: unknown means human review.
+  // Default to 'high' for unknown ops, fail-safe: unknown means human review.
   return OPERATION_RISK_TIERS[operationType] ?? 'high'
 }
 

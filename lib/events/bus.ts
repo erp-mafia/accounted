@@ -1,7 +1,7 @@
 import type { CoreEvent, CoreEventType, EventHandler } from './types'
 import { createLogger } from '@/lib/logger'
 
-// Internal handler type — loose enough for the Map, but type-safe at the public API
+// Internal handler type: loose enough for the Map, but type-safe at the public API
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyHandler = (payload: any) => Promise<void> | void
 

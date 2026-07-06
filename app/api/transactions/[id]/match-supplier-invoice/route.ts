@@ -89,13 +89,13 @@ export const POST = withRouteContext(
     // the kursvinst/kursförlust path in createSupplierInvoicePaymentEntry.
     const isPureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
 
-    // Amount in the *invoice's* currency — used to update
+    // Amount in the *invoice's* currency: used to update
     // supplier_invoices.paid_amount/remaining_amount and the
     // supplier_invoice_payments row (whose `currency` is the invoice's).
     // When the bank transaction is in a different currency from the
     // invoice (e.g. paying a USD invoice from a SEK account) we treat the
     // match as a full payment of whatever remains, rather than storing the
-    // SEK number with the invoice's currency suffix — which would render
+    // SEK number with the invoice's currency suffix: which would render
     // as "Betalt 239 USD" on a 25 USD invoice.
     const paymentAmountInvoiceCurrency =
       transaction.currency === invoice.currency
@@ -114,7 +114,7 @@ export const POST = withRouteContext(
     const paymentAccount =
       (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account || '1930'
 
-    // Route on the supplier invoice's actual booking state — if 2440 was posted
+    // Route on the supplier invoice's actual booking state: if 2440 was posted
     // at receipt (accrual), the match clears 2440 regardless of the company's
     // current setting. Only true kontantmetoden invoices (no registration JE)
     // book expense + input VAT here.
@@ -126,7 +126,7 @@ export const POST = withRouteContext(
     // path: there a whole-krona payment within 1 kr settles the invoice in full
     // and the residual is booked to 3740 by the line builder. Cash-method entries
     // book the full invoice total (not the bank amount), so absorbing there would
-    // mark the invoice paid while leaving a hidden 1930 discrepancy — keep strict.
+    // mark the invoice paid while leaving a hidden 1930 discrepancy: keep strict.
     // Rejecting here, BEFORE any JE is created, keeps a doomed overshoot from
     // burning a voucher number.
     const paymentPlan = planSupplierPayment(invoice, paymentAmountInvoiceCurrency, {
@@ -142,7 +142,7 @@ export const POST = withRouteContext(
     // SEK that actually left the bank, when we know it. SEK transaction → the
     // absolute amount; foreign transaction with a stored amount_sek → that
     // value; foreign transaction WITHOUT amount_sek → unknown (null). The raw
-    // foreign amount must never stand in here — treating 19 USD as 19 SEK is
+    // foreign amount must never stand in here: treating 19 USD as 19 SEK is
     // exactly the bug that books "19 kr" on a ~175 kr payment.
     const bankSekStored =
       transaction.currency === 'SEK'
@@ -195,7 +195,7 @@ export const POST = withRouteContext(
 
     // Cash method (kontantmetoden) collapses registration + payment into a
     // single entry. Under the cash method the expense is recognised AT PAYMENT
-    // at the payment-date rate, so there is no kursvinst/kursförlust — we hand
+    // at the payment-date rate, so there is no kursvinst/kursförlust: we hand
     // the builder the actual bank SEK (settledBankSek) and it translates the
     // whole verifikat to that, leaving 1930 equal to the bank transaction.
     // The only combination we still can't model is a PARTIAL cash-method
@@ -298,7 +298,7 @@ export const POST = withRouteContext(
     } catch (err) {
       txLog.error('failed to create supplier invoice payment journal entry', err as Error)
       // A failed payment voucher must fail the whole match. Proceeding used to
-      // mark the invoice paid with NO voucher — an unrecoverable half-state:
+      // mark the invoice paid with NO voucher: an unrecoverable half-state:
       // mark-paid rejects 'paid' invoices and this route rejects linked
       // transactions, so no flow could ever complete the booking afterwards.
       if (isBookkeepingError(err)) {
@@ -316,7 +316,7 @@ export const POST = withRouteContext(
 
     // Ledger update from the plan computed up front. An öre-absorbed settlement
     // reports remaining 0 / status paid even though the bank paid a sub-krona
-    // less (or more) — the residual lives on 3740, not the supplier ledger.
+    // less (or more): the residual lives on 3740, not the supplier ledger.
     const { newRemaining, newPaidAmount, isFullyPaid, newStatus } = paymentPlan.plan
 
     const { data: updatedRows, error: updateInvError } = await supabase
@@ -341,7 +341,7 @@ export const POST = withRouteContext(
     if (!updatedRows || updatedRows.length === 0) {
       // CAS guard: the invoice was settled by a concurrent request between
       // our read and write. The payment voucher we just posted belongs to no
-      // payment — cancel it and document the gap (mirrors mark-paid).
+      // payment: cancel it and document the gap (mirrors mark-paid).
       await cancelOrphanedPaymentEntry(
         supabase, companyId!, user.id, journalEntryId,
         'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',

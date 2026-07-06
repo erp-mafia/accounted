@@ -25,7 +25,7 @@ import { validateDocumentMagicBytes } from '@/lib/core/documents/document-servic
 import { NextResponse } from 'next/server'
 
 // v4 UUIDs (variant 'a' / 'b' in the 4th group) so Zod's stricter validators
-// accept them — the looser `2222...` style fails on the variant check.
+// accept them: the looser `2222...` style fails on the variant check.
 const mockUser = { id: '11111111-1111-4111-a111-111111111111' }
 const validDocId = '22222222-2222-4222-a222-222222222222'
 const companyId = '33333333-3333-4333-a333-333333333333'
@@ -159,7 +159,7 @@ describe('GET /api/documents/[id]/integrity', () => {
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
     expect(status).toBe(200)
     expect(body.data.valid).toBe(false)
-    // The whole point of the V1.2.5 / Art 25(2) hardening — internal text
+    // The whole point of the V1.2.5 / Art 25(2) hardening: internal text
     // never appears in the response.
     expect(body.data.reason).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain('storage/v1/object')
@@ -194,7 +194,7 @@ describe('GET /api/documents/[id]/integrity', () => {
   it('does not import the service-role supabase client', async () => {
     // The download must go through the per-request user-scoped client so
     // RLS on storage.objects can act as defense-in-depth. Statically
-    // verifying the source is the cleanest check — runtime mocking of the
+    // verifying the source is the cleanest check: runtime mocking of the
     // service-client export would not catch a future regression where
     // someone added an import but conditionally used it.
     const fs = await import('node:fs/promises')
@@ -208,7 +208,7 @@ describe('GET /api/documents/[id]/integrity', () => {
     // The route's first `from('document_attachments')` chain must include
     // `.eq('is_current_version', true)` so superseded versions cannot have
     // their bytes probed via this surface. Source-level check rather than
-    // runtime spying — the proxy-based queued mock collapses every chained
+    // runtime spying: the proxy-based queued mock collapses every chained
     // method into the same handler, so introspecting individual .eq calls
     // is not feasible without rebuilding the mock.
     const fs = await import('node:fs/promises')

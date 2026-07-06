@@ -19,6 +19,19 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
 }))
 
+// applyDomainStatusFromWebhook confirms the receiving capability with Resend
+// before flipping a row to verified: keep that lookup off the network.
+const { domainsMock } = vi.hoisted(() => ({
+  domainsMock: {
+    get: vi.fn(),
+  },
+}))
+vi.mock('resend', () => ({
+  Resend: class {
+    domains = domainsMock
+  },
+}))
+
 // Rate limiter is a thin RPC wrapper; bypass it so the queued-mock sequence
 // in each test doesn't have to account for the extra Supabase call.
 vi.mock('@/lib/rate-limits/inbox', () => ({
@@ -103,13 +116,140 @@ describe('POST /inbound', () => {
     expect(res.status).toBe(200)
   })
 
-  it('returns 404 when no recipient matches our domain', async () => {
+  it('returns 404 when no recipient matches our domain or a verified custom domain', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(
       mockReceivedEvent({ to: ['random@contoso.com'] }) as never
     )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // company_inbound_domains lookup finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+
     const request = createMockRequest('/inbound', { method: 'POST', body: {} })
     const res = await webhookRoute.handler(request)
     expect(res.status).toBe(404)
+  })
+
+  it('routes mail on a verified custom domain to its company (any local part)', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ to: ['fakturor@hansbolag.example'], attachments: [] }) as never
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ company_id: 'company-9', domain: 'hansbolag.example' }] }) // verified domain
+    enqueue({ data: { created_by: 'user-owner-9' } }) // company owner
+    enqueue({ data: null }) // no-attachments error-row insert
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['fakturor@hansbolag.example'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Invoice #5678',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Body',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('no_attachments')
+  })
+
+  it('does not route mail for an unverified custom domain', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ to: ['faktura@pending-bolag.example'] }) as never
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // status='verified' filter means a pending claim never matches
+    enqueue({ data: [] })
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    expect(res.status).toBe(404)
+  })
+
+  it('prefers the shared-domain address when both shared and custom recipients are present', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({
+        to: ['acme-ab-x7f2@arcim.io', 'faktura@hansbolag.example'],
+        attachments: [],
+      }) as never
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // Only the three shared-path queries are enqueued: if the handler also
+    // ran the custom-domain lookup, the queue would shift and created_by
+    // would resolve to null (500). A 200 proves the shared path won.
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // no-attachments error-row insert
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io', 'faktura@hansbolag.example'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Invoice #5678',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Body',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('no_attachments')
+  })
+
+  it('applies domain.updated events to custom-domain rows', async () => {
+    process.env.RESEND_API_KEY = 'test-key'
+    domainsMock.get.mockResolvedValue({
+      data: {
+        id: 'rd_123',
+        status: 'verified',
+        capabilities: { receiving: 'enabled', sending: 'disabled' },
+        records: [],
+      },
+      error: null,
+    })
+    vi.mocked(verifyInboundWebhook).mockReturnValue({
+      type: 'domain.updated',
+      created_at: '2026-07-01T10:00:00Z',
+      data: {
+        id: 'rd_123',
+        name: 'hansbolag.example',
+        status: 'verified',
+        created_at: '2026-07-01T09:00:00Z',
+        region: 'eu-west-1',
+        records: [],
+      },
+    } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'row-1', verified_at: null } }) // row by resend_domain_id
+    enqueue({ data: null }) // update
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.domain_updated).toBe(true)
   })
 
   it('returns 404 when the address is not in company_inboxes', async () => {

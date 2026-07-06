@@ -1,22 +1,22 @@
-# Vouchers och presentkort — SPV vs MPV
+# Vouchers och presentkort: SPV vs MPV
 
 ## Lagstöd
 
-- **2 kap. 26–27 §§ ML 2023:200** — definitioner av voucher, SPV, MPV.
-- **5 kap. 40–44 §§ ML 2023:200** — beskattningsbara transaktioner kring vouchers. Kontrollera konsoliderad version efter renumrering enligt SFS 2024:942 (ikraft 2025-01-01).
+- **2 kap. 26-27 §§ ML 2023:200**: definitioner av voucher, SPV, MPV.
+- **5 kap. 40-44 §§ ML 2023:200**: beskattningsbara transaktioner kring vouchers. Kontrollera konsoliderad version efter renumrering enligt SFS 2024:942 (ikraft 2025-01-01).
 - **Rådets direktiv (EU) 2016/1065** (voucher-direktivet), implementerat i Sverige 2019-01-01.
-- **Skatteverkets ställningstagande dnr 202 488720-18/111** (2018-11-26) — fortsatt giltigt.
-- **Skatteverkets ställningstagande dnr 202 508158-18/111** (2018-12-06) — fakturering och redovisning.
+- **Skatteverkets ställningstagande dnr 202 488720-18/111** (2018-11-26): fortsatt giltigt.
+- **Skatteverkets ställningstagande dnr 202 508158-18/111** (2018-12-06): fakturering och redovisning.
 
 ## Definitioner
 
 **Voucher**: Instrument som måste tas emot som vederlag (helt eller delvis) för leverans av varor eller tjänster, där varorna/tjänsterna eller säljarens identitet anges på instrumentet eller i tillhörande dokumentation.
 
-**SPV (Single-Purpose Voucher) — enfunktionsvoucher**: Voucher där **både** följande är kända vid utställandet:
+**SPV (Single-Purpose Voucher), enfunktionsvoucher**: Voucher där **både** följande är kända vid utställandet:
 - Platsen för leverans (beskattningsland).
 - Den moms som ska betalas (momssats).
 
-**MPV (Multi-Purpose Voucher) — flerfunktionsvoucher**: Alla andra vouchers (där minst en av platsen eller momssatsen är okänd vid utställandet).
+**MPV (Multi-Purpose Voucher), flerfunktionsvoucher**: Alla andra vouchers (där minst en av platsen eller momssatsen är okänd vid utställandet).
 
 ## Beslutsmatris
 
@@ -29,7 +29,7 @@
 | iTunes-voucher | **MPV** | Lex specialis: separat hantering av e-tjänster vs spel |
 | ICA-presentkort (matkedja, blandade satser 12 % och 25 %) | **MPV** | Sats okänd |
 | Sommarjobb-bonus i form av butiksvärdesedel (en butik, bara 12 %-livsmedel) | **SPV** | Båda kända |
-| Rabattkupong (-100 kr på köp över 500 kr) | **Ingen voucher** — rabattinstrument, ej voucher (2 kap. 27 § ML) |
+| Rabattkupong (-100 kr på köp över 500 kr) | **Ingen voucher**: rabattinstrument, ej voucher (2 kap. 27 § ML) |
 
 ## Redovisningsregler
 

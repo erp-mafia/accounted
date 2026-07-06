@@ -79,7 +79,7 @@ export async function GET(
     return NextResponse.json({ error: 'Inga anställda i lönekörningen' }, { status: 400 })
   }
 
-  // Validate bank accounts — but only for employees who will actually appear
+  // Validate bank accounts, but only for employees who will actually appear
   // in the file (positive payout). A zero-net employee is filtered out below,
   // so missing bank details for them must not block the file.
   const missingBank = runEmployees.filter(sre => {

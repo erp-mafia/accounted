@@ -1,6 +1,7 @@
 import type { AgentIntent } from './types'
 import { generalHelp } from './general-help'
 import { transactionCategorization } from './transaction-categorization'
+import { inboxBulkBook } from './inbox-bulk-book'
 import { invoiceDraft } from './invoice-draft'
 import { supplierInvoiceReview } from './supplier-invoice-review'
 import { vatReview } from './vat-review'
@@ -16,13 +17,14 @@ import { onboardingIntake } from './onboarding-intake'
 // here, append it to INTENTS, and it's reachable from /api/agent/invoke.
 // Plan refs: §8 (intent system).
 //
-// Using a static table (not a registry singleton) on purpose — intents are
+// Using a static table (not a registry singleton) on purpose: intents are
 // pure code, not data. Their lifetime matches the deployment.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const INTENTS: AgentIntent<any, any>[] = [
   generalHelp,
   transactionCategorization,
+  inboxBulkBook,
   invoiceDraft,
   supplierInvoiceReview,
   vatReview,

@@ -53,7 +53,7 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   // Regression guard for #755: 7833/7834 were referenced here but absent from
   // the BAS reference, so backfillStandardBASAccounts could not seed them and
   // annual depreciation threw AccountsNotInChartError. Every account in the
-  // triple must resolve in BAS_REFERENCE — otherwise the lazy backfill silently
+  // triple must resolve in BAS_REFERENCE: otherwise the lazy backfill silently
   // can't add it and the depreciation posting fails on minimal charts.
   it('every account in the triple exists in the BAS reference (backfillable)', () => {
     for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as Array<
@@ -67,7 +67,7 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   })
 })
 
-describe('disposeAsset — gain/loss account selection', () => {
+describe('disposeAsset: gain/loss account selection', () => {
   function makeAsset(overrides: Partial<Asset> = {}): Asset {
     return {
       id: 'asset-1',
@@ -103,7 +103,7 @@ describe('disposeAsset — gain/loss account selection', () => {
   function makeSupabaseForDispose(asset: Asset, schedules: Array<{ planned_depreciation: number }>) {
     // Three from() calls happen inside disposeAsset:
     //   1. getAsset (.maybeSingle on 'assets')
-    //   2. sumPostedDepreciation (.then on 'depreciation_schedules' — server-derived
+    //   2. sumPostedDepreciation (.then on 'depreciation_schedules': server-derived
     //      accumulated_depreciation; replaces the previously client-supplied value)
     //   3. update (.single on 'assets', returning the disposed row)
     const builders = {
@@ -274,7 +274,7 @@ describe('disposeAsset — gain/loss account selection', () => {
     expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
   })
 
-  it('server-derives accumulated_depreciation — caller cannot inflate gain', async () => {
+  it('server-derives accumulated_depreciation: caller cannot inflate gain', async () => {
     const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
     vi.mocked(createJournalEntry).mockClear()
     const asset = makeAsset({ category: 'equipment', acquisition_cost: 100_000 })
@@ -305,7 +305,7 @@ describe('disposeAsset — gain/loss account selection', () => {
   })
 })
 
-describe('updateAsset — acquisition-basis correction guard', () => {
+describe('updateAsset: acquisition-basis correction guard', () => {
   function makeAssetRow(overrides: Partial<Asset> = {}): Asset {
     return {
       id: 'asset-1',
@@ -457,7 +457,7 @@ describe('updateAsset — acquisition-basis correction guard', () => {
 
   it('blocks a correction when depreciation was hand-posted (no engine schedule)', async () => {
     // No depreciation_schedules row, but a manual credit to the asset's 1259
-    // accumulated account exists in the ledger — must still block.
+    // accumulated account exists in the ledger: must still block.
     const { supabase } = mockForUpdate(makeAssetRow(), {
       postedCount: 0,
       otherAssetEntryIds: [],

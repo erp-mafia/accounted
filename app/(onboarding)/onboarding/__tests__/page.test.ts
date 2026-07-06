@@ -5,7 +5,7 @@ import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 // `findCompanyRoleByOrgNumber` replaces the old prefetchLookup at /onboarding.
 // It reads bankid_enrichment.company_roles (populated by TIC Identity API at
 // BankID-completion time) and matches the role by orgnr. This costs zero
-// Lens calls — Identity API is on a different TIC product/quota. These tests
+// Lens calls: Identity API is on a different TIC product/quota. These tests
 // pin the behaviour because regressing this would silently re-add Lens spend
 // to every BankID signup.
 
@@ -98,7 +98,7 @@ describe('findCompanyRoleByOrgNumber', () => {
     // Important: TIC v2 returns full Swedish names like "Aktiebolag" and
     // "Enskild firma" (not the v1 "AB"/"EF" abbreviations). The canonical
     // mapEntityType in lib/company-lookup/entity-type-map.ts handles both
-    // sets — but only if we pass the raw string through unchanged.
+    // sets, but only if we pass the raw string through unchanged.
     const supabase = mockSupabase([
       makeRole({ companyRegistrationNumber: '8001011231', legalEntityType: 'Enskild firma' }),
     ])

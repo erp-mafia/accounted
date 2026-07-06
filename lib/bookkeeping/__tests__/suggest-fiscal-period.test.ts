@@ -37,7 +37,7 @@ describe('computeSuggestedPeriod', () => {
   })
 
   it('caps the gap suggestion so it never overlaps the right neighbour', () => {
-    // A six-month hole (Jan–Jun 2025) before a short FY 2025 H2 period.
+    // A six-month hole (Jan-Jun 2025) before a short FY 2025 H2 period.
     const fy2025h2: Range = { period_start: '2025-07-01', period_end: '2025-12-31' }
     expect(computeSuggestedPeriod('2025-03-15', [FY2024, fy2025h2])).toEqual({
       name: 'Räkenskapsår 2025',

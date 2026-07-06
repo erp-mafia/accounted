@@ -11,7 +11,7 @@ export const prompts: McpPrompt[] = [
     text:
       'Lista mina förfallna kundfakturor. Anropa gnubok_list_invoices med status="overdue" ' +
       'och svara på svenska med en kort lista: kundnamn, belopp, antal dagar förfallen. ' +
-      'Inga rekommendationer — bara fakta.',
+      'Inga rekommendationer: bara fakta.',
   },
   {
     name: 'cash_today',
@@ -19,7 +19,7 @@ export const prompts: McpPrompt[] = [
     text:
       'Hur mycket pengar har jag på företagskontot just nu? Anropa gnubok_get_balance_sheet ' +
       'för dagens datum och rapportera saldot på konto 1930. Visa även de senaste 5 transaktionerna ' +
-      'via gnubok_list_uncategorized_transactions (limit=5, sortera nyast först — men inkludera även ' +
+      'via gnubok_list_uncategorized_transactions (limit=5, sortera nyast först: men inkludera även ' +
       'kategoriserade om verktyget tillåter). Svara kort på svenska.',
   },
   {

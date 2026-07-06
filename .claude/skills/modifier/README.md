@@ -21,7 +21,7 @@ per company.
 - **Modifier** = a structural attribute (form, ownership, employer status,
   multi-currency, blandad verksamhet, …).
 
-A company will typically have **0–1 vertical** and **0–3 modifiers**.
+A company will typically have **0-1 vertical** and **0-3 modifiers**.
 
 ## Authoring contract
 
@@ -47,11 +47,11 @@ version: 1
 
 ## Suggested body sections
 
-1. **When this applies** — the precise conditions the agent should look for.
-2. **Implications** — what changes in day-to-day bookkeeping.
-3. **Regulatory edge cases** — laws that fire because of this modifier.
-4. **BAS account patterns** — accounts that show up because of it.
-5. **References** — links to horizontals and into `references/*.md` files.
+1. **When this applies**: the precise conditions the agent should look for.
+2. **Implications**: what changes in day-to-day bookkeeping.
+3. **Regulatory edge cases**: laws that fire because of this modifier.
+4. **BAS account patterns**: accounts that show up because of it.
+5. **References**: links to horizontals and into `references/*.md` files.
 
 ## Adding / removing
 

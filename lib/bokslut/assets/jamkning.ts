@@ -1,5 +1,5 @@
 /**
- * Jämkning helpers — input-VAT correction on disposal of investeringsvara
+ * Jämkning helpers: input-VAT correction on disposal of investeringsvara
  * within the korrigeringstid (ML 8a kap 4-7 §§).
  *
  * When an asset that had input VAT deducted at acquisition is disposed of
@@ -47,7 +47,7 @@ export interface JamkningInput {
    * Whether the disposal event triggers jämkning at all. Most disposals
    * within the korrigeringstid trigger it, but the caller may opt out
    * (e.g. the buyer continues to use the asset in a fully taxable
-   * verksamhet and assumes the jämkning obligation via avtal — ML 8a kap
+   * verksamhet and assumes the jämkning obligation via avtal: ML 8a kap
    * 12 §).
    */
   disposalEvent: 'triggers_jamkning' | 'no_jamkning'
@@ -57,14 +57,14 @@ export interface JamkningInput {
  * Compute the jämkning amount per ML 8a kap 7 §. Returns a positive number
  * representing the amount to be paid back to the state (i.e. reverse the
  * input-VAT deduction). When disposal happens AFTER the correction period
- * (remainingMonths <= 0) the formula returns 0 — caller can simply skip
+ * (remainingMonths <= 0) the formula returns 0: caller can simply skip
  * the line.
  *
  * Formula: (remaining / total) × originalInputVat
  *
  * Edge cases:
  *   - disposalEvent = 'no_jamkning' → 0
- *   - totalCorrectionMonths <= 0 → 0 (defensive — caller bug)
+ *   - totalCorrectionMonths <= 0 → 0 (defensive: caller bug)
  *   - remainingMonths <= 0 → 0 (asset is past the correction period)
  *   - remainingMonths > totalCorrectionMonths → caps at originalInputVat
  *     (sold immediately, before any correction period has elapsed)
@@ -89,7 +89,7 @@ export function computeJamkningAmount(input: JamkningInput): number {
  * of the asset CATEGORY / BAS account class, not user-editable per-asset:
  *
  *   - Fastighet (BAS 1100-1199) → 120 months
- *   - Markanläggning (BAS 1150-1159) — also 120 months
+ *   - Markanläggning (BAS 1150-1159): also 120 months
  *   - All other movable property → 60 months
  *
  * Pure: takes only dates and the asset's BAS account, returns numbers.
@@ -104,7 +104,7 @@ export interface JamkningEligibility {
   remainingMonths: number
   /**
    * Whether the disposal falls WITHIN the correction period. Convenience
-   * boolean — equivalent to `remainingMonths > 0`. Caller uses this to
+   * boolean: equivalent to `remainingMonths > 0`. Caller uses this to
    * show / hide the jämkning UI.
    */
   withinCorrectionPeriod: boolean
@@ -147,11 +147,11 @@ function isRealProperty(args: {
   basAssetAccount?: string
   category?: AssetCategory
 }): boolean {
-  // Prefer the asset (anskaffning) account when supplied — it's the most
+  // Prefer the asset (anskaffning) account when supplied: it's the most
   // direct mapping to the BAS class.
   const assetAccount = args.basAssetAccount
   if (assetAccount && /^1[1][0-9]{2}$/.test(assetAccount)) return true
-  // Expense account check — 7820-7829 = byggnader/markanläggning.
+  // Expense account check: 7820-7829 = byggnader/markanläggning.
   const expense = args.basExpenseAccount
   if (expense && /^782[0-9]$/.test(expense)) return true
   // Category fallback for callers who only have the asset row's category
@@ -164,7 +164,7 @@ function isRealProperty(args: {
 
 /**
  * Calendar months between two ISO date strings, rounded toward zero.
- * Counts complete months only — partial months don't tick the clock.
+ * Counts complete months only: partial months don't tick the clock.
  *
  * The Swedish tax authorities count months, not days, for jämkning
  * (ML 8a kap 6 §). Example: acquired 2023-01-15, sold 2026-01-14 →

@@ -8,6 +8,7 @@ import {
   generateReverseChargeLines,
   getVatRate,
 } from './vat-entries'
+import { dimensionsBagKey } from './dimension-resolver'
 import type {
   CategorizationTemplate,
   CategorizationTemplateSource,
@@ -36,12 +37,12 @@ const TRAILING_MONTH_TOKENS = new Set([
 
 /**
  * Strip trailing tokens that label *when/who* rather than *what merchant*:
- * a month name, or a 1–2 letter all-caps personal initial ("ngrok JW",
+ * a month name, or a 1-2 letter all-caps personal initial ("ngrok JW",
  * "ngrok JW", "Ngrok Mars" all describe the same merchant). Without this, one
  * merchant splinters into many un-learnable variants and counterparty matching
  * never fires (the reported ngrok bug: three prior bookings, zero matches).
  *
- * Conservative by design: only acts on a TRAILING token, only on 1–2 char
+ * Conservative by design: only acts on a TRAILING token, only on 1-2 char
  * all-caps initials (so 3-letter brands like SEB/ICA and any lowercased word
  * survive), and always keeps at least one core token (never strips to empty).
  */
@@ -50,7 +51,7 @@ function stripTrailingNoiseTokens(s: string): string {
   while (tokens.length > 1) {
     const last = tokens[tokens.length - 1]
     const isMonth = TRAILING_MONTH_TOKENS.has(last.toLowerCase())
-    // Personal initials: 1–2 letters, all-caps in the ORIGINAL casing (run
+    // Personal initials: 1-2 letters, all-caps in the ORIGINAL casing (run
     // before normalizeMerchantName lowercases everything).
     const isInitials = /^[A-ZÅÄÖ]{1,2}$/.test(last)
     if (!isMonth && !isInitials) break
@@ -167,7 +168,7 @@ export interface CounterpartyTemplateMatch {
  * Three-tier matching (delegated to batch version with single-element array):
  * 1. Exact alias match
  * 2. Exact normalized name match
- * 3. Fuzzy Levenshtein — distance ≤2 for short names, ≤3 for long names
+ * 3. Fuzzy Levenshtein: distance ≤2 for short names, ≤3 for long names
  */
 export async function findCounterpartyTemplate(
   supabase: SupabaseClient,
@@ -379,6 +380,11 @@ function buildMultiLineMappingResult(
         debit_amount: entry.side === 'debit' ? amount : 0,
         credit_amount: entry.side === 'credit' ? amount : 0,
         description: '',
+        // Dimensions PR7: business lines carry the pattern's learned bag;
+        // VAT/tax/rounding lines stay untagged.
+        ...(entry.type === 'business' && entry.dimensions
+          ? { dimensions: entry.dimensions }
+          : {}),
       })
     }
   }
@@ -617,7 +623,7 @@ function isSettlementAccount(account: string): boolean {
   return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890'
 }
 
-/** Rounding account — excluded from pattern extraction */
+/** Rounding account: excluded from pattern extraction */
 function isRoundingAccount(account: string): boolean {
   return account === '3740'
 }
@@ -653,17 +659,18 @@ interface VoucherLinePattern {
  * Returns null if the voucher can't be represented as a pattern.
  */
 function extractVoucherLinePattern(
-  lines: { account: string; amount: number }[]
+  lines: { account: string; amount: number; dimensions?: Record<string, string> }[]
 ): VoucherLinePattern | null {
-  const settlement: { account: string; amount: number }[] = []
-  const vat: { account: string; amount: number }[] = []
-  const business: { account: string; amount: number }[] = []
+  type PatternLine = { account: string; amount: number; dimensions?: Record<string, string> }
+  const settlement: PatternLine[] = []
+  const vat: PatternLine[] = []
+  const business: PatternLine[] = []
 
   for (const line of lines) {
     if (isSettlementAccount(line.account)) {
       settlement.push(line)
     } else if (isRoundingAccount(line.account)) {
-      // Skip 3740 lines — rounding artifacts
+      // Skip 3740 lines: rounding artifacts
       continue
     } else if (isVatAccount(line.account)) {
       vat.push(line)
@@ -712,6 +719,11 @@ function extractVoucherLinePattern(
       type: isTaxAccount(b.account) ? 'tax' : 'business',
       side: b.amount >= 0 ? 'debit' : 'credit',
       ratio: Math.round(ratio * 10000) / 10000,
+      // Dimensions PR7: carry the source line's bag so SIE-learned templates
+      // keep tagging like the history did (dropped in averaging on conflict).
+      ...(b.dimensions && Object.keys(b.dimensions).length > 0
+        ? { dimensions: b.dimensions }
+        : {}),
     })
   }
 
@@ -773,7 +785,18 @@ function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePattern
   if (voucherPatterns.length === 1) return normalizeRatios(voucherPatterns[0].entries)
 
   // Collect all accounts across all patterns
-  const accountMap = new Map<string, { type: LinePatternEntry['type']; side: LinePatternEntry['side']; ratios: number[]; vat_rate?: number }>()
+  const accountMap = new Map<string, {
+    type: LinePatternEntry['type']
+    side: LinePatternEntry['side']
+    ratios: number[]
+    vat_rate?: number
+    // Dimensions PR7: conservative: a bag survives averaging only when EVERY
+    // occurrence of the account carries the identical bag. A single
+    // disagreeing (or untagged) voucher drops it: a template must never
+    // invent a tag history doesn't consistently support.
+    dimensions?: Record<string, string>
+    dimensionsConsistent: boolean
+  }>()
 
   for (const vp of voucherPatterns) {
     // Normalize per-voucher ratios before averaging
@@ -786,10 +809,19 @@ function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePattern
           side: entry.side,
           ratios: entry.ratio !== undefined ? [entry.ratio] : [],
           vat_rate: entry.vat_rate,
+          dimensions: entry.dimensions,
+          dimensionsConsistent: true,
         })
       } else {
         if (entry.ratio !== undefined) {
           existing.ratios.push(entry.ratio)
+        }
+        if (
+          existing.dimensionsConsistent &&
+          dimensionsBagKey(existing.dimensions) !== dimensionsBagKey(entry.dimensions)
+        ) {
+          existing.dimensionsConsistent = false
+          existing.dimensions = undefined
         }
       }
     }
@@ -803,6 +835,9 @@ function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePattern
     }
     if (data.ratios.length > 0) {
       entry.ratio = Math.round((data.ratios.reduce((s, r) => s + r, 0) / data.ratios.length) * 10000) / 10000
+    }
+    if (data.dimensionsConsistent && data.dimensions && Object.keys(data.dimensions).length > 0) {
+      entry.dimensions = data.dimensions
     }
     entries.push(entry)
   }

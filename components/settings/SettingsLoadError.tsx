@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 /**
  * Shown when a settings section's fetch settled without a row (or errored).
  * Replaces the old behaviour where a null `settings` object left the loading
- * skeleton on screen indefinitely — a settled fetch always resolves to either
+ * skeleton on screen indefinitely: a settled fetch always resolves to either
  * content or this retryable state.
  */
 export function SettingsLoadError({ onRetry }: { onRetry: () => void }) {

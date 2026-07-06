@@ -3,6 +3,7 @@ import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 export const GET = withRouteContext(
   'report.income_statement',
@@ -34,8 +35,16 @@ export const GET = withRouteContext(
       range = parsed.range
     }
 
+    const dimFilter = parseDimensionFilterParams(searchParams)
+    if (!dimFilter.ok) {
+      return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+    }
+
     try {
-      const result = await generateIncomeStatement(supabase, companyId!, periodId, range)
+      const result = await generateIncomeStatement(supabase, companyId!, periodId, {
+        ...range,
+        dimensions: dimFilter.dimensions,
+      })
 
       if (period) {
         result.period = {

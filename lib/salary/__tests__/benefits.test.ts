@@ -141,7 +141,7 @@ describe('calculateWellnessBenefit', () => {
 
   it('handles exact cap boundary', () => {
     const result = calculateWellnessBenefit(2500, 2500, config)
-    // YTD = 5000 = cap — still tax-free
+    // YTD = 5000 = cap: still tax-free
     expect(result.taxable).toBe(false)
   })
 

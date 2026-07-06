@@ -2,7 +2,7 @@
  * GET /api/transactions/[id]/match-invoice/preview?invoice_id=...
  *
  * Returns the journal entry lines that match-invoice would create for this
- * (transaction, invoice) pair. Read-only — does not stage or write anything.
+ * (transaction, invoice) pair. Read-only: does not stage or write anything.
  *
  * The shape mirrors the routing decision in the POST handler: if the invoice
  * was already booked (invoice.journal_entry_id is set, i.e. 1510 is on the
@@ -11,7 +11,7 @@
  * receipt fully pays the invoice do we preview the cash entry (Dr 1930 /
  * Cr 30xx / Cr 26xx).
  *
- * The UI uses this to show the user the exact lines before they confirm —
+ * The UI uses this to show the user the exact lines before they confirm:
  * the lack of any preview was part of the reported bug.
  */
 import { NextResponse } from 'next/server'
@@ -98,10 +98,10 @@ export const GET = withRouteContext(
     // comparison from the raw SEK amount made a 1 000 SEK payment look like
     // it fully cleared a 140 USD invoice (newRemaining went negative →
     // isFullyPaid=true), which for a cash-method unbooked invoice previewed a
-    // cash entry (Dr 1930 / Cr 30xx) that the POST — which converts first —
+    // cash entry (Dr 1930 / Cr 30xx) that the POST: which converts first:
     // would never commit (it posts the clearing entry Dr 1930 / Cr 1510).
     //
-    // Per ML 8 kap 21–23§ the rate effective on the payment date is the
+    // Per ML 8 kap 21-23§ the rate effective on the payment date is the
     // correct conversion. If the lookup fails (Riksbanken outage, missing
     // rate for that date), the response carries `fx_conversion.error` and
     // the dialog can surface a manual-rate input field instead.
@@ -167,11 +167,11 @@ export const GET = withRouteContext(
     )
     // A rate-unavailable cross-currency payment can't be resolved to invoice
     // currency yet, so never report fully-paid (or preview the cash shape) on
-    // a guess — the dialog blocks confirm until a manual rate is entered and
+    // a guess: the dialog blocks confirm until a manual rate is entered and
     // the POST recomputes the real figure.
     const fxRateUnavailable = fxConversion.required && 'error' in fxConversion
     // Pure-SEK whole-krona settlements absorb a sub-krona remainder as
-    // öresavrundning (3740) and settle in full — mirror that here so the
+    // öresavrundning (3740) and settle in full: mirror that here so the
     // preview's fully-paid signal matches the committed verifikat.
     const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
     const isFullyPaid =
@@ -192,7 +192,7 @@ export const GET = withRouteContext(
       const isForeign = inv.currency !== 'SEK'
 
       // Per-item rate aggregation (matches generatePerRateLines semantics).
-      // InvoiceItem.line_total is the NET line amount (EXCLUDES VAT) — it sums
+      // InvoiceItem.line_total is the NET line amount (EXCLUDES VAT): it sums
       // to invoice.subtotal, and each line's vat_amount = line_total * rate. The
       // commit path (generatePerRateLines) credits revenue with line_total
       // directly; subtracting vat here double-subtracts VAT and unbalances the
@@ -252,7 +252,7 @@ export const GET = withRouteContext(
       lines.push(...creditLines)
     } else {
       // Clearing entry. Delegates to the shared helper so the preview and
-      // the committed verifikat are byte-identical — fixing the prior
+      // the committed verifikat are byte-identical: fixing the prior
       // bug where the preview ran `resolveSekAmount(tx.amount, null,
       // INV.currency, INV.rate)`, treating the SEK tx number as if it
       // were in the invoice's currency and multiplying by the invoice's

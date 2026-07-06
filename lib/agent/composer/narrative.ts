@@ -17,14 +17,14 @@ Stil:
 - Använd ALDRIG tankstreck (— eller –). Använd kommatecken, punkt eller skriv "till" för intervall ("2,5 till 5 miljoner"). Hård regel.
 
 Innehåll:
-1. Beskriv verksamheten med egna ord utifrån SNI-koder och verksamhetsbeskrivning: vad företaget gör, juridisk form och ägarbild om den är känd. Återge inte verksamhetsbeskrivningen ordagrant — den visas redan separat under "Verksamhet".
+1. Beskriv verksamheten med egna ord utifrån SNI-koder och verksamhetsbeskrivning: vad företaget gör, juridisk form och ägarbild om den är känd. Återge inte verksamhetsbeskrivningen ordagrant: den visas redan separat under "Verksamhet".
 2. Avsluta med en mening om vad assistenten är inställd på att hjälpa till med för den här typen av verksamhet, utifrån de valda specialiteterna.
 
 Skriv endast själva profiltexten. Ingen rubrik, inga punktlistor.`
 
 const VOICE_DIRECTOR = `\n\nRöst: Andra person, ägar-/ledningsperspektiv. "Du driver…", "Din verksamhet…". Användaren är verifierad styrelseledamot eller firmatecknare i bolaget.`
 
-const VOICE_NEUTRAL = `\n\nRöst: Tredje person, neutral. "Coredination AB är…", "Bolaget bedriver…". Användaren kan vara ägare, anställd eller redovisningskonsult — vi vet inte. Skriv ALDRIG "Du driver…", "Din verksamhet…" eller andra formuleringar som antar att användaren själv äger eller leder bolaget. Använd företagsnamnet eller "Bolaget".`
+const VOICE_NEUTRAL = `\n\nRöst: Tredje person, neutral. "Coredination AB är…", "Bolaget bedriver…". Användaren kan vara ägare, anställd eller redovisningskonsult: vi vet inte. Skriv ALDRIG "Du driver…", "Din verksamhet…" eller andra formuleringar som antar att användaren själv äger eller leder bolaget. Använd företagsnamnet eller "Bolaget".`
 
 function systemPromptFor(userIsConfirmedDirector: boolean): string {
   return SHARED_PROMPT_HEADER + (userIsConfirmedDirector ? VOICE_DIRECTOR : VOICE_NEUTRAL)
@@ -70,7 +70,7 @@ function buildUserPrompt(inputs: ComposerInputs, selection: AtomSelection): stri
     }
     if (typeof tic.purpose === 'string' && tic.purpose.trim().length > 0) {
       // Verksamhetsbeskrivning is the most important signal for the
-      // confirming voice — pass it verbatim so the model can paraphrase.
+      // confirming voice: pass it verbatim so the model can paraphrase.
       lines.push(`Verksamhetsbeskrivning (Bolagsverket): ${tic.purpose as string}`)
     }
     const reg = tic.registration as { fTax?: boolean; vat?: boolean; payroll?: boolean } | undefined

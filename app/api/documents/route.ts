@@ -8,7 +8,7 @@ import type { DocumentUploadSource } from '@/types'
 ensureInitialized()
 
 /**
- * POST /api/documents — upload a document to the WORM archive.
+ * POST /api/documents: upload a document to the WORM archive.
  *
  * multipart/form-data:
  *   file: the document file
@@ -44,7 +44,17 @@ export const POST = withRouteContext(
     const opLog = log.child({ filename: file.name, sizeBytes: file.size })
 
     try {
-      const uploadSource = (formData.get('upload_source') as string) || 'file_upload'
+      // Whitelist the source — arbitrary strings from formData would otherwise
+      // land in the upload_source column; unknown values fall back to the
+      // default rather than 400ing an otherwise-valid upload.
+      const VALID_SOURCES: DocumentUploadSource[] = [
+        'camera', 'file_upload', 'email', 'e_invoice', 'scan', 'api', 'system',
+      ]
+      const rawSource = formData.get('upload_source')
+      const uploadSource: DocumentUploadSource =
+        typeof rawSource === 'string' && VALID_SOURCES.includes(rawSource as DocumentUploadSource)
+          ? (rawSource as DocumentUploadSource)
+          : 'file_upload'
       const journalEntryId = formData.get('journal_entry_id') as string | null
       const journalEntryLineId = formData.get('journal_entry_line_id') as string | null
 
@@ -55,7 +65,7 @@ export const POST = withRouteContext(
         buffer,
         type: file.type,
       }, {
-        upload_source: uploadSource as DocumentUploadSource,
+        upload_source: uploadSource,
         journal_entry_id: journalEntryId || undefined,
         journal_entry_line_id: journalEntryLineId || undefined,
       })
@@ -71,18 +81,27 @@ export const POST = withRouteContext(
           details: { reason: message },
         })
       }
+      // Magic-byte validation rejections (validateDocumentMagicBytes) are a
+      // client problem, not a storage failure: surface as 400 with an
+      // accurate message instead of the misleading "kunde inte sparas".
+      if (/kunde inte verifieras|matchar inte den angivna filtypen/i.test(message)) {
+        opLog.warn('document upload rejected by content validation', { reason: message })
+        return errorResponseFromCode('DOC_UPLOAD_INVALID_CONTENT', opLog, {
+          requestId,
+          details: { reason: message },
+        })
+      }
+      // Full error is logged above; the raw message can leak storage-layer
+      // internals, so the client only gets the generic code + requestId.
       opLog.error('document upload failed', err as Error)
-      return errorResponseFromCode('DOC_UPLOAD_STORAGE_FAILED', opLog, {
-        requestId,
-        details: { reason: message },
-      })
+      return errorResponseFromCode('DOC_UPLOAD_STORAGE_FAILED', opLog, { requestId })
     }
   },
   { requireWrite: true },
 )
 
 /**
- * GET /api/documents — list documents.
+ * GET /api/documents: list documents.
  *
  * Query params:
  *   journal_entry_id: filter by JE
@@ -97,8 +116,12 @@ export const GET = withRouteContext(
     const { searchParams } = new URL(request.url)
     const journalEntryId = searchParams.get('journal_entry_id')
     const currentOnly = searchParams.get('current_only') !== 'false'
-    const limit = parseInt(searchParams.get('limit') || '50')
-    const offset = parseInt(searchParams.get('offset') || '0')
+    // Clamp pagination — parseInt('abc') is NaN and unbounded limits let a
+    // caller demand the whole table in one page.
+    const rawLimit = parseInt(searchParams.get('limit') || '50', 10)
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 50
+    const rawOffset = parseInt(searchParams.get('offset') || '0', 10)
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0
 
     let query = supabase
       .from('document_attachments')

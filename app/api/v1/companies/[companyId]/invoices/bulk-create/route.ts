@@ -3,13 +3,13 @@
  *
  * Bulk create draft invoices in one call. Each invoice in the request array
  * is validated and inserted independently. The response is partial-success
- * by default — items that fail don't roll back items that succeeded.
+ * by default: items that fail don't roll back items that succeeded.
  *
  * Request:
  *   {
  *     invoices: CreateInvoiceSchema[],  // 1..50 items
  *     all_or_nothing?: boolean          // default false. Passing true returns
- *                                       // 501 NOT_IMPLEMENTED — the flag is
+ *                                       // 501 NOT_IMPLEMENTED: the flag is
  *                                       // reserved for a future DB-side RPC.
  *   }
  *
@@ -23,7 +23,7 @@
  *     summary: { total: N, succeeded: X, failed: Y }
  *   }
  *
- * Idempotent (mandatory Idempotency-Key applies to the whole batch — replays
+ * Idempotent (mandatory Idempotency-Key applies to the whole batch: replays
  * return the cached full result, not per-item retries). Dry-runnable.
  *
  * Limits:
@@ -80,13 +80,13 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/bulk-create',
   summary: 'Create up to 50 draft invoices in one call (partial-success).',
   description:
-    'Bulk-creation endpoint. Each invoice in the request array is validated and inserted independently. By default, individual failures do not roll back successes — the response carries a per-item results array with ok/error markers and a summary. Idempotent (the whole batch is keyed by the single Idempotency-Key). Dry-runnable.',
+    'Bulk-creation endpoint. Each invoice in the request array is validated and inserted independently. By default, individual failures do not roll back successes: the response carries a per-item results array with ok/error markers and a summary. Idempotent (the whole batch is keyed by the single Idempotency-Key). Dry-runnable.',
   useWhen:
     'You\'re importing a batch of invoices from another system, or producing many invoices programmatically (e.g. monthly subscription billing). Use dry-run first to validate the whole batch before committing.',
   doNotUseFor:
-    'Sending the same invoice to multiple customers — POST /invoices once per customer. Long-running imports of > 50 invoices — split into pages. Transactional all-or-nothing imports — not yet supported (passing all_or_nothing: true returns 501 NOT_IMPLEMENTED; the flag is reserved for a future RPC).',
+    'Sending the same invoice to multiple customers: POST /invoices once per customer. Long-running imports of > 50 invoices: split into pages. Transactional all-or-nothing imports: not yet supported (passing all_or_nothing: true returns 501 NOT_IMPLEMENTED; the flag is reserved for a future RPC).',
   pitfalls: [
-    'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response — it does not retry only the failed items.',
+    'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response: it does not retry only the failed items.',
     'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag (or pass false).',
     'Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.',
     'Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item\'s SEK columns null but does NOT fail the item.',
@@ -159,7 +159,7 @@ async function createOneInvoice(
   const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
   // Customer fetch (scoped to company). We use the DB-returned `customer.id`
-  // (not `input.customer_id`) downstream as defense in depth — the .eq()
+  // (not `input.customer_id`) downstream as defense in depth: the .eq()
   // pair already enforces company scoping, but echoing the trusted value
   // from the query makes the guarantee explicit at the call site and
   // immune to refactoring drift.
@@ -260,6 +260,9 @@ async function createOneInvoice(
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
+      // Dimensions PR7: per-item bag, merged over the invoice's
+      // default_dimensions on the revenue line when the JE posts at :send.
+      dimensions: item.dimensions ?? {},
     }
   })
 
@@ -314,6 +317,9 @@ async function createOneInvoice(
       our_reference: input.our_reference,
       notes: input.notes,
       document_type: documentType,
+      // Dimensions PR7: invoice-level bag; the :send JE generator applies it
+      // to every line (items[].dimensions win per key).
+      default_dimensions: input.default_dimensions ?? {},
     })
     .select(INVOICE_BULK_RESPONSE_COLUMNS)
     .single()
@@ -347,7 +353,7 @@ async function createOneInvoice(
       .eq('company_id', companyId)
     if (rbErr) {
       log.error(
-        'bulk-create: items insert failed AND rollback delete failed — orphaned header',
+        'bulk-create: items insert failed AND rollback delete failed, orphaned header',
         rbErr,
         { request_index: index, invoiceId, companyId, originalPgCode: itemsErr.code },
       )
@@ -423,7 +429,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Reject all_or_nothing: true loudly. The schema accepts it for forward
     // compatibility, but a caller asking for atomic semantics must not get
-    // partial-success behaviour silently — that would let an automation
+    // partial-success behaviour silently: that would let an automation
     // depend on a guarantee that doesn't exist. The flag will be honored
     // once a DB-side RPC ships; until then it's 501.
     if (body.all_or_nothing) {

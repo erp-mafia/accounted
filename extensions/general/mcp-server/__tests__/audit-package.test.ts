@@ -19,7 +19,7 @@ import {
   estimateArchiveSize,
 } from '@/lib/reports/full-archive-export'
 
-describe('gnubok_audit_package — registration', () => {
+describe('gnubok_audit_package: registration', () => {
   it('is registered', () => {
     const tool = tools.find((t) => t.name === 'gnubok_audit_package')
     expect(tool).toBeDefined()
@@ -57,7 +57,7 @@ function makePeriodMock(period: Record<string, unknown> | null) {
   } as never
 }
 
-describe('gnubok_audit_package — execute', () => {
+describe('gnubok_audit_package: execute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

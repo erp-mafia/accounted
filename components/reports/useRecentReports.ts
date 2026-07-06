@@ -45,7 +45,7 @@ export function useRecentReports(companyId: string | null | undefined) {
         try {
           window.localStorage.setItem(STORAGE_KEY_PREFIX + companyId, JSON.stringify(next))
         } catch {
-          /* localStorage unavailable — keep in-memory only */
+          /* localStorage unavailable: keep in-memory only */
         }
         return next
       })

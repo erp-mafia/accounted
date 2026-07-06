@@ -22,7 +22,7 @@ import type {
  * Skattekonto-rad in the /transactions inbox.
  *
  * Mirrors the visual rhythm of TransactionInboxCard. The Skatteverket badge is
- * the cue that this row is fundamentally different from a bank tx — different
+ * the cue that this row is fundamentally different from a bank tx: different
  * counter-account (1630 vs 1930), different categorization rules.
  */
 export default function SkattekontoInboxCard({
@@ -151,10 +151,10 @@ export default function SkattekontoInboxCard({
         <DataListMeta>
           <span className="tabular-nums">{formatDate(row.transaktionsdatum)}</span>
           <DataListMetaSeparator />
-          <Badge variant="outline" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
+          <span className="inline-flex items-center gap-1 text-muted-foreground">
             <Landmark className="h-3 w-3" />
             {t('skv_badge')}
-          </Badge>
+          </span>
           {matchSuggestion && (
             <>
               <DataListMetaSeparator />

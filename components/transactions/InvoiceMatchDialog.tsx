@@ -54,7 +54,7 @@ interface MatchPreview {
 }
 
 // String-typed working copy of a line. The amount is a single value plus a
-// side (debit / credit) — modeling a verifikationsrad as one positive number
+// side (debit / credit): modeling a verifikationsrad as one positive number
 // with a direction matches how Swedish accountants think and tightens the
 // failure modes (you can't accidentally fill both sides). Conversion back
 // to the server's { debit_amount, credit_amount } shape happens at submit.
@@ -306,7 +306,7 @@ export default function InvoiceMatchDialog({
 
         {transaction && (isCustomerInvoice || isSupplierInvoice) && (
           <div className="space-y-4">
-            {/* Duplicate-payment warning — customer-side only, only when a candidate exists */}
+            {/* Duplicate-payment warning: customer-side only, only when a candidate exists */}
             {candidate && isCustomerInvoice && (
               <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 space-y-3">
                 <div className="flex items-start gap-2">
@@ -429,7 +429,7 @@ export default function InvoiceMatchDialog({
 
             {/* Amount comparison. Compares the bank tx against what the
                 customer STILL OWES (remaining_amount), not the original
-                invoice.total — otherwise a 1 250 SEK invoice with a prior
+                invoice.total: otherwise a 1 250 SEK invoice with a prior
                 230 SEK partial would show "Differens: 250 kr" when a 1 000
                 SEK top-up arrives, instead of the actual 20 kr shortfall.
                 The customer branch previously fell back to .total; both
@@ -444,7 +444,7 @@ export default function InvoiceMatchDialog({
                 : transaction.potential_invoice!.currency
               const sameCurrency = transaction.currency === invCurrency
               // Cross-currency "match" comparison is meaningless without an FX
-              // conversion — show the explicit different-currencies warning
+              // conversion: show the explicit different-currencies warning
               // and skip the numeric match check. The committed verifikat is
               // built by buildInvoicePaymentClearingLines, which posts the
               // FX diff to 3960/7960 so the books balance correctly even
@@ -453,7 +453,7 @@ export default function InvoiceMatchDialog({
               const amountsMatch = sameCurrency && diff < 0.01
               // A sub-krona SEK difference is öresavrundning: the backend books
               // it to 3740 and settles the invoice in full instead of leaving it
-              // delbetald (see ORE_ROUNDING_SETTLEMENT_MAX). SEK only — keep the
+              // delbetald (see ORE_ROUNDING_SETTLEMENT_MAX). SEK only: keep the
               // 1 kr band in sync with the server constant.
               const isOreRounding =
                 sameCurrency && transaction.currency === 'SEK' && diff >= 0.01 && diff < 1.0
@@ -505,7 +505,7 @@ export default function InvoiceMatchDialog({
               )
             })()}
 
-            {/* Valutaomräkning section — only renders when the preview
+            {/* Valutaomräkning section: only renders when the preview
                 route flagged a cross-currency settlement. Shows the
                 Riksbanken rate + invoice-currency-equivalent of the bank
                 payment + the projected post-payment invoice state. When
@@ -521,7 +521,7 @@ export default function InvoiceMatchDialog({
                 ?? 0
 
               if ('error' in fx) {
-                // Riksbanken unavailable — show manual rate input.
+                // Riksbanken unavailable: show manual rate input.
                 return (
                   <div className="rounded-lg border border-warning/40 bg-warning/5 p-4 space-y-3">
                     <div className="flex items-start gap-2">
@@ -538,7 +538,7 @@ export default function InvoiceMatchDialog({
                     </div>
                     {/* The typed rate flows through onConfirm.manual_exchange_rate
                         and the route recomputes server-side, so the footer
-                        Confirm button is the trigger — no separate apply button.
+                        Confirm button is the trigger: no separate apply button.
                         Confirm stays disabled until a positive rate is entered
                         (see DialogFooter guard below). */}
                     <div className="space-y-1">
@@ -611,7 +611,7 @@ export default function InvoiceMatchDialog({
               )
             })()}
 
-            {/* Bookkeeping preview — editable. Read-only by default; user
+            {/* Bookkeeping preview: editable. Read-only by default; user
                 clicks "Redigera" to switch the rows to inputs. */}
             {(preview || previewFailed) && (
               <div className="rounded-lg border p-4 space-y-3">
@@ -658,7 +658,7 @@ export default function InvoiceMatchDialog({
                       {t('booking_credit')}
                     </div>
                     {/* Verifikat amounts are always denominated in SEK (the
-                        bookkeeping home currency) — the preview route builds
+                        bookkeeping home currency): the preview route builds
                         every line via resolveSekAmount. Format them as SEK,
                         NOT transaction.currency, otherwise a foreign-currency
                         payment (e.g. 19 USD) shows the converted SEK figure
@@ -700,7 +700,7 @@ export default function InvoiceMatchDialog({
                           onChange={(e) => updateEditLine(i, { description: e.target.value })}
                           placeholder={t('booking_description_placeholder')}
                         />
-                        {/* Side toggle — segmented control. Clicking either
+                        {/* Side toggle: segmented control. Clicking either
                             button picks that side; the amount stays the
                             same. */}
                         <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">

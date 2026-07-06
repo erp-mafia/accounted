@@ -28,7 +28,7 @@ function getBaseUrl(): string {
 }
 
 /**
- * Map Skatteverket error codes (felkod 1–5) to Swedish user messages.
+ * Map Skatteverket error codes (felkod 1-5) to Swedish user messages.
  *
  * Codes per dev_docs/skattekonto(2.1.0)/examples/felkod_*.json.
  */
@@ -60,7 +60,7 @@ async function handleErrorResponse(response: Response): Promise<never> {
   try {
     fel = (await response.json()) as SkatteverketFel
   } catch {
-    // body wasn't JSON — fall through to generic message
+    // body wasn't JSON: fall through to generic message
   }
 
   if (fel && typeof fel.felkod === 'number') {

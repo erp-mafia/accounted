@@ -177,10 +177,10 @@ export async function GET(request: Request) {
     const monthRows: MonthRow[] = monthlyBreakdown.months
 
     const compositionRows: CompositionRow[] = [
-      { klass: '4 — Material/varor', amount: Math.round(expenseComposition.class4 * 100) / 100 },
-      { klass: '5 — Externa kostnader', amount: Math.round(expenseComposition.class5 * 100) / 100 },
-      { klass: '6 — Externa kostnader', amount: Math.round(expenseComposition.class6 * 100) / 100 },
-      { klass: '7 — Personalkostnader', amount: Math.round(expenseComposition.class7 * 100) / 100 },
+      { klass: '4: Material/varor', amount: Math.round(expenseComposition.class4 * 100) / 100 },
+      { klass: '5: Externa kostnader', amount: Math.round(expenseComposition.class5 * 100) / 100 },
+      { klass: '6: Externa kostnader', amount: Math.round(expenseComposition.class6 * 100) / 100 },
+      { klass: '7: Personalkostnader', amount: Math.round(expenseComposition.class7 * 100) / 100 },
     ]
 
     const supplierRows: SupplierRow[] = topSuppliers

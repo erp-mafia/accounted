@@ -36,7 +36,7 @@ vi.mock('@/lib/supabase/server', () => ({
         capture.filters.push({ method: 'not', args })
         return chain
       })
-      // Thenable — awaiting the builder resolves the queued result.
+      // Thenable: awaiting the builder resolves the queued result.
       chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
       return chain
     }),
@@ -89,7 +89,7 @@ describe('GET /api/events/cleanup/cron', () => {
       ['event_type', 'like', 'agent.%'],
     ])
 
-    // Pass 2: 180-day cutoff, no exclusions — sweeps the telemetry rows.
+    // Pass 2: 180-day cutoff, no exclusions, sweeps the telemetry rows.
     const pass2 = deleteCalls[1]
     const lt2 = pass2.filters.find((f) => f.method === 'lt')!
     expect(daysAgo(lt2.args[1] as string)).toBeCloseTo(180, 0)

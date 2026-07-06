@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,6 +34,7 @@ function num(v: string): number | null {
 }
 
 export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
+  const t = useTranslations('salary_override')
   const { toast } = useToast()
   const [expanded, setExpanded] = useState(
     props.taxOverride !== null ||
@@ -71,18 +73,18 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       const data = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte spara justering',
-          description: typeof data?.error === 'string' ? data.error : 'Okänt fel',
+          title: t('save_failed'),
+          description: typeof data?.error === 'string' ? data.error : t('unknown_error'),
           variant: 'destructive',
         })
         return
       }
-      toast({ title: 'Justering sparad' })
+      toast({ title: t('saved') })
       props.onSaved()
     } catch (err) {
       toast({
-        title: 'Kunde inte spara justering',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        title: t('save_failed'),
+        description: err instanceof Error ? err.message : t('unknown_error'),
         variant: 'destructive',
       })
     } finally {
@@ -106,8 +108,8 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       if (!res.ok) {
         const data = await res.json()
         toast({
-          title: 'Kunde inte rensa justering',
-          description: typeof data?.error === 'string' ? data.error : 'Okänt fel',
+          title: t('clear_failed'),
+          description: typeof data?.error === 'string' ? data.error : t('unknown_error'),
           variant: 'destructive',
         })
         return
@@ -116,7 +118,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       setAvgStr('')
       setBasisStr('')
       setReason('')
-      toast({ title: 'Justering rensad' })
+      toast({ title: t('cleared') })
       props.onSaved()
     } finally {
       setSaving(false)
@@ -127,8 +129,8 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <div className="flex items-center gap-2">
-          <CardTitle className="text-base">Avancerat läge</CardTitle>
-          {hasOverride && <Badge variant="warning">Justerat</Badge>}
+          <CardTitle className="text-base">{t('title')}</CardTitle>
+          {hasOverride && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
         </div>
         <Button
           variant="outline"
@@ -137,21 +139,19 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           disabled={props.disabled}
         >
           <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-          {expanded ? 'Dölj' : 'Visa'}
+          {expanded ? t('hide') : t('show')}
         </Button>
       </CardHeader>
       {expanded && (
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Justera skatteavdrag eller arbetsgivaravgift för den här anställde — t.ex. för FoU-avdrag eller
-            jämkning. Justerade värden används vid bokföring och AGI-rapportering. Endast tillåtet i
-            granskningsläge.
+            {t('description')}
           </p>
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
               <Label htmlFor="tax_override" className="text-xs">
-                Skatteavdrag (kr)
+                {t('tax_label')}
               </Label>
               <Input
                 id="tax_override"
@@ -163,13 +163,13 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 className="tabular-nums"
               />
               <p className="text-[11px] text-muted-foreground">
-                Beräknat: <span className="tabular-nums">{formatCurrency(props.taxWithheld)}</span>
+                {t('calculated')} <span className="tabular-nums">{formatCurrency(props.taxWithheld)}</span>
               </p>
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="avgifter_override" className="text-xs">
-                Arbetsgivaravgifter (kr)
+                {t('avgifter_label')}
               </Label>
               <Input
                 id="avgifter_override"
@@ -181,13 +181,13 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 className="tabular-nums"
               />
               <p className="text-[11px] text-muted-foreground">
-                Beräknat: <span className="tabular-nums">{formatCurrency(props.avgifterAmount)}</span>
+                {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterAmount)}</span>
               </p>
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="avgifter_basis_override" className="text-xs">
-                Avgiftsunderlag (kr)
+                {t('basis_label')}
               </Label>
               <Input
                 id="avgifter_basis_override"
@@ -199,19 +199,19 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 className="tabular-nums"
               />
               <p className="text-[11px] text-muted-foreground">
-                Beräknat: <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
+                {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
               </p>
             </div>
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="override_reason" className="text-xs">
-              Anledning (krävs vid justering)
+              {t('reason_label')}
             </Label>
             <Textarea
               id="override_reason"
               rows={2}
-              placeholder="T.ex. FoU-avdrag 10 % på arbetsgivaravgifter, jämkning enligt beslut från Skatteverket"
+              placeholder={t('reason_placeholder')}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               disabled={props.disabled || saving}
@@ -221,7 +221,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleSave} disabled={props.disabled || saving}>
               {saving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Spara justering
+              {t('save')}
             </Button>
             {hasOverride && (
               <Button
@@ -229,7 +229,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 onClick={handleClear}
                 disabled={props.disabled || saving}
               >
-                Rensa justering
+                {t('clear')}
               </Button>
             )}
           </div>

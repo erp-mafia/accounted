@@ -50,7 +50,7 @@ export default function NewUserChecklist({
   return (
     <div className={cn('min-h-[75vh] flex flex-col items-center justify-center px-4 sm:px-0 stagger-enter', className)}>
       <div className="w-full max-w-2xl">
-        {/* Header — centered welcome. Data-import steps lead; building the
+        {/* Header: centered welcome. Data-import steps lead; building the
             assistant is the last step so a user coming from another system
             brings their books in first. */}
         <div className="text-center mb-8 md:mb-12">
@@ -197,7 +197,7 @@ export default function NewUserChecklist({
           </div>
         </div>
 
-        {/* Step 3: Connect Skatteverket — only when the extension is enabled.
+        {/* Step 3: Connect Skatteverket, only when the extension is enabled.
             Optional: connecting here lets Accounted submit moms + AGI and read
             skattekonto saldo, but the user can skip and do it later from
             /settings/skatteverket. The OAuth flow returns to the dashboard
@@ -242,7 +242,7 @@ export default function NewUserChecklist({
               ) : (
                 // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api route, not a Next page
                 <a
-                  // Plain anchor — the authorize endpoint 302-redirects to
+                  // Plain anchor: the authorize endpoint 302-redirects to
                   // skatteverket.se; <Link> would route via Next's client
                   // router which doesn't follow cross-origin redirects.
                   href="/api/extensions/ext/skatteverket/authorize?return_to=/"
@@ -268,7 +268,7 @@ export default function NewUserChecklist({
           </div>
         )}
 
-        {/* Build the assistant — always the last step, so a user migrating
+        {/* Build the assistant: always the last step, so a user migrating
             from another system brings their books in first. */}
         <div className="mb-8 md:mb-12">
           <div className="flex items-center gap-3 mb-4">
@@ -329,7 +329,7 @@ export default function NewUserChecklist({
           </div>
         </div>
 
-        {/* Escape hatch — a visible secondary action, not a muted ghost link,
+        {/* Escape hatch: a visible secondary action, not a muted ghost link,
             so users with nothing to import can clearly choose to start fresh. */}
         <div className="space-y-6">
           <div className="flex items-center gap-4">

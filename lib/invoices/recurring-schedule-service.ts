@@ -65,7 +65,7 @@ function lastDayOfMonth(year: number, monthIndex0: number): number {
  *    NEXT month's occurrence (callers compute the FIRST run via
  *    computeInitialRunDate).
  *  - Day 29-31 in shorter months clamps to that month's last day.
- *  - The schedule's stored day_of_month is unchanged — caller passes it in.
+ *  - The schedule's stored day_of_month is unchanged: caller passes it in.
  */
 export function computeNextRunDate(reference: Date, dayOfMonth: number): string {
   if (dayOfMonth < 1 || dayOfMonth > 31) {
@@ -253,8 +253,8 @@ export async function executeRecurringSchedule(
   })
   const { error: itemsError } = await supabase.from('invoice_items').insert(itemRows)
   if (itemsError) {
-    // Hard-delete is safe here only because step 5 inserted invoice_number: null
-    // — no F-series slot has been consumed yet (step 7 calls ensureInvoiceNumber).
+    // Hard-delete is safe here only because step 5 inserted invoice_number: null,
+    // no F-series slot has been consumed yet (step 7 calls ensureInvoiceNumber).
     // Once a number is assigned, the soft-cancel path in step 7 must be used to
     // preserve the sequence per BFL 5 kap 6§ / ML 17 kap 24§.
     await supabase.from('invoices').delete().eq('id', invoice.id)
@@ -302,7 +302,7 @@ export async function executeRecurringSchedule(
   let warning: string | null = null
 
   // 9. Auto-send path. If anything below fails, we keep the invoice (now a
-  //    numbered draft) and surface a Swedish warning on the schedule — the
+  //    numbered draft) and surface a Swedish warning on the schedule: the
   //    user can manually send from /invoices/[id].
   if (schedule.auto_send) {
     try {
@@ -313,7 +313,7 @@ export async function executeRecurringSchedule(
         completeInvoice as Invoice & { customer: Customer; items: InvoiceItem[] },
       )
       if (!autoSent) {
-        warning = 'Auto-utskick misslyckades — fakturan finns som utkast och kan skickas manuellt.'
+        warning = 'Auto-utskick misslyckades: fakturan finns som utkast och kan skickas manuellt.'
       }
     } catch (err) {
       opLog.error('auto-send failed for recurring schedule', err as Error, {
@@ -376,7 +376,7 @@ async function sendInvoiceFromSchedule(
     .single<CompanySettings>()
 
   if (!company) {
-    throw new Error('company settings missing — cannot send invoice')
+    throw new Error('company settings missing: cannot send invoice')
   }
 
   const items = (invoice.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
@@ -423,7 +423,7 @@ async function sendInvoiceFromSchedule(
     return false
   }
 
-  // Email delivered — flip status, create JE, archive PDF. Treat downstream
+  // Email delivered: flip status, create JE, archive PDF. Treat downstream
   // failures as warnings (don't unsend the email).
   await supabase
     .from('invoices')

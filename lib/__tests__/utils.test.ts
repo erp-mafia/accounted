@@ -10,7 +10,7 @@ describe('swedishToday', () => {
 
   it('reports the date in Europe/Stockholm, not UTC', () => {
     // 23:30 UTC on 2026-05-26 is already 01:30 on 2026-05-27 in Stockholm
-    // (CEST, UTC+2). A naive UTC date would read the day before — the off-by-one
+    // (CEST, UTC+2). A naive UTC date would read the day before: the off-by-one
     // we explicitly format around for users near midnight.
     expect(swedishToday(new Date('2026-05-26T23:30:00Z'))).toBe('2026-05-27 (onsdag)')
   })

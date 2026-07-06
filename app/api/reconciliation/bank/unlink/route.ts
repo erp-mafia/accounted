@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   if (!validation.success) return validation.response
   const { transaction_id } = validation.data
 
-  const result = await unlinkReconciliation(supabase, companyId, transaction_id)
+  const result = await unlinkReconciliation(supabase, companyId, transaction_id, user.id)
 
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 400 })

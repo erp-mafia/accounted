@@ -13,7 +13,7 @@
  *     (e.g. "25-2"). Verified against Skatteverket's current spec.
  *   - Amounts are whole kronor, signed integers (negative allowed).
  *   - Empty buckets are blank fields (`;;`), never `0;0`.
- *   - Avropslager codes X/Y/Z are NOT emitted in v1 — only numeric amounts.
+ *   - Avropslager codes X/Y/Z are NOT emitted in v1: only numeric amounts.
  *
  * The serializer refuses to build if any row has hasBlockingIssue=true or any
  * warning is error-level. Caller (API route) returns 400 to the client.
@@ -107,7 +107,7 @@ export function buildPeriodiskSammanstallningCsv(
 
   // 3. Period code.
   const periodCode = formatPeriodCode(report.period.type, report.period.year, report.period.period)
-  // Defensive — formatPeriodCode already validates, but double-check via regex.
+  // Defensive: formatPeriodCode already validates, but double-check via regex.
   const re = report.period.type === 'monthly' ? PERIOD_MONTHLY_RE : PERIOD_QUARTERLY_RE
   if (!re.test(periodCode)) {
     throw new PsCsvBuildError('INVALID_PERIOD_CODE', `Periodkod ${periodCode} matchar inte SKV-format.`)
@@ -127,7 +127,7 @@ export function buildPeriodiskSammanstallningCsv(
   )
 
   for (const row of report.rows) {
-    // Skip rows where all three buckets round to zero (defensive — the
+    // Skip rows where all three buckets round to zero (defensive: the
     // generator already drops them, but a row could be passed in manually).
     if (row.services === 0 && row.goods === 0 && row.triangulation === 0) continue
 

@@ -1,5 +1,5 @@
 /**
- * Template Embeddings — Core Facade
+ * Template Embeddings: Core Facade
  *
  * Provides template matching via keyword-based search.
  */

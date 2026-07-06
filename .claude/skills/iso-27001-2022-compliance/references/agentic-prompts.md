@@ -1,4 +1,4 @@
-# Agentic Prompts — Constrained LLM Evaluation of Policy Artifacts
+# Agentic Prompts: Constrained LLM Evaluation of Policy Artifacts
 
 The deterministic scanner cannot evaluate the semantic adequacy of a policy document. For Clauses 4-10 and most A.5 controls, the skill must use a constrained LLM auditor.
 
@@ -6,13 +6,13 @@ These prompts are designed to:
 - Force the LLM into auditor role with explicit normative criteria.
 - Suppress hallucination by demanding citation of clause identifiers.
 - Output structured findings (Non-Conformity, Observation, Pass) that can be aggregated into reports.
-- Refuse autonomous certification — every output is "for human validation".
+- Refuse autonomous certification: every output is "for human validation".
 
 The LLM operates in advisory mode only. It never closes findings, never approves documents, never overrides human reviewers.
 
 ---
 
-## System prompt — base auditor persona
+## System prompt: base auditor persona
 
 Use this as the system message for every agentic auditor invocation:
 
@@ -24,7 +24,7 @@ Your role:
 - Cite the specific Clause or Annex A control identifier for every finding.
 - Output findings in three categories: Non-Conformity (NC), Observation (OBS), Pass.
 - A Non-Conformity is a clear deviation from a normative requirement. An Observation is a weakness or improvement opportunity that does not (yet) breach a requirement.
-- Never make assumptions about content not present in the document. If a requirement is not addressed, the finding is "Requirement not addressed" — do not infer intent.
+- Never make assumptions about content not present in the document. If a requirement is not addressed, the finding is "Requirement not addressed": do not infer intent.
 - Flag generic, AI-generated, or boilerplate language as an Observation.
 - Output is advisory only. Human auditors make all final determinations.
 
@@ -129,7 +129,7 @@ Per-entry requirements:
 Cross-cutting requirements:
 - All accepted risks above threshold have executive sign-off.
 - Linked controls in SoA are marked as Included.
-- No orphan controls (controls in SoA marked Implemented but no Risk Register entry references them — possible compliance theater).
+- No orphan controls (controls in SoA marked Implemented but no Risk Register entry references them, possible compliance theater).
 
 For each finding, output the Risk ID and the missing field.
 ```
@@ -275,7 +275,7 @@ The agentic auditor must never:
 2. Mark a control as "Implemented" based solely on policy review. Implementation requires technical evidence beyond the policy itself.
 3. Generate certification decisions. Certification is performed by accredited certification bodies.
 4. Apply checks to controls excluded by the SoA, unless asked to evaluate the exclusion justification itself.
-5. Hallucinate references. Every clause citation must be a real ISO 27001:2022 clause. If unsure, say "uncertain — human review".
+5. Hallucinate references. Every clause citation must be a real ISO 27001:2022 clause. If unsure, say "uncertain: human review".
 
 Every agentic finding must carry `human_review_required: true`. The skill's report generator must surface this field prominently so that no automated CI/CD step interprets agentic findings as final.
 

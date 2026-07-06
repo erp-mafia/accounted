@@ -4,18 +4,24 @@
  *
  * The audit found two repository-wide problems that are being remediated in
  * dedicated campaigns (A1 = route auth/MFA, D1 = money rounding). Those touch
- * hundreds of sites and won't land in one PR — so this guard makes sure the
+ * hundreds of sites and won't land in one PR: so this guard makes sure the
  * count can only go DOWN, never up, while the migrations are in flight.
  *
  * Checks:
- *   1. raw-route-auth  — an `app/api/**\/route.ts` that calls
+ *   1. raw-route-auth : an `app/api/**\/route.ts` that calls
  *      `supabase.auth.getUser()` directly instead of going through
  *      `requireAuth()` / `withRouteContext()` (the only guards that enforce
  *      MFA AAL2 on hosted). Tracked as a file-set so a NEW offending route
  *      fails CI even if an old one was fixed in the same PR.
- *   2. naive-ore-round — `Math.round(x * 100) / 100`, which is subtly wrong on
+ *   2. naive-ore-round: `Math.round(x * 100) / 100`, which is subtly wrong on
  *      exact-half values (see lib/money.ts `roundOre`). Tracked as a count.
  *      The canonical rounding modules are excluded.
+ *   3. direct-jel-insert: a file that inserts into `journal_entry_lines`
+ *      outside the sanctioned writers. During the dimensions dual-write window
+ *      every line writer must derive cost_center/project via
+ *      lineDimensionColumns() from the dimensions JSONB map
+ *      (lib/bookkeeping/dimension-resolver.ts): a new direct insert site can
+ *      silently diverge the mirror columns. Tracked as a file-set.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -31,7 +37,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'antipatterns-baseline.json')
 
 const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', 'coverage'])
-// The sanctioned home of the öre-round implementation — must not count against itself.
+// The sanctioned home of the öre-round implementation: must not count against itself.
 const ROUND_EXEMPT = new Set(['lib/money.ts', 'lib/bokslut/rounding.ts'])
 
 const RAW_AUTH_RE = /\.auth\.getUser\(/
@@ -75,6 +81,37 @@ function findRawRouteAuth() {
     .sort()
 }
 
+// Sanctioned journal_entry_lines insert sites. engine/storno write mirrors via
+// dimension-resolver; sie-import and sandbox seed write neither dims nor
+// mirrors (DB defaults keep them consistent).
+const JEL_INSERT_SANCTIONED = new Set([
+  'lib/bookkeeping/engine.ts',
+  'lib/core/bookkeeping/storno-service.ts',
+  'lib/import/sie-import.ts',
+  'app/api/sandbox/seed/route.ts',
+])
+// Matches an insert CHAINED on the lines table (`.from('journal_entry_lines').insert(`,
+// with optional whitespace/newlines in the chain): select-only readers don't count.
+const JEL_INSERT_CHAIN_RE = /\.from\(\s*['"]journal_entry_lines['"]\s*\)\s*\.\s*(insert|upsert)\(/
+
+/** Files that insert into journal_entry_lines outside the sanctioned writers. */
+function findDirectJelInserts() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (JEL_INSERT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
 /** Count of naive Math.round(x*100)/100 occurrences (lines) across source. */
 function countNaiveRound() {
   const files = [
@@ -96,6 +133,7 @@ function countNaiveRound() {
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  directJelInsert: findDirectJelInserts(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -136,6 +174,22 @@ if (newAuthFiles.length) {
   console.error('  → wrap the route in withRouteContext (or call requireAuth) so MFA is enforced.')
 }
 
+// 1b. direct-jel-insert: allowlist lives in this file (JEL_INSERT_SANCTIONED),
+// no baseline: any unsanctioned insert site is a hard failure.
+if (current.directJelInsert.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-jel-insert: ${current.directJelInsert.length} file(s) insert into journal_entry_lines ` +
+      `outside the sanctioned writers:`,
+  )
+  current.directJelInsert.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
+      '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
+      '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -156,9 +210,9 @@ if (fixedAuthFiles.length || current.naiveOreRound < baseline.naiveOreRound.coun
 }
 
 if (failed) {
-  console.error('\nAntipattern guard failed — see above.')
+  console.error('\nAntipattern guard failed: see above.')
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0).`,
 )

@@ -49,7 +49,7 @@ The October 31, 2025 transition deadline has now passed, so any active certifica
 ### A.8.16 Monitoring activities
 **Intent**: Monitor networks, systems, and applications for anomalous behavior to detect potential information security incidents.
 **Repository signal**: Alerting rules deployed via IaC. SIEM integration. Webhook integrations to incident response tooling (PagerDuty, Opsgenie). Anomaly detection on key metrics.
-**Common gap**: Logging exists (A.8.15) but nobody is alerted on anomalies. A.8.15 and A.8.16 are distinct — implement both.
+**Common gap**: Logging exists (A.8.15) but nobody is alerted on anomalies. A.8.15 and A.8.16 are distinct: implement both.
 
 ### A.8.23 Web filtering
 **Intent**: Manage access to external websites to reduce exposure to malicious content.

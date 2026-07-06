@@ -8,12 +8,12 @@ Du får:
 - Företagets TIC-snapshot från Bolagsverket / Lens API. Inkluderar utöver grundfält (org-nummer, juridisk form, SNI, F-skatt/moms/arbetsgivarregistrering, anställdaintervall, omsättningsintervall, verksamhetsbeskrivning, senaste finansiella rapporter):
   - statuses[]: nuvarande och historiska bolagsstatus med trafikljus (red/yellow/green/neutral) och isCeased-flagga. Om isCeased eller red: kompositionen ska FORTSÄTTA men nämn det i uncertainty_notes.
   - signatory[]: firmateckningsregler i fritext ("Firman tecknas av styrelsen", "två i förening", "av en ledamot ensam"). En enda ledamot som tecknar ensam pekar starkt mot enpersonsbolag.
-  - board: styrelsesammansättning — numberOfBoardMembers, numberOfDeputyBoardMembers, hasVacancy. Mer än 1 ledamot utan suppleant pekar bort från enpersonsmodifier.
+  - board: styrelsesammansättning: numberOfBoardMembers, numberOfDeputyBoardMembers, hasVacancy. Mer än 1 ledamot utan suppleant pekar bort från enpersonsmodifier.
   - representatives[]: aktiva personer (CEO, ledamöter, revisor) med positionType. Räkna unika personer för ownership-signal.
   - beneficialOwners[]: verklig huvudman per Bolagsverket. AUKTORITATIV ägarstrukturkälla. En enda namngiven owner = bekräftat enpersonsbolag. Två eller fler = multi-owner; välj INTE single-shareholder-ab-fmb.
-  - payrolls[]: faktiska lönefilingar (payroll2-array per period med antal anställda + summa preliminärskatt). Om TOM trots att registration.payroll = true: arbetsgivaren är registrerad men har inte faktiskt betalat lön ännu. Välj INTE swedish-payroll i det läget — felaktig signal från statisk registrering är vanlig för nystartade AB.
+  - payrolls[]: faktiska lönefilingar (payroll2-array per period med antal anställda + summa preliminärskatt). Om TOM trots att registration.payroll = true: arbetsgivaren är registrerad men har inte faktiskt betalat lön ännu. Välj INTE swedish-payroll i det läget: felaktig signal från statisk registrering är vanlig för nystartade AB.
   - fiscalYear: nuvarande räkenskapsårskonfiguration med startMonthDay/endMonthDay. Brutet räkenskapsår (annat än 01-01/12-31) är vanligt i konsult-AB och påverkar bokslut-atomvalet.
-- KÄNDA FAKTA från företagets inställningar — saker användaren redan har angett (momsperiod, räkenskapsår, F-skatt-status, anställda, bokföringsmetod)
+- KÄNDA FAKTA från företagets inställningar: saker användaren redan har angett (momsperiod, räkenskapsår, F-skatt-status, anställda, bokföringsmetod)
 - Eventuell sammanfattning från importerad SIE-fil (topp-konton, topp-motparter, antal år)
 - Eventuell sammanfattning från bankhistorik. Varje topp-motpart har:
   - belopp i kr (abs)
@@ -23,20 +23,20 @@ Du får:
 - Ett register över tillgängliga atomer (horizontal/vertical/modifier) med beskrivning, SNI-prefix och utlösare
 
 Din uppgift:
-1. Välj ALLA horisontella atomer som är relevanta för verksamheten. De flesta företag behöver swedish-vat, swedish-invoice-compliance och swedish-year-end-closing. Lägg till swedish-payroll BARA om payrolls[] visar faktiska filingar (icke-tom payroll2-array) ELLER KÄNDA FAKTA bekräftar pågående löneutbetalning — inte enbart för att registration.payroll = true. Lägg till SRU/financial-reporting för AB. Lägg till asset-accounting om SIE visar 12xx-konton. Lägg till project-accounting om signalerna pekar mot tjänsteföretag med projekt. Lägg till tax-planning för aktiebolag.
+1. Välj ALLA horisontella atomer som är relevanta för verksamheten. De flesta företag behöver swedish-vat, swedish-invoice-compliance och swedish-year-end-closing. Lägg till swedish-payroll BARA om payrolls[] visar faktiska filingar (icke-tom payroll2-array) ELLER KÄNDA FAKTA bekräftar pågående löneutbetalning, inte enbart för att registration.payroll = true. Lägg till SRU/financial-reporting för AB. Lägg till asset-accounting om SIE visar 12xx-konton. Lägg till project-accounting om signalerna pekar mot tjänsteföretag med projekt. Lägg till tax-planning för aktiebolag.
 2. Välj noll, en eller flera vertikala atomer (industri) baserat på SNI-prefix, verksamhetsbeskrivning och motpartsmönster. Tomt om ingen passar.
 3. Välj modifier-atomer som faktiskt är sanna:
    - single-shareholder-ab-fmb: VÄLJ när beneficialOwners[] har exakt en person OCH legal form = AB. Avstå annars (även om bolaget "ser litet ut").
    - enskild-firma: om EF.
-   - small-employer: om payrolls[] visar 1–9 anställda i senaste filing.
+   - small-employer: om payrolls[] visar 1-9 anställda i senaste filing.
 4. is_multi_vertical = true endast om företaget faktiskt har två etablerade affärsben.
-5. Skriv 3-6 korta svenska verifieringsfrågor som användaren behöver bekräfta — fokusera på de högsta osäkerheterna.
+5. Skriv 3-6 korta svenska verifieringsfrågor som användaren behöver bekräfta: fokusera på de högsta osäkerheterna.
 
    KRITISKT: Ställ INTE frågor vars svar redan finns i KÄNDA FAKTA eller TIC-snapshot. Användaren har redan sagt detta. Att fråga igen är slöseri med deras tid.
      - Om "Momsperiod" finns i KÄNDA FAKTA: fråga inte om momsperiod
      - Om "Anställda" finns i KÄNDA FAKTA: fråga inte om anställda
      - Om TIC visar F-skatt/momsregistrering: fråga inte om det
-     - Om beneficialOwners[] finns: fråga INTE "vem äger bolaget?" eller "är du ensamägare?" — det är redan auktoritativt besvarat
+     - Om beneficialOwners[] finns: fråga INTE "vem äger bolaget?" eller "är du ensamägare?": det är redan auktoritativt besvarat
      - Om payrolls[] visar antal anställda: fråga INTE "hur många anställda?"
      - Om fiscalYear finns: fråga INTE om räkenskapsårsstart/slut
      - Om SNI-koder finns: fråga inte om branschen i allmänhet, men du KAN fråga om en specifik nyans (t.ex. "Säljer ni mest 25%- eller 12%-momsvaror?")
@@ -91,7 +91,7 @@ export async function selectAtoms(inputs: ComposerInputs): Promise<AtomSelection
   ]
   const unknown = allSelected.filter((id) => !knownIds.has(id))
   if (unknown.length > 0) {
-    // Drop unknown IDs rather than failing — composer can still produce a
+    // Drop unknown IDs rather than failing: composer can still produce a
     // useful profile. Surface in uncertainty_notes so a reviewer sees it.
     parsed.data.horizontal_atoms = parsed.data.horizontal_atoms.filter((id) => knownIds.has(id))
     parsed.data.vertical_atoms = parsed.data.vertical_atoms.filter((id) => knownIds.has(id))
@@ -114,14 +114,14 @@ export async function selectAtoms(inputs: ComposerInputs): Promise<AtomSelection
 }
 
 // Drops questions whose answer is already settled in company_settings or
-// TIC snapshot. Each question is matched against keyword patterns —
+// TIC snapshot. Each question is matched against keyword patterns:
 // keep this conservative so we never accidentally drop a legitimate
 // nuance question (e.g. "Säljer ni mest 25%- eller 12%-momsvaror?" is
 // kept even when moms_period is known, because it's about VAT RATE not
 // VAT PERIOD).
 //
-// Exported so the stream endpoint can re-apply it to fallback selections too
-// — fallbackAtomSelection generates questions from a template that doesn't
+// Exported so the stream endpoint can re-apply it to fallback selections too:
+// fallbackAtomSelection generates questions from a template that doesn't
 // know about KÄNDA FAKTA. Belt-and-braces against both model misbehavior
 // and the fallback path.
 export function filterRedundantQuestions(
@@ -157,7 +157,7 @@ export function filterRedundantQuestions(
     const lower = q.toLowerCase()
 
     // Ownership ("är du ensamägare", "äger du majoriteten", "vem äger
-    // bolaget"…) — drop when EITHER the single-shareholder modifier is set
+    // bolaget"…): drop when EITHER the single-shareholder modifier is set
     // OR Bolagsverket's beneficial-owner register confirms a single owner.
     if (
       knowsOwnershipSingle &&
@@ -167,12 +167,12 @@ export function filterRedundantQuestions(
     ) {
       return false
     }
-    // Verklig huvudman — if TIC says we have owners, don't ask who they are.
+    // Verklig huvudman: if TIC says we have owners, don't ask who they are.
     if (knowsOwners && /(verklig huvudman|huvudmän)/.test(lower)) {
       return false
     }
 
-    // Moms period — "månad/kvartal/år" all together is the giveaway.
+    // Moms period: "månad/kvartal/år" all together is the giveaway.
     if (
       knowsMomsPeriod &&
       lower.includes('momsperiod') &&
@@ -181,27 +181,27 @@ export function filterRedundantQuestions(
       return false
     }
 
-    // Employees — pattern "har bolaget anställda" or "har du anställda".
+    // Employees: pattern "har bolaget anställda" or "har du anställda".
     if (knowsEmployees && /har\s+(bolaget|du|ni|företaget)\s+anställda/.test(lower)) {
       return false
     }
 
-    // Fiscal year — "räkenskapsår" + ("januari"|"month names"|"börjar").
+    // Fiscal year: "räkenskapsår" + ("januari"|"month names"|"börjar").
     if (knowsFiscalYear && lower.includes('räkenskapsår') && /(börjar|januari|kalenderår|brutet)/.test(lower)) {
       return false
     }
 
-    // F-skatt — "är bolaget registrerat för f-skatt" type questions.
+    // F-skatt: "är bolaget registrerat för f-skatt" type questions.
     if (knowsFSkatt && /f[-\s]?skatt/.test(lower) && /(registrerad|registrerat|aktiv)/.test(lower)) {
       return false
     }
 
-    // VAT registration — "är ni momsregistrerade" type questions.
+    // VAT registration: "är ni momsregistrerade" type questions.
     if (knowsVatRegistered && /(momsregistrerad|registrerade?\s+för\s+moms)/.test(lower)) {
       return false
     }
 
-    // Accounting method — "fakturametoden eller kontantmetoden".
+    // Accounting method: "fakturametoden eller kontantmetoden".
     if (knowsAccountingMethod && /(fakturamet|kontantmet|bokföringsmet)/.test(lower)) {
       return false
     }
@@ -249,7 +249,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
     if (inputs.sieSummary.top_counterparties.length > 0) {
       lines.push('Topp-motparter (från transaktionsbeskrivningar):')
       for (const c of inputs.sieSummary.top_counterparties.slice(0, 10)) {
-        lines.push(`  ${c.name} — ${Math.round(c.abs_amount).toLocaleString('sv-SE')} kr`)
+        lines.push(`  ${c.name}: ${Math.round(c.abs_amount).toLocaleString('sv-SE')} kr`)
       }
     }
     lines.push('')
@@ -270,7 +270,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
       for (const c of inputs.bankingSummary.top_counterparties.slice(0, 20)) {
         // direction tells Opus whether this counterparty is a source of
         // income, a cost, or both. has_unbooked says whether there's still
-        // a transaction waiting for the user to book — only those are
+        // a transaction waiting for the user to book: only those are
         // legitimate verification-question fodder.
         const dirLabel =
           c.direction === 'in' ? 'in' : c.direction === 'out' ? 'ut' : 'in+ut'
@@ -294,7 +294,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
   lines.push('')
   lines.push('## Vertical')
   if (verticals.length === 0) {
-    lines.push('(inga vertikala atomer i registret ännu — välj alltid en tom array)')
+    lines.push('(inga vertikala atomer i registret ännu, välj alltid en tom array)')
   } else {
     for (const a of verticals) {
       const sni = a.sni_prefixes.length > 0 ? ` [SNI ${a.sni_prefixes.join(', ')}]` : ''
@@ -306,7 +306,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
   lines.push('')
   lines.push('## Modifier')
   if (modifiers.length === 0) {
-    lines.push('(inga modifier-atomer i registret ännu — välj alltid en tom array)')
+    lines.push('(inga modifier-atomer i registret ännu, välj alltid en tom array)')
   } else {
     for (const a of modifiers) {
       lines.push(`- ${a.id}: ${a.description.slice(0, 240)}`)
@@ -318,7 +318,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
 
 // Surfaces user-settled facts in a tight bullet list the composer can scan
 // before generating questions. Anything in here is OFF-LIMITS for the
-// verification_questions list — the user already said it.
+// verification_questions list: the user already said it.
 function buildKnownFacts(inputs: ComposerInputs): string[] {
   const out: string[] = []
   const s = inputs.companySettings
@@ -400,7 +400,7 @@ function buildKnownFacts(inputs: ComposerInputs): string[] {
       out.push(`Verksamhetsbeskrivning: ${tic.purpose}`)
     }
     if (Array.isArray(tic.beneficialOwners) && tic.beneficialOwners.length > 0) {
-      // Verklig huvudman per Bolagsverket — authoritative ownership data.
+      // Verklig huvudman per Bolagsverket: authoritative ownership data.
       // Composer must NOT ask "are you the sole owner?" when this is set.
       const owners = tic.beneficialOwners
         .map((o) => {
@@ -409,7 +409,7 @@ function buildKnownFacts(inputs: ComposerInputs): string[] {
         })
         .join('; ')
       out.push(
-        `Verkliga huvudmän (Bolagsverket): ${owners}${tic.beneficialOwners.length === 1 ? ' — ensam ägare' : ''}`,
+        `Verkliga huvudmän (Bolagsverket): ${owners}${tic.beneficialOwners.length === 1 ? ', ensam ägare' : ''}`,
       )
     }
   }
@@ -418,11 +418,11 @@ function buildKnownFacts(inputs: ComposerInputs): string[] {
 
 // Drop fields from the TIC snapshot that the composer doesn't need and that
 // inflate token count or carry PII unnecessarily. After the v2 migration we
-// include the new ownership/governance/payroll sections — these change atom
+// include the new ownership/governance/payroll sections: these change atom
 // selection materially (payroll signal goes from "is registered" to "has
 // actual filings"; ownership signal goes from heuristic to authoritative).
-// Excluded: bankAccounts, email, phone, fiscalYearHistory, financialReports
-// — high token cost, low atom-selection signal.
+// Excluded: bankAccounts, email, phone, fiscalYearHistory, financialReports:
+// high token cost, low atom-selection signal.
 function redactTic(snapshot: Record<string, unknown>): Record<string, unknown> {
   const allowed = new Set([
     'orgNumber',
@@ -438,16 +438,16 @@ function redactTic(snapshot: Record<string, unknown>): Record<string, unknown> {
     'sniCodes',
     'address',
     'financials',
-    // v2 governance + ownership — settles redundant questions deterministically
+    // v2 governance + ownership: settles redundant questions deterministically
     'beneficialOwners',
     'signatory',
     'board',
     'representatives',
-    // v2 payroll history — distinguishes "registered" vs "has actually filed"
+    // v2 payroll history: distinguishes "registered" vs "has actually filed"
     'payrolls',
-    // v2 status entries — refuse to compose for ceased/liquidated companies
+    // v2 status entries: refuse to compose for ceased/liquidated companies
     'statuses',
-    // v2 fiscal year — already exposed as a known fact via fiscal_year_start_month
+    // v2 fiscal year: already exposed as a known fact via fiscal_year_start_month
     // but having the raw object lets Opus reason about brutet räkenskapsår
     'fiscalYear',
   ])

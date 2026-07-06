@@ -4,7 +4,6 @@ import { useState, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import {
@@ -239,9 +238,9 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="font-medium">{term.term}</h3>
                   {term.simpleTerm && (
-                    <Badge variant="secondary" className="font-normal">
+                    <span className="text-sm text-muted-foreground font-normal">
                       {term.simpleTerm}
-                    </Badge>
+                    </span>
                   )}
                 </div>
                 {!isExpanded && (
@@ -268,11 +267,9 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
             {term.relatedTerms && term.relatedTerms.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs text-muted-foreground">{t('related_label')}</span>
-                {term.relatedTerms.map((related) => (
-                  <Badge key={related} variant="outline" className="text-xs">
-                    {related}
-                  </Badge>
-                ))}
+                <span className="text-xs text-muted-foreground">
+                  {term.relatedTerms.join(', ')}
+                </span>
               </div>
             )}
 
@@ -418,7 +415,7 @@ export default function HelpPage() {
                 <span className="font-medium">Arkivplan</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFNAR 2013:2 — beskriver var räkenskapsinformation förvaras
+                Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
               </p>
             </a>
             <a
@@ -431,7 +428,7 @@ export default function HelpPage() {
                 <span className="font-medium">Systemdokumentation</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFL 5 kap. 11 § — beskriver bokföringssystemets uppbyggnad
+                Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
               </p>
             </a>
           </div>

@@ -129,6 +129,30 @@ describe('detectBookedDuplicateTransaction', () => {
     })
     expect(result?.transaction_id).toBe('sib-2')
   })
+
+  // ── Intra-batch exclusion (bulk-book false-positive fix) ────────────────
+  it('excludes a same-batch sibling whose id is in excludeTransactionIds', async () => {
+    const supabase = makeSupabase([sibling({ id: 'sib-batch' })])
+    const result = await detectBookedDuplicateTransaction(
+      supabase,
+      COMPANY,
+      { id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null },
+      { excludeTransactionIds: ['sib-batch'] },
+    )
+    expect(result).toBeNull()
+  })
+
+  it('STILL flags a pre-existing sibling not in excludeTransactionIds (invariant preserved)', async () => {
+    // 'sib-old' existed before the batch; only 'sib-batch' was booked this run.
+    const supabase = makeSupabase([sibling({ id: 'sib-old' })])
+    const result = await detectBookedDuplicateTransaction(
+      supabase,
+      COMPANY,
+      { id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null },
+      { excludeTransactionIds: ['sib-batch'] },
+    )
+    expect(result?.transaction_id).toBe('sib-old')
+  })
 })
 
 // ── Ledger-only voucher guard (the orphan with no sibling transaction) ───────
@@ -235,7 +259,7 @@ describe('detectLedgerDuplicateVoucher', () => {
       debit_amount: 0,
       credit_amount: 16609,
       journal_entry: {
-        id: 'je-3', entry_date: '2026-05-04', description: 'Lön 2026-05 — Nettolön',
+        id: 'je-3', entry_date: '2026-05-04', description: 'Lön 2026-05: Nettolön',
         voucher_series: 'A', voucher_number: 3, status: 'posted', source_type: 'salary',
       },
     })
@@ -305,6 +329,29 @@ describe('detectLedgerDuplicateVoucher', () => {
     })
     expect(result).toBeNull()
   })
+
+  // ── Intra-batch exclusion (bulk-book false-positive fix) ────────────────
+  it('excludes a same-batch voucher whose journal_entry.id is in excludeJournalEntryIds', async () => {
+    const supabase = makeLedgerSupabase({ lines: [jel()] }) // jel() → journal_entry.id 'je-2'
+    const result = await detectLedgerDuplicateVoucher(
+      supabase,
+      COMPANY,
+      { id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null },
+      { excludeJournalEntryIds: ['je-2'] },
+    )
+    expect(result).toBeNull()
+  })
+
+  it('STILL flags a pre-existing voucher not in excludeJournalEntryIds (invariant preserved)', async () => {
+    const supabase = makeLedgerSupabase({ lines: [jel()] })
+    const result = await detectLedgerDuplicateVoucher(
+      supabase,
+      COMPANY,
+      { id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null },
+      { excludeJournalEntryIds: ['je-booked-this-batch'] },
+    )
+    expect(result?.journal_entry_id).toBe('je-2')
+  })
 })
 
 describe('detectBookingDuplicate (orchestrator)', () => {
@@ -330,6 +377,22 @@ describe('detectBookingDuplicate (orchestrator)', () => {
     const result = await detectBookingDuplicate(supabase, COMPANY, {
       id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
     })
+    expect(result).toBeNull()
+  })
+
+  it('propagates exclusions to BOTH the sibling scan and the ledger scan', async () => {
+    // A matching sibling AND a matching ledger voucher exist, but both belong to
+    // this same batch (excluded) → the orchestrator must report no duplicate.
+    const supabase = makeLedgerSupabase({
+      transactionRows: [sibling({ id: 'sib-batch', amount: 98565, journal_entry_id: 'je-sib' })],
+      lines: [jel()], // journal_entry.id 'je-2'
+    })
+    const result = await detectBookingDuplicate(
+      supabase,
+      COMPANY,
+      { id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null },
+      { excludeTransactionIds: ['sib-batch'], excludeJournalEntryIds: ['je-2'] },
+    )
     expect(result).toBeNull()
   })
 })

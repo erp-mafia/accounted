@@ -1,5 +1,6 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { applyPlaceholders, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
 
@@ -60,7 +61,7 @@ const LABELS = {
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
-    // Statutory Swedish phrase — kept verbatim in both locales. F-skatt is a
+    // Statutory Swedish phrase: kept verbatim in both locales. F-skatt is a
     // Swedish tax-authority designation; translating it has no legal standing.
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc} summary:`,
@@ -68,8 +69,48 @@ const LABELS = {
   },
 } as const
 
+// Placeholder keys available in company-editable email texts
+// (company_settings.invoice_email_texts). Rendered as a legend in the
+// settings UI; kept here rather than in messages/*.json because ICU message
+// syntax treats literal braces as interpolation.
+export const INVOICE_EMAIL_PLACEHOLDER_KEYS = [
+  'fakturanummer',
+  'kundnamn',
+  'förnamn',
+  'företag',
+  'förfallodatum',
+  'belopp',
+] as const
+
+// Display strings for the settings UI's input placeholder attributes.
+// subject and greeting are functions in LABELS, so their pattern form is
+// hand-written here; body/signoff reference LABELS directly so they cannot
+// drift from the actual defaults.
+export const INVOICE_EMAIL_DEFAULT_TEXTS = {
+  sv: {
+    subject: 'Faktura {fakturanummer} från {företag}',
+    greeting: 'Hej {förnamn},',
+    body: LABELS.sv.bodyInvoice,
+    signoff: LABELS.sv.sincerely,
+  },
+  en: {
+    subject: 'Invoice {fakturanummer} from {företag}',
+    greeting: 'Hi {förnamn},',
+    body: LABELS.en.bodyInvoice,
+    signoff: LABELS.en.sincerely,
+  },
+} as const
+
 function resolveLang(customer: Customer): EmailLang {
   return customer.language === 'en' ? 'en' : 'sv'
+}
+
+// Custom texts apply ONLY to standard invoices. Credit notes, proforma and
+// delivery notes always use the stock texts: a custom "Tack för ditt
+// förtroende..." body or "Faktura..." subject would be wrong on those.
+function isStandardInvoice(invoice: Invoice): boolean {
+  const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
+  return docType === 'invoice' && !invoice.credited_invoice_id
 }
 
 function getDocumentLabel(invoice: Invoice, lang: EmailLang): string {
@@ -81,7 +122,7 @@ function getDocumentLabel(invoice: Invoice, lang: EmailLang): string {
   return L.docInvoice
 }
 
-// Currency for the customer-facing total — explicit ISO code so a non-Swedish
+// Currency for the customer-facing total: explicit ISO code so a non-Swedish
 // recipient reads "1 234,56 SEK" instead of the Swedish symbol "kr". Use the
 // English locale for digit grouping when the email is in English so the comma
 // thousands separator matches reader expectation.
@@ -100,7 +141,48 @@ export interface InvoiceEmailData {
   company: CompanySettings
 }
 
-// Minimal hex validator — guards against branding values that bypass the
+function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record<string, string> {
+  const { invoice, customer, company } = data
+  const fullName = (customer.name || '').trim()
+  return {
+    fakturanummer: invoice.invoice_number ?? '',
+    kundnamn: fullName,
+    förnamn: fullName ? fullName.split(' ')[0] : '',
+    företag: getCompanyPrimaryName(company),
+    förfallodatum: formatDate(invoice.due_date),
+    belopp: formatCurrencyForCustomer(invoice.total, invoice.currency, lang),
+  }
+}
+
+interface ResolvedCustomTexts {
+  subject?: string
+  greeting?: string
+  body?: string
+  signoff?: string
+}
+
+// Resolves the company's custom email texts for one language. Per-field
+// fallback: missing / non-string / whitespace-only values return undefined
+// and the caller uses the stock text. Returns RAW substituted strings:
+// escaping is the caller's job per output variant (HTML vs text vs subject).
+// Defensive typeof checks: rows can be written outside Zod (scripts, SQL).
+function resolveCustomTexts(data: InvoiceEmailData, lang: EmailLang): ResolvedCustomTexts {
+  if (!isStandardInvoice(data.invoice)) return {}
+  const texts = data.company.invoice_email_texts
+  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
+  if (!langTexts || typeof langTexts !== 'object') return {}
+  const values = buildPlaceholderValues(data, lang)
+  const pick = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() !== '' ? applyPlaceholders(v.trim(), values) : undefined
+  return {
+    subject: pick(langTexts.subject),
+    greeting: pick(langTexts.greeting),
+    body: pick(langTexts.body),
+    signoff: pick(langTexts.signoff),
+  }
+}
+
+// Minimal hex validator: guards against branding values that bypass the
 // settings UI and could inject CSS via crafted strings. Anything malformed
 // falls back to the legacy default.
 function safeBrandingColor(value: string | null | undefined, fallback: string): string {
@@ -123,9 +205,10 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   const isProforma = docType === 'proforma'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma
   const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const custom = resolveCustomTexts(data, lang)
 
   // Primary color drives the heading accent and the highlighted total. The
-  // accent is sanitized to a strict hex pattern — anything else falls back
+  // accent is sanitized to a strict hex pattern: anything else falls back
   // to the legacy dark neutral. Credit notes intentionally use the success
   // green for the total regardless of branding, because the customer's brain
   // is wired to expect "money coming back = green".
@@ -154,10 +237,10 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Greeting -->
     <div style="margin-bottom: 30px;">
       <p style="margin: 0 0 15px 0;">
-        ${L.greeting(firstName)}
+        ${custom.greeting !== undefined ? userTextToHtml(custom.greeting) : L.greeting(firstName)}
       </p>
       <p style="margin: 0;">
-        ${isCreditNote ? L.bodyCreditNote : L.bodyInvoice}
+        ${custom.body !== undefined ? userTextToHtml(custom.body) : (isCreditNote ? L.bodyCreditNote : L.bodyInvoice)}
       </p>
     </div>
 
@@ -235,7 +318,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         ${L.questions}
       </p>
       <p style="margin: 0; color: #666; font-size: 14px;">
-        ${L.sincerely}<br>
+        ${custom.signoff !== undefined ? userTextToHtml(custom.signoff) : L.sincerely}<br>
         <strong style="color: ${primaryColor};">${getCompanyPrimaryName(company)}</strong>
       </p>
       ${company.org_number ? `
@@ -267,13 +350,14 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const isProforma = docType === 'proforma'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma
   const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const custom = resolveCustomTexts(data, lang)
 
   let text = `${L.documentFrom(documentType, getCompanyPrimaryName(company))}\n`
   text += `${L.documentNumber(documentType)} ${invoice.invoice_number}\n\n`
 
-  text += `${L.greeting(firstName)}\n\n`
+  text += `${custom.greeting ?? L.greeting(firstName)}\n\n`
 
-  text += `${isCreditNote ? L.bodyCreditNote : L.bodyInvoice}\n\n`
+  text += `${custom.body ?? (isCreditNote ? L.bodyCreditNote : L.bodyInvoice)}\n\n`
 
   text += `${L.documentSummary(documentType)}\n`
   text += `---\n`
@@ -295,7 +379,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   }
 
   text += `${L.questions}\n\n`
-  text += `${L.sincerely}\n`
+  text += `${custom.signoff ?? L.sincerely}\n`
   text += `${getCompanyDisplayName(company)}\n`
 
   if (company.org_number) {
@@ -315,7 +399,12 @@ export function generateInvoiceEmailSubject(data: InvoiceEmailData): string {
   const { invoice, customer, company } = data
   const lang = resolveLang(customer)
   const L = LABELS[lang]
-  const documentType = getDocumentLabel(invoice, lang)
 
+  // Sanitization runs after substitution, so a pathological placeholder
+  // value containing a newline is also flattened to a single header line.
+  const custom = resolveCustomTexts(data, lang)
+  if (custom.subject !== undefined) return sanitizeSubjectLine(custom.subject)
+
+  const documentType = getDocumentLabel(invoice, lang)
   return L.subjectFrom(documentType, invoice.invoice_number ?? '', getCompanyPrimaryName(company))
 }

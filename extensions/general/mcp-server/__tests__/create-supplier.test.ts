@@ -1,5 +1,5 @@
 /**
- * Unit tests for gnubok_create_supplier — registration, risk tier, and
+ * Unit tests for gnubok_create_supplier: registration, risk tier, and
  * input validation (ASVS V2.3, V4.5; ISO A.8.28; CC6.3).
  *
  * The financial identifier checks here guard against the supplier-fraud /
@@ -20,7 +20,7 @@ vi.mock('@/lib/currency/riksbanken', () => ({
 
 const tool = () => tools.find((t) => t.name === 'gnubok_create_supplier')!
 
-describe('gnubok_create_supplier — registration', () => {
+describe('gnubok_create_supplier: registration', () => {
   it('is registered with idempotent + non-read-only annotations', () => {
     expect(tool()).toBeDefined()
     expect(tool().annotations.readOnlyHint).toBe(false)
@@ -63,7 +63,7 @@ const noopSupabase = {
   })),
 } as never
 
-describe('gnubok_create_supplier — input validation', () => {
+describe('gnubok_create_supplier: input validation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -134,7 +134,7 @@ describe('gnubok_create_supplier — input validation', () => {
  * mutate caller intent. We use dry_run so no DB write is attempted; the
  * staging helper still receives the validated params.
  */
-describe('gnubok_create_supplier — staging behaviour', () => {
+describe('gnubok_create_supplier: staging behaviour', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

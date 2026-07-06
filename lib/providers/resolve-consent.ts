@@ -38,7 +38,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
   }
 
   if (!consent.provider) {
-    throw { status: 400, message: 'Consent has no provider set — complete onboarding first' };
+    throw { status: 400, message: 'Consent has no provider set: complete onboarding first' };
   }
 
   // Load tokens
@@ -49,7 +49,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     .limit(1);
 
   if (!tokenRows || tokenRows.length === 0) {
-    throw { status: 401, message: 'No tokens found for this consent — complete OAuth first' };
+    throw { status: 401, message: 'No tokens found for this consent: complete OAuth first' };
   }
 
   const tokens = tokenRows[0]!;
@@ -63,7 +63,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     };
   }
 
-  // Björn Lunden: client credentials — auto-refresh when expired
+  // Björn Lunden: client credentials, auto-refresh when expired
   if (consent.provider === 'bjornlunden') {
     if (tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date()) {
       const refreshed = await refreshBjornLundenToken();
@@ -101,18 +101,18 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
 
     // A failed refresh is categorically an expired/revoked connection: the
     // providers rotate refresh tokens and a dead one (e.g. Fortnox `400
-    // invalid_grant`) can never be replayed — retrying is pointless. Surface it
+    // invalid_grant`) can never be replayed. Retrying is pointless. Surface it
     // as PROVIDER_AUTH_EXPIRED so callers (preview/sie-data/migrate) report
     // "reconnect" (401) instead of a generic 500 that invites a useless retry.
     // The raw helpers throw plain Errors with the status only in the message
-    // string, so classifyProviderError can't see it downstream — we map here,
+    // string, so classifyProviderError can't see it downstream: we map here,
     // at the boundary that knows this is a refresh.
     try {
       if (consent.provider === 'fortnox') {
         refreshed = await refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string);
       } else if (consent.provider === 'briox') {
         // Briox /tokenrefresh wants the (expired) access token alongside the
-        // refresh token; no app-level config involved. Both tokens rotate —
+        // refresh token; no app-level config involved. Both tokens rotate:
         // the new refresh_token is persisted below.
         refreshed = await refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string);
       } else {
@@ -128,7 +128,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
         ? 'PROVIDER_LICENSE_MISSING'
         : 'PROVIDER_AUTH_EXPIRED';
       log.error(
-        `Failed to refresh ${consent.provider} token for consent ${consentId} — ` +
+        `Failed to refresh ${consent.provider} token for consent ${consentId}: ` +
         (code === 'PROVIDER_LICENSE_MISSING'
           ? 'the integration license is missing/inactive'
           : 'the connection must be re-authorized'),
@@ -147,7 +147,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
 
     // Optimistic concurrency guard: providers like Briox and Fortnox rotate
     // BOTH tokens on refresh, so two concurrent requests refreshing the same
-    // expired pair must not both persist — the second write would overwrite
+    // expired pair must not both persist: the second write would overwrite
     // the pair the first request just stored with a possibly-dead one. Key
     // the UPDATE on the token_expires_at we read above: if another request
     // already rotated, zero rows match and we adopt the stored fresh tokens.
@@ -160,20 +160,20 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       })
       .eq('consent_id', consentId)
       .eq('token_expires_at', tokens.token_expires_at as string)
-      // consent_id is the table's PRIMARY KEY — there is no `id` column.
+      // consent_id is the table's PRIMARY KEY: there is no `id` column.
       // Selecting `id` here makes Postgres reject the whole statement
       // ("column provider_consent_tokens.id does not exist"), which surfaces as
       // updateError and is misreported as "rotated tokens could not be saved"
-      // AFTER the provider already rotated — permanently breaking the consent.
+      // AFTER the provider already rotated, permanently breaking the consent.
       .select('consent_id');
 
     if (updateError) {
       // The provider has ALREADY rotated the tokens but we failed to persist
-      // the new pair — the stored pair is now dead and every later call on
+      // the new pair: the stored pair is now dead and every later call on
       // this consent will fail. Log loudly; the only recovery is to
       // disconnect and re-enter the provider credentials.
       log.error(
-        `Failed to persist rotated ${consent.provider} tokens for consent ${consentId} — ` +
+        `Failed to persist rotated ${consent.provider} tokens for consent ${consentId}: ` +
         'the stored credentials are now invalid and the consent will break',
         { reason: updateError.message },
       );
@@ -181,13 +181,13 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
         status: 500,
         message:
           'Token refresh succeeded at the provider but the rotated tokens could not be saved. ' +
-          'The stored credentials are no longer valid — disconnect the provider and re-enter the credentials.',
+          'The stored credentials are no longer valid: disconnect the provider and re-enter the credentials.',
       };
     }
 
     if (!updatedRows || updatedRows.length === 0) {
       // Lost the refresh race: a concurrent request already rotated and
-      // persisted a fresh pair. Use those tokens as-is — calling the provider
+      // persisted a fresh pair. Use those tokens as-is: calling the provider
       // refresh endpoint again here would invalidate the winner's pair.
       const { data: freshRows } = await supabase
         .from('provider_consent_tokens')
@@ -205,7 +205,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
             | undefined,
         };
       }
-      // Token row vanished mid-flight (disconnect?) — fall through to our own
+      // Token row vanished mid-flight (disconnect?): fall through to our own
       // refreshed pair, which the provider still considers the latest one.
     }
 

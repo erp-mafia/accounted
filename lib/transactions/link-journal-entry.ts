@@ -8,7 +8,7 @@
  *   - REST: app/api/transactions/[id]/link-journal-entry/route.ts
  *     (duplicate-payment UI: user confirms the suggested existing voucher)
  *   - MCP commit handler: lib/pending-operations/commit.ts
- *     (gnubok_link_transaction_to_journal_entry — agent-staged operation)
+ *     (gnubok_link_transaction_to_journal_entry, agent-staged operation)
  *
  * NEVER creates a new journal entry. The match log records
  * 'linked_to_existing_voucher' for audit on success.
@@ -25,7 +25,7 @@ const log = createLogger('transactions/link-journal-entry')
 // lib/errors/structured-errors.ts so both callers (REST route, MCP commit
 // handler) can surface the right HTTP status and the localized message.
 // The TX-not-found case reuses the shared TX_CATEGORIZE_TX_NOT_FOUND code
-// rather than a link-specific one — it predates this route and is the
+// rather than a link-specific one: it predates this route and is the
 // canonical "bank tx not found in this company" envelope.
 export type LinkTransactionJournalEntryErrorCode =
   | 'TX_CATEGORIZE_TX_NOT_FOUND'
@@ -62,13 +62,13 @@ export type LinkTransactionJournalEntryOutcome =
 /**
  * Canonical verifikat-label format: `${series}-${number}` (e.g. "A-12").
  * Centralised so the MCP staging preview and the committed result can't
- * diverge — divergence is a BFL 5 kap 7§ traceability hazard because the
+ * diverge: divergence is a BFL 5 kap 7§ traceability hazard because the
  * verifikationsserie label that ends up in the audit trail must match the
  * label the user saw at approval time.
  *
  * Fallbacks ('A' series, empty number) are defensive only; in practice a
  * posted verifikat always has both. Callers should never construct this
- * string inline — import this helper instead.
+ * string inline: import this helper instead.
  */
 export function formatVoucherLabel(
   voucherSeries: string | null | undefined,
@@ -208,7 +208,7 @@ export async function linkTransactionToJournalEntry(
   }
 
   // Snapshot tx state so the compensating-rollback path can restore the row
-  // if a subsequent step fails — otherwise a partial state would persist
+  // if a subsequent step fails: otherwise a partial state would persist
   // (tx linked, invoice unchanged, no payment row).
   const priorTxState = {
     journal_entry_id: transaction.journal_entry_id, // validated null above
@@ -237,7 +237,7 @@ export async function linkTransactionToJournalEntry(
 
   async function rollbackTxLink(reason: string): Promise<void> {
     // SOC 2 PI1.3 (processing integrity): if a rollback itself fails, the
-    // ledger ends up in a partial state — tx pointing at the existing
+    // ledger ends up in a partial state: tx pointing at the existing
     // verifikat with no invoice_payments row, or the invoice row at an
     // intermediate paid_amount. We surface the rollback failure (IDs only,
     // no amounts or counterparty names) so a reconciliation job can
@@ -285,10 +285,10 @@ export async function linkTransactionToJournalEntry(
       return { ok: false, code: 'LINK_TX_INVOICE_RACE' }
     }
 
-    // BFL 5 kap 2§ + ML 8 kap 21–23§: the payment row must record the rate
+    // BFL 5 kap 2§ + ML 8 kap 21-23§: the payment row must record the rate
     // effective on the PAYMENT date, not the invoice-creation date. If
     // transaction.exchange_rate is null (SEK tx, no rate needed), leave the
-    // payment row's rate null too — a downstream Riksbanken lookup can
+    // payment row's rate null too: a downstream Riksbanken lookup can
     // populate it lazily if reporting needs it. Falling back to
     // invoice.exchange_rate would silently record the wrong (invoice-date)
     // rate, which corrupts the FX-diff figures in any later VAT or income

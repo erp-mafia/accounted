@@ -139,7 +139,7 @@ export default function AccountMappingStep({
           <CardTitle>Kontomappning</CardTitle>
           <CardDescription>
             Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt — granska de osäkra nedan.
+            De flesta matchas automatiskt: granska de osäkra nedan.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

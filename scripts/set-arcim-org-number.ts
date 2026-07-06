@@ -65,7 +65,7 @@ async function main() {
     process.exit(1)
   }
   if (before.org_number === orgNumber) {
-    console.log(`\nNo change needed — org_number is already ${orgNumber}.`)
+    console.log(`\nNo change needed: org_number is already ${orgNumber}.`)
     return
   }
 

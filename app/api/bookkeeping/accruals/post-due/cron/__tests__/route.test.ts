@@ -14,7 +14,7 @@ let installmentsResult: {
 } = { data: [], error: null }
 
 // The route loads company ids through fetchAllRows, which appends
-// .range(from, to) per page — the mock slices the fixture so pagination
+// .range(from, to) per page: the mock slices the fixture so pagination
 // (>1000 rows) is exercised for real.
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(() => ({

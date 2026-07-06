@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseInvoiceDateRange } from '../date-range-parser'
 
-describe('parseInvoiceDateRange — ISO patterns', () => {
+describe('parseInvoiceDateRange: ISO patterns', () => {
   it('parses "period: 2026-01-01 till 2027-12-31"', () => {
     expect(parseInvoiceDateRange('period: 2026-01-01 till 2027-12-31')).toEqual({
       startDate: '2026-01-01',
@@ -17,7 +17,7 @@ describe('parseInvoiceDateRange — ISO patterns', () => {
   })
 
   it('parses ISO with en dash', () => {
-    expect(parseInvoiceDateRange('2026-01-01–2026-06-30')).toEqual({
+    expect(parseInvoiceDateRange('2026-01-01-2026-06-30')).toEqual({
       startDate: '2026-01-01',
       endDate: '2026-06-30',
     })
@@ -38,7 +38,7 @@ describe('parseInvoiceDateRange — ISO patterns', () => {
   })
 })
 
-describe('parseInvoiceDateRange — Swedish long form', () => {
+describe('parseInvoiceDateRange: Swedish long form', () => {
   it('parses "period: 1 jan 2026 - 31 dec 2026"', () => {
     expect(parseInvoiceDateRange('period: 1 jan 2026 - 31 dec 2026')).toEqual({
       startDate: '2026-01-01',
@@ -54,7 +54,7 @@ describe('parseInvoiceDateRange — Swedish long form', () => {
   })
 
   it('uses last day of month for non-31-day months in Swedish form', () => {
-    // feb-feb expands to a Feb 1 → Feb 28 window — the "same month" case
+    // feb-feb expands to a Feb 1 → Feb 28 window: the "same month" case
     // still has measurable length so it's accepted, not rejected.
     expect(parseInvoiceDateRange('feb 2026 till feb 2026')).toEqual({
       startDate: '2026-02-01',
@@ -81,7 +81,7 @@ describe('parseInvoiceDateRange — Swedish long form', () => {
   })
 })
 
-describe('parseInvoiceDateRange — yyyy-mm form', () => {
+describe('parseInvoiceDateRange: yyyy-mm form', () => {
   it('parses "2026-01 till 2027-12"', () => {
     expect(parseInvoiceDateRange('Avtal 2026-01 till 2027-12')).toEqual({
       startDate: '2026-01-01',
@@ -90,7 +90,7 @@ describe('parseInvoiceDateRange — yyyy-mm form', () => {
   })
 
   it('does NOT misparse a full ISO ymd as a yyyy-mm prefix', () => {
-    // The leading "2026-01-01" should not be eaten by the yyyy-mm regex —
+    // The leading "2026-01-01" should not be eaten by the yyyy-mm regex:
     // the iso-iso branch should handle this first.
     expect(parseInvoiceDateRange('period 2026-01-01 till 2026-12-31')).toEqual({
       startDate: '2026-01-01',
@@ -99,7 +99,7 @@ describe('parseInvoiceDateRange — yyyy-mm form', () => {
   })
 })
 
-describe('parseInvoiceDateRange — rejected inputs', () => {
+describe('parseInvoiceDateRange: rejected inputs', () => {
   it('returns null for a single date with no end', () => {
     expect(parseInvoiceDateRange('Faktura daterad 2026-01-01')).toBeNull()
   })

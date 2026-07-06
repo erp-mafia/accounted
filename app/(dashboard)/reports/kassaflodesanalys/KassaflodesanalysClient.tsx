@@ -165,7 +165,7 @@ export function KassaflodesanalysClient() {
       ) : report ? (
         <div className="space-y-6">
           <p className="text-sm text-muted-foreground">
-            Period: {formatDate(report.period_start)} – {formatDate(report.period_end)}
+            Period: {formatDate(report.period_start)} till {formatDate(report.period_end)}
           </p>
 
           {/* Section 1: Löpande verksamhet */}
@@ -291,8 +291,8 @@ export function KassaflodesanalysClient() {
                 )}
                 <span className="font-medium">
                   {report.reconciliation.is_reconciled
-                    ? 'Avstämning OK — kassaflödet stämmer med 19xx'
-                    : 'Avstämning misslyckades — kontrollera bokföringen'}
+                    ? 'Avstämning OK: kassaflödet stämmer med 19xx'
+                    : 'Avstämning misslyckades: kontrollera bokföringen'}
                 </span>
               </div>
               <div className="space-y-1 text-sm">

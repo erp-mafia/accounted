@@ -5,16 +5,16 @@ import { luhnValidate } from '@/lib/bankgiro/luhn'
  *
  * Accepts hyphen/space-formatted input in either of the two shapes Swedish
  * users commonly type:
- *  - 10 digits (5560125790 or 8001011231) — stored as-is
- *  - 12 digits (198001011231) — century prefix stripped
+ *  - 10 digits (5560125790 or 8001011231): stored as-is
+ *  - 12 digits (198001011231): century prefix stripped
  *
  * Returns null for any other length, non-digit content, or invalid Luhn
  * check digit (the structural rule Bolagsverket and personnummer share).
  * Storing a structurally invalid org number would later be caught by
- * Skatteverket SRU and any receiving SIE4 system — refusing at the boundary
+ * Skatteverket SRU and any receiving SIE4 system: refusing at the boundary
  * keeps Accounted's bookkeeping from accumulating under an unusable identifier.
  *
- * 10-digit storage matches the rest of the codebase — see
+ * 10-digit storage matches the rest of the codebase: see
  * `lib/skatteverket/format.ts`, which converts 10→12 at export time by
  * prefixing with '16' (AB) or '19'/'20' (EF personnummer).
  */

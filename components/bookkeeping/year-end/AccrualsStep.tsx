@@ -188,7 +188,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
           <CardTitle className="text-base">Periodiseringar</CardTitle>
           <p className="text-sm text-muted-foreground">
             Förutbetalda kostnader (17xx) och upplupna kostnader (29xx). Posteringarna
-            ska vändas på första dagen av nästa räkenskapsår — datumet visas per
+            ska vändas på första dagen av nästa räkenskapsår: datumet visas per
             verifikation. Automatisk omvändning är planerad till en kommande version.
           </p>
         </CardHeader>
@@ -334,8 +334,8 @@ function ManualEntryEditor({
                 onChange({ liabilityAccount: e.target.value as '2991' | '2992' })
               }
             >
-              <option value="2992">2992 — Revision</option>
-              <option value="2991">2991 — Bokslut</option>
+              <option value="2992">2992: Revision</option>
+              <option value="2991">2991: Bokslut</option>
             </select>
           </div>
         )}

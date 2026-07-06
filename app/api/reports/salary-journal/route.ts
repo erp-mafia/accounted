@@ -4,7 +4,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { generateSalaryJournal } from '@/lib/reports/salary-journal'
 
 /**
- * Lönejournal report — per BFNAR 2013:2 behandlingshistorik requirement.
+ * Lönejournal report, per BFNAR 2013:2 behandlingshistorik requirement.
  * Monthly/annual per-employee salary register for AGI reconciliation.
  */
 export async function GET(request: Request) {

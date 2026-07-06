@@ -32,7 +32,17 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Paid AI OCR gate: hasCapability('ai') decides whether Bedrock runs. Default
+// to entitled (true) so the sandbox/page-count reasons are exercised; the
+// no-AI tests below override to false. capabilityBlockedResponse stays real so
+// the retry 403 envelope is genuine.
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
+  return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
+})
+
 import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { hasCapability } from '@/lib/entitlements/has-capability'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -117,6 +127,7 @@ function makeUploadSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(hasCapability).mockResolvedValue(true)
 })
 
 describe('Sandbox companies skip Bedrock extraction', () => {
@@ -234,5 +245,92 @@ describe('Sandbox companies skip Bedrock extraction', () => {
       expect(body.error).toMatch(/sandlådan/i)
       expect(extractInvoiceFields).not.toHaveBeenCalled()
     })
+  })
+})
+
+// The paid-tier paywall: a free/manual-tier company (no `ai` capability) must
+// never trigger Bedrock OCR. Upload + attach degrade gracefully (document is
+// stored, extraction skipped with reason 'no_ai_entitlement'); retry is an
+// explicit "run AI" action and hard-blocks with 403 capability_blocked.
+describe('Free tier (no ai capability) does not run Bedrock extraction', () => {
+  it('POST /upload: skips extraction with skip_reason=no_ai_entitlement (highest priority)', async () => {
+    vi.mocked(hasCapability).mockResolvedValueOnce(false)
+    const captured: { row?: Record<string, unknown> } = {}
+    // Not a sandbox: proves the ai gate wins over a passing sandbox check.
+    const supabase = makeUploadSupabase({ isSandbox: false, captured })
+
+    const bytes = await makePdfBuffer(1)
+    const file = new File([bytes as BlobPart], 'receipt.pdf', { type: 'application/pdf' })
+    const form = new FormData()
+    form.set('file', file)
+
+    const res = await uploadRoute.handler(makeMultipartRequest(form, '/upload'), buildCtx(supabase))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(status).toBe(200)
+    expect(extractInvoiceFields).not.toHaveBeenCalled()
+    expect(body.data.extraction_skipped).toBe(true)
+    expect(body.data.skip_reason).toBe('no_ai_entitlement')
+    expect(captured.row?.extraction_skipped).toBe(true)
+  })
+
+  it('POST /items/:id/attach-document: skips extraction when the company lacks ai', async () => {
+    vi.mocked(hasCapability).mockResolvedValueOnce(false)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'item-1',
+        document_id: null,
+        status: 'received',
+        correlation_id: null,
+        created_supplier_invoice_id: null,
+      },
+      error: null,
+    })
+    // sandbox check → false (so the ai gate, not sandbox, is what skips)
+    enqueue({ data: { is_sandbox: false }, error: null })
+    // update row
+    enqueue({ data: null, error: null })
+
+    const bytes = await makePdfBuffer(1)
+    const file = new File([bytes as BlobPart], 'attach.pdf', { type: 'application/pdf' })
+    const form = new FormData()
+    form.set('file', file)
+
+    const req = new Request('http://localhost:3000/items/item-1/attach-document?_id=item-1', {
+      method: 'POST',
+      body: form,
+    })
+
+    const res = await attachRoute.handler(req, buildCtx(supabase))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(status).toBe(200)
+    expect(extractInvoiceFields).not.toHaveBeenCalled()
+    expect(body.data.extraction_skipped).toBe(true)
+    expect(body.data.skip_reason).toBe('no_ai_entitlement')
+  })
+
+  it('POST /items/:id/retry-extraction: hard-blocks with 403 capability_blocked', async () => {
+    vi.mocked(hasCapability).mockResolvedValueOnce(false)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // item lookup: the ai gate fires immediately after, before the sandbox check
+    enqueue({
+      data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
+      error: null,
+    })
+
+    const req = createMockRequest('/items/item-1/retry-extraction', {
+      method: 'POST',
+      searchParams: { _id: 'item-1' },
+    })
+
+    const res = await retryRoute.handler(req, buildCtx(supabase))
+    const { status, body } = await parseJsonResponse<{ capability_blocked: boolean; capability: string }>(res)
+
+    expect(status).toBe(403)
+    expect(body.capability_blocked).toBe(true)
+    expect(body.capability).toBe('ai')
+    expect(extractInvoiceFields).not.toHaveBeenCalled()
   })
 })

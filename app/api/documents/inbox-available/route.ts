@@ -7,15 +7,15 @@ import type { InvoiceExtractionResult } from '@/types'
 ensureInitialized()
 
 /**
- * GET /api/documents/inbox-available — list invoice-inbox documents that are
+ * GET /api/documents/inbox-available: list invoice-inbox documents that are
  * available to attach as underlag to a verifikat.
  *
  * Returns only *unconsumed* inbox items: those that have a file but have not
  * yet become a supplier invoice, a direct journal entry, or been matched to a
- * bank transaction — and whose underlying document is not already linked to a
+ * bank transaction, and whose underlying document is not already linked to a
  * verifikation. This mirrors the inbox's own "Att göra" set, narrowed to items
  * with an attachable file. Re-pointing an already-linked document is forbidden
- * (BFL 7 kap — räkenskapsinformation is immutable), so those are excluded here
+ * (BFL 7 kap: räkenskapsinformation is immutable), so those are excluded here
  * and the DB immutability trigger is the backstop.
  *
  * `invoice_inbox_items` is a core table, so a core route may read it directly
@@ -43,7 +43,7 @@ interface DocRow {
 export const GET = withRouteContext('document.inbox_available', async (_request, ctx) => {
   const { supabase, companyId, log, requestId } = ctx
 
-  // 1) Eligible inbox items — company-scoped (defense in depth alongside RLS),
+  // 1) Eligible inbox items: company-scoped (defense in depth alongside RLS),
   //    unconsumed, with a document.
   const { data: inboxRows, error: inboxError } = await supabase
     .from('invoice_inbox_items')

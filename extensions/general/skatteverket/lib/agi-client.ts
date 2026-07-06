@@ -13,9 +13,9 @@ import type {
  * Skatteverket AGI (Arbetsgivardeklaration) client.
  *
  * Two RAMLs back this surface:
- *   • inlamning v1.7.7   — XML ingest + JSON status reads
+ *   • inlamning v1.7.7  : XML ingest + JSON status reads
  *     base: /arbetsgivardeklaration/inlamning/v1
- *   • hanteraredovisningsperiod v1.2.8 — period lock + receipts
+ *   • hanteraredovisningsperiod v1.2.8: period lock + receipts
  *     base: /arbetsgivardeklaration/hanteraredovisningsperiod/v1
  *
  * Filing flow:
@@ -32,10 +32,10 @@ import type {
  *   POST /arbetsgivare/{x}/redovisningsperioder/{y}/lasUpp  (unlock)
  *
  * Cleanup paths (both on the inlämning API, NOT hantera):
- *   DELETE /underlag/{inlamningId}
- *      — abort an unsaved underlag (use agiAvbrytUnderlag)
- *   DELETE /arbetsgivare/{x}/redovisningsperioder/{y}/inlamningar/{inlamningId}
- *      — remove a SAVED underlag from Eget utrymme (use agiTaBortSparadInlamning)
+ *   DELETE /underlag/{inlamningId}:
+ *     abort an unsaved underlag (use agiAvbrytUnderlag)
+ *   DELETE /arbetsgivare/{x}/redovisningsperioder/{y}/inlamningar/{inlamningId}:
+ *     remove a SAVED underlag from Eget utrymme (use agiTaBortSparadInlamning)
  *
  * Note: skvRequest already maps 401/403/429 to SkatteverketAuthError. AGI
  * 400/404/409 carry the SkatteverketAGIErrorBody envelope, which we surface
@@ -76,7 +76,7 @@ async function readErrorBody(response: Response): Promise<{ error: string; body?
 }
 
 /**
- * POST /underlag — XML body, returns the new inlämningsId.
+ * POST /underlag: XML body, returns the new inlämningsId.
  *
  * The xml is whatever generateAGIXml() produced. We don't validate it
  * locally; Skatteverket replies 415 if the schema fails parsing, or 400
@@ -139,9 +139,9 @@ export async function agiGetKontrollresultat(
 }
 
 /**
- * POST /underlag/{inlamningId}/spara — commit the underlag to Eget utrymme.
+ * POST /underlag/{inlamningId}/spara: commit the underlag to Eget utrymme.
  *
- * Allowed even when kontrollresultat reports DONE_REJECTED — SKV will keep
+ * Allowed even when kontrollresultat reports DONE_REJECTED: SKV will keep
  * the rejected underlag in Eget utrymme as a record. Mina Sidor does NOT
  * expose in-place editing of saved underlag; correcting a rejected AGI
  * means generating new XML (with the same FK570 specifikationsnummer per
@@ -176,7 +176,7 @@ export async function agiSparaUnderlag(
 }
 
 /**
- * DELETE /underlag/{inlamningId} — avbryt en inlämning som ännu inte sparats.
+ * DELETE /underlag/{inlamningId}: avbryt en inlämning som ännu inte sparats.
  *
  * Use this to discard an underlag whose kontrollresultat showed errors
  * before the user has clicked "spara". For *saved* underlag use
@@ -208,7 +208,7 @@ export async function agiAvbrytUnderlag(
 
 /**
  * DELETE a saved underlag for an arbetsgivare + period. Distinct from
- * agiAvbrytUnderlag — this targets the saved copy in Eget utrymme.
+ * agiAvbrytUnderlag: this targets the saved copy in Eget utrymme.
  */
 export async function agiTaBortSparadInlamning(
   supabase: SupabaseClient,
@@ -238,7 +238,7 @@ export async function agiTaBortSparadInlamning(
  * POST /arbetsgivare/{x}/redovisningsperioder/{y}/skapaGranskningsunderlag.
  *
  * Returns a Mina Sidor deep-link the user opens in a new tab to sign with
- * BankID. `lasPeriod=true` locks the period for changes during signing —
+ * BankID. `lasPeriod=true` locks the period for changes during signing:
  * recommended for the happy path. Caller can later POST .../las or .../lasUpp
  * on the hantera API to flip the lock without regenerating the granskning.
  */
@@ -260,7 +260,7 @@ export async function agiSkapaGranskningsunderlag(
   )
 
   // 409 INCORRECT_DATA returns the same shape as 200 (with a felrapport
-  // link) — surface it as data rather than an error so the UI can route the
+  // link): surface it as data rather than an error so the UI can route the
   // user to fix the rejected underlag.
   if (response.status === 409) {
     const data = (await response.json()) as SkatteverketAGIGranskningsunderlagResponse
@@ -309,7 +309,7 @@ export async function agiGetKvittenser(
 
 /**
  * POST /arbetsgivare/{x}/redovisningsperioder/{y}/las (hantera API).
- * Locks the period for changes — typically called automatically by
+ * Locks the period for changes: typically called automatically by
  * skapaGranskningsunderlag with lasPeriod=true.
  */
 export async function agiLasPeriod(
@@ -358,13 +358,13 @@ export async function agiLasUppPeriod(
 }
 
 /**
- * POST /underlag/huvuduppgift/kontrollera — pre-flight validation of a single
+ * POST /underlag/huvuduppgift/kontrollera: pre-flight validation of a single
  * HU as JSON without saving anything. Returns the kontrollsvar (OK / INFO /
  * ARENDE / STOPP / AVVISANDE) and a list of any fel that fired.
  *
  * Use this to surface validation errors per HU to the user before they
  * generate and submit a full XML underlag. The JSON property names follow
- * the v1.7 spec §7 — see lib/salary/agi/huvuduppgift-json.ts for the typed
+ * the v1.7 spec §7: see lib/salary/agi/huvuduppgift-json.ts for the typed
  * builder.
  */
 export async function agiKontrolleraHU(
@@ -391,9 +391,9 @@ export async function agiKontrolleraHU(
 }
 
 /**
- * POST /underlag/individuppgift/kontrollera — pre-flight validation of a
+ * POST /underlag/individuppgift/kontrollera: pre-flight validation of a
  * single IU as JSON without saving anything. JSON property names follow
- * the v1.7 spec §8 — see lib/salary/agi/individuppgift-json.ts for the
+ * the v1.7 spec §8: see lib/salary/agi/individuppgift-json.ts for the
  * typed builder.
  */
 export async function agiKontrolleraIU(

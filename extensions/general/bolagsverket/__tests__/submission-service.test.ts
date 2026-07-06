@@ -128,7 +128,7 @@ describe('normalizeOrgnr / hashPnr', () => {
     expect(normalizeOrgnr('5560001111')).toBe('5560001111')
   })
 
-  it('hashes personnummer with company salt — never the raw value', () => {
+  it('hashes personnummer with company salt: never the raw value', () => {
     const hash = hashPnr('company-1', '19830101-9876')
     expect(hash).toMatch(/^[0-9a-f]{64}$/)
     expect(hash).not.toContain('9876')

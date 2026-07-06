@@ -3,7 +3,7 @@
  * Seed / sync the agent_atom_registry table from SKILL.md files on disk.
  *
  * DEV / MANUAL path only. It writes the registry directly with the service role,
- * which needs DB access — so it is NOT part of prebuild. Production gets skill
+ * which needs DB access: so it is NOT part of prebuild. Production gets skill
  * bodies via the generated seed migration (scripts/generate-skill-bodies.ts),
  * which ships in supabase/migrations and runs on deploy.
  *

@@ -5,7 +5,7 @@ import { BjornLundenClient, BjornLundenApiError } from '../client'
  * Mocked-fetch tests for the BL HTTP client. Sandbox-verified behaviors under
  * guard here:
  *   - pagination uses `page` + `rows` (a `pageRequested` request param is
- *     IGNORED by the API — sending it loops on page 1 forever)
+ *     IGNORED by the API: sending it loops on page 1 forever)
  *   - every call carries Authorization Bearer + the per-company User-Key
  *   - 429/5xx retry, 401/403/404 fail fast (a wrong User-Key surfaces as 500)
  */
@@ -156,12 +156,12 @@ describe('BjornLundenClient', () => {
     })
 
     it('exposes status and body on the error for upstream classification', async () => {
-      // Fresh Response per attempt — a Response body can only be read once
+      // Fresh Response per attempt: a Response body can only be read once
       fetchSpy.mockImplementation(() =>
         Promise.resolve(new Response('{"status":"INTERNAL_SERVER_ERROR"}', { status: 500 })),
       )
 
-      // 500 IS retried (transient by contract) — all attempts exhausted here.
+      // 500 IS retried (transient by contract): all attempts exhausted here.
       // A wrong User-Key also answers 500; submit-token validation relies on
       // the BjornLundenApiError shape to classify it.
       await expect(client.get(TOKEN, USER_KEY, '/details')).rejects.toMatchObject({

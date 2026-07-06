@@ -68,7 +68,7 @@ function looksLikeSwedishOrgNumber(orgNumber: string | null | undefined): boolea
 }
 
 /**
- * Check if a string looks like a Swedish identity number — an organisation
+ * Check if a string looks like a Swedish identity number: an organisation
  * number or personnummer in 10-digit form, or a personnummer in the 12-digit
  * century-prefixed form (19xx / 20xx). Used to avoid misclassifying a domestic
  * party as foreign just because its number isn't exactly 10 digits: a 12-digit
@@ -113,7 +113,7 @@ const FOREIGN_SUFFIXES: { suffix: string; region: 'eu' | 'non_eu' }[] = [
   // Danish/Norwegian
   { suffix: 'a/s', region: 'eu' },
   { suffix: 'aps', region: 'eu' },
-  // Anglo (could be UK, US, etc. — treat as non-EU since UK left)
+  // Anglo (could be UK, US, etc.: treat as non-EU since UK left)
   { suffix: 'ltd', region: 'non_eu' },
   { suffix: 'limited', region: 'non_eu' },
   { suffix: 'llc', region: 'non_eu' },
@@ -169,7 +169,7 @@ function inferTypeFromVatOrCountry(
   if (orgNumber) {
     const digits = orgNumber.replace(/[-+\s]/g, '')
     if (digits.length > 0 && !looksLikeSwedishIdNumber(orgNumber)) {
-      // Not a Swedish number — use name heuristic or default to non_eu
+      // Not a Swedish number: use name heuristic or default to non_eu
       const nameRegion = inferRegionFromName(companyName)
       if (nameRegion === 'eu') return 'eu_business'
       return 'non_eu_business'
@@ -181,7 +181,7 @@ function inferTypeFromVatOrCountry(
   if (nameRegion === 'eu') return 'eu_business'
   if (nameRegion === 'non_eu') return 'non_eu_business'
 
-  // 6. No signal at all — default to swedish_business (most common in Swedish systems)
+  // 6. No signal at all: default to swedish_business (most common in Swedish systems)
   return 'swedish_business'
 }
 
@@ -242,7 +242,7 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   const number = getOrgNumber(dto.party)
   // The provider exposes a single identity-number field, but Accounted stores a
   // personnummer in `personal_number` (individuals) and an org number in
-  // `org_number` (businesses). Route it to the column the type expects — else a
+  // `org_number` (businesses). Route it to the column the type expects: else a
   // Privatperson's personnummer lands in org_number and is hidden by the
   // individual customer form, which renders personal_number for individuals.
   const isIndividual = customerType === 'individual'
@@ -305,7 +305,7 @@ export function mapSalesInvoice(
   const statusMap: Record<string, string> = {
     draft: 'draft',
     sent: 'sent',
-    booked: 'sent', // Accounted has no 'booked' status — treat as sent
+    booked: 'sent', // Accounted has no 'booked' status: treat as sent
     paid: 'paid',
     overdue: 'overdue',
     cancelled: 'cancelled',
@@ -399,7 +399,7 @@ export function mapSupplierInvoice(
   let resolvedStatus: string
   if (isCreditNote) {
     // A kreditfaktura is never an open or "paid" payable. Force a credit-note
-    // terminal status regardless of the provider's lifecycle status — the
+    // terminal status regardless of the provider's lifecycle status: the
     // arcim gateway is the only source of invoiceTypeCode and is NOT guaranteed
     // to also send status='credited', so trusting dto.status here could persist
     // a credit note as 'registered'/'paid' (contradicting its amounts).

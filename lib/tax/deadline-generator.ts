@@ -69,25 +69,8 @@ export async function generateTaxDeadlinesForUser(
   // Get applicable deadline configs based on settings
   const applicableConfigs = getApplicableDeadlineConfigs(settings)
 
-  // Delete existing system-generated deadlines for these years
   const startDate = `${Math.min(...years)}-01-01`
   const endDate = `${Math.max(...years)}-12-31`
-
-  const { data: deletedData, error: deleteError } = await supabase
-    .from('deadlines')
-    .delete()
-    .eq('company_id', companyId)
-    .eq('source', 'system')
-    .gte('due_date', startDate)
-    .lte('due_date', endDate)
-    .select('id')
-
-  if (deleteError) {
-    log.error('Error deleting existing deadlines:', deleteError)
-    throw deleteError
-  }
-
-  const deletedCount = deletedData?.length || 0
 
   // Generate new deadlines
   const deadlines: Array<{
@@ -156,21 +139,48 @@ export async function generateTaxDeadlinesForUser(
     }
   }
 
-  // Insert new deadlines
+  // Insert the replacement rows BEFORE deleting the old set. A failed insert
+  // then leaves the previous deadlines intact — the old delete-first order
+  // meant any insert failure (like the 23502 user_id regression) wiped the
+  // company's tax deadlines without replacing them.
+  let newIds: string[] = []
   if (deadlines.length > 0) {
-    const { error: insertError } = await supabase
+    const { data: insertedData, error: insertError } = await supabase
       .from('deadlines')
       .insert(deadlines)
+      .select('id')
 
     if (insertError) {
       log.error('Error inserting deadlines:', insertError)
       throw insertError
     }
+    newIds = (insertedData ?? []).map((d: { id: string }) => d.id)
+  }
+
+  // Delete the superseded system-generated deadlines for these years,
+  // excluding the rows just inserted.
+  let deleteQuery = supabase
+    .from('deadlines')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('source', 'system')
+    .gte('due_date', startDate)
+    .lte('due_date', endDate)
+
+  if (newIds.length > 0) {
+    deleteQuery = deleteQuery.not('id', 'in', `(${newIds.join(',')})`)
+  }
+
+  const { data: deletedData, error: deleteError } = await deleteQuery.select('id')
+
+  if (deleteError) {
+    log.error('Error deleting existing deadlines:', deleteError)
+    throw deleteError
   }
 
   return {
     created: deadlines.length,
-    deleted: deletedCount,
+    deleted: deletedData?.length || 0,
   }
 }
 

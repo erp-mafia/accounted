@@ -2,6 +2,7 @@
 
 import { use, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { ArrowLeft, Calculator, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -10,44 +11,45 @@ import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { formatCurrency } from '@/lib/utils'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, Employee } from '@/types'
 
-const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
-  monthly_salary: 'Månadslön',
-  hourly_salary: 'Timlön',
-  overtime: 'Övertid',
-  overtime_50: 'Övertid 50 %',
-  overtime_100: 'Övertid 100 %',
-  ob_weekday_evening: 'OB vardag kväll',
-  ob_weekend: 'OB helg',
-  ob_night: 'OB natt',
-  ob_holiday: 'OB helgdag',
-  bonus: 'Bonus',
-  commission: 'Provision',
-  gross_deduction_pension: 'Bruttoavdrag — pension',
-  gross_deduction_other: 'Bruttoavdrag — övrigt',
-  benefit_car: 'Bilförmån',
-  benefit_housing: 'Bostadsförmån',
-  benefit_meals: 'Kostförmån',
-  benefit_wellness: 'Friskvård',
-  benefit_bike: 'Cykelförmån',
-  benefit_other: 'Övrig förmån',
-  sick_karens: 'Karensavdrag',
-  sick_day2_14: 'Sjuklön (dag 2–14, 80 %)',
-  sick_day15_plus: 'Sjuklön (dag 15+, Försäkringskassan)',
-  vab: 'VAB (vård av sjukt barn)',
-  parental_leave: 'Föräldraledighet',
-  unpaid_leave: 'Tjänstledighet utan lön',
-  vacation: 'Semester',
-  semesterersattning: 'Semesterersättning',
-  traktamente_taxfree: 'Traktamente (skattefritt)',
-  traktamente_taxable: 'Traktamente (skattepliktigt)',
-  mileage_taxfree: 'Milersättning (skattefritt)',
-  mileage_taxable: 'Milersättning (skattepliktigt)',
-  net_deduction_advance: 'Nettoavdrag — förskott',
-  net_deduction_union: 'Nettoavdrag — fackavgift',
-  net_deduction_benefit_payment: 'Nettoavdrag — förmånsbetalning',
-  net_deduction_other: 'Nettoavdrag — övrigt',
-  correction: 'Korrigering',
-  other: 'Övrigt',
+/** Translation keys in the `salary_run_employee` namespace. */
+const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
+  monthly_salary: 'li_monthly_salary',
+  hourly_salary: 'li_hourly_salary',
+  overtime: 'li_overtime',
+  overtime_50: 'li_overtime_50',
+  overtime_100: 'li_overtime_100',
+  ob_weekday_evening: 'li_ob_weekday_evening',
+  ob_weekend: 'li_ob_weekend',
+  ob_night: 'li_ob_night',
+  ob_holiday: 'li_ob_holiday',
+  bonus: 'li_bonus',
+  commission: 'li_commission',
+  gross_deduction_pension: 'li_gross_deduction_pension',
+  gross_deduction_other: 'li_gross_deduction_other',
+  benefit_car: 'li_benefit_car',
+  benefit_housing: 'li_benefit_housing',
+  benefit_meals: 'li_benefit_meals',
+  benefit_wellness: 'li_benefit_wellness',
+  benefit_bike: 'li_benefit_bike',
+  benefit_other: 'li_benefit_other',
+  sick_karens: 'li_sick_karens',
+  sick_day2_14: 'li_sick_day2_14',
+  sick_day15_plus: 'li_sick_day15_plus',
+  vab: 'li_vab',
+  parental_leave: 'li_parental_leave',
+  unpaid_leave: 'li_unpaid_leave',
+  vacation: 'li_vacation',
+  semesterersattning: 'li_semesterersattning',
+  traktamente_taxfree: 'li_traktamente_taxfree',
+  traktamente_taxable: 'li_traktamente_taxable',
+  mileage_taxfree: 'li_mileage_taxfree',
+  mileage_taxable: 'li_mileage_taxable',
+  net_deduction_advance: 'li_net_deduction_advance',
+  net_deduction_union: 'li_net_deduction_union',
+  net_deduction_benefit_payment: 'li_net_deduction_benefit_payment',
+  net_deduction_other: 'li_net_deduction_other',
+  correction: 'li_correction',
+  other: 'li_other',
 }
 
 interface DetailResponse {
@@ -60,12 +62,13 @@ export default function SalaryRunEmployeeDetailPage({
 }: {
   params: Promise<{ id: string; employeeId: string }>
 }) {
+  const t = useTranslations('salary_run_employee')
   const { id: runId, employeeId } = use(params)
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [calculating, setCalculating] = useState(false)
-  // Live counts pushed from the calendar — overrides the stale snapshot from
+  // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
 
@@ -79,11 +82,11 @@ export default function SalaryRunEmployeeDetailPage({
       ])
       const runJson = await runRes.json()
       const sreJson = await sreRes.json()
-      if (!runRes.ok) throw new Error(runJson.error || 'Kunde inte ladda lönekörning')
-      if (!sreRes.ok) throw new Error(sreJson.error || 'Kunde inte ladda anställd')
+      if (!runRes.ok) throw new Error(runJson.error || t('error_load_run'))
+      if (!sreRes.ok) throw new Error(sreJson.error || t('error_load_employee'))
       setData({ run: runJson.data, runEmployee: sreJson.data })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setLoading(false)
     }
@@ -101,11 +104,11 @@ export default function SalaryRunEmployeeDetailPage({
       const res = await fetch(`/api/salary/runs/${runId}/calculate`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(json.error || 'Beräkning misslyckades')
+        throw new Error(json.error || t('error_calculate'))
       }
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setCalculating(false)
     }
@@ -129,7 +132,7 @@ export default function SalaryRunEmployeeDetailPage({
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Laddar...
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t('loading')}
       </div>
     )
   }
@@ -141,10 +144,10 @@ export default function SalaryRunEmployeeDetailPage({
           href={`/salary/runs/${runId}`}
           className="inline-flex items-center text-sm text-muted-foreground hover:underline"
         >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Tillbaka till lönekörning
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> {t('back_to_run')}
         </Link>
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          {error ?? 'Kunde inte ladda anställd'}
+          {error ?? t('error_load_employee')}
         </div>
       </div>
     )
@@ -164,7 +167,7 @@ export default function SalaryRunEmployeeDetailPage({
           href={`/salary/runs/${runId}`}
           className="inline-flex items-center text-sm text-muted-foreground hover:underline"
         >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Tillbaka till lönekörning
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> {t('back_to_run')}
         </Link>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div>
@@ -172,7 +175,7 @@ export default function SalaryRunEmployeeDetailPage({
               {employee.first_name} {employee.last_name}
             </h1>
             <p className="text-sm text-muted-foreground tabular-nums">
-              {employee.personnummer} · Lönespecifikation {periodLabel}
+              {employee.personnummer} · {t('payslip_period', { period: periodLabel })}
             </p>
           </div>
           {run.status === 'draft' && (
@@ -187,7 +190,7 @@ export default function SalaryRunEmployeeDetailPage({
               ) : (
                 <Calculator className="mr-1.5 h-3.5 w-3.5" />
               )}
-              Beräkna
+              {t('calculate')}
             </Button>
           )}
         </div>
@@ -195,26 +198,26 @@ export default function SalaryRunEmployeeDetailPage({
 
       {/* Summary */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <SummaryCard label="Brutto" value={runEmployee.gross_salary} />
+        <SummaryCard label={t('gross')} value={runEmployee.gross_salary} />
         <SummaryCard
-          label="Skatt"
+          label={t('tax')}
           value={runEmployee.tax_withheld_override ?? runEmployee.tax_withheld}
           overridden={runEmployee.tax_withheld_override !== null}
         />
         <SummaryCard
-          label="Netto"
+          label={t('net')}
           value={runEmployee.net_salary + (runEmployee.tax_withheld - (runEmployee.tax_withheld_override ?? runEmployee.tax_withheld))}
           accent
           overridden={runEmployee.tax_withheld_override !== null}
         />
         <SummaryCard
-          label="Avgifter"
+          label={t('avgifter')}
           value={runEmployee.avgifter_amount_override ?? runEmployee.avgifter_amount}
           overridden={runEmployee.avgifter_amount_override !== null}
         />
       </div>
 
-      {/* Advanced mode — per-employee override of tax / arbetsgivaravgift */}
+      {/* Advanced mode: per-employee override of tax / arbetsgivaravgift */}
       {run.status === 'review' && (
         <SalaryOverridePanel
           runId={runId}
@@ -231,14 +234,14 @@ export default function SalaryRunEmployeeDetailPage({
         />
       )}
 
-      {/* Unified calendar — worked time (for hourly) + absence on the same grid */}
+      {/* Unified calendar: worked time (for hourly) + absence on the same grid */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Tid och frånvaro</CardTitle>
+          <CardTitle className="text-base">{t('time_absence_title')}</CardTitle>
           <p className="text-xs text-muted-foreground">
             {employee.salary_type === 'hourly'
-              ? 'Markera dagar och ange arbetade timmar eller frånvaro. Grundlönen räknas som timlön × summa arbetade timmar. Karensavdrag, sjuklön och AGI-rapportering härleds automatiskt.'
-              : 'Markera sjukdom, VAB, föräldraledighet och annan frånvaro per dag. Karensavdrag, sjuklön och AGI-rapportering räknas ut automatiskt.'}
+              ? t('calendar_hint_hourly')
+              : t('calendar_hint_monthly')}
           </p>
         </CardHeader>
         <CardContent>
@@ -253,9 +256,9 @@ export default function SalaryRunEmployeeDetailPage({
             onAbsenceCountsChange={setLiveCounts}
           />
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-            <AbsenceCount label="Sjukdagar" days={liveCounts?.sick ?? runEmployee.sick_days} />
-            <AbsenceCount label="VAB-dagar" days={liveCounts?.vab ?? runEmployee.vab_days} />
-            <AbsenceCount label="Föräldraledig" days={liveCounts?.parental ?? runEmployee.parental_days} />
+            <AbsenceCount label={t('sick_days')} days={liveCounts?.sick ?? runEmployee.sick_days} />
+            <AbsenceCount label={t('vab_days')} days={liveCounts?.vab ?? runEmployee.vab_days} />
+            <AbsenceCount label={t('parental_days')} days={liveCounts?.parental ?? runEmployee.parental_days} />
           </div>
         </CardContent>
       </Card>
@@ -263,29 +266,29 @@ export default function SalaryRunEmployeeDetailPage({
       {/* Line items */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Lönerader ({lineItems.length})</CardTitle>
+          <CardTitle className="text-base">{t('line_items_title', { count: lineItems.length })}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {lineItems.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-              Inga lönerader. Kör beräkning på lönekörningen för att skapa standardrader.
+              {t('no_line_items')}
             </p>
           ) : (
             <table className="w-full">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
-                  <th className="px-4 py-2">Typ</th>
-                  <th className="px-4 py-2">Beskrivning</th>
-                  <th className="px-4 py-2 text-right">Antal</th>
-                  <th className="px-4 py-2 text-right">Belopp</th>
+                  <th className="px-4 py-2">{t('th_type')}</th>
+                  <th className="px-4 py-2">{t('th_description')}</th>
+                  <th className="px-4 py-2 text-right">{t('th_quantity')}</th>
+                  <th className="px-4 py-2 text-right">{t('th_amount')}</th>
                 </tr>
               </thead>
               <tbody>
                 {lineItems.map(li => (
                   <tr key={li.id} className="border-b last:border-0">
-                    <td className="px-4 py-2 text-xs text-muted-foreground">{LINE_ITEM_TYPE_LABELS[li.item_type] ?? li.item_type}</td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground">{LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}</td>
                     <td className="px-4 py-2 text-sm">{li.description}</td>
-                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '—'}</td>
+                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '-'}</td>
                     <td className="px-4 py-2 text-sm text-right tabular-nums">{formatCurrency(li.amount)}</td>
                   </tr>
                 ))}
@@ -299,11 +302,12 @@ export default function SalaryRunEmployeeDetailPage({
 }
 
 function SummaryCard({ label, value, accent, overridden }: { label: string; value: number; accent?: boolean; overridden?: boolean }) {
+  const t = useTranslations('salary_run_employee')
   return (
     <div className={`rounded-md border bg-card p-3 ${accent ? 'ring-1 ring-primary/40' : ''} ${overridden ? 'ring-1 ring-warning/40' : ''}`}>
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {label}
-        {overridden && <span className="text-[10px] uppercase tracking-wider text-warning">Justerat</span>}
+        {overridden && <span className="text-[10px] uppercase tracking-wider text-warning">{t('adjusted_badge')}</span>}
       </div>
       <div className="mt-0.5 text-lg font-medium tabular-nums">{formatCurrency(value)}</div>
     </div>
@@ -311,10 +315,11 @@ function SummaryCard({ label, value, accent, overridden }: { label: string; valu
 }
 
 function AbsenceCount({ label, days }: { label: string; days: number }) {
+  const t = useTranslations('salary_run_employee')
   return (
     <div className="rounded-md border bg-muted/30 px-3 py-2">
       <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="text-sm font-medium tabular-nums">{days} dagar</div>
+      <div className="text-sm font-medium tabular-nums">{t('days_count', { days })}</div>
     </div>
   )
 }

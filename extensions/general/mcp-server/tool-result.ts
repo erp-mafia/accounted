@@ -2,14 +2,14 @@
  * Helpers for shaping MCP tool results in an agent-actionable form.
  *
  * Two additive concepts:
- *   1. `next` — when a tool succeeds and there's an obvious follow-up tool or
+ *   1. `next`: when a tool succeeds and there's an obvious follow-up tool or
  *      resource the agent should call, expose it directly so Claude doesn't
  *      have to re-derive it from prose.
- *   2. structured errors — failures include a stable code, English + Swedish
+ *   2. structured errors: failures include a stable code, English + Swedish
  *      messages, and a remediation hint when one exists.
  *
  * Both are folded into the JSON `text` payload that the JSON-RPC handler
- * already serializes — no protocol change needed, and existing string-only
+ * already serializes: no protocol change needed, and existing string-only
  * consumers keep working.
  */
 import { getStructuredError, type StructuredError } from '@/lib/errors/get-structured-error'

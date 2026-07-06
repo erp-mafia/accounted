@@ -8,7 +8,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // this table's PRIMARY KEY is `consent_id` and it has NO `id` column. Postgres
 // rejected the whole statement ("column provider_consent_tokens.id does not
 // exist"), which surfaced as updateError AFTER the provider had already rotated
-// the refresh token — permanently breaking the consent.
+// the refresh token: permanently breaking the consent.
 //
 // Unit mocks can't catch this (they replay queued data regardless of the
 // selected columns), so we assert the real query shapes against real Postgres.

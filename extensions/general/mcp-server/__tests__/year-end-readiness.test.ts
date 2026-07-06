@@ -20,7 +20,7 @@ import {
   previewYearEndClosing,
 } from '@/lib/core/bookkeeping/year-end-service'
 
-describe('gnubok_year_end_readiness — registration', () => {
+describe('gnubok_year_end_readiness: registration', () => {
   it('is registered in the tools array', () => {
     const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')
     expect(tool).toBeDefined()
@@ -63,7 +63,7 @@ function makeMockSupabase(period: Record<string, unknown> | null) {
   } as never
 }
 
-describe('gnubok_year_end_readiness — execute', () => {
+describe('gnubok_year_end_readiness: execute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

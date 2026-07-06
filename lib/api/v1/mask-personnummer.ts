@@ -1,7 +1,7 @@
 /**
  * Personnummer masking for v1 list/create responses.
  *
- * GDPR Art.5(1)(c) — data minimisation. A Swedish personnummer is a
+ * GDPR Art.5(1)(c): data minimisation. A Swedish personnummer is a
  * national identifier; the list endpoint and create-response shape mask
  * the last 4 digits (the gender + checksum) so a roster scan or a
  * mistaken response log doesn't leak a natural-person identifier. The

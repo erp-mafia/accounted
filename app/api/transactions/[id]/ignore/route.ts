@@ -9,7 +9,7 @@ import { requireWritePermission } from '@/lib/auth/require-write'
  * Mark a bank transaction as ignored so it stops surfacing in the bank
  * reconciliation view (and other "to book" funnels) without creating a
  * verifikation. Use case: tiny ränteintäkter, rounding noise, opening-balance
- * artefacts — anything the user wants off the unmatched list but doesn't want
+ * artefacts: anything the user wants off the unmatched list but doesn't want
  * to fabricate a journal entry for.
  *
  * Refuses when the transaction is already booked; once a verifikation exists,
@@ -45,7 +45,7 @@ export async function POST(
 
   if (transaction.journal_entry_id) {
     return NextResponse.json(
-      { error: 'Transaktionen är redan bokförd — använd Avmatcha eller backa verifikationen för att ändra status.' },
+      { error: 'Transaktionen är redan bokförd: använd Avmatcha eller backa verifikationen för att ändra status.' },
       { status: 409 }
     )
   }
@@ -71,7 +71,7 @@ export async function POST(
  * DELETE /api/transactions/[id]/ignore
  *
  * Reverse a previous ignore. The row comes back into the unmatched list with
- * no further side effects — we never created a verifikation, so there's
+ * no further side effects: we never created a verifikation, so there's
  * nothing to storno.
  */
 export async function DELETE(

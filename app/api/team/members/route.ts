@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 
 /**
  * GET /api/team/members
- * Returns team members (single-user teams — no invitations).
+ * Returns team members (single-user teams, no invitations).
  */
 export async function GET() {
   const supabase = await createClient()
@@ -21,7 +21,7 @@ export async function GET() {
     .single()
 
   if (!myMembership) {
-    // User is not in any team — check if they own a company (could start a team)
+    // User is not in any team: check if they own a company (could start a team)
     const { data: ownedCompany } = await serviceClient
       .from('company_members')
       .select('id')

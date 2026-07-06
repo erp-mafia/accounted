@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
- * Lönejournal — Monthly/annual per-employee salary register.
+ * Lönejournal: Monthly/annual per-employee salary register.
  *
  * Required per BFL as underlag for AGI reconciliation.
  * Lists gross, tax, net, avgifter, and vacation accrual per employee per period.
@@ -73,7 +73,7 @@ export async function generateSalaryJournal(
       .eq('salary_runs.period_year', year)
       .eq('salary_runs.status', 'booked')
       .order('created_at')
-      // id tiebreaker — created_at is not unique, so it alone is not a stable
+      // id tiebreaker: created_at is not unique, so it alone is not a stable
       // total order for paging (see fetch-all.ts).
       .order('id', { ascending: true })
       .range(from, to)

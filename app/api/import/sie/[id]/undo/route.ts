@@ -3,10 +3,15 @@ import { undoSIEImport } from '@/lib/import/sie-import'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
+// Hard-deleting a large import (thousands of audit-logged journal entries +
+// cascading lines) can take well over the default function timeout. Match the
+// SIE execute route so the serverless function doesn't kill the request first.
+export const maxDuration = 300
+
 /**
  * DELETE /api/import/sie/[id]/undo
  *
- * Undo a completed SIE import — hard-deletes all journal entries created
+ * Undo a completed SIE import: hard-deletes all journal entries created
  * by the import (transaction vouchers + the opening_balance entry),
  * detaches any user-attached documents, resets voucher_sequences, and
  * marks the sie_imports row as 'undone'. Period must be open and not

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 export const GET = withRouteContext(
   'report.general_ledger',
@@ -17,8 +18,15 @@ export const GET = withRouteContext(
       return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
     }
 
+    const dimFilter = parseDimensionFilterParams(searchParams)
+    if (!dimFilter.ok) {
+      return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+    }
+
     try {
-      const data = await generateGeneralLedger(supabase, companyId!, periodId, accountFrom, accountTo)
+      const data = await generateGeneralLedger(supabase, companyId!, periodId, accountFrom, accountTo, {
+        dimensions: dimFilter.dimensions,
+      })
       return NextResponse.json({ data })
     } catch (err) {
       log.error('general ledger generation failed', err as Error, { periodId })

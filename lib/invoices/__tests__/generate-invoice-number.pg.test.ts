@@ -110,7 +110,7 @@ describe('generate_invoice_number RPC', () => {
     expect(counterAfterSecond).toBe(counterAfterFirst)
   })
 
-  it('serializes concurrent calls on the same invoice — both see the same number, counter advances by 1', async () => {
+  it('serializes concurrent calls on the same invoice: both see the same number, counter advances by 1', async () => {
     const { userId, companyId } = await seedCompany()
     await ensureCompanySettings({ userId, companyId, invoicePrefix: 'F', nextInvoiceNumber: 100 })
     const invoiceId = await insertDraftInvoice({ userId, companyId })

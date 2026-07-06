@@ -1,5 +1,5 @@
 /**
- * /llms.txt — agent-discoverable index of the Accounted API.
+ * /llms.txt: agent-discoverable index of the Accounted API.
  *
  * Convention adopted by Stripe, Anthropic, and other agent-facing platforms:
  * a plain-text Markdown file at the doc root that points LLM crawlers and
@@ -19,7 +19,7 @@ export async function GET(_request: Request) {
 
 > Swedish double-entry bookkeeping as a public REST API. API version ${API_V1_VERSION}.
 
-This API lets agents and integrations do anything the Accounted dashboard can do —
+This API lets agents and integrations do anything the Accounted dashboard can do:
 read transactions, create invoices, mark them paid, run VAT reports, file year-end
 declarations, ingest SIE files, and subscribe to webhooks for state changes.
 
@@ -38,7 +38,7 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
 - **Idempotency-Key on every write.** Pass a UUID in \`Idempotency-Key\`; replays
   return the cached response (24h TTL) with \`Idempotent-Replayed: true\`.
 - **Test mode.** Create a key with mode \`test\` (prefix \`gnubok_sk_test_\`) in the
-  dashboard. A test key forces \`dry_run\` on every write against your real company —
+  dashboard. A test key forces \`dry_run\` on every write against your real company:
   you get a realistic 200 + preview of what *would* happen, but nothing is ever
   saved or sent. Reads return real data; responses carry \`X-Gnubok-Mode: test\`.
   Writes on endpoints that can't be simulated are refused (403

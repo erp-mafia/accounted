@@ -3,7 +3,7 @@
  *
  * Cursor-paginated transaction list. Filters: status (booked/unbooked),
  * date range, currency, search (description ilike). Default sort:
- * (date DESC, id ASC) — newest first, deterministic tie-break.
+ * (date DESC, id ASC): newest first, deterministic tie-break.
  */
 import { z } from 'zod'
 import { paginated } from '@/lib/api/v1/response'
@@ -35,7 +35,7 @@ const TransactionSummary = z.object({
 
 const TransactionListResponse = listEnvelope(TransactionSummary)
 
-// Explicit projection — no SELECT *. created_at is required for cursor
+// Explicit projection: no SELECT *. created_at is required for cursor
 // stability (see ordering rationale in the GET handler).
 const TRANSACTION_SUMMARY_COLUMNS =
   'id, date, description, amount, currency, reference, merchant_name, ' +
@@ -50,13 +50,13 @@ registerEndpoint({
   description:
     'Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description ilike).',
   useWhen:
-    'You need to walk a company\'s bank ledger — building a categorization queue, reconciling against external statements, or sampling for audit.',
+    'You need to walk a company\'s bank ledger: building a categorization queue, reconciling against external statements, or sampling for audit.',
   doNotUseFor:
     'Looking up one transaction by id (use the detail endpoint). Reconciliation status (use /reconciliation/bank/status).',
   pitfalls: [
-    'Default page size is 50. Pass ?limit=100 for the maximum. Cursor pagination — pass ?cursor=<next_cursor> from the previous response.',
+    'Default page size is 50. Pass ?limit=100 for the maximum. Cursor pagination: pass ?cursor=<next_cursor> from the previous response.',
     'A booked transaction has a non-null journal_entry_id. is_business / category live on the transaction row even before booking.',
-    'reverse-charge or storno entries can leave a transaction with journal_entry_id pointing at a cancelled JE — check status on the JE separately.',
+    'reverse-charge or storno entries can leave a transaction with journal_entry_id pointing at a cancelled JE: check status on the JE separately.',
   ],
   example: {
     response: {
@@ -125,7 +125,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const f = filtersResult.data
 
     // Sort by (created_at DESC, id ASC). created_at is the stable cursor
-    // anchor — it's a real timestamp (passes ISO-8601 validation in
+    // anchor: it's a real timestamp (passes ISO-8601 validation in
     // decodeDefaultCursor), unique within a company at the row insertion
     // grain, and total-orderable. Sorting by `date` directly broke the
     // cursor (date is YYYY-MM-DD only, decoder rejects it). For users

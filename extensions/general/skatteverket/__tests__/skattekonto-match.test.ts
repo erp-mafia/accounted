@@ -324,7 +324,7 @@ describe('findMatchSuggestionsBulk', () => {
   })
 
   it('skips rows that are already linked to a verifikat', async () => {
-    // already-linked rows shouldn't even reach the candidate query — but
+    // already-linked rows shouldn't even reach the candidate query: but
     // verify by passing no other unmatched rows; the queue stays empty.
     const { supabase } = createQueuedMockSupabase()
 
@@ -343,7 +343,7 @@ describe('findMatchSuggestionsBulk', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        // 20 days before the SKV row — too far
+        // 20 days before the SKV row: too far
         lineRow({ entryId: 'je-far', debit: 5000, entryDate: '2026-02-25' }),
       ],
     })
@@ -382,7 +382,7 @@ describe('findMatchSuggestionsBulk', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        // Debit-side line — wrong side for a -8333 SKV row
+        // Debit-side line: wrong side for a -8333 SKV row
         lineRow({ entryId: 'je-wrong-side', debit: 8333, entryDate: '2026-03-16' }),
       ],
     })
@@ -400,7 +400,7 @@ describe('findMatchSuggestionsBulk', () => {
   })
 
   it('returns empty map immediately when no unmatched rows are provided', async () => {
-    // No queue interaction expected — function should short-circuit.
+    // No queue interaction expected: function should short-circuit.
     const { supabase } = createQueuedMockSupabase()
     const fromSpy = vi.spyOn(supabase, 'from')
 

@@ -27,7 +27,7 @@ export const myExtApiRoutes: ApiRouteDefinition[] = [
 
 ## Path Parameters
 
-Use `:paramName` — dispatcher extracts as `_paramName` search params:
+Use `:paramName`; dispatcher extracts as `_paramName` search params:
 
 ```typescript
 {

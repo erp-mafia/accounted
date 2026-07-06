@@ -39,18 +39,18 @@ If a prompt template keyword is used but doesn't match any file, tell the user t
 
 ## Step 2: Ask 5 Clarifying Questions
 
-Analyze the input (and prompt template if loaded) to generate 5 questions that will clarify the ticket. Ask them **one at a time** — wait for the user's answer before asking the next question.
+Analyze the input (and prompt template if loaded) to generate 5 questions that will clarify the ticket. Ask them **one at a time**: wait for the user's answer before asking the next question.
 
 ### Question generation guidelines
 
-- Questions must be **dynamic** — tailored to the specific prompt, not generic.
+- Questions must be **dynamic**: tailored to the specific prompt, not generic.
 - Each question should build on previous answers when relevant.
 - Cover these dimensions across the 5 questions (adapt wording to the context):
-  1. **Problem clarity** — What exactly is wrong, missing, or needed? (dig deeper than the initial prompt)
-  2. **Impact & scope** — Who is affected? How often? What's the severity?
-  3. **Desired outcome** — What should it look like when done? What's the acceptance criteria?
-  4. **Constraints** — Are there technical, legal, or timeline constraints?
-  5. **Location** — Where in the app would this change be implemented? (the user can say "not sure" and you'll figure it out in Step 3)
+  1. **Problem clarity**: What exactly is wrong, missing, or needed? (dig deeper than the initial prompt)
+  2. **Impact & scope**: Who is affected? How often? What's the severity?
+  3. **Desired outcome**: What should it look like when done? What's the acceptance criteria?
+  4. **Constraints**: Are there technical, legal, or timeline constraints?
+  5. **Location**: Where in the app would this change be implemented? (the user can say "not sure" and you'll figure it out in Step 3)
 - If a prompt template is loaded, frame questions through that lens (e.g., security questions for `/security`, design questions for `/design`).
 - Keep questions concise and specific. Avoid open-ended questions like "anything else?"
 
@@ -58,7 +58,7 @@ Analyze the input (and prompt template if loaded) to generate 5 questions that w
 
 Ask each question as a single, clear message. Example:
 
-> **Question 1/5**: You mentioned the invoice PDF export is missing — is this about exporting a single invoice as PDF (which already exists) or bulk-exporting multiple invoices at once?
+> **Question 1/5**: You mentioned the invoice PDF export is missing. Is this about exporting a single invoice as PDF (which already exists) or bulk-exporting multiple invoices at once?
 
 ## Step 3: Codebase Scan
 
@@ -103,24 +103,24 @@ Present the preview in this format:
 ---
 
 ## Problem
-{What's wrong or what's missing — current state. Be specific with concrete examples.}
+{What's wrong or what's missing, current state. Be specific with concrete examples.}
 
 ## Solution
-{What should be built or fixed — desired state. Be specific about the expected behavior.}
+{What should be built or fixed, desired state. Be specific about the expected behavior.}
 
 ## Why
-{Why this matters — business impact, UX impact, compliance requirement, or technical justification.}
+{Why this matters: business impact, UX impact, compliance requirement, or technical justification.}
 
 ## Where
 {Affected files and components with paths and line numbers.}
 
 **Files:**
-- `path/to/file.ts:L42` — {what changes here}
-- `path/to/other.ts:L15` — {what changes here}
+- `path/to/file.ts:L42`: {what changes here}
+- `path/to/other.ts:L15`: {what changes here}
 
 **Related files:**
-- `path/to/test.ts` — tests to update
-- `types/index.ts` — types to add/modify
+- `path/to/test.ts`: tests to update
+- `types/index.ts`: types to add/modify
 
 {Any additional implementation guidance.}
 
@@ -133,7 +133,7 @@ After the preview, ask:
 > Create this ticket in Linear? (yes / no / edit)
 
 - **yes**: Proceed to Step 5.
-- **no**: Cancel — do not create the ticket.
+- **no**: Cancel: do not create the ticket.
 - **edit**: Ask what they want to change, update the preview, and ask again.
 
 ## Step 5: Create Linear Ticket
@@ -143,7 +143,7 @@ Create the ticket using `mcp__claude_ai_Linear__save_issue` with:
 - **team**: `Gnubok`
 - **title**: The title from the preview (keep under 70 characters)
 - **description**: The full description from the preview (Problem, Solution, Why, Where sections)
-- **labels**: The auto-detected type — `Bug`, `Feature`, or `Improvement`
+- **labels**: The auto-detected type: `Bug`, `Feature`, or `Improvement`
 - **priority**: The inferred priority number (1-4)
 
 After creation, report the Linear ticket identifier (e.g., `GNO-123`) so the user can reference it.
@@ -151,8 +151,8 @@ After creation, report the Linear ticket identifier (e.g., `GNO-123`) so the use
 ## Important Notes
 
 - Be specific and actionable. Vague tickets waste everyone's time.
-- Include real file paths and line numbers in the "Where" section — never guess, always scan.
+- Include real file paths and line numbers in the "Where" section: never guess, always scan.
 - Keep the title short and prefixed with the area in brackets.
 - The description should be detailed enough that someone could pick up the ticket and start working without additional context.
-- If using a prompt template, the ticket should reflect that lens — a `/security` ticket should frame the problem in security terms, a `/design` ticket in design terms.
+- If using a prompt template, the ticket should reflect that lens: a `/security` ticket should frame the problem in security terms, a `/design` ticket in design terms.
 - Do not create the ticket without explicit user approval.

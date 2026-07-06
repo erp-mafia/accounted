@@ -1,13 +1,13 @@
 /**
- * /api/v1/companies/{companyId}/suppliers/{id} — supplier detail + writes.
+ * /api/v1/companies/{companyId}/suppliers/{id}: supplier detail + writes.
  *
- * GET    — full record. ?expand=supplier_invoices embeds open supplier invoices.
- * PATCH  — partial update. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+ * GET   : full record. ?expand=supplier_invoices embeds open supplier invoices.
+ * PATCH : partial update. Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *          Setting archived_at: null un-archives the supplier.
- * DELETE — soft-delete (sets archived_at). Idempotent. Dry-runnable. 204 on
+ * DELETE: soft-delete (sets archived_at). Idempotent. Dry-runnable. 204 on
  *          success. REFUSES to archive when the supplier has any open
  *          (registered / approved / partially_paid / overdue / disputed)
- *          supplier invoice — preserves the canonical seller name/address
+ *          supplier invoice: preserves the canonical seller name/address
  *          that BFL 7 kap requires the leverantörsfaktura to carry. Close
  *          (credit or mark paid) the open invoices first.
  */
@@ -56,7 +56,7 @@ const SupplierDetail = z.object({
 })
 
 const ALLOWED_EXPAND = ['supplier_invoices'] as const
-// `disputed` is included so a held supplier invoice still blocks archive —
+// `disputed` is included so a held supplier invoice still blocks archive:
 // the seller record may still be needed if the dispute resolves into a
 // kreditfaktura or partial payment.
 const OPEN_SUPPLIER_INVOICE_STATUSES = [
@@ -81,7 +81,7 @@ registerEndpoint({
   description:
     'Returns the full supplier record. Pass ?expand=supplier_invoices to embed any open supplier invoices (registered / approved / partially_paid / overdue / disputed) for the supplier in the same response.',
   useWhen:
-    'You need the full supplier record — address, payment terms, banking details, default expense account — before booking a supplier invoice or syncing to an external AP system.',
+    'You need the full supplier record: address, payment terms, banking details, default expense account: before booking a supplier invoice or syncing to an external AP system.',
   doNotUseFor:
     'Listing suppliers (use the list endpoint). Looking up customer or employee records (different resources).',
   pitfalls: [
@@ -205,7 +205,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — partial update
+// PATCH: partial update
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -218,11 +218,11 @@ registerEndpoint({
   useWhen:
     'You need to change a supplier\'s contact details, payment terms, banking info, default expense account, or VAT number. Use dry-run first to confirm the merged record before committing.',
   doNotUseFor:
-    'Archiving a supplier (use DELETE — sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).',
+    'Archiving a supplier (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).',
   pitfalls: [
     'Idempotency-Key is mandatory; calls without it return 400.',
-    'org_number uniqueness is enforced at DB level — 23505 → 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
-    'Changing default_expense_account does not retroactively rebook prior supplier invoices — only future bookings pick up the new default.',
+    'org_number uniqueness is enforced at DB level: 23505 → 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
+    'Changing default_expense_account does not retroactively rebook prior supplier invoices: only future bookings pick up the new default.',
   ],
   example: {
     request: { default_payment_terms: 14, notes: 'New payment terms agreed 2026-05-12.' },
@@ -319,14 +319,14 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // Mirror is_active (legacy boolean) when archived_at changes. Keeps the
     // dashboard's "show only active suppliers" filters working without
-    // backfill — every v1 archive/un-archive flows through here and the
+    // backfill: every v1 archive/un-archive flows through here and the
     // bulk-create.
     if (Object.prototype.hasOwnProperty.call(updateData, 'archived_at')) {
       updateData.is_active = updateData.archived_at === null
     }
 
     // Fetch the current row up front. Needed for the BFL 7 kap immutability
-    // check below — a supplier with `archived_at IS NOT NULL` is part of the
+    // check below: a supplier with `archived_at IS NOT NULL` is part of the
     // räkenskapsinformation backing historical verifikationer and must not
     // have its name / address / banking fields mutated. The single exception
     // is un-archiving (PATCH archived_at: null).
@@ -351,7 +351,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const currentArchivedAt = (current as { archived_at: string | null }).archived_at
     const isUnArchiving = updateData.archived_at === null
     if (currentArchivedAt && !isUnArchiving) {
-      // BFL 7 kap 1 § protects räkenskapsinformation — the identifying
+      // BFL 7 kap 1 § protects räkenskapsinformation: the identifying
       // fields that historical verifikationer reference through their join
       // to this row. Internal notes / payment-config don't qualify, so we
       // only refuse the PATCH when an identifying field is in the update.
@@ -387,7 +387,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       }
       // Non-identifying fields (notes, default_payment_terms,
       // default_expense_account, default_currency, email, phone) are not
-      // räkenskapsinformation — fall through and allow the update.
+      // räkenskapsinformation: fall through and allow the update.
     }
 
     if (ctx.dryRun) {
@@ -425,7 +425,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 )
 
 // ──────────────────────────────────────────────────────────────────
-// DELETE — soft-delete (sets archived_at)
+// DELETE: soft-delete (sets archived_at)
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -434,15 +434,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/suppliers/:id',
   summary: 'Archive a supplier (soft-delete).',
   description:
-    'Sets archived_at on the supplier; the record is preserved (supplier invoices and audit history remain intact) but excluded from default list responses. To un-archive, PATCH archived_at back to null. Idempotent — archiving an already-archived supplier is a no-op. Dry-runnable.',
+    'Sets archived_at on the supplier; the record is preserved (supplier invoices and audit history remain intact) but excluded from default list responses. To un-archive, PATCH archived_at back to null. Idempotent: archiving an already-archived supplier is a no-op. Dry-runnable.',
   useWhen:
     'You want to remove a supplier from active rosters without losing their history. Idempotent: re-archiving is safe.',
   doNotUseFor:
-    'Permanently deleting a supplier with all history — the public API does not expose hard-delete. GDPR erasure requests go through a dedicated workflow.',
+    'Permanently deleting a supplier with all history: the public API does not expose hard-delete. GDPR erasure requests go through a dedicated workflow.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'A supplier with any open supplier invoice (registered / approved / partially_paid / overdue / disputed) cannot be archived — returns 409 SUPPLIER_HAS_INVOICES. Close the invoices first. This protects BFL 7 kap audit: the supplier record is the canonical source of seller name/address for invoice reissuance.',
-    '204 No Content is returned on success — there is no response body to parse.',
+    'A supplier with any open supplier invoice (registered / approved / partially_paid / overdue / disputed) cannot be archived: returns 409 SUPPLIER_HAS_INVOICES. Close the invoices first. This protects BFL 7 kap audit: the supplier record is the canonical source of seller name/address for invoice reissuance.',
+    '204 No Content is returned on success: there is no response body to parse.',
   ],
   example: {
     response: { data: null, meta: { request_id: 'req_…', api_version: '2026-05-12' } },

@@ -16,8 +16,8 @@
  * its own (still-active) accrual JE.
  *
  * Remediation per affected payment:
- *   1. reverseEntry(payment_je)  — storno cancels Dr 1930 / Cr 30xx / Cr 26xx
- *   2. createInvoicePaymentJournalEntry — posts the correct Dr 1930 / Cr 1510
+ *   1. reverseEntry(payment_je): storno cancels Dr 1930 / Cr 30xx / Cr 26xx
+ *   2. createInvoicePaymentJournalEntry: posts the correct Dr 1930 / Cr 1510
  *   3. Re-link invoice_payments + transactions to the new JE
  *
  * Net effect on the books: 30xx and 26xx are restored to their correct

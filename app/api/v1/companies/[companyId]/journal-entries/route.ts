@@ -1,12 +1,12 @@
 /**
- * /api/v1/companies/{companyId}/journal-entries — list + create draft.
+ * /api/v1/companies/{companyId}/journal-entries: list + create draft.
  *
- * GET   — cursor-paginated list with filters (fiscal_period_id, status, date range).
+ * GET   : cursor-paginated list with filters (fiscal_period_id, status, date range).
  *         Cursor on (entry_date DESC, id DESC).
- * POST  — create a draft verifikation. Idempotent (mandatory Idempotency-Key).
+ * POST  : create a draft verifikation. Idempotent (mandatory Idempotency-Key).
  *         Dry-runnable. The draft has no voucher number until you call
  *         /commit, so a draft that's never committed produces no löpnummer gap
- *         (BFL 5 kap 6–7 §§).
+ *         (BFL 5 kap 6-7 §§).
  *
  * Strict-mode v1: any engine failure aborts before any state change. The
  * `createDraftEntry` engine call is itself atomic (rollbacks the row on
@@ -83,7 +83,7 @@ registerEndpoint({
   useWhen:
     'You need to walk the verifikationsserie for a period (audit, SIE export, gap detection) or list recent activity for a UI.',
   doNotUseFor:
-    'Reading a single verifikation (use GET /{id}). Reading lines without the header (no separate endpoint — they ride in /{id}).',
+    'Reading a single verifikation (use GET /{id}). Reading lines without the header (no separate endpoint: they ride in /{id}).',
   pitfalls: [
     'Cancelled drafts are hidden by default. They are NOT a löpnummer gap (no voucher_number is allocated for drafts); the filter is for noise reduction.',
     'voucher_number=0 indicates a draft that has not been committed. Posted entries always have voucher_number > 0.',
@@ -203,7 +203,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST — create draft verifikation
+// POST: create draft verifikation
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -214,16 +214,16 @@ registerEndpoint({
   description:
     'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run validates balance + account-chart membership + period date constraints without inserting any row.',
   useWhen:
-    'You\'re posting an arbitrary verifikation — manual journal entries, accrual reversals, period closing adjustments — outside the invoicing / supplier-invoice / transaction flows.',
+    'You\'re posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.',
   doNotUseFor:
-    'Bookkeeping flows that have a dedicated endpoint (invoices, supplier-invoices, transactions). Editing an existing posted entry — use /correct instead.',
+    'Bookkeeping flows that have a dedicated endpoint (invoices, supplier-invoices, transactions). Editing an existing posted entry: use /correct instead.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Lines must sum to zero (Σ debit = Σ credit). Engine rejects with JOURNAL_ENTRY_NOT_BALANCED on imbalance.',
     'entry_date must fall within fiscal_period_id\'s [period_start, period_end]; otherwise ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.',
     'All account_numbers must be active in the chart_of_accounts; otherwise ACCOUNTS_NOT_IN_CHART.',
     'voucher_series defaults to "A" if omitted. Must be a single uppercase letter.',
-    'This creates a DRAFT only — call POST /{id}/commit to assign the voucher_number and post atomically.',
+    'This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically.',
   ],
   example: {
     request: {
@@ -282,7 +282,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Balance pre-check — same logic the engine runs, but cheap to fail fast.
+    // Balance pre-check: same logic the engine runs, but cheap to fail fast.
     const balance = validateBalance(input.lines)
     if (!balance.valid) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_BALANCED', ctx.log, {
@@ -291,7 +291,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Period-lock pre-check — drafts CAN technically be inserted into locked
+    // Period-lock pre-check: drafts CAN technically be inserted into locked
     // periods (no JE-trigger fires until commit), but rejecting up front is
     // cleaner UX and avoids leaving an undeletable draft behind.
     const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, input.entry_date)
@@ -305,7 +305,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (ctx.dryRun) {
       // Dry-run preview: report the balanced lines + would-be header. No row
       // is inserted, so the engine's per-line account-id resolution doesn't
-      // happen — chart-lookup failures will only be reported on live commit.
+      // happen: chart-lookup failures will only be reported on live commit.
       return dryRunPreview(
         {
           status: 'draft' as const,

@@ -34,7 +34,7 @@ interface UiState {
  * Phase 2 bokslutsdispositioner step. Fetches proposals from the dispositions
  * API, lets the user adjust amounts (or skip) per proposal, then POSTs the
  * accepted ones. Mandatory p-fond reversals (cohort ≥ 6 years old) cannot be
- * skipped — checkbox stays disabled-on.
+ * skipped: checkbox stays disabled-on.
  *
  * EF companies get an empty `proposals` array from the server, so this step
  * renders a short pass-through note and lets the user continue.
@@ -66,7 +66,7 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
       const selections: UiState['selections'] = {}
       data.proposals.forEach((p, index) => {
         // Key must match the render loop and buildPostItems, which both pass
-        // the array index — omitting it here defaulted every non-ateforing
+        // the array index: omitting it here defaulted every non-ateforing
         // key to ":0", so only the first proposal card ever rendered.
         const key = proposalKey(p, index)
         selections[key] = {
@@ -95,7 +95,7 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     try {
       const items = buildPostItems(proposal, ui)
       if (items.length === 0) {
-        // Nothing selected — just move on
+        // Nothing selected: just move on
         onContinue()
         return
       }
@@ -337,7 +337,7 @@ function ProposalCard({
 }
 
 function isOverridable(kind: DispositionKind): boolean {
-  // Bolagsskatt and SLP are derived from posted entries — overriding the amount
+  // Bolagsskatt and SLP are derived from posted entries: overriding the amount
   // would silently break the journal posting (the calculator would still
   // recompute server-side). p-fond avsättning and överavskrivningar take a
   // desired amount as input, so editing is meaningful. p-fond återföring is
@@ -347,7 +347,7 @@ function isOverridable(kind: DispositionKind): boolean {
 }
 
 function proposalKey(p: ProposedDisposition, index = 0): string {
-  // For återföring there can be multiple cards (one per cohort) — disambiguate
+  // For återföring there can be multiple cards (one per cohort): disambiguate
   // by including the line account in the key. For other kinds, the kind is unique.
   if (p.kind === 'periodiseringsfond_ateforing') {
     return `${p.kind}:${p.lines[0]?.account_number ?? index}`
@@ -362,7 +362,7 @@ interface PostItem {
 
 function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[] {
   const items: PostItem[] = []
-  // Group återföring entries — server expects a single item with a `returns`
+  // Group återföring entries: server expects a single item with a `returns`
   // map keyed by cohort account.
   const ateforingReturns: Record<string, number> = {}
   for (const p of proposal.proposals) {
@@ -395,7 +395,7 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
         })
         break
       case 'uppskjuten_skatt':
-        // K3 only — server recomputes the amount; client just signals intent.
+        // K3 only: server recomputes the amount; client just signals intent.
         items.push({ kind: 'uppskjuten_skatt' })
         break
     }

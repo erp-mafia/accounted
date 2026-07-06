@@ -1,4 +1,4 @@
-// AUTO-GENERATED — do not edit. Run `npm run setup:extensions` to regenerate.
+// AUTO-GENERATED: do not edit. Run `npm run setup:extensions` to regenerate.
 import dynamic from 'next/dynamic'
 import type { ComponentType } from 'react'
 import type { WorkspaceComponentProps } from '../workspace-registry'

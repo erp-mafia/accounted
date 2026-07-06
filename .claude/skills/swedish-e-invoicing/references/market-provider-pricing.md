@@ -37,13 +37,13 @@ Setup fee 0. Includes inbound + outbound Peppol BIS Billing 3 + EHF + multi-mand
 
 | Item | Typical SME price (SEK) |
 |---|---|
-| Outbound e-invoice (sender) | **3.00–3.50** (Bokio, SpeedLedger, BL); 0–3.40 (InExchange) |
+| Outbound e-invoice (sender) | **3.00-3.50** (Bokio, SpeedLedger, BL); 0-3.40 (InExchange) |
 | Inbound e-invoice | Often free; 3.50 (BL) |
-| Monthly minimum (SME platform) | 0–199 |
+| Monthly minimum (SME platform) | 0-199 |
 | Setup/onboarding | 0 |
-| Postal fallback | 8.25–20 |
+| Postal fallback | 8.25-20 |
 | Kivra to consumer | ~5 |
-| Enterprise (Pagero/Basware) per-doc | Negotiated, EUR 0.10–0.50 |
+| Enterprise (Pagero/Basware) per-doc | Negotiated, EUR 0.10-0.50 |
 
 ## How Swedish accounting platforms wire Peppol
 
@@ -103,7 +103,7 @@ Pattern: **bigger players are bundling tax + invoicing + AP automation + complia
 | 2024 | VIA Equity acquires Crediflow group |
 | 1 Jul 2024 | GEP (US) acquires OpusCapita from PSG Equity |
 | ~2020 | Visma Group acquires InExchange (Factorum AB) |
-| 2019–2020 | Ropo Capital acquires Colligent Inkasso, Posti Messaging Scandinavia |
+| 2019-2020 | Ropo Capital acquires Colligent Inkasso, Posti Messaging Scandinavia |
 
 **Reseller dependency risk is now real**, Pagero is a TR division, Basware is PE-owned, both will eventually re-price upward. Build optionality into the stack via a clean `SendClient` abstraction with dual-vendor capability.
 
@@ -111,14 +111,14 @@ Pattern: **bigger players are bundling tax + invoicing + AP automation + complia
 
 For a new Swedish accounting/fintech product, the practical menu:
 
-1. **Storecove**, best DX, single API across Peppol + IT SDI + FR PA + PL KSeF + BE + DE. Free 30-day sandbox. Effective rate €0.05–€0.30/invoice. **Best fit when multi-mandate is needed.**
+1. **Storecove**, best DX, single API across Peppol + IT SDI + FR PA + PL KSeF + BE + DE. Free 30-day sandbox. Effective rate €0.05-€0.30/invoice. **Best fit when multi-mandate is needed.**
 2. **Qvalia**, transparent EUR pricing, ISO 27001, Swedish-headquartered. Good fit for SME-only Swedish flows.
 3. **InExchange**, heaviest Swedish installed base, but partial vendor lock-in via Visma Group ownership.
 4. **Visma Autoinvoice / Maventa**, only worth it if already integrating Visma ecosystem.
 5. **Pagero / Basware**, enterprise-only, not SME-friendly post-acquisition.
 6. **Own Oxalis-NG AP**, only for receive at low volume (€100/mo Hetzner + €4,400 yr-1 OpenPeppol fees). For send, only economic above ~25k invoices/month.
 
-**Build vs buy break-even:** reseller cost of ~€0.10/invoice (mid-volume Storecove) versus own-AP fixed cost of ~€30k/year (membership + cert + ops) breaks even at **~300,000 invoices/year sent through your customers**, equivalent to ~3,000–5,000 active SME customers each sending 50–100 invoices/month. **For receive there is no economic case to build initially**, Storecove free receive or own Oxalis on a small VPS dominate.
+**Build vs buy break-even:** reseller cost of ~€0.10/invoice (mid-volume Storecove) versus own-AP fixed cost of ~€30k/year (membership + cert + ops) breaks even at **~300,000 invoices/year sent through your customers**, equivalent to ~3,000-5,000 active SME customers each sending 50-100 invoices/month. **For receive there is no economic case to build initially**, Storecove free receive or own Oxalis on a small VPS dominate.
 
 ## Authoritative source list
 

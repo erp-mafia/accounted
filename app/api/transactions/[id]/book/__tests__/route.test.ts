@@ -32,7 +32,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
-// Booking-time duplicate guard — mocked so route tests exercise the WIRING
+// Booking-time duplicate guard: mocked so route tests exercise the WIRING
 // (warn / force / mismatch); the detection query itself is unit-tested in
 // lib/transactions/__tests__/booking-duplicate-detection.test.ts.
 const mockDetectDup = vi.fn()
@@ -40,7 +40,7 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
-// Behandlingshistorik append — mocked so we can assert the dismissal is
+// Behandlingshistorik append: mocked so we can assert the dismissal is
 // persisted without reaching the service-role client.
 const mockAppendProcessingHistory = vi.fn()
 vi.mock('@/lib/processing-history/append', () => ({
@@ -245,7 +245,7 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(body.error.details.candidate.voucher_label).toBe('A142')
     // Critically: no verifikat is created when a duplicate is flagged.
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
-    // Blocking a duplicate is not a dismissal — nothing is logged.
+    // Blocking a duplicate is not a dismissal: nothing is logged.
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 
@@ -293,7 +293,7 @@ describe('POST /api/transactions/[id]/book', () => {
   it('returns 409 when a ledger-only voucher (no sibling transaction) already books this movement', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
     enqueue({ data: tx, error: null }) // fetch
-    // A voucher-keyed candidate has no transaction_id — it's bound by je id.
+    // A voucher-keyed candidate has no transaction_id: it's bound by je id.
     mockDetectDup.mockResolvedValue({
       transaction_id: null,
       journal_entry_id: VOUCHER_JE_UUID,

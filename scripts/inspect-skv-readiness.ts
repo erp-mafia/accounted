@@ -154,7 +154,7 @@ async function main() {
       console.log(`  expires_at=${t.expires_at}  refresh_count=${t.refresh_count}  scope=${t.scope}`)
     }
   } else {
-    console.log('\n✓ No existing skatteverket_tokens — clean slate for OAuth.')
+    console.log('\n✓ No existing skatteverket_tokens: clean slate for OAuth.')
   }
 
   console.log('\nDone (read-only).')

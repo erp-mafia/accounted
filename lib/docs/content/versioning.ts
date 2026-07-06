@@ -19,7 +19,7 @@ Gnubok-Version: ${API_V1_VERSION}
 
 ### Pinning
 
-Webhooks are pinned to the API version active at creation time (the \`api_version_pinned\` column on the \`webhooks\` row). Payload shapes for *your* webhook will not change until you explicitly upgrade — even if we ship a new dated version that breaks the shape for newly-created webhooks.
+Webhooks are pinned to the API version active at creation time (the \`api_version_pinned\` column on the \`webhooks\` row). Payload shapes for *your* webhook will not change until you explicitly upgrade: even if we ship a new dated version that breaks the shape for newly-created webhooks.
 
 API requests pin per-request via the \`Gnubok-Version\` request header (planned for v1.x; today every request gets the current version):
 
@@ -89,7 +89,7 @@ curl https://app.gnubok.se/api/v1/companies/{cid}/invoices \\
   -d '{ "customer_id": "...", "items": [...] }'
 \`\`\`
 
-In an agent loop, generate the key once at the *start* of an attempt and reuse it across every retry of that single logical action — never on a fresh attempt with new inputs.
+In an agent loop, generate the key once at the *start* of an attempt and reuse it across every retry of that single logical action: never on a fresh attempt with new inputs.
 
 ---
 
@@ -113,14 +113,14 @@ Dry-run **does not** call external providers (VIES VAT validation, BankID, Skatt
 
 ## Strict-mode write semantics
 
-A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't" — either both happened or neither did.
+A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't": either both happened or neither did.
 
 When a multi-step write fails:
 
 - **Pre-engine failure** (validation, missing FK, period locked) → no rows written, structured error returned.
 - **Post-engine failure** (engine call succeeded, follow-up step failed) → the engine's writes are reversed via \`reverseEntry()\` (storno), the failure surfaces with code matching the failed step (e.g. \`MATCH_INVOICE_TX_LINK_FAILED\`).
 
-Storno reversals are themselves immutable journal entries — the original audit trail remains visible per BFL 5 kap 5 §. \`reversal_journal_entry_id\` on the original row points at the storno.
+Storno reversals are themselves immutable journal entries: the original audit trail remains visible per BFL 5 kap 5 §. \`reversal_journal_entry_id\` on the original row points at the storno.
 
 ---
 
@@ -144,5 +144,5 @@ Every successful write response carries an \`audit\` block in \`meta\`:
 }
 \`\`\`
 
-No second round-trip needed to confirm what happened — agents can chain follow-up work directly on the returned voucher number.
+No second round-trip needed to confirm what happened: agents can chain follow-up work directly on the returned voucher number.
 `

@@ -5,6 +5,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
+import { revokeLinksForRun } from '@/lib/salary/payslips/links'
 
 ensureInitialized()
 
@@ -62,7 +63,7 @@ export async function POST(
     try {
       await reverseEntry(supabase, companyId, user.id, entryId)
     } catch (err) {
-      // Entry may already be reversed — continue
+      // Entry may already be reversed: continue
       if (err instanceof EntryAlreadyReversedError) continue
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed
@@ -76,6 +77,12 @@ export async function POST(
     .from('salary_runs')
     .update({ status: 'corrected' })
     .eq('id', id)
+
+  // The storno replaces the payslips — previously emailed payslip links for
+  // the original run must stop resolving (they show as "ersatt" to the
+  // employee). Fresh links are issued when the correction run's payslips
+  // are sent.
+  await revokeLinksForRun(supabase, id)
 
   // Create new correction run for same period
   // Remove the unique constraint conflict by using the original run's unique key

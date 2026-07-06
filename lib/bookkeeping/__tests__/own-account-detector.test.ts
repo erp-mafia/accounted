@@ -81,7 +81,7 @@ describe('detectOwnAccountTransfer', () => {
         source: 'enable_banking',
       },
     })
-    // pair candidate lookup — find the matching EUR-side leg
+    // pair candidate lookup: find the matching EUR-side leg
     enqueue({
       data: [{ id: 'tx-eur-leg', amount: 90.50, date: '2026-06-12' }],
     })
@@ -148,7 +148,7 @@ describe('detectOwnAccountTransfer', () => {
     expect(result).toBeNull()
   })
 
-  it('does not fall back to amount-only heuristics when IBAN missing — null instead', async () => {
+  it('does not fall back to amount-only heuristics when IBAN missing: null instead', async () => {
     const { supabase } = createQueuedMockSupabase()
     const result = await detectOwnAccountTransfer(
       supabase as never,

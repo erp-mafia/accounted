@@ -146,7 +146,7 @@ describe('calculateMatchScore', () => {
 })
 
 // ============================================================
-// findMatchingInvoices (integration — mock Supabase)
+// findMatchingInvoices (integration: mock Supabase)
 // ============================================================
 
 describe('findMatchingInvoices', () => {
@@ -189,7 +189,7 @@ describe('findMatchingInvoices', () => {
     mockResult({
       data: [
         { ...makeInvoice({ invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
-        // Second invoice with exact amount — should not be scored
+        // Second invoice with exact amount: should not be scored
         {
           ...makeInvoice({ id: 'inv-2', invoice_number: 'F-2024002', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }),
           customer: makeCustomer({ name: 'Test match description' }),
@@ -361,7 +361,7 @@ describe('getBestInvoiceMatch', () => {
 })
 
 // ============================================================
-// findMatchingInvoices — paid-voucher status-leak guard
+// findMatchingInvoices: paid-voucher status-leak guard
 // ============================================================
 //
 // Defensive filter added because manual verifikationer (booked outside the
@@ -374,7 +374,7 @@ describe('getBestInvoiceMatch', () => {
 //     more payments legitimately)
 //   - invoices without payment rows still pass through unchanged
 
-describe('findMatchingInvoices — status-leak guard', () => {
+describe('findMatchingInvoices: status-leak guard', () => {
   it('excludes a sent invoice that already has a payment voucher', async () => {
     const { supabase: queuedSupabase, enqueue } = createQueuedMockSupabase()
     const inv = {

@@ -37,7 +37,7 @@ function authedSupabase() {
   return { supabase, enqueueMany }
 }
 
-describe('PATCH /api/salary/runs/[id]/employees/[employeeId] — monthly salary edit', () => {
+describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edit', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

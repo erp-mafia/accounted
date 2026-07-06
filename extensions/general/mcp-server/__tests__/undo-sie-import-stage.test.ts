@@ -15,7 +15,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('gnubok_undo_sie_import — stage-time validation', () => {
+describe('gnubok_undo_sie_import: stage-time validation', () => {
   it('stages an undo when the import is completed and the period is open', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

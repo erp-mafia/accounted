@@ -50,7 +50,7 @@ export async function DELETE(
   }
 
   // Guard: only unbooked transactions can be deleted. A booked/matched row is
-  // räkenskapsinformation — the fix is to unlink (reconciliation) or storno, not
+  // räkenskapsinformation: the fix is to unlink (reconciliation) or storno, not
   // delete. Return a structured bilingual envelope so the UI shows this clear,
   // actionable message instead of the generic "Ladda om sidan" 409 fallback.
   if (transaction.journal_entry_id) {
@@ -70,7 +70,7 @@ export async function DELETE(
 
   // Guard: only transactions the user created in the app can be deleted. Rows
   // fetched via bank sync or uploaded via a bank-file import are an external
-  // record of money that moved — deleting one would silently drop a real bank
+  // record of money that moved: deleting one would silently drop a real bank
   // line (and a re-sync would just bring it back). The user can *ignore* such a
   // row (POST /api/transactions/[id]/ignore) to take it off the to-book list,
   // but never delete it. See lib/transactions/origin.ts for the origin rule.
@@ -98,7 +98,7 @@ export async function DELETE(
   if (deleteError) {
     // An unbooked row can still carry payment_match_log rows (written at ingest
     // for every auto-suggested match). Their FK cascades on delete, but the
-    // audit-immutability trigger raises P0001 — surface that as an actionable
+    // audit-immutability trigger raises P0001: surface that as an actionable
     // message (match or ignore instead) rather than a bare 500.
     const code = (deleteError as { code?: string }).code
     const message = (deleteError as { message?: string }).message ?? ''
@@ -134,7 +134,7 @@ export async function DELETE(
 /**
  * Edit a bank transaction's title (description).
  *
- * Legal under BFL only while the row is a mutable staging label — i.e. NOT yet
+ * Legal under BFL only while the row is a mutable staging label: i.e. NOT yet
  * booked into a verifikat and NOT confirmed-matched to an invoice. Once booked
  * the description is räkenskapsinformation and corrections go through storno
  * (reverseEntry/correctEntry), so this route hard-blocks those rows. The bank's
@@ -193,11 +193,11 @@ export const PATCH = withRouteContext(
       // Re-assert the FULL editable gate atomically against a concurrent book
       // or auto-match. Ingest's supplier auto-match can set supplier_invoice_id
       // WITHOUT journal_entry_id, so guarding journal_entry_id alone leaves a
-      // narrow TOCTOU window — mirror the read-time gate here.
+      // narrow TOCTOU window: mirror the read-time gate here.
       .is('journal_entry_id', null)
       .is('invoice_id', null)
       .is('supplier_invoice_id', null)
-      // Return only what the client renders (data minimisation — the row also
+      // Return only what the client renders (data minimisation: the row also
       // carries company_id and other internal fields the caller doesn't need).
       .select('id, description, title_edited_at')
       .maybeSingle<Pick<Transaction, 'id' | 'description' | 'title_edited_at'>>()
@@ -210,7 +210,7 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('TRANSACTION_TITLE_LOCKED', log, { requestId })
     }
 
-    // Behandlingshistorik (BFNAR 2013:2 kap 8) — light-touch for a pre-verifikat
+    // Behandlingshistorik (BFNAR 2013:2 kap 8): light-touch for a pre-verifikat
     // working label; updated_at (trigger) captures "when". We deliberately do
     // NOT log the description text: a bank label can carry PII (payee names,
     // reference numbers). The before-value stays recoverable in

@@ -4,18 +4,18 @@ import type { BokioClient } from './client';
  * Bokio document (upload) resource config + fetchers.
  *
  * Bokio exposes receipts/underlag via two endpoints:
- *   - GET /companies/{cid}/uploads               — list, carries journalEntryId
- *   - GET /companies/{cid}/uploads/{id}/download — raw bytes (octet-stream)
+ *   - GET /companies/{cid}/uploads               : list, carries journalEntryId
+ *   - GET /companies/{cid}/uploads/{id}/download : raw bytes (octet-stream)
  *
  * The list does NOT include a filename, and the download is served as
- * application/octet-stream — so the real file type comes from the list item's
+ * application/octet-stream, so the real file type comes from the list item's
  * `contentType`, and a filename has to be synthesised by the caller.
  *
  * The link between an upload and a gnubok verifikat is recovered from the
  * Bokio journal entry's human voucher number (e.g. "V342"): the SIE import
  * preserves it on journal_entries.source_voucher_series / source_voucher_number.
  * Bokio restarts numbering at V1 every fiscal year, so the number alone is not
- * unique — callers must scope the match by fiscal year (the entry's date).
+ * unique: callers must scope the match by fiscal year (the entry's date).
  */
 
 const UPLOADS_PATH = '/uploads';
@@ -46,7 +46,7 @@ export interface BokioVoucherRef {
   series: string;
   /** Numeric part of the voucher number, e.g. 342. */
   number: number;
-  /** Entry date (YYYY-MM-DD) — used to scope the match by fiscal year. */
+  /** Entry date (YYYY-MM-DD), used to scope the match by fiscal year. */
   date: string;
 }
 

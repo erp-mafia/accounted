@@ -14,6 +14,16 @@ import {
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import {
+  normalizeLineDimensions,
+  validateEntryDimensions,
+} from '@/lib/bookkeeping/dimension-resolver'
+import {
+  applyDimensionRules,
+  assertMandatoryDimensions,
+  fetchActiveDimensionRules,
+  isDimensionRuleExemptSource,
+} from '@/lib/bookkeeping/dimension-rules'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -76,7 +86,7 @@ export async function getNextVoucherNumber(
 /**
  * Resolve account IDs from account numbers for a company.
  *
- * By default only active accounts are returned — inactive / never-added
+ * By default only active accounts are returned: inactive / never-added
  * accounts surface as "missing" so callers throw AccountsNotInChartError.
  *
  * Pass `{ includeInactive: true }` for reversals: the accounts on an already-
@@ -178,28 +188,33 @@ export async function findFiscalPeriod(
 
 /**
  * Build line insert objects from input lines, resolving account IDs and
- * including tax_code, cost_center, project dimensions
+ * including tax_code and the dimensions bag
  */
 function buildLineInserts(
   entryId: string,
   lines: CreateJournalEntryLineInput[],
   accountIdMap: Map<string, string>
 ) {
-  return lines.map((line, index) => ({
-    journal_entry_id: entryId,
-    account_number: line.account_number,
-    account_id: accountIdMap.get(line.account_number) || null,
-    debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-    credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-    currency: line.currency || 'SEK',
-    amount_in_currency: line.amount_in_currency ? Math.round(line.amount_in_currency * 100) / 100 : null,
-    exchange_rate: line.exchange_rate || null,
-    line_description: line.line_description || null,
-    tax_code: line.tax_code || null,
-    cost_center: line.cost_center || null,
-    project: line.project || null,
-    sort_order: index,
-  }))
+  return lines.map((line, index) => {
+    // dimensions JSONB is the single source of truth; cost_center/project
+    // are GENERATED columns derived from keys '1'/'6' since the PR9 cutover
+    // (20260702230000): writing them explicitly would error.
+    const dimensions = normalizeLineDimensions(line)
+    return {
+      journal_entry_id: entryId,
+      account_number: line.account_number,
+      account_id: accountIdMap.get(line.account_number) || null,
+      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
+      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
+      currency: line.currency || 'SEK',
+      amount_in_currency: line.amount_in_currency ? Math.round(line.amount_in_currency * 100) / 100 : null,
+      exchange_rate: line.exchange_rate || null,
+      line_description: line.line_description || null,
+      tax_code: line.tax_code || null,
+      dimensions,
+      sort_order: index,
+    }
+  })
 }
 
 /**
@@ -217,6 +232,26 @@ export async function createDraftEntry(
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
   }
+
+  // Account dimension rules (dimensions PR10): apply 'default'/'fixed'
+  // values onto the line bags before validation + insert. Zero rules —
+  // every company by default — returns the input untouched; a failed rule
+  // fetch fails open like the soft validation below. System-generated and
+  // correction sources are exempt — policy governs new business events,
+  // never imported history or bokslut mechanics.
+  const ruleExempt = isDimensionRuleExemptSource(input.source_type)
+  const rules = ruleExempt ? [] : await fetchActiveDimensionRules(supabase, companyId)
+  if (rules === null) {
+    log.warn('dimension rule fetch failed — defaults/fixed skipped (fail-open)', { companyId })
+  }
+  const lines = rules ? applyDimensionRules(input.lines, rules) : input.lines
+
+  // Soft dimension validation (dimensions plan PR3): free for untagged
+  // entries; free-text passthrough unless company_settings.dimensions_enabled;
+  // enabled companies get registry validation with a typed Swedish rejection.
+  // Runs before any insert so a rejection leaves no orphan rows. Reversal/
+  // storno/correction paths bypass this: they copy posted data verbatim.
+  await validateEntryDimensions(supabase, companyId, lines)
 
   // Validate that entry_date falls within the selected fiscal period
   const { data: period, error: periodError } = await supabase
@@ -303,7 +338,7 @@ export async function createDraftEntry(
   }
 
   // Insert journal entry lines with dimensions
-  const lineInserts = buildLineInserts(entry.id, input.lines, accountIdMap)
+  const lineInserts = buildLineInserts(entry.id, lines, accountIdMap)
 
   const { error: linesError } = await supabase
     .from('journal_entry_lines')
@@ -355,12 +390,12 @@ export async function createDraftEntry(
 }
 
 /**
- * Update an existing DRAFT journal entry in place — header + lines. Only drafts
+ * Update an existing DRAFT journal entry in place: header + lines. Only drafts
  * are editable; committed entries (posted/reversed/cancelled) are immutable per
  * BFL 5 kap. and rejected with CannotEditNonDraftError (the DB immutability
  * trigger is the backstop). Mirrors createDraftEntry's validate-everything-first
  * order so an unbalanced set, a bad period, or a locked period fails before any
- * row is mutated — the header UPDATE is the first write, so a locked period
+ * row is mutated: the header UPDATE is the first write, so a locked period
  * aborts cleanly with the draft untouched.
  */
 export async function updateDraftEntry(
@@ -391,6 +426,21 @@ export async function updateDraftEntry(
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
   }
 
+  // Same soft dimension validation as createDraftEntry: before any write, so
+  // a rejection leaves both the header and the existing lines untouched.
+  // Account dimension rules (PR10) apply first — same as create. Gate on
+  // the STORED source_type (updates preserve it; the input's copy is not
+  // authoritative here).
+  const ruleExempt = isDimensionRuleExemptSource(
+    (existing as { source_type?: string }).source_type
+  )
+  const rules = ruleExempt ? [] : await fetchActiveDimensionRules(supabase, companyId)
+  if (rules === null) {
+    log.warn('dimension rule fetch failed — defaults/fixed skipped (fail-open)', { companyId })
+  }
+  const lines = rules ? applyDimensionRules(input.lines, rules) : input.lines
+  await validateEntryDimensions(supabase, companyId, lines)
+
   // Entry date must fall within the selected fiscal period.
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
@@ -412,7 +462,7 @@ export async function updateDraftEntry(
   }
 
   // Resolve account IDs (seeding standard BAS accounts on demand) up front, so
-  // the line insert below cannot fail on a missing account — same as create.
+  // the line insert below cannot fail on a missing account: same as create.
   const accountIdMap = await resolveAccountIds(supabase, companyId, input.lines)
   const allAccountNumbers = [...new Set(input.lines.map((l) => l.account_number))]
   let missingAccounts = allAccountNumbers.filter((num) => !accountIdMap.has(num))
@@ -430,7 +480,7 @@ export async function updateDraftEntry(
 
   const resolvedSeries = input.voucher_series || (existing.voucher_series as string) || 'A'
 
-  // All validation passed — mutate. Update the header first; a locked/closed
+  // All validation passed: mutate. Update the header first; a locked/closed
   // period blocks this write (enforce_period_lock) before any line is touched.
   // source_type / source_id / status are intentionally preserved.
   const { error: headerError } = await supabase
@@ -459,7 +509,7 @@ export async function updateDraftEntry(
     throw new BookkeepingDatabaseError('create_entry_lines', deleteError.message)
   }
 
-  const lineInserts = buildLineInserts(entryId, input.lines, accountIdMap)
+  const lineInserts = buildLineInserts(entryId, lines, accountIdMap)
   const { error: linesError } = await supabase
     .from('journal_entry_lines')
     .insert(lineInserts)
@@ -490,10 +540,10 @@ export async function updateDraftEntry(
  * Commit a draft entry: assigns voucher number and transitions to 'posted'
  * Uses the atomic commit_journal_entry RPC so the voucher number increment
  * and status update happen in one transaction. If the balance trigger rejects
- * the entry, the sequence increment rolls back — no burned numbers.
+ * the entry, the sequence increment rolls back: no burned numbers.
  *
  * Actor attribution: the surrounding runWithActor() scope (set by the
- * approval entry points — commitPendingOperation, web approve routes) is
+ * approval entry points: commitPendingOperation, web approve routes) is
  * forwarded to the RPC, which stamps journal_entries.committed_actor_* and
  * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs,
  * identical to pre-attribution behaviour.
@@ -507,6 +557,49 @@ export async function commitEntry(
   rubricVersion?: string
 ): Promise<JournalEntry> {
   const actor = getActor()
+
+  // Mandatory dimension rules (dimensions PR10): 'required' rules bite when
+  // the verifikat is about to become immutable — drafts may be incomplete,
+  // posting may not. Zero active rules (the default) skips the line fetch
+  // entirely; a failed rule fetch fails open (transient DB errors must not
+  // block bookkeeping). Reversal/correction paths never pass through
+  // commitEntry, so history always reverses regardless of policy.
+  const rules = await fetchActiveDimensionRules(supabase, companyId)
+  if (rules === null) {
+    // Deliberate fail-open, but LOUD: a transient policy-table error must not
+    // block month-end bookings company-wide, yet a silently skipped control
+    // is invisible — the warning makes the degradation observable.
+    log.warn('dimension rule fetch failed — mandatory enforcement skipped (fail-open)', {
+      companyId,
+      entityId: entryId,
+    })
+  } else if (rules.some((r) => r.rule_type === 'required')) {
+    const { data: ruleLines, error: ruleLinesError } = await supabase
+      .from('journal_entry_lines')
+      .select('account_number, dimensions, journal_entries!inner(source_type)')
+      .eq('journal_entry_id', entryId)
+    if (ruleLinesError || !ruleLines) {
+      log.warn('line fetch for mandatory dimension check failed — enforcement skipped (fail-open)', {
+        companyId,
+        entityId: entryId,
+      })
+    } else {
+      const typedLines = ruleLines as unknown as Array<{
+        account_number: string
+        dimensions: Record<string, string>
+        journal_entries: { source_type: string }
+      }>
+      // System/correction sources are exempt — see
+      // DIMENSION_RULE_EXEMPT_SOURCE_TYPES (imported history, bokslut
+      // mechanics and credit instruments must never be blocked by policy).
+      // source_type is a HEADER column (journal_entries) — the join repeats
+      // the same value on every line, so reading lines[0] IS reading the
+      // entry header; lines cannot mix source types.
+      if (!isDimensionRuleExemptSource(typedLines[0]?.journal_entries?.source_type)) {
+        assertMandatoryDimensions(typedLines, rules)
+      }
+    }
+  }
 
   // Atomic: increment voucher sequence + update status in one transaction.
   // Rolls back the sequence if the balance trigger or any constraint fails.
@@ -559,7 +652,7 @@ export async function commitEntry(
  *
  * If commitEntry fails (e.g. balance trigger rejection, period lock, RPC error),
  * the orphan draft is cancelled so callers don't leave an undeletable stuck draft.
- * The commit RPC is atomic — no voucher number is burned on failure.
+ * The commit RPC is atomic: no voucher number is burned on failure.
  */
 export async function createJournalEntry(
   supabase: SupabaseClient,
@@ -575,7 +668,7 @@ export async function createJournalEntry(
   } catch (commitError) {
     // CAS guard: only cancel if still in draft. If the RPC actually posted
     // before failing downstream, immutability trigger blocks draft→cancelled
-    // on a posted row anyway — the filter just avoids firing the trigger.
+    // on a posted row anyway: the filter just avoids firing the trigger.
     try {
       const { error: cancelError } = await supabase
         .from('journal_entries')
@@ -662,6 +755,7 @@ export async function reverseEntry(
       : undefined,
     exchange_rate: line.exchange_rate || undefined,
     tax_code: line.tax_code || undefined,
+    dimensions: line.dimensions || undefined,
     cost_center: line.cost_center || undefined,
     project: line.project || undefined,
   }))
@@ -676,7 +770,7 @@ export async function reverseEntry(
     original.voucher_series || 'A'
   )
 
-  // Resolve account IDs — include inactive rows. The accounts on the
+  // Resolve account IDs: include inactive rows. The accounts on the
   // original committed entry were active at commit time; if the user has
   // since toggled one off, the storno must still be allowed to go through
   // (BFL 5 kap 5§). Only a truly missing chart row (rare: would require
@@ -749,7 +843,7 @@ export async function reverseEntry(
     .select('id')
 
   if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Another concurrent reversal already changed the status — mark the orphaned
+    // Another concurrent reversal already changed the status: mark the orphaned
     // reversal as cancelled so it's excluded from reports but remains traceable.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
@@ -759,7 +853,7 @@ export async function reverseEntry(
   // Unlink any bank transactions booked by the reversed entry so they return
   // to "Att bokföra" and can be booked again from the transactions view.
   // Without this the row keeps pointing at a status='reversed' entry, reads
-  // as bokförd forever, and has no re-booking affordance — the agent paths
+  // as bokförd forever, and has no re-booking affordance: the agent paths
   // (lib/pending-operations/commit.ts) already did this manually after every
   // reverseEntry call; the dashboard reverse route did not.
   const { error: unlinkError } = await supabase

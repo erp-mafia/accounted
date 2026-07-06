@@ -1,4 +1,4 @@
-// AUTO-GENERATED — do not edit. Run `npm run setup:extensions` to regenerate.
+// AUTO-GENERATED: do not edit. Run `npm run setup:extensions` to regenerate.
 import type { Extension } from '../types'
 import { enableBankingExtension } from '@/extensions/general/enable-banking'
 import { emailExtension } from '@/extensions/general/email'

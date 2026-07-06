@@ -48,7 +48,7 @@ const makePaidRun = (overrides = {}) => ({
   ...overrides,
 })
 
-describe('POST /api/salary/runs/[id]/book — nollkörning', () => {
+describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -101,5 +101,52 @@ describe('POST /api/salary/runs/[id]/book — nollkörning', () => {
 
     expect(status).toBe(200)
     expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('passes each employee default_dimensions bag from the join to the engine (PR8)', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
+    vi.mocked(createSalaryRunEntries).mockResolvedValue({
+      salaryEntry: { id: 'je-1' },
+      avgifterEntry: { id: 'je-2' },
+      vacationEntry: null,
+      pensionEntry: null,
+    } as never)
+
+    enqueueMany([
+      { data: makePaidRun({ total_gross: 30000, total_tax: 7000, total_net: 23000, total_avgifter: 9426 }) },
+      {
+        data: [
+          {
+            employee_id: 'e1',
+            employee: { employment_type: 'employee', default_dimensions: { '1': 'KS01' } },
+            gross_salary: 30000,
+            tax_withheld: 7000,
+            net_salary: 23000,
+            avgifter_amount: 9426,
+            avgifter_rate: 0.3142,
+            vacation_accrual: 0,
+            vacation_accrual_avgifter: 0,
+            line_items: [],
+          },
+        ],
+      }, // roster with dims from the employees join
+      { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
+    const runInput = vi.mocked(createSalaryRunEntries).mock.calls[0][3] as {
+      employees: Array<{ employee_id: string; default_dimensions?: Record<string, string> }>
+    }
+    expect(runInput.employees[0].default_dimensions).toEqual({ '1': 'KS01' })
   })
 })

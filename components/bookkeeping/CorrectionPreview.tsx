@@ -31,12 +31,12 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
 
   // An account that was on the original but the user dropped from the rättelse:
   // the storno still drains it to zero (delta = −original). Flag it so the cell
-  // reads "tas bort" instead of a bare "–", which would imply "unchanged".
+  // reads "tas bort" instead of a bare "-", which would imply "unchanged".
   const isRemoved = (row: AccountRow) =>
     hasAnyCorrection && !row.correctionPresent && Math.abs(row.original) >= 0.005
 
   // The per-account deltas sum to the corrected lines' debit − credit. A non-zero
-  // sum means the proposed rättelse is not yet balanced — surface that here so the
+  // sum means the proposed rättelse is not yet balanced: surface that here so the
   // förändring column is read as a work-in-progress, not a miscalculation.
   const netDelta = rows.reduce((sum, r) => sum + r.delta, 0)
   const unbalanced = hasAnyCorrection && Math.abs(netDelta) >= 0.005
@@ -76,12 +76,12 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
                   {formatSignedAmount(row.storno)}
                 </td>
                 <td className={`px-3 py-1.5 text-right tabular-nums ${isRemoved(row) ? 'text-muted-foreground' : signClass(row.correction)}`}>
-                  {!hasAnyCorrection ? '–' : isRemoved(row) ? 'tas bort' : formatSignedAmount(row.correction)}
+                  {!hasAnyCorrection ? '-' : isRemoved(row) ? 'tas bort' : formatSignedAmount(row.correction)}
                 </td>
                 <td
                   className={`px-3 py-1.5 text-right tabular-nums border-l font-medium ${signClass(row.delta)}`}
                 >
-                  {hasAnyCorrection ? formatSignedAmount(row.delta) : '–'}
+                  {hasAnyCorrection ? formatSignedAmount(row.delta) : '-'}
                 </td>
               </tr>
             ))}
@@ -95,7 +95,7 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
             <div className="flex items-center justify-between gap-2">
               <AccountNumber number={row.account_number} showName size="sm" />
               <span className={`text-sm font-medium tabular-nums ${signClass(row.delta)}`}>
-                {hasAnyCorrection ? formatSignedAmount(row.delta) : '–'}
+                {hasAnyCorrection ? formatSignedAmount(row.delta) : '-'}
               </span>
             </div>
             <dl className="grid grid-cols-3 gap-2 text-xs">
@@ -110,7 +110,7 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
               <div>
                 <dt className="text-muted-foreground">Rättelse</dt>
                 <dd className={`tabular-nums ${isRemoved(row) ? 'text-muted-foreground' : signClass(row.correction)}`}>
-                  {!hasAnyCorrection ? '–' : isRemoved(row) ? 'tas bort' : formatSignedAmount(row.correction)}
+                  {!hasAnyCorrection ? '-' : isRemoved(row) ? 'tas bort' : formatSignedAmount(row.correction)}
                 </dd>
               </div>
             </dl>
@@ -124,7 +124,7 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
       </p>
       {unbalanced && (
         <p className="text-xs text-destructive">
-          Förslaget balanserar inte ännu – debet och kredit i rättelsen måste vara lika.
+          Förslaget balanserar inte ännu: debet och kredit i rättelsen måste vara lika.
         </p>
       )}
     </div>

@@ -1,5 +1,5 @@
 /**
- * Voucher series resolver — pure helpers for mapping journal_entries.source_type
+ * Voucher series resolver: pure helpers for mapping journal_entries.source_type
  * to a default voucher_series per company_settings, formatting voucher labels
  * for display, and parsing them back.
  *
@@ -9,7 +9,7 @@
  * Defaults to 'A' when:
  *   - the settings row is null/undefined
  *   - the JSONB is missing the source_type key
- *   - the configured value is not a single uppercase letter A–Z
+ *   - the configured value is not a single uppercase letter A-Z
  *
  * These functions are pure; no I/O. Engine call-sites read the settings row
  * once and pass it in.
@@ -41,7 +41,7 @@ export function resolveDefaultSeriesForSource(
   if (!settings) return 'A'
 
   // Accept both the full settings row and a bare map. Both shapes are
-  // narrowed via duck-typing on the column key — when present, treat it as
+  // narrowed via duck-typing on the column key: when present, treat it as
   // the settings row; otherwise treat the argument itself as the map.
   const raw = settings as {
     default_voucher_series_per_source_type?: VoucherSeriesMap | null
@@ -68,7 +68,7 @@ export function resolveDefaultSeriesForSource(
  *
  * The booking engine resolves series from the per-source-type map, not from the
  * global default, so the bookkeeping settings form calls this when the user
- * changes the "Standardserie" dropdown — otherwise that control would be a
+ * changes the "Standardserie" dropdown, otherwise that control would be a
  * no-op for bookkeeping. Pure; returns the next map (input is not mutated).
  */
 export function applyDefaultSeriesToMap(
@@ -84,7 +84,7 @@ export function applyDefaultSeriesToMap(
 }
 
 /**
- * Format a voucher (series + number) for UI display. Returns "—" when the
+ * Format a voucher (series + number) for UI display. Returns "-" when the
  * voucher number is null (e.g. a draft entry that has not been committed yet).
  *
  * Always lifts the series to uppercase. Falls back to 'A' when the series is
@@ -96,7 +96,7 @@ export function formatVoucher(entry: {
   voucher_number?: number | null
 }): string {
   if (entry.voucher_number == null || entry.voucher_number === 0) {
-    return '—'
+    return '-'
   }
   const series =
     entry.voucher_series && typeof entry.voucher_series === 'string'

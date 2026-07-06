@@ -21,7 +21,7 @@ describe('normalizeOrgNumber', () => {
 
   it('rejects Luhn-invalid org numbers (blocks garbage at the boundary)', () => {
     // 5560125791 has the last digit flipped from the real Volvo number
-    // 5560125790 — Luhn check fails.
+    // 5560125790: Luhn check fails.
     expect(normalizeOrgNumber('5560125791')).toBeNull()
     expect(normalizeOrgNumber('556012-5791')).toBeNull()
     // Typo: swapping adjacent digits in the payload breaks the Luhn check.

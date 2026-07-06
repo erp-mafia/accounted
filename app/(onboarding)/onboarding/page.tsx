@@ -9,12 +9,12 @@ export const dynamic = 'force-dynamic'
 
 // Look up the user's CompanyRoles enrichment (from BankID auth) and find the
 // role whose orgnr matches the incoming `?org_number=`. CompanyRoles lives on
-// the TIC Identity API — separate product, separate quota from the Lens
-// `/lookup` endpoint — so this is free: no Lens calls.
+// the TIC Identity API (separate product, separate quota from the Lens
+// `/lookup` endpoint) so this is free: no Lens calls.
 //
 // Returns enough to pre-fill Step 1's entity-type radio + Step 2's
 // company_name field. The rest (address, F-skatt, VAT) is captured by the
-// user in Steps 2–4. F-skatt/VAT defaults can't be safely guessed without
+// user in Steps 2-4. F-skatt/VAT defaults can't be safely guessed without
 // Bolagsverket data (ML 17 kap 24§ violation if we default a momsregistrerat
 // bolag to false), so we make the user confirm in Step 4.
 //
@@ -91,7 +91,7 @@ export default async function OnboardingPage({
 
   // BankID prefill: look up the CompanyRoles row (no Lens call) to pre-fill
   // Step 1's entity_type radio and Step 2's company_name. If no role matches,
-  // the user fills everything manually — same fallback as a non-BankID
+  // the user fills everything manually: same fallback as a non-BankID
   // signup. `preverifiedOrgNumber` tells Step 2 to skip the client-side
   // /lookup since CompanyRoles already confirms existence.
   let initialEntityType: EntityType | undefined

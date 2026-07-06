@@ -6,9 +6,9 @@ export interface ARReconciliationResult {
   ar_ledger_total: number
   /**
    * Sum of posted balances on accounts 1510 (Kundfordringar) and 1513
-   * (Kundfordringar – delad faktura). 1513 covers the Skatteverket portion
+   * (Kundfordringar: delad faktura). 1513 covers the Skatteverket portion
    * of ROT/RUT fakturamodellen invoices and is zero today (no fakturamodellen
-   * postings yet) — included for forward compatibility.
+   * postings yet): included for forward compatibility.
    */
   account_1510_balance: number
   difference: number
@@ -30,7 +30,7 @@ export interface ARReconciliationResult {
  * which matches what was originally posted to 1510. This means the report will
  * diverge from the GL once partial payments settle at a different rate (the
  * delta is correctly booked as valutakursvinst/-förlust to 3960/7960 per
- * ML 8 kap 21–23 §). A subledger-derived total would reconcile through that
+ * ML 8 kap 21-23 §). A subledger-derived total would reconcile through that
  * difference; deferred to a follow-up.
  */
 export async function generateARReconciliation(
@@ -64,7 +64,7 @@ export async function generateARReconciliation(
     .reduce((sum, inv) => {
       const isFx = inv.currency && inv.currency !== 'SEK'
       const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      // Skip unconvertible FX rows from the sum — adding raw foreign amounts
+      // Skip unconvertible FX rows from the sum: adding raw foreign amounts
       // to a SEK total is arithmetically unsound. Counted instead.
       if (isFx && !hasRate) {
         unconvertedFxCount += 1
@@ -76,13 +76,13 @@ export async function generateARReconciliation(
     }, 0)
 
   // Get AR receivable balance from the ledger in this period. We sum 1510
-  // (Kundfordringar) AND 1513 (Kundfordringar – delad faktura) so the comparison
+  // (Kundfordringar) AND 1513 (Kundfordringar: delad faktura) so the comparison
   // stays correct under ROT/RUT fakturamodellen, where the customer portion sits
-  // on 1510 and the Skatteverket claim on 1513 — both are open AR receivable
+  // on 1510 and the Skatteverket claim on 1513: both are open AR receivable
   // from the company's perspective. 1513 is zero today (no fakturamodellen
   // postings yet) so this is a forward-looking defense.
   //
-  // We count posted AND reversed entries together — the SAME inclusion rule the
+  // We count posted AND reversed entries together: the SAME inclusion rule the
   // trial balance / balance sheet use. A corrected invoice flips its original to
   // status='reversed'; that reversed leg is cancelled by the posted storno, so
   // both must be summed or a corrected invoice manufactures a phantom gap.
@@ -128,7 +128,7 @@ export async function generateARReconciliation(
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is
     // incomplete by construction and we cannot honestly stamp the period
-    // Avstämd — the user must fix the underlying data first.
+    // Avstämd: the user must fix the underlying data first.
     is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
     unconverted_fx_count: unconvertedFxCount,
   }

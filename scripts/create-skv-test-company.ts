@@ -129,7 +129,7 @@ async function main() {
   console.log(`org_number (10-digit):     ${TEST_ORG_NUMBER}`)
   console.log(`SKV redovisare (12-digit): 16${TEST_ORG_NUMBER}`)
   console.log(`Previous active_company_id: ${previousActive ?? '(none)'}`)
-  console.log(`\nNext step — seed VAT fixtures for SKV's pre-wired periods:`)
+  console.log(`\nNext step: seed VAT fixtures for SKV's pre-wired periods:`)
   console.log(`  npx tsx scripts/seed-skv-test-data.ts ${companyId} 2024 1`)
   console.log(`  npx tsx scripts/seed-skv-test-data.ts ${companyId} 2024 2`)
   console.log(`\nWhen done testing, switch back via the UI's company switcher,`)

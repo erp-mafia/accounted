@@ -77,7 +77,7 @@ export default function JournalEntryAttachments({
   const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([])
 
   // Docs listed here are filtered by journal_entry_id, so every row is bound
-  // to a verifikation — BFL 7 kap 2§ blocks deletion. "Ta bort" therefore
+  // to a verifikation: BFL 7 kap 2§ blocks deletion. "Ta bort" therefore
   // surfaces the educational modal; "Ersätt" goes through createNewVersion()
   // so the original stays in the version chain.
   const [blockedDoc, setBlockedDoc] = useState<DocumentRecord | null>(null)
@@ -97,7 +97,7 @@ export default function JournalEntryAttachments({
       setDocuments(data || [])
       onCountChangeRef.current?.(data?.length || 0)
     } catch {
-      // Non-critical — silently ignore
+      // Non-critical: silently ignore
     } finally {
       setLoading(false)
     }
@@ -126,7 +126,7 @@ export default function JournalEntryAttachments({
         window.open(data.download_url, '_blank')
       }
     } catch {
-      // Non-critical — silently ignore
+      // Non-critical: silently ignore
     }
   }
 

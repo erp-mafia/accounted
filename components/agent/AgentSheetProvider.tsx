@@ -23,7 +23,7 @@ export interface AgentIdentity {
 
 export interface OpenAgentSheetArgs {
   intentId: string
-  // Intent-specific args passed to the server's intent.capture() — e.g.
+  // Intent-specific args passed to the server's intent.capture(), e.g.
   // { transaction_id: '...' } for transaction.categorization.
   intentArgs?: Record<string, unknown>
   // Optional ref persisted on agent_conversations.context_ref so the UI can
@@ -38,8 +38,21 @@ export interface OpenAgentSheetArgs {
 interface AgentSheetContextValue {
   openAgentSheet: (args: OpenAgentSheetArgs) => void
   closeAgentSheet: () => void
+  // Collapse hides the sheet WITHOUT unmounting it, so the in-memory
+  // conversation (messages, streaming, pending approval cards) survives: the
+  // floating trigger re-expands the same session. Distinct from close, which
+  // ends the session entirely.
+  collapseAgentSheet: () => void
+  expandAgentSheet: () => void
+  // Discard the current thread and start a fresh conversation on the same
+  // intent (the header "Ny konversation" control). Implemented by remounting
+  // the sheet via a nonce in its key.
+  restartAgentSheet: () => void
+  // True while a session exists (open or collapsed).
   isOpen: boolean
-  // Agent name + avatar — set once from the server-loaded agent_profile
+  // True while a session exists but is minimized off-screen.
+  collapsed: boolean
+  // Agent name + avatar: set once from the server-loaded agent_profile
   // and exposed through context so the trigger / chat headers can render
   // them without their own fetches. Null when the user hasn't verified a
   // profile yet (free tier or pre-onboarding).
@@ -55,26 +68,56 @@ interface AgentSheetProviderProps {
 
 export function AgentSheetProvider({ children, identity }: AgentSheetProviderProps) {
   const [activeArgs, setActiveArgs] = useState<OpenAgentSheetArgs | null>(null)
+  // Collapsed = session alive but hidden. Kept separate from activeArgs so
+  // collapsing never unmounts AgentChat (which would wipe the conversation).
+  const [collapsed, setCollapsed] = useState(false)
+  // Bumped by restartAgentSheet to force a fresh AgentChat mount (a new thread)
+  // on the same intent, without closing the sheet.
+  const [restartNonce, setRestartNonce] = useState(0)
 
   const openAgentSheet = useCallback((args: OpenAgentSheetArgs) => {
     setActiveArgs(args)
+    setCollapsed(false)
   }, [])
 
   const closeAgentSheet = useCallback(() => {
     setActiveArgs(null)
+    setCollapsed(false)
   }, [])
 
-  const resolvedIdentity: AgentIdentity =
-    identity ?? { displayName: null, avatarId: null, isVerified: false }
+  const collapseAgentSheet = useCallback(() => setCollapsed(true), [])
+  const expandAgentSheet = useCallback(() => setCollapsed(false), [])
+  const restartAgentSheet = useCallback(() => {
+    setRestartNonce((n) => n + 1)
+    setCollapsed(false)
+  }, [])
+
+  const resolvedIdentity = useMemo<AgentIdentity>(
+    () => identity ?? { displayName: null, avatarId: null, isVerified: false },
+    [identity],
+  )
 
   const value = useMemo<AgentSheetContextValue>(
     () => ({
       openAgentSheet,
       closeAgentSheet,
+      collapseAgentSheet,
+      expandAgentSheet,
+      restartAgentSheet,
       isOpen: activeArgs !== null,
+      collapsed,
       identity: resolvedIdentity,
     }),
-    [openAgentSheet, closeAgentSheet, activeArgs, resolvedIdentity],
+    [
+      openAgentSheet,
+      closeAgentSheet,
+      collapseAgentSheet,
+      expandAgentSheet,
+      restartAgentSheet,
+      activeArgs,
+      collapsed,
+      resolvedIdentity,
+    ],
   )
 
   return (
@@ -82,11 +125,14 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       {children}
       {activeArgs && (
         <AgentSheet
-          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${activeArgs.seedUserMessage ?? ''}`}
+          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${activeArgs.seedUserMessage ?? ''}:${restartNonce}`}
           intentId={activeArgs.intentId}
           intentArgs={activeArgs.intentArgs}
           contextRef={activeArgs.contextRef}
           seedUserMessage={activeArgs.seedUserMessage}
+          collapsed={collapsed}
+          onCollapse={collapseAgentSheet}
+          onRestart={restartAgentSheet}
           onClose={closeAgentSheet}
         />
       )}

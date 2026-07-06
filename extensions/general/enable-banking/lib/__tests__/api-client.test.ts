@@ -40,7 +40,7 @@ describe('api-client', () => {
     it('aborts fetch after timeout', async () => {
       fetchSpy.mockImplementation(
         () => new Promise((_, reject) => {
-          // Simulate a hanging request — the AbortController will fire
+          // Simulate a hanging request: the AbortController will fire
           setTimeout(() => reject(new DOMException('Aborted', 'AbortError')), 100)
         })
       )
@@ -305,7 +305,7 @@ describe('api-client', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      // Fresh Response per call — a body can only be read once.
+      // Fresh Response per call: a body can only be read once.
       fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
 
       await expect(
@@ -321,7 +321,7 @@ describe('api-client', () => {
   })
 
   // -------------------------------------------------------------------------
-  // getAllTransactions — same first-page fallbacks via the paginated path
+  // getAllTransactions: same first-page fallbacks via the paginated path
   // -------------------------------------------------------------------------
   describe('getAllTransactions fallbacks', () => {
     const ASPSP_ERROR_BODY =
@@ -390,7 +390,7 @@ describe('api-client', () => {
         ) // page 1 ok, hands back a continuation_key
         .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // page 2 fails
 
-      // A continuation_key is scoped to its window, so page 2 must not narrow —
+      // A continuation_key is scoped to its window, so page 2 must not narrow:
       // it fails fast instead.
       await expect(
         getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
@@ -424,7 +424,7 @@ describe('JWT cache', () => {
       _resetTokenCache: vi.fn(),
     }))
 
-    // The actual cache test is in jwt.ts — we verify the cache function exists
+    // The actual cache test is in jwt.ts: we verify the cache function exists
     const jwt = await import('../jwt')
     expect(typeof jwt._resetTokenCache).toBe('function')
   })

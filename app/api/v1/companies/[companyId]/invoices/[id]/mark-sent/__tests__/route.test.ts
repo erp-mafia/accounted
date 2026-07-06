@@ -27,7 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
-// Stub the F-series allocator — the route's flow is what we're testing.
+// Stub the F-series allocator: the route's flow is what we're testing.
 vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
   ensureInvoiceNumber: vi.fn().mockResolvedValue(undefined),
 }))

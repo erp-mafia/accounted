@@ -144,12 +144,12 @@ describe('formatVoucher', () => {
     expect(formatVoucher({ voucher_series: 'B', voucher_number: 12 })).toBe('B12')
   })
 
-  it('returns em dash for null voucher_number', () => {
-    expect(formatVoucher({ voucher_series: 'A', voucher_number: null })).toBe('—')
+  it('returns hyphen for null voucher_number', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: null })).toBe('-')
   })
 
-  it('returns em dash for voucher_number 0 (uncommitted draft placeholder)', () => {
-    expect(formatVoucher({ voucher_series: 'A', voucher_number: 0 })).toBe('—')
+  it('returns hyphen for voucher_number 0 (uncommitted draft placeholder)', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 0 })).toBe('-')
   })
 
   it('falls back to series A when series is null', () => {
@@ -178,7 +178,7 @@ describe('parseVoucher', () => {
 
   it('returns null for malformed input', () => {
     expect(parseVoucher('')).toBeNull()
-    expect(parseVoucher('—')).toBeNull()
+    expect(parseVoucher('-')).toBeNull()
     expect(parseVoucher('123')).toBeNull()
     expect(parseVoucher('AA1')).toBeNull()
     expect(parseVoucher('A0')).toBeNull()

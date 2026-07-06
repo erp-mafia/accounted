@@ -23,7 +23,7 @@ export async function getClient(): Promise<PoolClient> {
 
 // Run `fn` inside a role/JWT context that auth.uid() / user_company_ids() will
 // observe. Uses SET LOCAL inside a transaction so the role reverts on commit
-// or rollback. Always rolls back so the test's writes do not persist — tests
+// or rollback. Always rolls back so the test's writes do not persist: tests
 // that need to seed data must do that on the superuser connection first.
 export async function withUserContext<T>(
   userId: string,
@@ -34,7 +34,7 @@ export async function withUserContext<T>(
     await client.query('BEGIN')
     // Set JWT claims BEFORE switching role: non-superuser set_config on a
     // namespaced GUC is fine, but keeping order explicit avoids surprises.
-    // Set both the whole-claims object and the individual `sub` claim —
+    // Set both the whole-claims object and the individual `sub` claim:
     // different versions of Supabase's auth.uid() read one or the other.
     await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
       JSON.stringify({ sub: userId, role: 'authenticated' }),
@@ -42,7 +42,7 @@ export async function withUserContext<T>(
     await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
     await client.query(`SET LOCAL ROLE authenticated`)
     // Fail loudly and early if the JWT context did not land the way we
-    // expect — otherwise RLS policies return empty and the real test
+    // expect: otherwise RLS policies return empty and the real test
     // failure points at an unrelated assertion.
     const authCheck = await client.query<{ uid: string | null }>(
       `SELECT auth.uid()::text AS uid`,

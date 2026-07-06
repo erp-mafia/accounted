@@ -98,7 +98,7 @@ export default function OpeningBalanceUploadStep({
                 </Button>
               </label>
               <p className="text-xs text-muted-foreground mt-3">
-                XLSX, XLS, CSV, ODS — max 10 MB
+                XLSX, XLS, CSV, ODS: max 10 MB
               </p>
             </>
           )}
@@ -119,7 +119,7 @@ export default function OpeningBalanceUploadStep({
             <p className="font-medium text-foreground">Filformat</p>
             <p>
               Filen bör ha en rubrikrad med kolumner för kontonummer och belopp.
-              Vanliga format stöds automatiskt — t.ex. kolumner som heter &quot;Konto&quot;,
+              Vanliga format stöds automatiskt: t.ex. kolumner som heter &quot;Konto&quot;,
               &quot;Debet&quot;, &quot;Kredit&quot; eller &quot;Saldo&quot;.
             </p>
           </div>

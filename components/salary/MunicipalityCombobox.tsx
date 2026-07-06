@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 
 export interface KommunRate {
@@ -15,7 +16,7 @@ interface MunicipalityComboboxProps {
   onSelect: (kommun: string, tableNumber: number, totalRate: number) => void
   /** Fired on free-text edits that don't match a known municipality. */
   onChange?: (kommun: string) => void
-  /** Income year — drives which year's municipal rates are fetched. */
+  /** Income year: drives which year's municipal rates are fetched. */
   year: number
   disabled?: boolean
   id?: string
@@ -38,6 +39,7 @@ export default function MunicipalityCombobox({
   id,
   className,
 }: MunicipalityComboboxProps) {
+  const t = useTranslations('salary_employee')
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -154,7 +156,7 @@ export default function MunicipalityCombobox({
         onChange={handleInputChange}
         onFocus={() => setIsOpen(true)}
         onKeyDown={handleKeyDown}
-        placeholder="Sök kommun…"
+        placeholder={t('kommun_search_placeholder')}
         autoComplete="off"
         disabled={disabled}
         className={className}
@@ -183,7 +185,7 @@ export default function MunicipalityCombobox({
               >
                 <span className="min-w-0 break-words">{k.kommun}</span>
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  Tabell {k.tableNumber}
+                  {t('kommun_table_number', { number: k.tableNumber })}
                 </span>
               </button>
             )
@@ -193,7 +195,7 @@ export default function MunicipalityCombobox({
 
       {loadFailed && (
         <p className="mt-1 text-xs text-muted-foreground">
-          Kunde inte hämta kommunlistan — skriv kommunnamnet och ange skattetabellen manuellt.
+          {t('kommun_load_failed')}
         </p>
       )}
     </div>

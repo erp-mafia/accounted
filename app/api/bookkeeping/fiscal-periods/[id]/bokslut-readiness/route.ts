@@ -4,7 +4,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildBokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 
 /**
- * GET: aggregated bokslut readiness report — combines validateYearEndReadiness
+ * GET: aggregated bokslut readiness report: combines validateYearEndReadiness
  * (legal blockers) with bank-reconciliation status and informational reminders
  * for the bokslutsdispositioner that are still booked manually until Phase 2+
  * ships their calculators. One fetch backs the wizard's preflight step.

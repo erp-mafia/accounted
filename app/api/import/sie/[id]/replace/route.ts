@@ -3,6 +3,11 @@ import { replaceSIEImport } from '@/lib/import/sie-import'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
+// Hard-deleting a large import (thousands of audit-logged journal entries +
+// cascading lines) can take well over the default function timeout. Match the
+// SIE execute route so the serverless function doesn't kill the request first.
+export const maxDuration = 300
+
 /**
  * POST /api/import/sie/[id]/replace
  *

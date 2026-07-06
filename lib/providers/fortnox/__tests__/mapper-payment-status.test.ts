@@ -5,7 +5,7 @@ import { mapFortnoxToSupplierInvoice, mapFortnoxToSalesInvoice } from '../mapper
  * Guards the paid-status hardening: deriveInvoiceStatus and paymentStatus.paid
  * share one isFullyPaid() source of truth, so status === 'paid' iff
  * paymentStatus.paid (for non-cancelled / non-credit rows). An ABSENT Balance
- * must never be read as paid — on either the supplier OR the sales path.
+ * must never be read as paid: on either the supplier OR the sales path.
  */
 
 function supplierRaw(over: Record<string, unknown>): Record<string, unknown> {
@@ -32,7 +32,7 @@ function salesRaw(over: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
-describe('Fortnox mapper — paid-status consistency', () => {
+describe('Fortnox mapper: paid-status consistency', () => {
   it('supplier: absent Balance is NOT paid (defaults to unpaid, not 0)', () => {
     const dto = mapFortnoxToSupplierInvoice(supplierRaw({})) // no Balance key
     expect(dto.status).toBe('booked')

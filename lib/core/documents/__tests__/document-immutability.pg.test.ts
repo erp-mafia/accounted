@@ -11,15 +11,15 @@ import {
 } from '@/tests/pg/fixtures'
 
 // BFL retention is enforced by two independent triggers on document_attachments:
-//   * enforce_document_journal_entry_immutability (20260506130000) — blocks
+//   * enforce_document_journal_entry_immutability (20260506130000): blocks
 //     any change to journal_entry_id once it has been set, regardless of the
 //     linked entry's status. Honors gnubok.allow_delete (20260506140000).
-//   * enforce_document_metadata_immutability (extended in 20260506120000) —
+//   * enforce_document_metadata_immutability (extended in 20260506120000):
 //     blocks metadata changes and journal_entry_line_id changes when the
 //     linked entry is posted/reversed. Also honors gnubok.allow_delete.
 //
-// Both wordings — "BFL 5 kap" (entry trigger) and "BFL 7 kap" (metadata
-// trigger) — are accepted; which one fires first depends on what column the
+// Both wordings: "BFL 5 kap" (entry trigger) and "BFL 7 kap" (metadata
+// trigger): are accepted; which one fires first depends on what column the
 // UPDATE touches.
 const BFL_RETENTION_ERROR = /BFL [57] kap/i
 
@@ -81,7 +81,7 @@ async function insertEntryAtStatus(params: {
   return entryId
 }
 
-describe('document-immutability.pg — BFL retention bypass guards', () => {
+describe('document-immutability.pg: BFL retention bypass guards', () => {
   it('rejects unlinking (journal_entry_id → NULL) on a doc linked to a posted entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertEntryAtStatus({
@@ -112,7 +112,7 @@ describe('document-immutability.pg — BFL retention bypass guards', () => {
     ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
-  it('rejects unlinking on a doc linked to a draft entry — link is durable from first set', async () => {
+  it('rejects unlinking on a doc linked to a draft entry: link is durable from first set', async () => {
     // The entry-level trigger does not consult journal_entries.status; once
     // journal_entry_id is set on a document, it cannot be cleared. This is
     // stricter than the original branch design and matches main's intent
@@ -149,7 +149,7 @@ describe('document-immutability.pg — BFL retention bypass guards', () => {
     ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
-  it('allows first-time linking (NULL → UUID) — legitimate linkToJournalEntry path', async () => {
+  it('allows first-time linking (NULL → UUID): legitimate linkToJournalEntry path', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
@@ -208,7 +208,7 @@ describe('document-immutability.pg — BFL retention bypass guards', () => {
     ).rejects.toThrow(/Bokföringslagen/i)
   })
 
-  it('respects gnubok.allow_delete bypass — delete_last_voucher RPC keeps working', async () => {
+  it('respects gnubok.allow_delete bypass: delete_last_voucher RPC keeps working', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
@@ -237,11 +237,11 @@ describe('document-immutability.pg — BFL retention bypass guards', () => {
 
 // The supersession flow needs to flip the OLD row from is_current_version=true
 // to false. The metadata-immutability trigger blocks that change for docs
-// linked to posted entries unless the gnubok.allow_supersede GUC is set —
+// linked to posted entries unless the gnubok.allow_supersede GUC is set:
 // which create_document_version sets before its UPDATE. Without this, users
 // have no way to replace a corrupt underlag (e.g. a bad PDF uploaded via the
 // MCP server before magic-byte validation).
-describe('document-immutability.pg — version supersession on posted entries', () => {
+describe('document-immutability.pg: version supersession on posted entries', () => {
   it('allows create_document_version on a doc linked to a posted entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertEntryAtStatus({
@@ -331,7 +331,7 @@ describe('document-immutability.pg — version supersession on posted entries', 
   // check landed, the SECURITY DEFINER function would happily mutate the
   // foreign company's row because the GUC bypass disarmed the immutability
   // trigger. The membership guard inside the function is the only line of
-  // defence — PostgREST exposes the RPC to all authenticated users.
+  // defence: PostgREST exposes the RPC to all authenticated users.
   it('rejects create_document_version when caller is not a member of the document company', async () => {
     const { userId: aliceId, companyId: aliceCompanyId, fiscalPeriodId: aliceFp } =
       await seedCompany()
@@ -370,7 +370,7 @@ describe('document-immutability.pg — version supersession on posted entries', 
 
   // Identity-spoofing attack: caller passes p_user_id ≠ auth.uid(). Allowing
   // this would let any authenticated user manufacture supersession events
-  // attributed to a different user — useful for audit-log forgery even when
+  // attributed to a different user: useful for audit-log forgery even when
   // the supersession itself is legitimate.
   it('rejects create_document_version when p_user_id does not match auth.uid()', async () => {
     const { userId: aliceId, companyId, fiscalPeriodId } = await seedCompany()
@@ -381,7 +381,7 @@ describe('document-immutability.pg — version supersession on posted entries', 
       userId: aliceId, companyId, journalEntryId: entryId,
     })
 
-    // Mallory is also a member of the company — so the membership check
+    // Mallory is also a member of the company: so the membership check
     // alone would not catch a spoofed p_user_id.
     const malloryId = await insertAuthUser()
     await insertCompanyMember({ companyId, userId: malloryId, role: 'member' })

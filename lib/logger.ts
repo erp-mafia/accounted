@@ -4,7 +4,7 @@
  * Emits JSON in production (Vercel logs ingest these), pretty text in dev.
  * Suppresses info/warn in test (preserves existing test-noise contract).
  *
- * Backward-compatible with the legacy `log.error(msg, ...args)` callers — any
+ * Backward-compatible with the legacy `log.error(msg, ...args)` callers: any
  * extra args after the message are merged into the structured payload:
  *   - Error instances become `err: { name, message, stack, code }`
  *   - plain objects merge into the context fields (after PII redaction)

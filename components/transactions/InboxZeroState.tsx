@@ -32,7 +32,7 @@ export default function InboxZeroState({ hasTransactions, onCreateTransaction }:
     )
   }
 
-  // All transactions categorized — inbox zero!
+  // All transactions categorized: inbox zero!
   return (
     <EmptyState icon={Check} title={t('done_title')} description={t('done_description')}>
       <Button asChild variant="outline">

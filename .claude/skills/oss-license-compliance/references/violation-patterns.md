@@ -6,7 +6,7 @@ What developers believe is in the codebase rarely matches what is actually there
 
 ### Hidden licenses and Gist contamination
 
-The default developer assumption — "no LICENSE file means public domain" — is wrong. Licenses appear in:
+The default developer assumption ("no LICENSE file means public domain") is wrong. Licenses appear in:
 
 * Subdirectories rather than the repository root.
 * Top-of-file header comments rather than separate license files.
@@ -24,7 +24,7 @@ All publicly-posted Stack Overflow code is licensed CC BY-SA (Creative Commons A
 * Derivative works must carry the same license.
 * Attribution is required.
 
-In a proprietary codebase, this functions as a copyleft contamination vector. Enterprise audits routinely find that 20–33% of identified license conflicts trace to Stack Overflow snippet pasting.
+In a proprietary codebase, this functions as a copyleft contamination vector. Enterprise audits routinely find that 20-33% of identified license conflicts trace to Stack Overflow snippet pasting.
 
 The scanner's defense is the same: snippet matching against the Stack Overflow code corpus.
 
@@ -71,7 +71,7 @@ The "corresponding source" potentially includes proprietary code that has been c
 
 ### "Internal tool" misclassification
 
-A team treats an AGPL- or SSPL-licensed tool as "internal use only" — exempt from §13 because no external users interact with it. The classification holds **only** if the deployment is genuinely internal:
+A team treats an AGPL- or SSPL-licensed tool as "internal use only": exempt from §13 because no external users interact with it. The classification holds **only** if the deployment is genuinely internal:
 
 * No external customers, partners, or contractors interact with it over a network.
 * The "service" is not exposed via VPN, partner API, or shared infrastructure.
@@ -86,11 +86,11 @@ Orange, a major telecommunications carrier, was ordered to pay **€800,000 in d
 
 Notable features:
 
-* **€150,000 of the award was moral damages** — a French legal concept, but a clear signal that courts treat OSS licensing violations as more than contractual breach.
+* **€150,000 of the award was moral damages**: a French legal concept, but a clear signal that courts treat OSS licensing violations as more than contractual breach.
 * The case originated in 2005 and litigated for nearly two decades. Compliance programs that assume "no one will sue" are betting against a 20-year time horizon.
 * The defendant was a sophisticated commercial entity, not a hobbyist; sophistication did not mitigate liability.
 
-### GitHub Copilot class action (US, 2022–ongoing)
+### GitHub Copilot class action (US, 2022-ongoing)
 
 `DOE 1 et al. v. GitHub, Inc., Microsoft Corporation, OpenAI`, Northern District of California. Plaintiffs allege Copilot reproduces licensed code without preserving attribution or licensing terms. Theories include DMCA §1202 (removal of copyright management information), open-source license breach, and tortious interference.
 
@@ -104,11 +104,11 @@ Older precedent, but the relevant lesson is durable: a vendor that distributes c
 
 These patterns evade purely automated detection. Document them and feed them into agentic review:
 
-* **Renamed and refactored snippets** — sufficient transformation evades fingerprint matching but may still be derivative.
-* **License declared in commit message only** — has no legal force; the file content governs.
-* **License declared in pull-request body** — same; the merged file content governs.
-* **License inferred from project context** — "the rest of this repo is MIT, so this file is too" is not a license. SPDX header per file is the clean answer.
-* **License changed in upstream upstream** — a transitive of a transitive flipped license; the lockfile pin protected you, until the next dependency update.
+* **Renamed and refactored snippets**: sufficient transformation evades fingerprint matching but may still be derivative.
+* **License declared in commit message only**: has no legal force; the file content governs.
+* **License declared in pull-request body**: same; the merged file content governs.
+* **License inferred from project context**: "the rest of this repo is MIT, so this file is too" is not a license. SPDX header per file is the clean answer.
+* **License changed in upstream upstream**: a transitive of a transitive flipped license; the lockfile pin protected you, until the next dependency update.
 
 ## Internal organizational patterns
 

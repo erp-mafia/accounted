@@ -36,11 +36,11 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
     let cancelled = false
     async function load() {
       setIsLoading(true)
-      // Filter out fully-settled invoices defensively — match-invoice should
+      // Filter out fully-settled invoices defensively: match-invoice should
       // flip status to 'paid' on full settlement, but a stale 'sent'/'overdue'
       // row with remaining_amount=0 would otherwise be selectable here and
       // could be matched a second time, double-booking the income.
-      // Also exclude proformas (PF- series) — proforma is not a faktura per
+      // Also exclude proformas (PF- series): proforma is not a faktura per
       // ML 17 kap 24§, has no VAT obligation, and must never be matched
       // against a bank receipt or trigger a verifikation.
       const { data } = await supabase
@@ -57,7 +57,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
 
       // Status-leak guard: if an invoice still says 'sent'/'overdue' but
       // already has a payment voucher attached (manual or system), hide it.
-      // Partially-paid invoices intentionally pass through — they may take
+      // Partially-paid invoices intentionally pass through: they may take
       // more payments. Mirrors the server-side filter in findMatchingInvoices.
       const fullIds = all
         .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')

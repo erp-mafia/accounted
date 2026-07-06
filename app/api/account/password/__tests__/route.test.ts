@@ -131,7 +131,7 @@ describe('POST /api/account/password', () => {
 
       expect(status).toBe(200)
       expect(body.data?.ok).toBe(true)
-      // Did NOT go through the user session — that path would fail with AAL2.
+      // Did NOT go through the user session: that path would fail with AAL2.
       expect(updateUser).not.toHaveBeenCalled()
       // Password set via admin
       expect(passwordSetCall(updateUserById)).toEqual([

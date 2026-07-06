@@ -2,7 +2,7 @@
  * Shared encoding helpers for Skatteverket SRU files.
  *
  * SRU submissions (INFO.SRU + BLANKETTER.SRU) must be ISO 8859-1 (Latin-1),
- * never UTF-8 — Swedish characters (å, ä, ö) corrupt otherwise and Skatteverkets
+ * never UTF-8: Swedish characters (å, ä, ö) corrupt otherwise and Skatteverkets
  * filöverföringstjänst rejects the upload. This is the single most common cause
  * of programmatic SRU validation failure.
  */

@@ -38,7 +38,7 @@ describe('computeJamkningAmount', () => {
   })
 
   it('sold immediately (60 months remaining on 60-month period) → full originalInputVat', () => {
-    // (60 / 60) × 20 000 = 20 000 — the full deduction must be reversed
+    // (60 / 60) × 20 000 = 20 000: the full deduction must be reversed
     const amount = computeJamkningAmount({
       originalInputVat: 20_000,
       totalCorrectionMonths: 60,
@@ -158,7 +158,7 @@ describe('assessJamkningEligibility', () => {
   })
 
   it('falls back to category when account is unrecognized', () => {
-    // No BAS account provided — has to rely on the category signal.
+    // No BAS account provided: has to rely on the category signal.
     const e = assessJamkningEligibility({
       category: 'building',
       acquisitionDate: '2024-01-01',
@@ -192,7 +192,7 @@ describe('assessJamkningEligibility', () => {
   })
 
   it('clamps elapsedMonths to 0 if disposalDate precedes acquisitionDate', () => {
-    // Defensive — should never happen in practice but must not blow up.
+    // Defensive: should never happen in practice but must not blow up.
     const e = assessJamkningEligibility({
       basAssetAccount: '1220',
       category: 'equipment',

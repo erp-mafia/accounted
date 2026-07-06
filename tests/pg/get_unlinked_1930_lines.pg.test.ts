@@ -42,7 +42,7 @@ async function insertPostedJournalEntry(params: {
       params.sourceType,
     ],
   )
-  // Balanced pair on 1930 + 2091 (balanserad vinst/förlust — the realistic
+  // Balanced pair on 1930 + 2091 (balanserad vinst/förlust, the realistic
   // carried-forward counterpart for an IB on a bank account; harmless for the
   // other source_types where the test only cares about the 1930 side).
   await getPool().query(
@@ -55,7 +55,7 @@ async function insertPostedJournalEntry(params: {
   return id
 }
 
-describe('get_unlinked_gl_lines RPC — opening_balance exclusion', () => {
+describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
   it('excludes opening_balance vouchers from the unmatched-1930 set', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -67,9 +67,9 @@ describe('get_unlinked_gl_lines RPC — opening_balance exclusion', () => {
     })
 
     // Three vouchers on 1930, all posted, none linked to a transaction:
-    //   IB voucher (source_type='opening_balance')   — should be EXCLUDED
-    //   Bank import voucher                          — should be RETURNED
-    //   Manual voucher                               — should be RETURNED
+    //   IB voucher (source_type='opening_balance')   : should be EXCLUDED
+    //   Bank import voucher                          : should be RETURNED
+    //   Manual voucher                               : should be RETURNED
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-01-01',
@@ -116,7 +116,7 @@ describe('get_unlinked_gl_lines RPC — opening_balance exclusion', () => {
 
     // A storno and a correction voucher on 1930 (the products of the correctEntry
     // flow), plus a normal bank voucher. Stornos/corrections are book-only
-    // reversals with no bank-feed counterpart — they must be EXCLUDED so a
+    // reversals with no bank-feed counterpart: they must be EXCLUDED so a
     // reconciled period doesn't show them as omatchade verifikationer.
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,

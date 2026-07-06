@@ -129,7 +129,7 @@ describe('POST /api/transactions/create-from-document', () => {
       error: null,
     })
     enqueue({ data: { id: 'new-tx-1' }, error: null }) // insert
-    enqueue({ data: [{ id: VALID_UUID }], error: null }) // inbox update — one row affected
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // inbox update: one row affected
 
     const res = await POST(makeReq(validBody()))
     const { status, body } = await parseJsonResponse<{
@@ -156,7 +156,7 @@ describe('POST /api/transactions/create-from-document', () => {
       error: null,
     })
     enqueue({ data: { id: 'orphan-tx' }, error: null }) // insert succeeds
-    enqueue({ data: [], error: null }) // inbox update affects zero rows — lost the race
+    enqueue({ data: [], error: null }) // inbox update affects zero rows: lost the race
     enqueue({ data: null, error: null }) // rollback delete of the orphan
 
     const res = await POST(makeReq(validBody()))
@@ -208,7 +208,7 @@ describe('POST /api/transactions/create-from-document', () => {
     spy.mockRestore()
   })
 
-  it('tolerates a failed inbox-link update — transaction exists, surface inbox_link_failed', async () => {
+  it('tolerates a failed inbox-link update: transaction exists, surface inbox_link_failed', async () => {
     enqueue({
       data: {
         id: VALID_UUID,

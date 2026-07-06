@@ -7,7 +7,7 @@
 /**
  * Parse a YYYY-MM-DD string into numeric parts without timezone issues.
  * Using new Date(dateStr) is unsafe because it creates UTC midnight,
- * but getDate()/getMonth()/getFullYear() return local-timezone values —
+ * but getDate()/getMonth()/getFullYear() return local-timezone values:
  * shifting the date by -1 day in Western timezones.
  */
 export function parseDateParts(dateStr: string): { year: number; month: number; day: number } {
@@ -17,7 +17,7 @@ export function parseDateParts(dateStr: string): { year: number; month: number; 
 
 /**
  * Calculate the number of months between two dates (inclusive of partial months).
- * Uses year/month arithmetic only — a mid-month start counts the start month fully,
+ * Uses year/month arithmetic only: a mid-month start counts the start month fully,
  * which is conservative for the 18-month cap check.
  */
 export function monthsBetween(start: string, end: string): number {
@@ -44,7 +44,7 @@ export function validatePeriodDuration(start: string, end: string, options?: Val
     return 'Period end must be after period start'
   }
 
-  // start must be 1st of month — unless this is the first fiscal period (BFL 3 kap.)
+  // start must be 1st of month: unless this is the first fiscal period (BFL 3 kap.)
   if (startParts.day !== 1 && !options?.isFirstPeriod) {
     return 'Period start must be the 1st of a month'
   }

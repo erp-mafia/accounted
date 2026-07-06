@@ -14,7 +14,7 @@ import { getPool } from '@/tests/pg/setup'
  * column (created_journal_entry_id / created_supplier_invoice_id). An earlier
  * version of both handlers ALSO wrote `status: 'confirmed'` in that same
  * UPDATE. But migration 20260504180000 tightened the status enum to
- * `CHECK (status IN ('received','error'))` — 'confirmed' is no longer legal.
+ * `CHECK (status IN ('received','error'))`: 'confirmed' is no longer legal.
  *
  * Because the link column and the illegal status were set in ONE atomic
  * UPDATE, Postgres rejected the whole statement. The handler swallowed the
@@ -25,12 +25,12 @@ import { getPool } from '@/tests/pg/setup'
  *
  * The unit suites (voucher-executors.test.ts, create-supplier-invoice-from-
  * inbox.test.ts) mock @/lib/supabase/server, so the CHECK constraint is never
- * exercised — the buggy UPDATE "succeeds" against the mock. Only a real
+ * exercised: the buggy UPDATE "succeeds" against the mock. Only a real
  * Postgres catches it. This test locks the DB-level contract the fix depends
  * on: resolving an inbox row writes ONLY the link column, never `status`.
  */
 
-// status='received', source='upload' — a fresh, unresolved inbox row, exactly
+// status='received', source='upload': a fresh, unresolved inbox row, exactly
 // what an uploaded item looks like before it's booked.
 async function insertInboxItem(params: {
   userId: string
@@ -85,7 +85,7 @@ async function readInbox(
   return res.rows[0]!
 }
 
-describe('invoice_inbox_items status CHECK — root cause', () => {
+describe('invoice_inbox_items status CHECK: root cause', () => {
   it("rejects status='confirmed' (the value the old handlers wrote)", async () => {
     const { userId, companyId } = await seedCompany()
     const inboxId = await insertInboxItem({ userId, companyId })
@@ -122,7 +122,7 @@ describe('commitCreateVoucher inbox link (book-direct kvitto)', () => {
                    AND created_supplier_invoice_id IS NULL
                  RETURNING id`
 
-  it("OLD buggy form (link + status='confirmed') is rejected ATOMICALLY — link never lands", async () => {
+  it("OLD buggy form (link + status='confirmed') is rejected ATOMICALLY: link never lands", async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const inboxId = await insertInboxItem({ userId, companyId })
     const jeId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
@@ -156,7 +156,7 @@ describe('commitCreateVoucher inbox link (book-direct kvitto)', () => {
 
     const row = await readInbox(inboxId)
     expect(row.created_journal_entry_id).toBe(jeId)
-    // status untouched — the link column alone drops the row out of the
+    // status untouched: the link column alone drops the row out of the
     // "needs action" filter (the UI and list_unmatched_documents read it).
     expect(row.status).toBe('received')
   })
@@ -202,12 +202,12 @@ describe('commitCreateVoucher inbox link (book-direct kvitto)', () => {
 })
 
 describe('commitCreateSupplierInvoiceFromInbox inbox link', () => {
-  // Mirrors the WHERE clause at lib/pending-operations/commit.ts:1726 —
+  // Mirrors the WHERE clause at lib/pending-operations/commit.ts:1726:
   // id + company_id only; idempotency is handled by an early-return check
   // upstream, so this UPDATE carries no null guards.
   const WHERE = `WHERE id = $2 AND company_id = $3 RETURNING id`
 
-  it("OLD buggy form (link + status='confirmed') is rejected ATOMICALLY — link never lands", async () => {
+  it("OLD buggy form (link + status='confirmed') is rejected ATOMICALLY: link never lands", async () => {
     const { userId, companyId } = await seedCompany()
     const inboxId = await insertInboxItem({ userId, companyId })
     const supplierInvoiceId = await insertSupplierInvoice({ userId, companyId })

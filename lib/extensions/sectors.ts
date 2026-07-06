@@ -11,7 +11,7 @@ import { WORKSPACES } from './_generated/workspace-map'
 // (controlled by extensions.config.json).
 // ============================================================
 
-/** Sector shells — structural metadata, always available */
+/** Sector shells: structural metadata, always available */
 const SECTOR_SHELLS: Omit<Sector, 'extensions'>[] = [
   {
     slug: 'general',
@@ -48,7 +48,7 @@ export function getExtensionsBySector(slug: SectorSlug): ExtensionDefinition[] {
   return getSector(slug)?.extensions ?? []
 }
 
-/** Extensions with a workspace and a quickAction href — for sidebar nav. */
+/** Extensions with a workspace and a quickAction href, for sidebar nav. */
 export function getExtensionNavItems(): { href: string; label: string; icon: string }[] {
   return getAllExtensions()
     .filter(e => {

@@ -10,16 +10,16 @@ import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
  *
  * Rule, intentionally conservative:
  *   - Equal absolute amount (rounded to öre)
- *   - Opposite signs (a transfer looks like -X on bank, +X on SKV — or
+ *   - Opposite signs (a transfer looks like -X on bank, +X on SKV: or
  *     vice versa for a refund). Same-sign pairs are unrelated cash flows
  *     that happen to share an amount.
  *   - Transaktionsdatum within ±DATE_WINDOW_DAYS of bank.date. Real
- *     settlement is usually 1–3 working days but we widen the window to
+ *     settlement is usually 1-3 working days but we widen the window to
  *     handle weekends and holidays.
  *
  * The function is non-blocking: false positives just mean an extra
  * warning panel the user can ignore. False negatives mean no warning
- * (user might double-book — but the SKV row will still have its own
+ * (user might double-book, but the SKV row will still have its own
  * `match_suggestion` once they book one side, so the dublett-flow has a
  * second chance to fire).
  */
@@ -33,7 +33,7 @@ interface BankCounterpartInput {
   skvRows: ReadonlyArray<
     Pick<StoredSkattekontoTransaction, 'id' | 'transaktionsdatum' | 'belopp_skatteverket'>
   >
-  /** Override for testing — defaults to BANK_SKV_DATE_WINDOW_DAYS. */
+  /** Override for testing: defaults to BANK_SKV_DATE_WINDOW_DAYS. */
   dateWindowDays?: number
 }
 
@@ -47,7 +47,7 @@ function diffDays(a: string, b: string): number {
 
 /**
  * Map each bank tx that has a plausible SKV counterpart to that SKV row's
- * transaktionsdatum. First plausible match wins per bank tx — we don't
+ * transaktionsdatum. First plausible match wins per bank tx: we don't
  * return a ranked list since the UI only renders a single hint per card.
  */
 export function findBankSkvCounterparts({

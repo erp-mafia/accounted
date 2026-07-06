@@ -7,7 +7,7 @@
  *
  * Generalises the existing MCP tools (gnubok_vat_close_check,
  * gnubok_year_end_readiness) under a single response shape. New check types
- * can be added by registering an entry in CHECK_RUNNERS — the response
+ * can be added by registering an entry in CHECK_RUNNERS: the response
  * envelope stays stable so agents only learn one shape.
  *
  * Response shape:
@@ -32,7 +32,7 @@ import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-servic
 // routes can't import from `@/extensions/` (CI guard `core-only.yml`). A
 // follow-up PR will extract that function into `lib/reports/` so it can be
 // re-used from both the MCP tool and this endpoint without violating the
-// extension/core boundary. The CHECK_RUNNERS shape is ready — adding the
+// extension/core boundary. The CHECK_RUNNERS shape is ready: adding the
 // type back is a one-liner once the function is in `lib/`.
 
 // --------------------------------------------------------------------
@@ -158,7 +158,7 @@ async function runVoucherGapsCheck(
     return { error: 'voucher_gaps requires fiscal_period_id (UUID) query param.' }
   }
 
-  // Same ownership pre-check as year_end_readiness — the RPC scopes by
+  // Same ownership pre-check as year_end_readiness: the RPC scopes by
   // company_id but returning a clean error here is better UX.
   const periodCheck = await ownsFiscalPeriod(supabase, companyId, fiscalPeriodId)
   if (!periodCheck) {
@@ -177,7 +177,7 @@ async function runVoucherGapsCheck(
   const findings: FindingShape[] = rows.map((r) => ({
     severity: r.has_explanation ? 'info' : 'blocker',
     code: r.has_explanation ? 'VOUCHER_GAP_EXPLAINED' : 'VOUCHER_GAP_UNEXPLAINED',
-    message: `Series ${r.voucher_series}: gap ${r.gap_start}${r.gap_end > r.gap_start ? `–${r.gap_end}` : ''}${r.has_explanation ? ' (explained)' : ' (no explanation)'}.`,
+    message: `Series ${r.voucher_series}: gap ${r.gap_start}${r.gap_end > r.gap_start ? `-${r.gap_end}` : ''}${r.has_explanation ? ' (explained)' : ' (no explanation)'}.`,
     details: { voucher_series: r.voucher_series, gap_start: r.gap_start, gap_end: r.gap_end, has_explanation: r.has_explanation },
   }))
 
@@ -208,11 +208,11 @@ registerEndpoint({
   useWhen:
     'Before committing to an irreversible action (VAT close, year-end close), or as a periodic audit sweep to surface blockers before they become urgent.',
   doNotUseFor:
-    'Executing the underlying action — this is read-only. After a passing check, call the corresponding async endpoint (POST /fiscal-periods/{id}/year-end, etc).',
+    'Executing the underlying action: this is read-only. After a passing check, call the corresponding async endpoint (POST /fiscal-periods/{id}/year-end, etc).',
   pitfalls: [
     'year_end_readiness and voucher_gaps require fiscal_period_id (UUID).',
-    'A passing check is a SNAPSHOT — the state can change between the check and the action. The same blocker logic runs again on commit.',
-    'vat_close is documented in the plan but NOT yet supported by this endpoint — call gnubok_vat_close_check via the MCP server until the function is extracted into lib/reports/.',
+    'A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.',
+    'vat_close is documented in the plan but NOT yet supported by this endpoint: call gnubok_vat_close_check via the MCP server until the function is extracted into lib/reports/.',
   ],
   example: {
     response: {

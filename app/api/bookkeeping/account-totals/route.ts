@@ -1,59 +1,57 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateQuery } from '@/lib/api/validate'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+// GET /api/bookkeeping/account-totals?from=3000&to=3999[&date_from=..&date_to=..&group_by=month]
+//
+// Sums posted debit/credit per account in an account-number range, optionally
+// bucketed by month. Both the entry list and the per-batch line fetches are
+// paginated — PostgREST caps unpaginated selects at 1000 rows, which would
+// silently under-count totals for companies with large journals.
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+const QuerySchema = z.object({
+  from: z.string().regex(/^\d{4}$/, 'from must be a 4-digit account number'),
+  to: z.string().regex(/^\d{4}$/, 'to must be a 4-digit account number'),
+  date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  group_by: z.enum(['month']).optional(),
+})
 
-  const companyId = await requireCompanyId(supabase, user.id)
+export const GET = withRouteContext('bookkeeping.account_totals', async (request, ctx) => {
+  const { supabase, companyId, log } = ctx
 
-  const { searchParams } = new URL(request.url)
-  const from = searchParams.get('from')
-  const to = searchParams.get('to')
-  const dateFrom = searchParams.get('date_from')
-  const dateTo = searchParams.get('date_to')
-  const groupBy = searchParams.get('group_by')
+  const validated = validateQuery(request, QuerySchema, {
+    log,
+    operation: 'bookkeeping.account_totals',
+  })
+  if (!validated.success) return validated.response
+  const { from, to, date_from: dateFrom, date_to: dateTo, group_by: groupBy } = validated.data
 
-  if (!from || !to) {
-    return NextResponse.json(
-      { error: 'from and to account numbers are required' },
-      { status: 400 }
-    )
-  }
+  // Posted entries in range — paginated (large journals exceed 1000 entries).
+  const entries = await fetchAllRows<{ id: string; entry_date: string }>(({ from: f, to: t }) => {
+    let query = supabase
+      .from('journal_entries')
+      .select('id, entry_date')
+      .eq('company_id', companyId)
+      .eq('status', 'posted')
 
-  // Get posted journal entries within date range
-  let entriesQuery = supabase
-    .from('journal_entries')
-    .select('id, entry_date')
-    .eq('company_id', companyId)
-    .eq('status', 'posted')
+    if (dateFrom) query = query.gte('entry_date', dateFrom)
+    if (dateTo) query = query.lte('entry_date', dateTo)
 
-  if (dateFrom) {
-    entriesQuery = entriesQuery.gte('entry_date', dateFrom)
-  }
-  if (dateTo) {
-    entriesQuery = entriesQuery.lte('entry_date', dateTo)
-  }
+    return query.order('id', { ascending: true }).range(f, t)
+  })
 
-  const { data: entries, error: entriesError } = await entriesQuery
-
-  if (entriesError) {
-    return NextResponse.json({ error: entriesError.message }, { status: 500 })
-  }
-
-  if (!entries || entries.length === 0) {
+  if (entries.length === 0) {
     return NextResponse.json({ totals: [], monthly: groupBy === 'month' ? [] : undefined })
   }
 
   const entryIds = entries.map((e) => e.id)
   const entryDateMap = new Map(entries.map((e) => [e.id, e.entry_date]))
 
-  // Fetch lines in batches to avoid URL length limits
+  // Fetch lines in id-batches to avoid URL length limits; each batch is
+  // itself paginated (200 entries can easily carry >1000 lines).
   const batchSize = 200
   const allLines: Array<{
     journal_entry_id: string
@@ -64,19 +62,22 @@ export async function GET(request: Request) {
 
   for (let i = 0; i < entryIds.length; i += batchSize) {
     const batch = entryIds.slice(i, i + batchSize)
-    const { data: lines, error: linesError } = await supabase
-      .from('journal_entry_lines')
-      .select('journal_entry_id, account_number, debit_amount, credit_amount')
-      .in('journal_entry_id', batch)
-      .gte('account_number', from)
-      .lte('account_number', to)
-
-    if (linesError) {
-      return NextResponse.json({ error: linesError.message }, { status: 500 })
-    }
-    if (lines) {
-      allLines.push(...lines)
-    }
+    const lines = await fetchAllRows<{
+      journal_entry_id: string
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+    }>(({ from: f, to: t }) =>
+      supabase
+        .from('journal_entry_lines')
+        .select('journal_entry_id, account_number, debit_amount, credit_amount')
+        .in('journal_entry_id', batch)
+        .gte('account_number', from)
+        .lte('account_number', to)
+        .order('id', { ascending: true })
+        .range(f, t)
+    )
+    allLines.push(...lines)
   }
 
   // Aggregate by account
@@ -132,4 +133,4 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ totals })
-}
+})

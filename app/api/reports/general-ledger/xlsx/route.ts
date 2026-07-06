@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { requireCompanyId } from '@/lib/company/context'
+import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import {
   reportToWorkbook,
   textColumn,
@@ -54,12 +55,19 @@ export async function GET(request: Request) {
     .eq('company_id', companyId)
     .single()
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
   try {
-    const report = await generateGeneralLedger(supabase, companyId, periodId, accountFrom, accountTo)
+    const report = await generateGeneralLedger(supabase, companyId, periodId, accountFrom, accountTo, {
+      dimensions: dimFilter.dimensions,
+    })
 
     // Flatten accounts + their lines into a single sheet. Each account contributes
     // an opening-balance row, its lines (with running balance), and a closing
-    // row — matching how huvudbok is read in Fortnox/Visma.
+    // row: matching how huvudbok is read in Fortnox/Visma.
     const rows: FlatRow[] = []
     for (const acc of report.accounts) {
       rows.push({
@@ -99,6 +107,24 @@ export async function GET(request: Request) {
       })
     }
 
+    // Partial-view disclosure: a filtered huvudbok starts balance accounts
+    // at zero IB (opening balances cannot be dimension-scoped): the export
+    // must say so or a project-filtered ledger reads as a full one.
+    const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
+    if (disclosure) {
+      rows.unshift({
+        account_number: disclosure,
+        account_name: '',
+        date: null as unknown as Date,
+        voucher: '',
+        description: 'Ingående balanser ingår inte i filtrerad vy',
+        source_type: '',
+        debit: null as unknown as number,
+        credit: null as unknown as number,
+        balance: null as unknown as number,
+      })
+    }
+
     const buffer = reportToWorkbook<FlatRow>([
       {
         name: 'Huvudbok',
@@ -128,7 +154,7 @@ export async function GET(request: Request) {
       },
     ])
 
-    const filename = xlsxFilename('huvudbok', companyRow?.company_name ?? '', report.period.end)
+    const filename = xlsxFilename(`huvudbok${dimensionFilterFileSuffix(dimFilter.dimensions)}`, companyRow?.company_name ?? '', report.period.end)
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

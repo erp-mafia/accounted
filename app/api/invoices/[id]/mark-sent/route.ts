@@ -20,7 +20,7 @@ ensureInitialized()
  *
  * Manually marks a draft invoice as sent (for invoices delivered outside the system).
  * Under faktureringsmetoden (accrual): creates the journal entry (Debit 1510, Credit 30xx/26xx).
- * Under kontantmetoden (cash): no journal entry — booking happens at payment.
+ * Under kontantmetoden (cash): no journal entry; booking happens at payment.
  */
 export async function POST(
   request: Request,
@@ -108,7 +108,7 @@ export async function POST(
         journalEntryId = journalEntry.id
 
         // Periodiserade lines: create schedules + catch-up dissolutions now
-        // that the revenue entry exists. Failures are logged, never fatal —
+        // that the revenue entry exists. Failures are logged, never fatal:
         // the verifikat is committed.
         const accrual = await createSchedulesForCustomerInvoice(
           supabase,
@@ -130,7 +130,7 @@ export async function POST(
           .update({ journal_entry_id: journalEntry.id })
           .eq('id', id)
         if (linkError) {
-          // Don't fail mark-sent — the verifikat committed; only the link
+          // Don't fail mark-sent: the verifikat committed; only the link
           // failed. But log it through the structured logger so it reaches log
           // aggregation/alerting: this write silently no-ops when the
           // journal_entry_id column is missing (it was absent in prod until the
@@ -166,8 +166,8 @@ export async function POST(
       }
 
       // The DB status flip already happened above, but the in-memory `invoice`
-      // is stale and still reads 'draft' — override here so the archived
-      // underlag isn't stamped "UTKAST – inte en giltig faktura".
+      // is stale and still reads 'draft': override here so the archived
+      // underlag isn't stamped "UTKAST: inte en giltig faktura".
       const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         settings as CompanySettings,

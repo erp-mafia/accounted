@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 // `createClient()` returns a fresh object on every call, so we keep the
-// instance creation inside the effect — listing it as a dep would re-fire
+// instance creation inside the effect: listing it as a dep would re-fire
 // the fetch on every render and create an infinite loop.
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,7 +58,7 @@ export default function BankTransactionPicker({
 
     ;(async () => {
       setIsLoading(true)
-      // No strict currency filter — the bank transaction that pays a
+      // No strict currency filter: the bank transaction that pays a
       // foreign-currency invoice is almost always in the company's domestic
       // currency (e.g. SEK bank account paying a USD invoice). The user
       // would see "no matches" if we filtered to the invoice currency.
@@ -91,7 +91,7 @@ export default function BankTransactionPicker({
     const matches = transactions.filter((t) =>
       term === '' ? true : (t.description || '').toLowerCase().includes(term),
     )
-    // Rank by amount proximity only when currencies match — comparing a USD
+    // Rank by amount proximity only when currencies match: comparing a USD
     // target to a SEK transaction numerically would produce a meaningless
     // ranking. Cross-currency rows fall back to date-desc order.
     return matches.sort((a, b) => {

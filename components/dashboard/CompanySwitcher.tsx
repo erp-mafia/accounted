@@ -91,7 +91,7 @@ export default function CompanySwitcher() {
       return
     }
     // Notify every other open tab of the same user so they hard-reload
-    // onto the new company. BroadcastChannel is best-effort — if the
+    // onto the new company. BroadcastChannel is best-effort: if the
     // browser doesn't support it (very old) we still hard-reload
     // ourselves, and other tabs will self-correct via the visibilitychange
     // / pageshow listeners in CompanyTabSync on their next focus event.
@@ -101,10 +101,10 @@ export default function CompanySwitcher() {
         channel.postMessage({ companyId })
         channel.close()
       } catch {
-        // Ignore — hard reload still happens below
+        // Ignore: hard reload still happens below
       }
     }
-    // Hard navigation — tears down React state, router cache, in-flight
+    // Hard navigation: tears down React state, router cache, in-flight
     // fetches, blob URLs, etc. This is the whole point: nothing from the
     // previous company can survive the switch.
     window.location.assign('/')
@@ -113,7 +113,7 @@ export default function CompanySwitcher() {
   // Always allow opening the dropdown (to show "Lägg till företag")
   const hasMultiple = companies.length > 1
 
-  // No companies yet — show a direct "Lägg till företag" link instead of
+  // No companies yet: show a direct "Lägg till företag" link instead of
   // the switcher so the user can still create one. Hidden in sandbox mode.
   if (!company && companies.length === 0) {
     if (isSandbox) return null

@@ -15,11 +15,11 @@ import { calculateVatDeclaration } from './vat-declaration'
  * momsdeklaration Ruta 35/38/39 can never drift. See §1.2 of the plan.
  *
  * Notes:
- *   - Account 3305/3105 (non-EU export) are NOT in this report — they go to
+ *   - Account 3305/3105 (non-EU export) are NOT in this report: they go to
  *     Ruta 36/40 only.
  *   - Trepartshandel (3107) is included so the report works if someone posts
  *     there manually; the invoicing UI doesn't post there today (v2).
- *   - Avropslager codes X/Y/Z are deferred to v2 — the CSV serializer asserts
+ *   - Avropslager codes X/Y/Z are deferred to v2: the CSV serializer asserts
  *     only numeric amounts in v1.
  */
 
@@ -314,7 +314,7 @@ export async function generatePeriodiskSammanstallning(
       })
       blocking = true
     } else {
-      // VAT prefix check — if the raw VAT-number starts with a country code,
+      // VAT prefix check: if the raw VAT-number starts with a country code,
       // it must match the customer.country. Skatteverket uses EL for Greece.
       const rawUpper = rawVat.replace(/\s+/g, '').toUpperCase()
       const prefixMatch = rawUpper.match(/^([A-Z]{2})/)
@@ -363,7 +363,7 @@ export async function generatePeriodiskSammanstallning(
     )
   }
 
-  // Goods-sold-with-quarterly-period — blocking under SFL 35 kap. 2 §.
+  // Goods-sold-with-quarterly-period: blocking under SFL 35 kap. 2 §.
   // Companies selling goods intra-EU must file PS monthly; a quarterly filing
   // is structurally non-compliant and must not be exportable as CSV.
   if (goodsLineSeen && periodType === 'quarterly') {
@@ -384,7 +384,7 @@ export async function generatePeriodiskSammanstallning(
     const triangulation = round(acc.triangulation)
     if (services === 0 && goods === 0 && triangulation === 0) {
       // Emit a warning only if there was actual rörelse (a credit note nets
-      // services back to zero — final values are 0 but we saw activity).
+      // services back to zero: final values are 0 but we saw activity).
       if (acc.sawActivity) {
         warnings.push({
           level: 'warning',

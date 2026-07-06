@@ -69,7 +69,7 @@ interface SkatteverketPanelProps {
   hasData: boolean
   /**
    * Calculated rutor for the current period. Used to run local pre-flight
-   * checks before Skatteverket sees the payload — SKV only validates internal
+   * checks before Skatteverket sees the payload: SKV only validates internal
    * arithmetic consistency, so we have to catch "ruta 30-32 present but
    * 20-24 empty" locally before letting the user submit.
    */
@@ -101,14 +101,14 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   } | null>(null)
 
   // Local sanity checks against the calculated declaration, run before any
-  // SKV call. SKV's "OK" only confirms arithmetic — these checks confirm
+  // SKV call. SKV's "OK" only confirms arithmetic: these checks confirm
   // the declaration looks plausible (no orphaned RC output, no missing
   // basis, no summaMoms drift).
   const localChecks: VatDeclarationCheck[] = rutor ? runVatDeclarationChecks(rutor) : []
   const localErrors = localChecks.filter((c) => c.status === 'ERROR')
   const localBlocked = localErrors.length > 0
 
-  // Per-voucher RC basis gap detection — fetched whenever a RC_BASIS_MISSING
+  // Per-voucher RC basis gap detection: fetched whenever a RC_BASIS_MISSING
   // warning fires so we can show the user exactly which verifikationer are
   // missing the basbelopp pair and offer a one-click correction.
   const hasRcBasisWarning = localChecks.some((c) => c.code === 'RC_BASIS_MISSING')
@@ -180,7 +180,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   /**
    * Apply an API JSON error result. When the error indicates the SKV session
    * has expired/been revoked/lost scope, immediately reflect that in the
-   * local status so the "Förnya session" CTA appears next to the message —
+   * local status so the "Förnya session" CTA appears next to the message:
    * the user shouldn't have to wait for /status to catch up.
    */
   const applyApiError = useCallback((result: { error?: string; code?: string } | null) => {
@@ -229,7 +229,12 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   }, [fetchStatus])
 
   const handleConnect = () => {
-    window.location.href = '/api/extensions/ext/skatteverket/authorize'
+    // return_to brings the user back to the momsdeklaration after the BankID
+    // round-trip; the authorize route's default otherwise lands on the report
+    // library. The callback appends skv_connected/skv_error itself.
+    window.location.href =
+      '/api/extensions/ext/skatteverket/authorize?return_to=' +
+      encodeURIComponent('/reports/vat-declaration')
   }
 
   const handleDisconnect = async () => {
@@ -277,7 +282,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
         setKontroller(controls)
         if (controls.length === 0) {
-          // SKV's OK only confirms arithmetic — it does NOT confirm that the
+          // SKV's OK only confirms arithmetic: it does NOT confirm that the
           // declaration is materially correct. We say so explicitly so the
           // user doesn't read this as a green light for actual filing.
           setSuccess(
@@ -541,7 +546,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
     )
   }
 
-  // Connected — show actions
+  // Connected: show actions
   const hasErrors = kontroller.some(k => k.status === 'ERROR')
   const hasWarnings = kontroller.some(k => k.status === 'WARNING')
 
@@ -554,7 +559,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
             Skicka till Skatteverket
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-success border-success/30 gap-1">
+            <Badge variant="success" className="gap-1">
               <CheckCircle2 className="h-3 w-3" />
               Ansluten
             </Badge>
@@ -593,7 +598,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
           </div>
         )}
 
-        {/* Local pre-flight check results — surfaced separately from SKV's
+        {/* Local pre-flight check results: surfaced separately from SKV's
             kontroller so the user knows these are Accounted's own sanity checks,
             not Skatteverket's. ERRORs block the submit/validate buttons. */}
         {localChecks.length > 0 && (
@@ -624,7 +629,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
           </div>
         )}
 
-        {/* Per-voucher RC basis gaps — concrete list of verifikationer that
+        {/* Per-voucher RC basis gaps: concrete list of verifikationer that
             triggered RC_BASIS_MISSING, with a one-click korrigera action. */}
         {hasRcBasisWarning && (
           <div className="space-y-2">
@@ -671,7 +676,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}{' '}
-                            kr fiktiv moms — saknar basbelopp{' '}
+                            kr fiktiv moms: saknar basbelopp{' '}
                             {gap.expectedBasisAmount.toLocaleString('sv-SE', {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
@@ -690,7 +695,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                               ...prev,
                               [gap.entryId]: {
                                 supplierType: next,
-                                // Non-EU + goods is import VAT, not RC — coerce back
+                                // Non-EU + goods is import VAT, not RC: coerce back
                                 // to service so the user can't submit an invalid combo.
                                 supplyType: next === 'non_eu_business' ? 'service' : sel.supplyType,
                               },
@@ -717,7 +722,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                           disabled={fixingId === gap.entryId}
                         >
                           <option value="service">Tjänst</option>
-                          {/* Non-EU goods is import VAT, not reverse charge — hide the
+                          {/* Non-EU goods is import VAT, not reverse charge: hide the
                               option for that combination so the fix endpoint never
                               has to reject it. */}
                           {sel.supplierType !== 'non_eu_business' && (

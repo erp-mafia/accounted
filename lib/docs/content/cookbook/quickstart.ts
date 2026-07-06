@@ -1,10 +1,10 @@
-export const QUICKSTART_MD = `# Quickstart — send your first invoice
+export const QUICKSTART_MD = `# Quickstart: send your first invoice
 
 > Five minutes from a fresh sandbox to an emailed invoice. Demonstrates the auth, dry-run, idempotency, and audit-block patterns you'll use everywhere.
 
 ## What you'll need
 
-- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data — safe for evals.
+- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data: safe for evals.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
@@ -29,7 +29,7 @@ Save the \`id\` as \`COMPANY_ID\` for the next steps.
 
 ## 2. Create a customer (dry-run first)
 
-Every write supports \`?dry_run=true\` — the response shows the would-be record without committing. Use it in agent test loops to validate inputs before paying the side-effect cost.
+Every write supports \`?dry_run=true\`: the response shows the would-be record without committing. Use it in agent test loops to validate inputs before paying the side-effect cost.
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
@@ -84,7 +84,7 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices" \\
   }'
 \`\`\`
 
-Response includes the auto-allocated invoice number, the computed VAT lines, and the audit block (the verifikation hasn't been posted yet — drafts are not yet räkenskapsinformation):
+Response includes the auto-allocated invoice number, the computed VAT lines, and the audit block (the verifikation hasn't been posted yet: drafts are not yet räkenskapsinformation):
 
 \`\`\`json
 {
@@ -148,23 +148,23 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOI
 
 You created a customer, drafted an invoice with one mixed-VAT line item, posted the verifikation, sent the PDF, and recorded the payment. Five API calls; the engine handled BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering.
 
-The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate) — including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date — ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
+The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate): including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date: ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
 
-The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a Swedish momsregistrerad seller that holds F-skatt registration. The buyer uses this note to determine whether they must withhold preliminary tax (A-skatt) — omitting it can shift liability onto the buyer and triggers a FATAL Peppol BIS 3.0 validation failure (SE-R-005) on B2G invoices. The requirement applies equally to PDF/paper and Peppol/e-invoice formats; B2G is just where the validation is automated. The PDF includes it automatically when \`company_settings.has_f_skatt\` is true. **The integrator is responsible for keeping \`has_f_skatt\` in sync with the company's live Skatteverket registration status.** Update via \`PATCH /api/v1/companies/{companyId}/settings\` or the settings page — a flag that's false while the company is actually F-skatt-registered produces non-compliant invoices, not merely a missing optional note.
+The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a Swedish momsregistrerad seller that holds F-skatt registration. The buyer uses this note to determine whether they must withhold preliminary tax (A-skatt): omitting it can shift liability onto the buyer and triggers a FATAL Peppol BIS 3.0 validation failure (SE-R-005) on B2G invoices. The requirement applies equally to PDF/paper and Peppol/e-invoice formats; B2G is just where the validation is automated. The PDF includes it automatically when \`company_settings.has_f_skatt\` is true. **The integrator is responsible for keeping \`has_f_skatt\` in sync with the company's live Skatteverket registration status.** Update via \`PATCH /api/v1/companies/{companyId}/settings\` or the settings page: a flag that's false while the company is actually F-skatt-registered produces non-compliant invoices, not merely a missing optional note.
 
 The summary fields in the JSON response (\`subtotal\`, \`vat_total\`, \`total\`) are convenience aggregates for the integration; the binding faktura content is the PDF itself.
 
 ## Next steps
 
-- **[Subscribe to invoice events](/docs/api/cookbook/webhooks)** — get notified when invoices are paid via webhooks instead of polling.
-- **[Ingest bank transactions](/docs/api/cookbook/ingest-bank-transactions)** — push CAMT/CSV into the engine and auto-categorise.
-- **[Run a VAT declaration](/docs/api/cookbook/file-vat-declaration)** — compute momsdeklaration rutor and submit to Skatteverket.
-- **[Full Invoices reference](/docs/api/reference/invoices)** — every endpoint, all the optional fields.
+- **[Subscribe to invoice events](/docs/api/cookbook/webhooks)**: get notified when invoices are paid via webhooks instead of polling.
+- **[Ingest bank transactions](/docs/api/cookbook/ingest-bank-transactions)**: push CAMT/CSV into the engine and auto-categorise.
+- **[Run a VAT declaration](/docs/api/cookbook/file-vat-declaration)**: compute momsdeklaration rutor and submit to Skatteverket.
+- **[Full Invoices reference](/docs/api/reference/invoices)**: every endpoint, all the optional fields.
 
 ## Common pitfalls
 
-- **Idempotency keys must be UUIDs.** Calls with non-UUID keys are rejected with \`VALIDATION_ERROR\`. Generate one per logical action and reuse it across retries of that same action — never on a fresh attempt.
-- **Test keys can't email real addresses.** \`gnubok_sk_test_*\` short-circuits external providers — \`/send\` returns success but no email goes out. The PDF is still generated and the voucher posted.
+- **Idempotency keys must be UUIDs.** Calls with non-UUID keys are rejected with \`VALIDATION_ERROR\`. Generate one per logical action and reuse it across retries of that same action: never on a fresh attempt.
+- **Test keys can't email real addresses.** \`gnubok_sk_test_*\` short-circuits external providers: \`/send\` returns success but no email goes out. The PDF is still generated and the voucher posted.
 - **Period locks block writes.** If you try to invoice into a closed period (\`invoice_date\` falls inside a locked fiscal period), the response is \`PERIOD_LOCKED\` (400). Use \`GET /fiscal-periods\` to check before backdating.
 - **VIES VAT validation runs on commit only.** Dry-run skips the external VIES call; the real commit will block on slow VIES responses (we time out after 5s, but that's still 5s added to the request). Pre-validate via \`POST /api/v1/vat/validate\` if you want a fast first pass.
 `

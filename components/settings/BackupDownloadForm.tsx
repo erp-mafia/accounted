@@ -222,7 +222,7 @@ export function BackupDownloadForm() {
                 {periods.length === 0 && <option value="">{t('no_fiscal_years')}</option>}
                 {periods.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.period_start} – {p.period_end}
+                    {p.period_start}: {p.period_end}
                   </option>
                 ))}
               </select>

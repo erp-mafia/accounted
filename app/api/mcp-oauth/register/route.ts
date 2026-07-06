@@ -6,7 +6,7 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 
 /**
- * RFC 7591 — Dynamic Client Registration.
+ * RFC 7591: Dynamic Client Registration.
  *
  * Claude Desktop and self-hosted MCP clients register themselves before
  * starting the auth flow. The redirect URIs they declare are validated
@@ -15,7 +15,7 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
  *
  * Security model:
  *  - Anonymous by design (RFC 7591 §3 allows it); the endpoint does NOT
- *    write to oauth_client_registrations — only owner/admin users can
+ *    write to oauth_client_registrations: only owner/admin users can
  *    insert via /api/settings/oauth-clients. This endpoint just echoes
  *    a client_id back to callers whose redirect_uris are already on the
  *    allowlist.
@@ -26,7 +26,7 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
  */
 
 const REGISTER_RATE_LIMIT = {
-  // 10 attempts per minute per /24 — enough headroom for a developer
+  // 10 attempts per minute per /24: enough headroom for a developer
   // iterating on a custom MCP client, low enough to make enumeration
   // attacks impractical.
   maxRequests: 10,
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
   try {
     allowlistClient = createServiceClientNoCookies()
   } catch {
-    // Env vars missing — built-in patterns still resolve, DB-backed
+    // Env vars missing: built-in patterns still resolve, DB-backed
     // registrations will all return false (fail closed).
     allowlistClient = undefined
   }
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
   for (const uri of redirectUris) {
     if (typeof uri !== 'string' || !(await isAllowedRedirectUri(uri, allowlistClient))) {
       // Single error shape regardless of whether the URI is malformed,
-      // unknown, or revoked — prevents the endpoint being used as an
+      // unknown, or revoked: prevents the endpoint being used as an
       // enumeration oracle for the user-managed allowlist (CC6.6).
       return NextResponse.json(
         { error: 'invalid_redirect_uri', error_description: 'Redirect URI not allowed' },

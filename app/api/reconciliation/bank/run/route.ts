@@ -24,12 +24,12 @@ export async function POST(request: Request) {
 
   const validation = await validateBody(request, RunReconciliationSchema)
   if (!validation.success) return validation.response
-  const { date_from, date_to, account_number, dry_run } = validation.data
+  const { date_from, date_to, account_number, dry_run, selected_matches } = validation.data
 
   const accountNumber = account_number ?? '1930'
 
   // Defense-in-depth: reject a non-default account the company hasn't
-  // registered as a cash account. The default '1930' is exempt — when no
+  // registered as a cash account. The default '1930' is exempt: when no
   // cash_accounts row exists it falls back to currency-only scoping
   // (cashAccountId undefined), so a company reconciling its primary SEK account
   // without a row behaves exactly as before this feature. Matches the status
@@ -55,10 +55,14 @@ export async function POST(request: Request) {
     accountNumber,
     currency,
     cashAccountId: cashAccount?.id as string | undefined,
-    // Only the primary account claims unassigned (NULL cash_account_id) rows —
+    // Only the primary account claims unassigned (NULL cash_account_id) rows:
     // a secondary same-currency account must scope strictly to its own id.
     includeUnassigned: Boolean(cashAccount?.is_primary),
     dryRun: dry_run ?? false,
+    applyOnly: selected_matches?.map((m) => ({
+      transactionId: m.transaction_id,
+      journalEntryId: m.journal_entry_id,
+    })),
   })
 
   return NextResponse.json({

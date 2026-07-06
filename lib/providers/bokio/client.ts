@@ -122,7 +122,7 @@ export class BokioClient {
       `getPage ${relativePath} page=${result.page}/${result.totalPages}: ` +
       `${result.items.length} items (totalCount=${result.totalCount})` +
       (result.items.length === 0 && result.totalCount > 0
-        ? ` — WARNING: 0 items despite totalCount=${result.totalCount}, raw keys: ${Object.keys(response).join(', ')}`
+        ? `; WARNING: 0 items despite totalCount=${result.totalCount}, raw keys: ${Object.keys(response).join(', ')}`
         : ''),
     );
 

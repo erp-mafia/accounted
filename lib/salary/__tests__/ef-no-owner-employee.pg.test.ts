@@ -9,7 +9,7 @@ import { getPool } from '@/tests/pg/setup'
  * or board on payroll (owner compensation is egna uttag, not lön). Ordinary
  * employees stay allowed for every entity type. See #782.
  *
- * Inserts go through getPool() (superuser, bypasses RLS) — this exercises the
+ * Inserts go through getPool() (superuser, bypasses RLS): this exercises the
  * trigger, not tenant isolation.
  */
 
@@ -31,7 +31,7 @@ async function insertEmployee(params: {
   return id
 }
 
-describe('enforce_ef_no_owner_employee.pg — owner/board payroll blocked for EF', () => {
+describe('enforce_ef_no_owner_employee.pg: owner/board payroll blocked for EF', () => {
   it('rejects company_owner for an enskild firma', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId, entityType: 'enskild_firma' })
@@ -79,7 +79,7 @@ describe('enforce_ef_no_owner_employee.pg — owner/board payroll blocked for EF
   })
 })
 
-describe('enforce_ef_no_owner_employee.pg — UPDATE semantics', () => {
+describe('enforce_ef_no_owner_employee.pg: UPDATE semantics', () => {
   it('rejects changing an EF employee to company_owner', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId, entityType: 'enskild_firma' })

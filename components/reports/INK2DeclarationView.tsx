@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Download, AlertCircle, Info } from 'lucide-react'
 import { AccountNumber } from '@/components/ui/account-number'
 import { formatCurrency } from '@/lib/utils'
@@ -133,19 +132,13 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
           {/* Company info */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>
-                  {data.companyInfo.companyName}
-                </CardTitle>
-                <Badge variant="secondary">
-                  {data.fiscalYear.name}
-                </Badge>
-              </div>
-              {data.companyInfo.orgNumber && (
-                <p className="text-sm text-muted-foreground">
-                  Org.nr: {data.companyInfo.orgNumber}
-                </p>
-              )}
+              <CardTitle>
+                {data.companyInfo.companyName}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {data.fiscalYear.name}
+                {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}
+              </p>
             </CardHeader>
           </Card>
 
@@ -248,7 +241,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
           {/* INK2S summary */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">INK2S — Skattemässiga justeringar</CardTitle>
+              <CardTitle className="text-lg">INK2S: Skattemässiga justeringar</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-start gap-2 mb-4 p-3 bg-primary/10 rounded-md">

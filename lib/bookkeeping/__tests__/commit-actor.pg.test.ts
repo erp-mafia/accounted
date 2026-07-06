@@ -37,7 +37,7 @@ async function fetchCommitAudit(entryId: string) {
   return rows
 }
 
-describe('commit_journal_entry — actor attribution (committed_actor_* + audit GUCs)', () => {
+describe('commit_journal_entry: actor attribution (committed_actor_* + audit GUCs)', () => {
   it('stamps committed_actor_* and the COMMIT audit row when actor params are passed', async () => {
     const { companyId, entryId } = await seedDraft()
 
@@ -66,7 +66,7 @@ describe('commit_journal_entry — actor attribution (committed_actor_* + audit 
   it('keeps the pre-attribution behaviour for callers that omit the new params', async () => {
     const { companyId, entryId } = await seedDraft()
 
-    // 2-arg call — the shape deployed code used before the 6-arg migration.
+    // 2-arg call: the shape deployed code used before the 6-arg migration.
     await getPool().query(
       `SELECT voucher_number FROM public.commit_journal_entry($1::uuid, $2::uuid)`,
       [companyId, entryId],
@@ -79,7 +79,7 @@ describe('commit_journal_entry — actor attribution (committed_actor_* + audit 
     )
     expect(rows[0]).toEqual({ committed_actor_type: null, committed_actor_label: null })
 
-    // Audit row falls back to 'user' — the column's previous effective DEFAULT.
+    // Audit row falls back to 'user': the column's previous effective DEFAULT.
     const audit = await fetchCommitAudit(entryId)
     expect(audit).toEqual([{ actor_type: 'user', actor_label: null }])
   })

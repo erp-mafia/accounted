@@ -1,19 +1,19 @@
 name: Scheduled Image Vulnerability Scan
 
 # The build pipeline (docker-publish.yml) builds and publishes the image but
-# does NOT fail on CVEs — it stays green so deploys are deterministic. This
+# does NOT fail on CVEs: it stays green so deploys are deterministic. This
 # workflow is the actual vulnerability gate: it re-scans the published `latest`
 # image and fails (notifying repo admins) plus raises a Security-tab alert on a
 # fixable CRITICAL/HIGH CVE, prompting a dependency or base-image bump.
 #
 # It fires on three triggers:
-#   1. workflow_run — the moment "Build and Push Docker Image" completes, so a
+#   1. workflow_run: the moment "Build and Push Docker Image" completes, so a
 #      freshly published image is gated within the scan's own duration (minutes)
 #      rather than waiting up to 24h for the cron. This is what shrinks the
 #      vulnerable-image exposure window after every publish.
-#   2. schedule (daily) — catches CVEs newly disclosed against an already-
+#   2. schedule (daily): catches CVEs newly disclosed against an already-
 #      published image even when nothing was republished.
-#   3. workflow_dispatch — run on demand from the Actions tab after a patch to
+#   3. workflow_dispatch: run on demand from the Actions tab after a patch to
 #      confirm clean.
 #
 # NOTE: GitHub only runs `schedule` and `workflow_run` triggers from the default
@@ -23,7 +23,7 @@ on:
     workflows: ['Build and Push Docker Image']
     types: [completed]
   schedule:
-    # 06:17 UTC daily — off the hour to dodge cron congestion on GitHub.
+    # 06:17 UTC daily: off the hour to dodge cron congestion on GitHub.
     - cron: '17 6 * * *'
   workflow_dispatch: {}
 
@@ -34,7 +34,7 @@ env:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # workflow_run fires even when the publish FAILED — there's no new image to
+    # workflow_run fires even when the publish FAILED: there's no new image to
     # gate in that case, so skip. schedule/workflow_dispatch carry no
     # workflow_run payload, so the `!= 'workflow_run'` arm lets them through.
     if: >-
@@ -59,7 +59,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          # Block on fixable CRITICAL/HIGH — the same policy the build pipeline
+          # Block on fixable CRITICAL/HIGH: the same policy the build pipeline
           # used to enforce inline. It is safe to block here: a red scheduled
           # run is a "go patch" notification, not a blocked deploy. ignore-unfixed
           # keeps it actionable (only CVEs we can resolve by rebuilding fail).

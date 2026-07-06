@@ -117,7 +117,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Arbetsgivardeklaration (monthly, any employer with employees — AB or EF)
+  // Arbetsgivardeklaration (monthly, any employer with employees: AB or EF)
   // Per Skatteförfarandelagen: every employer paying salary must file AGI monthly.
   // Deadline: 12th of following month (17th in Jan/Aug for turnover ≤40 MSEK per agi-filing.md)
   {
@@ -183,7 +183,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Inkomstdeklaration (AB) — digital filing deadlines per Skatteverket lookup table
+  // Inkomstdeklaration (AB): digital filing deadlines per Skatteverket lookup table
   {
     type: 'inkomstdeklaration_ab',
     titleTemplate: 'Inkomstdeklaration AB {periodLabel}',
@@ -196,10 +196,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
       const fyEndMonth = settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1
 
       // Skatteverket digital filing deadline lookup:
-      // FY end Jan–Apr  → Dec 1 same year as FY end
-      // FY end May–Jun  → Jan 15 year after FY end
-      // FY end Jul–Aug  → Apr 1 year after FY end
-      // FY end Sep–Dec  → Aug 1 year after FY end
+      // FY end Jan-Apr  → Dec 1 same year as FY end
+      // FY end May-Jun  → Jan 15 year after FY end
+      // FY end Jul-Aug  → Apr 1 year after FY end
+      // FY end Sep-Dec  → Aug 1 year after FY end
       const getDeadline = (fyEndYear: number) => {
         if (fyEndMonth >= 1 && fyEndMonth <= 4) {
           return { day: 1, month: 11, year: fyEndYear } // Dec 1
@@ -239,7 +239,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Årsredovisning (AB) — 7 months after fiscal year end per ÅRL 8:3
+  // Årsredovisning (AB): 7 months after fiscal year end per ÅRL 8:3
   {
     type: 'arsredovisning',
     titleTemplate: 'Årsredovisning till Bolagsverket {periodLabel}',

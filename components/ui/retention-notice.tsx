@@ -18,7 +18,7 @@ interface RetentionNoticeProps {
  *
  * Swedish Bokföringslagen (BFL) 7 kap. 2§ requires räkenskapsinformation
  * to be retained for 7 years. Accounted is the system of record, so deleting
- * a company or an account does not remove the underlying data — it only
+ * a company or an account does not remove the underlying data: it only
  * hides it from the UI and anonymizes PII where applicable.
  */
 export function RetentionNotice({ variant, className }: RetentionNoticeProps) {

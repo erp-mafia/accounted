@@ -1,14 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateQuery } from '@/lib/api/validate'
 
 // GET /api/agent/skills
 //
 // Read-only transparency surface for the in-app bookkeeping assistant's domain
-// knowledge ("atoms"). Powers /settings/agent-skills — the companion to
+// knowledge ("atoms"). Powers /settings/agent-skills: the companion to
 // /settings/agent-memory. Memory is what the assistant *learned* about this
 // company (user-editable); skills are the Swedish-accounting expertise it
-// *ships* with — authored in .claude/skills/**/SKILL.md, seeded into
+// *ships* with: authored in .claude/skills/**/SKILL.md, seeded into
 // agent_atom_registry, read-only for users, curated via mcp_exposed.
 //
 // Two shapes off one route:
@@ -19,7 +20,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 //
 // "Active for this company": horizontal atoms are regulatory and shared by
 // every Swedish company, so always active. Vertical/modifier atoms are active
-// only when the composer selected them into this company's agent_profile —
+// only when the composer selected them into this company's agent_profile:
 // others are shown dormant so the user sees both the full library and what's
 // tuned for them. The profile arrays store full ids ("vertical/konsult-it"),
 // matched directly against agent_atom_registry.id (see lib/agent/chat/system-prompt.ts).
@@ -32,27 +33,41 @@ interface AtomMeta {
   active: boolean
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+const QuerySchema = z.object({
+  slug: z.string().min(1).optional(),
+})
 
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
+export const GET = withRouteContext('agent.skills.list', async (request, ctx) => {
+  const { supabase, companyId, log } = ctx
 
-  const url = new URL(request.url)
-  const slug = url.searchParams.get('slug')
+  const validated = validateQuery(request, QuerySchema, {
+    log,
+    operation: 'agent.skills.list',
+  })
+  if (!validated.success) return validated.response
+  const { slug } = validated.data
 
   // Detail: one atom's body, fetched lazily when the user expands a card.
+  // The atom registry is global product content (not tenant data), so no
+  // company filter applies here.
   if (slug) {
     const { data, error } = await supabase
       .from('agent_atom_registry')
       .select('id, title, body, is_active, mcp_exposed')
       .eq('id', slug)
       .maybeSingle()
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) throw error
     if (!data || !data.is_active || !data.mcp_exposed) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json(
+        {
+          error: {
+            code: 'SKILL_NOT_FOUND',
+            message: 'Kunskapen hittades inte.',
+            message_en: 'Skill not found.',
+          },
+        },
+        { status: 404 },
+      )
     }
     return NextResponse.json({ data: { id: data.id, title: data.title, body: data.body ?? '' } })
   }
@@ -66,7 +81,7 @@ export async function GET(request: Request) {
     .is('parent_atom_id', null) // show top-level skills only; reference children are internal
     .order('tier', { ascending: true })
     .order('title', { ascending: true })
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) throw error
 
   const { data: profile } = await supabase
     .from('agent_profiles')
@@ -89,4 +104,4 @@ export async function GET(request: Request) {
   })
 
   return NextResponse.json({ data: result })
-}
+})

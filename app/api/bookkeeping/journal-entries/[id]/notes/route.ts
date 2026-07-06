@@ -1,7 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 
@@ -9,35 +7,35 @@ const UpdateNotesSchema = z.object({
   notes: z.string().max(2000).nullable(),
 })
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+// Notes are annotation metadata alongside the verifikat (not räkenskaps-
+// information) — the immutability trigger governs what may change on posted
+// entries; this route just scopes and validates.
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal_entry.notes',
+  async (request, { supabase, companyId }, { params }) => {
+    const { id } = await params
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const result = await validateBody(request, UpdateNotesSchema)
+    if (!result.success) return result.response
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .update({ notes: result.data.notes })
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .select('id')
+      .maybeSingle()
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
+    // Zero rows = the entry doesn't exist in this company — report it instead
+    // of a phantom success.
+    if (!data) {
+      return NextResponse.json({ error: 'Verifikationen hittades inte.' }, { status: 404 })
+    }
 
-  const result = await validateBody(request, UpdateNotesSchema)
-  if (!result.success) return result.response
-
-  const { error } = await supabase
-    .from('journal_entries')
-    .update({ notes: result.data.notes })
-    .eq('id', id)
-    .eq('company_id', companyId)
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 })
-  }
-
-  return NextResponse.json({ data: { updated: true } })
-}
+    return NextResponse.json({ data: { updated: true } })
+  },
+  { requireWrite: true },
+)

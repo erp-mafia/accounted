@@ -56,7 +56,7 @@ describe('arsredovisning_submissions RLS', () => {
     expect(outsiderRows).toBe(0)
   })
 
-  it('users cannot DELETE submissions (no policy — audit trail)', async () => {
+  it('users cannot DELETE submissions (no policy: audit trail)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const id = await insertSubmission(companyId, userId, fiscalPeriodId)
 

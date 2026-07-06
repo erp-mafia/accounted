@@ -12,7 +12,7 @@ import { parseSIEFile } from '@/lib/import/sie-parser'
 const consentId = process.argv[2]
 if (!consentId) {
   console.error('Usage: npx tsx --env-file=.env --env-file=.env.local scripts/debug-bl-unbalanced.ts <consentId>')
-  console.error('Refusing to run without an explicit consentId — this script reads a live BL company and writes a report.')
+  console.error('Refusing to run without an explicit consentId: this script reads a live BL company and writes a report.')
   process.exit(1)
 }
 

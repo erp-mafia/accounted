@@ -57,7 +57,7 @@ afterEach(() => {
   else process.env.SKATTEVERKET_ENABLED = prevEnv
 })
 
-describe('Skatteverket tools — catalog', () => {
+describe('Skatteverket tools: catalog', () => {
   it('registers all five tools', () => {
     expect(ALL.every(Boolean)).toBe(true)
   })
@@ -78,7 +78,7 @@ describe('Skatteverket tools — catalog', () => {
   })
 })
 
-describe('Skatteverket tools — EXTENSION_DISABLED gate', () => {
+describe('Skatteverket tools: EXTENSION_DISABLED gate', () => {
   it('every tool throws EXTENSION_DISABLED with the env off, making zero SKV calls', async () => {
     delete process.env.SKATTEVERKET_ENABLED
     const { supabase } = createQueuedMockSupabase()
@@ -123,14 +123,14 @@ describe('gnubok_vat_declaration_validate', () => {
     )) as { kontrollresultat: { status: string }; redovisningsperiod: string }
     expect(result.kontrollresultat.status).toBe('OK')
     expect(result.redovisningsperiod).toBe('202503')
-    // Only /kontrollera was called — nothing was saved at SKV.
+    // Only /kontrollera was called: nothing was saved at SKV.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
     expect(mockSkvRequest.mock.calls[0][3]).toMatch(/^\/kontrollera\//)
   })
 })
 
 describe('gnubok_vat_declaration_submit', () => {
-  it('validates via /kontrollera then stages — never touches /utkast', async () => {
+  it('validates via /kontrollera then stages: never touches /utkast', async () => {
     mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 } })
     mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'OK' }) })
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -181,7 +181,7 @@ describe('gnubok_agi_submit', () => {
   })
 })
 
-describe('Skatteverket tools — scopes', () => {
+describe('Skatteverket tools: scopes', () => {
   it('maps the five tools to the right scopes', () => {
     expect(TOOL_SCOPE_MAP.gnubok_vat_declaration_validate).toBe('compliance:read')
     expect(TOOL_SCOPE_MAP.gnubok_vat_declaration_status).toBe('compliance:read')

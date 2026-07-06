@@ -51,7 +51,7 @@ describe('submitProviderToken', () => {
   // ── Consent ownership (IDOR guard) ────────────────────────────────
 
   it('throws ConsentNotFoundError and writes NOTHING when the consent belongs to another company', async () => {
-    // Ownership check finds no row for (consentId, ownerCompanyId) — the same
+    // Ownership check finds no row for (consentId, ownerCompanyId): the same
     // result whether the consent does not exist or belongs to another tenant.
     mock.enqueue({ data: [] })
 
@@ -59,7 +59,7 @@ describe('submitProviderToken', () => {
       submitProviderToken('consent-other-tenant', 'bokio', 'tok', 'bokio-guid', 'company-A'),
     ).rejects.toBeInstanceOf(ConsentNotFoundError)
 
-    // Only the ownership read happened — no token upsert, no consent update.
+    // Only the ownership read happened: no token upsert, no consent update.
     expect(tablesTouched()).toEqual(['provider_consents'])
   })
 
@@ -118,7 +118,7 @@ describe('submitProviderToken', () => {
     ).rejects.toBeInstanceOf(ProviderTokenInvalidError)
 
     // The probe must fail fast: a typo'd key answers 500, which the client's
-    // retry policy treats as retryable — retry is disabled per call.
+    // retry policy treats as retryable: retry is disabled per call.
     expect(mockBlGet).toHaveBeenCalledTimes(1)
     expect(mockBlGet).toHaveBeenCalledWith('bl-app-token', 'user-key-guid', '/details', {
       retry: false,

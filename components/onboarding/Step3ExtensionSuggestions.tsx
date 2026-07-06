@@ -6,9 +6,16 @@ import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { getSector } from '@/lib/extensions/sectors'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
-import CategoryBadge from '@/components/extensions/CategoryBadge'
+import { useTranslations } from 'next-intl'
 import { ArrowRight, Loader2 } from 'lucide-react'
-import type { SectorSlug, ExtensionDefinition } from '@/lib/extensions/types'
+import type { SectorSlug, ExtensionDefinition, ExtensionCategory } from '@/lib/extensions/types'
+
+const CATEGORY_LABEL_KEY: Record<ExtensionCategory, string> = {
+  accounting: 'category_accounting',
+  reports: 'category_reports',
+  import: 'category_import',
+  operations: 'category_operations',
+}
 
 interface Step3Props {
   sectorSlug: string | null
@@ -18,6 +25,7 @@ interface Step3Props {
 }
 
 export default function Step3ExtensionSuggestions({ sectorSlug, onNext, onBack, isSaving }: Step3Props) {
+  const tExt = useTranslations('extensions')
   const generalSector = getSector('general')
   const selectedSector = sectorSlug ? getSector(sectorSlug as SectorSlug) : null
 
@@ -90,7 +98,9 @@ export default function Step3ExtensionSuggestions({ sectorSlug, onNext, onBack, 
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium">{ext.name}</p>
-                        <CategoryBadge category={ext.category} />
+                        <span className="text-[10px] text-muted-foreground">
+                          {tExt(CATEGORY_LABEL_KEY[ext.category])}
+                        </span>
                       </div>
                       <p className="text-xs text-muted-foreground line-clamp-1">{ext.description}</p>
                     </div>

@@ -21,19 +21,19 @@ import {
   Inbox,
   Landmark,
   Loader2,
-  Receipt,
+  ReceiptText,
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 
 /**
- * AttGoraSection — the dashboard's unified worklist ("Att göra").
+ * AttGoraSection: the dashboard's unified worklist ("Att göra").
  *
  * One flat ledger of everything actionable, grouped into three bands by
  * session intent: Bokför (the daily loop), Granska & komplettera (close the
- * gaps), Bevaka (time-driven). Every count comes from lib/worklist — the same
- * source as the sidebar badges — so the numbers can never disagree.
+ * gaps), Bevaka (time-driven). Every count comes from lib/worklist (the same
+ * source as the sidebar badges) so the numbers can never disagree.
  *
  * Suggested transaction↔invoice matches render inline with one-click confirm:
  * the row posts to the existing match endpoints, fades out optimistically,
@@ -113,7 +113,7 @@ export default function AttGoraSection({
         setTotal(json.data.total)
       }
     } catch (err) {
-      // Stale counts self-correct on the next page load — never block the
+      // Stale counts self-correct on the next page load: never block the
       // flow, but keep the failure observable (Sentry captures console.error)
       // so a systematically broken counts endpoint doesn't hide behind
       // silently frozen numbers.
@@ -341,7 +341,7 @@ export default function AttGoraSection({
                     {counts.overdue_invoice > 0 && (
                       <WorklistRow
                         href="/invoices?status=unpaid"
-                        icon={Receipt}
+                        icon={ReceiptText}
                         label={t('row_overdue_invoices')}
                         count={counts.overdue_invoice}
                       />

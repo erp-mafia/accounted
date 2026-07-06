@@ -9,7 +9,7 @@ import type { Customer } from '@/types'
 /**
  * GET /api/export/customers[?format=csv]
  *
- * Downloads the customer register as xlsx (default) or csv. Read-only — viewers
+ * Downloads the customer register as xlsx (default) or csv. Read-only: viewers
  * may export. Headers match the customer importer's detector keywords so files
  * round-trip.
  */

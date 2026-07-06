@@ -9,7 +9,7 @@ ensureInitialized()
 
 /**
  * Preview the journal entries that would be created when booking this salary run.
- * Shows exact BAS accounts and amounts — this is a key differentiator.
+ * Shows exact BAS accounts and amounts: this is a key differentiator.
  */
 export async function GET(
   request: Request,
@@ -40,7 +40,7 @@ export async function GET(
     .eq('salary_run_id', id)
 
   if (!employees || employees.length === 0) {
-    return NextResponse.json({ error: 'Inga beräknade resultat — kör beräkning först' }, { status: 400 })
+    return NextResponse.json({ error: 'Inga beräknade resultat: kör beräkning först' }, { status: 400 })
   }
 
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
@@ -74,7 +74,7 @@ export async function GET(
       account_number: SALARY_ACCOUNTS.TAX_WITHHELD,
       debit_amount: 0,
       credit_amount: Math.round(totalTax * 100) / 100,
-      line_description: `${desc} — Personalskatt`,
+      line_description: `${desc}: Personalskatt`,
     })
   }
 
@@ -84,11 +84,11 @@ export async function GET(
       account_number: SALARY_ACCOUNTS.BANK,
       debit_amount: 0,
       credit_amount: Math.round(totalNet * 100) / 100,
-      line_description: `${desc} — Nettolön`,
+      line_description: `${desc}: Nettolön`,
     })
   }
 
-  // Build avgifter entry preview — skipped for a nollkörning (0 avgifter),
+  // Build avgifter entry preview: skipped for a nollkörning (0 avgifter),
   // mirroring the vacation/pension guards below. The bookkeeping engine never
   // posts an all-zero 7510/2731 voucher (see book/route.ts nollkörning path),
   // so previewing one would falsely imply a verifikat that is never created.
@@ -100,13 +100,13 @@ export async function GET(
           account_number: SALARY_ACCOUNTS.AVGIFTER_EXPENSE,
           debit_amount: roundedAvgifter,
           credit_amount: 0,
-          line_description: `${desc} — Arbetsgivaravgifter`,
+          line_description: `${desc}: Arbetsgivaravgifter`,
         },
         {
           account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
           debit_amount: 0,
           credit_amount: roundedAvgifter,
-          line_description: `${desc} — Arbetsgivaravgifter`,
+          line_description: `${desc}: Arbetsgivaravgifter`,
         },
       ]
     : []
@@ -121,13 +121,13 @@ export async function GET(
         account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_EXPENSE,
         debit_amount: Math.round(totalVacation * 100) / 100,
         credit_amount: 0,
-        line_description: `${desc} — Semesteravsättning`,
+        line_description: `${desc}: Semesteravsättning`,
       },
       {
         account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_LIABILITY,
         debit_amount: 0,
         credit_amount: Math.round(totalVacation * 100) / 100,
-        line_description: `${desc} — Semesteravsättning`,
+        line_description: `${desc}: Semesteravsättning`,
       }
     )
   }
@@ -137,18 +137,18 @@ export async function GET(
         account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_EXPENSE,
         debit_amount: Math.round(totalVacationAvgifter * 100) / 100,
         credit_amount: 0,
-        line_description: `${desc} — Sociala avgifter semester`,
+        line_description: `${desc}: Sociala avgifter semester`,
       },
       {
         account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_LIABILITY,
         debit_amount: 0,
         credit_amount: Math.round(totalVacationAvgifter * 100) / 100,
-        line_description: `${desc} — Sociala avgifter semester`,
+        line_description: `${desc}: Sociala avgifter semester`,
       }
     )
   }
 
-  // Build pension entry preview (löneväxling — per deductions-lonevaxling.md)
+  // Build pension entry preview (löneväxling, per deductions-lonevaxling.md)
   // This would be populated from salary_line_items with type 'gross_deduction_pension'
   // For now, pension preview is shown when pension line items exist
   const pensionLineItems = employees.flatMap(e =>
@@ -162,13 +162,13 @@ export async function GET(
     const slp = Math.round(pensionContribution * 0.2426 * 100) / 100
     if (pensionContribution > 0) {
       pensionLines.push(
-        { account_number: '7410', debit_amount: pensionContribution, credit_amount: 0, line_description: `${desc} — Pensionsförsäkringspremier` },
-        { account_number: '2740', debit_amount: 0, credit_amount: pensionContribution, line_description: `${desc} — Pensionsförsäkringspremier` },
+        { account_number: '7410', debit_amount: pensionContribution, credit_amount: 0, line_description: `${desc}: Pensionsförsäkringspremier` },
+        { account_number: '2740', debit_amount: 0, credit_amount: pensionContribution, line_description: `${desc}: Pensionsförsäkringspremier` },
       )
       if (slp > 0) {
         pensionLines.push(
-          { account_number: '7533', debit_amount: slp, credit_amount: 0, line_description: `${desc} — Särskild löneskatt 24,26%` },
-          { account_number: '2514', debit_amount: 0, credit_amount: slp, line_description: `${desc} — Särskild löneskatt 24,26%` },
+          { account_number: '7533', debit_amount: slp, credit_amount: 0, line_description: `${desc}: Särskild löneskatt 24,26%` },
+          { account_number: '2514', debit_amount: 0, credit_amount: slp, line_description: `${desc}: Särskild löneskatt 24,26%` },
         )
       }
     }
@@ -176,7 +176,7 @@ export async function GET(
 
   return NextResponse.json({
     data: {
-      // Each entry is null when it has no lines — a nollkörning posts nothing,
+      // Each entry is null when it has no lines: a nollkörning posts nothing,
       // so the salary and avgifter entries fall away just like vacation/pension
       // already do, and the UI can simply skip the null ones.
       salaryEntry: salaryLines.length > 0 ? {
@@ -184,15 +184,15 @@ export async function GET(
         lines: salaryLines,
       } : null,
       avgifterEntry: avgifterLines.length > 0 ? {
-        description: `${desc} — Arbetsgivaravgifter`,
+        description: `${desc}: Arbetsgivaravgifter`,
         lines: avgifterLines,
       } : null,
       vacationEntry: vacationLines.length > 0 ? {
-        description: `${desc} — Semesteravsättning`,
+        description: `${desc}: Semesteravsättning`,
         lines: vacationLines,
       } : null,
       pensionEntry: pensionLines.length > 0 ? {
-        description: `${desc} — Pensionsavsättning`,
+        description: `${desc}: Pensionsavsättning`,
         lines: pensionLines,
       } : null,
     },

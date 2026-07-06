@@ -50,7 +50,7 @@ async function main() {
   const posted = entries.filter(e => e.status !== 'draft')
 
   if (posted.length > 0) {
-    console.log(`\n⚠ ${posted.length} entries are status='posted' or 'reversed' — those are immutable per BFL.`)
+    console.log(`\n⚠ ${posted.length} entries are status='posted' or 'reversed': those are immutable per BFL.`)
     console.log('  If you really want to remove them, you have to reverse them first or hard-delete via psql with triggers disabled.')
     console.log('  Skipping those here.')
   }
@@ -60,7 +60,7 @@ async function main() {
     return
   }
 
-  // BFL compliance trigger blocks DELETE on journal_entries — soft-delete via
+  // BFL compliance trigger blocks DELETE on journal_entries: soft-delete via
   // status='cancelled' instead. Cancelled entries are filtered out by the VAT
   // calculator (which only reads 'posted' and 'reversed').
   console.log(`\nMarking ${drafts.length} draft entries as cancelled...`)

@@ -1,5 +1,5 @@
 /**
- * Supplier Invoice Matching — auto-match expense transactions to unpaid supplier invoices.
+ * Supplier Invoice Matching: auto-match expense transactions to unpaid supplier invoices.
  *
  * 4-pass matching algorithm (ordered by confidence):
  * 1. Payment reference/OCR exact match → 0.98
@@ -8,11 +8,11 @@
  * 4. Fuzzy amount (±0.01) + supplier name in description → 0.70
  *
  * Auto-match threshold: ≥0.85 → applied automatically
- * Suggestion threshold: 0.70–0.85 → stored as potential_supplier_invoice_id
+ * Suggestion threshold: 0.70-0.85 → stored as potential_supplier_invoice_id
  *
  * The Pass-3 window spans the whole credit period (issue → due, ±5d) so an
- * early payment — common when a bank pays a Bankgiro the day the invoice lands,
- * weeks before the due date — still auto-matches. To contain the false-positive
+ * early payment: common when a bank pays a Bankgiro the day the invoice lands,
+ * weeks before the due date: still auto-matches. To contain the false-positive
  * risk of the wider window, a Pass-3 hit where more than one invoice matches the
  * same amount in-window is flagged `ambiguous`; callers must downgrade an
  * ambiguous auto-match to a mere suggestion.
@@ -26,7 +26,7 @@ export interface SupplierInvoiceMatch {
   matchMethod: 'payment_reference' | 'amount_bankgiro' | 'amount_date' | 'fuzzy_name'
   /**
    * True when this is a Pass-3 (amount + date-window) match but more than one
-   * invoice matched the same amount in-window — the date heuristic alone can't
+   * invoice matched the same amount in-window: the date heuristic alone can't
    * disambiguate. Callers must treat an ambiguous 0.85 as a suggestion, never an
    * auto-link. Undefined/false for the unique passes (OCR, bankgiro).
    */
@@ -58,7 +58,7 @@ export function findSupplierInvoiceMatch(
 
   let bestMatch: SupplierInvoiceMatch | null = null
   // How many invoices matched the exact amount within their date window. >1
-  // makes a Pass-3 (amount_date) winner ambiguous — the date can't pick between
+  // makes a Pass-3 (amount_date) winner ambiguous: the date can't pick between
   // same-amount invoices, so the caller must not auto-link it.
   let amountDateMatchCount = 0
 
@@ -156,7 +156,7 @@ export function findSupplierInvoiceMatch(
 
   // A Pass-3 winner is only trustworthy enough to auto-link when its amount was
   // unique in-window. If several invoices shared the amount, the date can't
-  // disambiguate — flag it so the caller demotes it to a suggestion.
+  // disambiguate: flag it so the caller demotes it to a suggestion.
   if (bestMatch && bestMatch.matchMethod === 'amount_date' && amountDateMatchCount > 1) {
     bestMatch.ambiguous = true
   }

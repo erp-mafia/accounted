@@ -55,10 +55,12 @@ export default function SupplierDetailPage() {
   }
 
   async function fetchInvoices() {
-    const res = await fetch(`/api/supplier-invoices?status=all`)
+    const res = await fetch(
+      `/api/supplier-invoices?status=all&supplier_id=${encodeURIComponent(String(params.id))}`,
+    )
     const { data } = await res.json()
     if (data) {
-      setInvoices(data.filter((inv: SupplierInvoice) => inv.supplier_id === params.id))
+      setInvoices(data as SupplierInvoice[])
     }
   }
 
@@ -244,7 +246,7 @@ export default function SupplierDetailPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg">{t('invoices_section_title')}</CardTitle>
-          <Link href="/supplier-invoices/new">
+          <Link href="/supplier-invoices?new=1">
             <Button size="sm">
               <FileText className="mr-2 h-4 w-4" />
               {t('new_invoice')}

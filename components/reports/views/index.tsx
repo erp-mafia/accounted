@@ -4,14 +4,24 @@
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronRight, Percent } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -29,12 +39,14 @@ import type {
 } from '@/lib/reports/source-lines'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
+import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import type {
   TrialBalanceRow,
   IncomeStatementReport,
   BalanceSheetReport,
   ResultatrapportReport,
   BalansrapportReport,
+  DimensionPnlReport,
   VatDeclaration,
   VatPeriodType,
 } from '@/types'
@@ -43,10 +55,18 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function reportQuery(periodId: string, range?: DateRangeValue): string {
+function reportQuery(
+  periodId: string,
+  range?: DateRangeValue,
+  dimensionFilter?: DimensionFilterValue | null,
+): string {
   const params = new URLSearchParams({ period_id: periodId })
   if (range?.fromDate) params.set('from_date', range.fromDate)
   if (range?.toDate) params.set('to_date', range.toDate)
+  if (dimensionFilter) {
+    params.set('dim_no', dimensionFilter.dimNo)
+    params.set('dim_code', dimensionFilter.code)
+  }
   return params.toString()
 }
 
@@ -369,13 +389,13 @@ function TrialBalanceDetailedRow({
     </>
   )
 }
-export function IncomeStatementView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+export function IncomeStatementView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
   const [data, setData] = useState<IncomeStatementReport | null>(null)
   const [monthlyData, setMonthlyData] = useState<MonthlyDataPoint[]>([])
   const [monthlyLoading, setMonthlyLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const reportQs = reportQuery(periodId, dateRange)
+  const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
 
   useEffect(() => {
     setLoading(true)
@@ -399,7 +419,9 @@ export function IncomeStatementView({ periodId, dateRange, onNavigateToAccount }
 
     // Monthly breakdown is full-period by design (it IS the per-month view),
     // so the date range only affects the headline numbers above the chart.
-    fetch(`/api/reports/monthly-breakdown?period_id=${periodId}`)
+    // The dimension filter DOES apply: a dimension-scoped view must not
+    // silently chart company-wide months.
+    fetch(`/api/reports/monthly-breakdown?${reportQuery(periodId, undefined, dimensionFilter)}`)
       .then((res) => res.json())
       .then((result) => {
         if (result.data?.months) {
@@ -642,17 +664,22 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
               </div>
             )}
           </div>
+          {!isBalanced && data.imbalance_diagnosis && (
+            <p className="text-sm text-muted-foreground mt-3 pt-3 border-t">
+              {data.imbalance_diagnosis.message}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
   )
 }
 
-export function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+export function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
   const [data, setData] = useState<ResultatrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const reportQs = reportQuery(periodId, dateRange)
+  const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
 
   useEffect(() => {
     setLoading(true)
@@ -748,7 +775,7 @@ export function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }
                         <td className="px-4 py-1.5">{row.account_name}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
-                          {hasPrior ? formatAmount(row.prior_period) : '—'}
+                          {hasPrior ? formatAmount(row.prior_period) : '-'}
                         </td>
                       </tr>
                     ))}
@@ -758,7 +785,7 @@ export function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }
                       </td>
                       <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_current)}</td>
                       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {hasPrior ? formatAmount(group.subtotal_prior) : '—'}
+                        {hasPrior ? formatAmount(group.subtotal_prior) : '-'}
                       </td>
                     </tr>
                   </React.Fragment>
@@ -777,7 +804,7 @@ export function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }
               {formatAmount(data.net_result_current)} kr
             </span>
             <span className="tabular-nums text-base text-muted-foreground w-32 text-right">
-              {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '—'}
+              {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
             </span>
           </div>
         </CardContent>
@@ -926,11 +953,23 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 Balanserar
               </Badge>
             ) : (
-              <Badge variant="destructive" className="text-base px-3 py-1">
-                Balanserar ej
-              </Badge>
+              <div className="text-right">
+                <Badge variant="destructive" className="text-base px-3 py-1">
+                  Balanserar ej
+                </Badge>
+                {data.imbalance_diagnosis && (
+                  <p className="text-sm text-destructive mt-1">
+                    Differens: {formatAmount(Math.abs(data.imbalance_diagnosis.differens))} kr
+                  </p>
+                )}
+              </div>
             )}
           </div>
+          {!data.is_balanced && data.imbalance_diagnosis && (
+            <p className="text-sm text-muted-foreground pt-2 border-t">
+              {data.imbalance_diagnosis.message}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -989,42 +1028,56 @@ function ReportSectionTable({
 // (räkenskapsår); undefined for monthly/quarterly (calendar periods).
 const VatDrillContext = React.createContext<{ fiscalPeriodId?: string }>({})
 
-export function VatDeclarationView({
-  fiscalPeriodId,
-  fiscalPeriodBounds,
-}: {
-  fiscalPeriodId?: string
-  fiscalPeriodBounds?: { start: string; end: string } | null
-} = {}) {
+export function VatDeclarationView() {
   const currentYear = new Date().getFullYear()
   const currentMonth = new Date().getMonth() + 1
   const currentQuarter = Math.ceil(currentMonth / 3)
 
-  const [periodType, setPeriodType] = useState<VatPeriodType>('quarterly')
+  // periodType stays null until the company's VAT settings have settled, so
+  // the first (automatic) fetch runs against the configured momsperiod instead
+  // of a guessed default.
+  const [periodType, setPeriodType] = useState<VatPeriodType | null>(null)
   const [year, setYear] = useState(currentYear)
   const [period, setPeriod] = useState(currentQuarter)
-  const [data, setData] = useState<VatDeclaration | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar
+  // year — picked inline in yearly mode. Monthly/quarterly are calendar
+  // periods and need no fiscal year.
+  const [fiscalPeriodId, setFiscalPeriodId] = useState('')
+  // Latest fetch outcome, tagged with the fetch key it was requested under.
+  // loading / error / data are all derived by comparing that tag with the
+  // current key, so the fetch effect never sets state synchronously.
+  const [result, setResult] = useState<{
+    key: string
+    declaration?: VatDeclaration
+    error?: string
+  } | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
 
-  // Default the periodicity to the company's configured VAT reporting period
-  // (moms_period in Inställningar) so the picker mirrors the setting instead of
-  // always starting on quarterly. Applied once per company the first time its
-  // settings load; a later manual change to the picker is preserved, and a
-  // company switch re-applies the new company's setting. `useCompanySettings`
-  // only refetches when the active company changes, so this never clobbers a
+  // Company settings drive both the momsregistrerad gate and the default
+  // periodicity (moms_period in Inställningar). Applied once per company the
+  // first time its settings settle — as a render-phase adjustment, not an
+  // effect. A later manual change to the picker is preserved, and a company
+  // switch re-applies the new company's setting. `useCompanySettings` only
+  // refetches when the active company changes, so this never clobbers a
   // manual selection mid-session.
-  const { settings } = useCompanySettings()
-  const appliedForCompany = useRef<string | null>(null)
-  useEffect(() => {
-    const momsPeriod = settings?.moms_period
-    const companyId = settings?.company_id
-    if (!momsPeriod || !companyId) return
-    if (appliedForCompany.current === companyId) return
-    appliedForCompany.current = companyId
-    setPeriodType(momsPeriod)
-    // `period` is reset to a sensible value by the periodType effect below.
-  }, [settings])
+  const { settings, isLoading: settingsLoading } = useCompanySettings()
+  const [appliedCompany, setAppliedCompany] = useState<string | null>(null)
+  const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
+  if (companyKey !== null && appliedCompany !== companyKey) {
+    setAppliedCompany(companyKey)
+    const configured = settings?.moms_period ?? 'quarterly'
+    setPeriodType(configured)
+    setPeriod(
+      configured === 'monthly' ? currentMonth : configured === 'quarterly' ? currentQuarter : 1,
+    )
+  }
+
+  // Settings row present and the company answered "not VAT-registered" —
+  // the declaration is meaningless, so the whole view is gated below.
+  const notVatRegistered = !settingsLoading && settings !== null && !settings.vat_registered
+  // Registered but never picked a redovisningsperiod (rare — onboarding
+  // requires it, but companies created outside that flow can miss it).
+  const momsPeriodMissing = settings?.vat_registered === true && !settings.moms_period
 
   // Generate year options (last 5 years)
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
@@ -1061,24 +1114,22 @@ export function VatDeclarationView({
     }
   }
 
-  // Reset period when type changes
-  useEffect(() => {
-    if (periodType === 'monthly') {
-      setPeriod(currentMonth)
-    } else if (periodType === 'quarterly') {
-      setPeriod(currentQuarter)
-    } else {
-      setPeriod(1)
-    }
-  }, [periodType, currentMonth, currentQuarter])
+  // Switching periodicity resets the period to "now" in the new unit. Done in
+  // the change handler (not an effect) so the auto-fetch below never sees an
+  // inconsistent periodType/period pair.
+  const handlePeriodTypeChange = (value: VatPeriodType) => {
+    setPeriodType(value)
+    setPeriod(value === 'monthly' ? currentMonth : value === 'quarterly' ? currentQuarter : 1)
+  }
 
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar year.
   // For yearly we pass the selected fiscal period so the API uses its actual
   // bounds (handles extended/shortened years); monthly/quarterly stay calendar.
   const isYearly = periodType === 'yearly'
+  const awaitingFiscalPeriod = isYearly && !fiscalPeriodId
   const vatQueryString = () => {
     const params = new URLSearchParams({
-      periodType,
+      periodType: periodType ?? 'quarterly',
       year: String(year),
       period: String(period),
     })
@@ -1086,24 +1137,91 @@ export function VatDeclarationView({
     return params.toString()
   }
 
-  const fetchDeclaration = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch(
-        `/api/reports/vat-declaration?${vatQueryString()}`
-      )
-      const result = await res.json()
-      if (result.error) {
-        setError(result.error)
-      } else {
-        setData(result.data)
-      }
-    } catch {
-      setError('Kunde inte hämta momsdeklaration')
-    } finally {
-      setLoading(false)
+  // The declaration loads as soon as the period is known — no manual "Hämta"
+  // step. fetchKey is null while a prerequisite is missing (settings pending,
+  // gated, or no redovisningsperiod configured); any change to it triggers a
+  // refetch and stale responses are discarded.
+  const fetchKey =
+    periodType === null || notVatRegistered || momsPeriodMissing || awaitingFiscalPeriod
+      ? null
+      : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
+
+  useEffect(() => {
+    if (!fetchKey || periodType === null) return
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (periodType === 'yearly') params.set('fiscal_period_id', fiscalPeriodId)
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        if (!res.ok || json?.error) {
+          setResult({
+            key: fetchKey,
+            error:
+              typeof json?.error === 'string' ? json.error : 'Kunde inte hämta momsdeklaration',
+          })
+        } else {
+          setResult({ key: fetchKey, declaration: json.data })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ key: fetchKey, error: 'Kunde inte hämta momsdeklaration' })
+      })
+    return () => {
+      cancelled = true
     }
+  }, [fetchKey, periodType, year, period, fiscalPeriodId])
+
+  // Derived fetch state: the previous declaration stays visible (dimmed)
+  // while the next period loads.
+  const upToDate = result !== null && result.key === fetchKey
+  const data = result?.declaration ?? null
+  const error = upToDate ? (result.error ?? null) : null
+  const loading = fetchKey !== null && !upToDate
+
+  // Settings not settled yet — the picker defaults and the gate both depend
+  // on them, so hold the whole view in a skeleton.
+  if (settingsLoading || periodType === null) {
+    return (
+      <Card>
+        <CardContent className="p-6 space-y-4">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-64" />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (notVatRegistered) {
+    return (
+      <EmptyState
+        icon={Percent}
+        title="Företaget är inte momsregistrerat"
+        description="Momsdeklarationen bygger på företagets skatteinställningar. Om företaget är momsregistrerat anger du momsregistrering och redovisningsperiod i inställningarna, så visas deklarationen här."
+        actionLabel="Öppna skatteinställningar"
+        actionHref="/settings/tax"
+      />
+    )
+  }
+
+  // Registered but no redovisningsperiod picked: block instead of guessing.
+  // A declaration rendered (and submittable via panelen) for the wrong
+  // period type is a compliance hazard, not a convenience.
+  if (momsPeriodMissing) {
+    return (
+      <EmptyState
+        icon={Percent}
+        title="Redovisningsperiod för moms saknas"
+        description="Företaget är momsregistrerat men ingen redovisningsperiod (månad, kvartal eller helår) är vald. Ange den i skatteinställningarna så visas deklarationen för rätt period."
+        actionLabel="Öppna skatteinställningar"
+        actionHref="/settings/tax"
+      />
+    )
   }
 
   return (
@@ -1118,90 +1236,106 @@ export function VatDeclarationView({
           contextRef={`vat:${year}-${periodType}-${period}`}
         />
       </ReportExportMenu>
-      {/* Period selection */}
+
+      {/* Period selection — the declaration below follows it automatically */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Välj period</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="p-4">
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <Label>Periodicitet</Label>
-              <select
+              <Select
                 value={periodType}
-                onChange={(e) => setPeriodType(e.target.value as VatPeriodType)}
-                className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                onValueChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
               >
-                <option value="monthly">Månadsvis</option>
-                <option value="quarterly">Kvartalsvis</option>
-                <option value="yearly">Årsvis</option>
-              </select>
+                <SelectTrigger className="mt-1 w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Månadsvis</SelectItem>
+                  <SelectItem value="quarterly">Kvartalsvis</SelectItem>
+                  <SelectItem value="yearly">Årsvis</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             {isYearly ? (
-              // Annual VAT covers the selected räkenskapsår — driven by the
-              // fiscal-year picker on the report page, not a calendar year.
-              <div>
-                <Label>Räkenskapsår</Label>
-                <div className="mt-1 rounded-md border border-input bg-muted/40 px-3 py-2 text-sm tabular-nums">
-                  {fiscalPeriodBounds
-                    ? `${formatDate(fiscalPeriodBounds.start)} – ${formatDate(fiscalPeriodBounds.end)}`
-                    : '—'}
-                </div>
-              </div>
+              // Annual VAT covers a räkenskapsår: picked here, not a
+              // calendar year.
+              <FiscalYearSelector
+                value={fiscalPeriodId || null}
+                onChange={(id) => setFiscalPeriodId(id || '')}
+                includeAllOption={false}
+                hideFuturePeriods
+              />
             ) : (
               <>
                 <div>
                   <Label>År</Label>
-                  <select
-                    value={year}
-                    onChange={(e) => setYear(parseInt(e.target.value))}
-                    className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    {yearOptions.map((y) => (
-                      <option key={y} value={y}>
-                        {y}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={String(year)} onValueChange={(value) => setYear(parseInt(value))}>
+                    <SelectTrigger className="mt-1 w-28 tabular-nums">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {yearOptions.map((y) => (
+                        <SelectItem key={y} value={String(y)} className="tabular-nums">
+                          {y}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Period</Label>
-                  <select
-                    value={period}
-                    onChange={(e) => setPeriod(parseInt(e.target.value))}
-                    className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  <Select
+                    value={String(period)}
+                    onValueChange={(value) => setPeriod(parseInt(value))}
                   >
-                    {getPeriodOptions().map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="mt-1 w-44">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getPeriodOptions().map((opt) => (
+                        <SelectItem key={opt.value} value={String(opt.value)}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </>
             )}
-            <Button onClick={fetchDeclaration} disabled={loading}>
-              {loading ? 'Laddar...' : 'Hämta'}
-            </Button>
           </div>
         </CardContent>
       </Card>
 
       {error && (
         <Card>
-          <CardContent className="p-8 text-center text-destructive">
-            <AlertCircle className="h-6 w-6 mx-auto mb-2" />
-            {error}
+          <CardContent className="flex flex-col items-center p-8 text-center">
+            <AlertCircle className="mb-2 h-6 w-6 text-destructive" />
+            <p className="mb-4 text-sm text-destructive">{error}</p>
+            <Button variant="outline" size="sm" onClick={() => setRetryKey((k) => k + 1)}>
+              Försök igen
+            </Button>
           </CardContent>
         </Card>
       )}
 
-      {data && (
-        <>
+      {!error && (awaitingFiscalPeriod || (loading && !data)) && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-64" />
+          </CardContent>
+        </Card>
+      )}
+
+      {data && !awaitingFiscalPeriod && (
+        <div
+          className={`space-y-4 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
+        >
           <VatCompositionChart rutor={data.rutor} />
 
           {/* Summary */}
-          <Card className="border-2">
+          <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>Momsdeklaration - {data.period.start} till {data.period.end}</CardTitle>
@@ -1391,24 +1525,20 @@ export function VatDeclarationView({
               </div>
             </CardContent>
           </Card>
-        </>
+        </div>
       )}
 
-      {/* Skatteverket integration panel */}
-      <SkatteverketPanel
-        periodType={periodType}
-        year={year}
-        period={period}
-        hasData={data !== null}
-        rutor={data?.rutor ?? null}
-      />
-
-      {!data && !loading && !error && (
-        <Card>
-          <CardContent className="p-8 text-center text-muted-foreground">
-            Välj period och klicka &quot;Hämta&quot; för att se momsdeklaration.
-          </CardContent>
-        </Card>
+      {/* Skatteverket integration panel — hidden while the räkenskapsår for
+          helårsmoms is unresolved, so its actions can never target an
+          unconfirmed period. */}
+      {!awaitingFiscalPeriod && (
+        <SkatteverketPanel
+          periodType={periodType}
+          year={year}
+          period={period}
+          hasData={data !== null}
+          rutor={data?.rutor ?? null}
+        />
       )}
     </div>
     </VatDrillContext.Provider>
@@ -1467,7 +1597,7 @@ function VatRutaRow({
     () => (canDrill ? makeVatFetcher(ruta, periodType!, year!, period!, fiscalPeriodId) : null),
     [canDrill, ruta, periodType, year, period, fiscalPeriodId]
   )
-  // Hooks must be called unconditionally — provide a noop fetcher when drill
+  // Hooks must be called unconditionally: provide a noop fetcher when drill
   // is disabled. The early-return for zero rows lives below the hooks.
   const expansion = useReportRowExpansion(
     fetcher ?? (async () => ({ lines: [], next_cursor: null })),
@@ -1698,7 +1828,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
                 )}
                 {reconciliation.unconverted_fx_count > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    {reconciliation.unconverted_fx_count} leverantörsfaktura i utländsk valuta saknar växelkurs — differensen kan bero på saknade kursuppgifter snarare än felbokning.
+                    {reconciliation.unconverted_fx_count} leverantörsfaktura i utländsk valuta saknar växelkurs: differensen kan bero på saknade kursuppgifter snarare än felbokning.
                   </p>
                 )}
               </div>
@@ -1775,6 +1905,7 @@ interface GeneralLedgerData {
       debit: number
       credit: number
       balance: number
+      dimensions?: Record<string, string>
     }[]
     closing_balance: number
     total_debit: number
@@ -1783,7 +1914,7 @@ interface GeneralLedgerData {
   period: { start: string; end: string }
 }
 
-export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId: string; initialAccountFilter: string | null }) {
+export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null }) {
   const [data, setData] = useState<GeneralLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1799,6 +1930,10 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
       const params = new URLSearchParams({ period_id: periodId })
       if (from) params.set('account_from', from)
       if (to) params.set('account_to', to)
+      if (dimensionFilter) {
+        params.set('dim_no', dimensionFilter.dimNo)
+        params.set('dim_code', dimensionFilter.code)
+      }
       const res = await fetch(`/api/reports/general-ledger?${params}`)
       const result = await res.json()
       if (result.error) {
@@ -1811,7 +1946,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
     } finally {
       setLoading(false)
     }
-  }, [periodId, accountFrom, accountTo])
+  }, [periodId, accountFrom, accountTo, dimensionFilter])
 
   // When initialAccountFilter changes (drill-down from another report), apply it
   useEffect(() => {
@@ -1822,7 +1957,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
     } else {
       fetchData()
     }
-  }, [periodId, initialAccountFilter])
+  }, [periodId, initialAccountFilter, dimensionFilter])
 
   if (loading) {
     return (
@@ -1857,7 +1992,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?period_id=${periodId}` }]} />
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, undefined, dimensionFilter)}` }]} />
       {/* Account range filter */}
       <Card>
         <CardContent className="pt-6">
@@ -1891,7 +2026,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
 
       {data.period.start && (
         <p className="text-sm text-muted-foreground">
-          Period: {data.period.start} — {data.period.end} | {data.accounts.length} konton
+          Period: {data.period.start}: {data.period.end} | {data.accounts.length} konton
         </p>
       )}
 
@@ -1931,7 +2066,17 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
                       </Link>
                     </td>
                     <td className="py-1.5">{formatDate(line.date)}</td>
-                    <td className="py-1.5 truncate max-w-[200px]">{line.description}</td>
+                    <td className="py-1.5 max-w-[240px]">
+                      <span className="truncate block">{line.description}</span>
+                      {line.dimensions && Object.keys(line.dimensions).length > 0 && (
+                        <span className="text-[11px] text-muted-foreground tabular-nums">
+                          {Object.entries(line.dimensions)
+                            .sort(([a], [b]) => Number(a) - Number(b))
+                            .map(([, code]) => code)
+                            .join(' · ')}
+                        </span>
+                      )}
+                    </td>
                     <td className="py-1.5 text-right tabular-nums">
                       {line.debit > 0 ? formatAmount(line.debit) : ''}
                     </td>
@@ -2060,7 +2205,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
       <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/journal-register/xlsx?period_id=${periodId}` }]} />
       {data.period.start && (
         <p className="text-sm text-muted-foreground">
-          Period: {data.period.start} — {data.period.end} | {data.total_entries} verifikationer
+          Period: {data.period.start}: {data.period.end} | {data.total_entries} verifikationer
         </p>
       )}
 
@@ -2208,7 +2353,7 @@ function ARCustomerInvoiceRows({
     currency: string
   }[]
 }) {
-  // ARCustomerInvoiceRows is mounted lazily — only when a customer is
+  // ARCustomerInvoiceRows is mounted lazily: only when a customer is
   // expanded, so initial state matches "still loading" and resets on
   // unmount. No synchronous setState in the effect is needed.
   const [enriched, setEnriched] = useState<Record<string, { journal_entry_id: string; voucher_series: string; voucher_number: number } | undefined>>({})
@@ -2494,7 +2639,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                 )}
                 {reconciliation.unconverted_fx_count > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    {reconciliation.unconverted_fx_count} kundfaktura i utländsk valuta saknar växelkurs — differensen kan bero på saknade kursuppgifter snarare än felbokning.
+                    {reconciliation.unconverted_fx_count} kundfaktura i utländsk valuta saknar växelkurs: differensen kan bero på saknade kursuppgifter snarare än felbokning.
                   </p>
                 )}
               </div>
@@ -2502,6 +2647,217 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+// --- Resultat per projekt/kostnadsställe (dimension P&L matrix) ---
+
+export function DimensionPnlView({ periodId, dateRange }: { periodId: string; dateRange: DateRangeValue }) {
+  // Loading is DERIVED (result key ≠ current query string) instead of a
+  // setState at effect start: keeps react-hooks/set-state-in-effect clean
+  // and is race-safe when the pivot/date changes mid-flight.
+  const [result, setResult] = useState<{
+    qs: string
+    data: DimensionPnlReport | null
+    error: string | null
+  } | null>(null)
+  const [dims, setDims] = useState<{ sie_dim_no: number; name: string }[]>([])
+  const [dimNo, setDimNo] = useState('6')
+  const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}`
+
+  // Registered dimensions for the pivot picker (best-effort; the report
+  // defaults to projekt if the registry read fails).
+  useEffect(() => {
+    fetch('/api/dimensions')
+      .then((res) => res.json())
+      .then((payload) => {
+        if (Array.isArray(payload.data)) {
+          setDims(payload.data.map((d: { sie_dim_no: number; name: string }) => ({ sie_dim_no: d.sie_dim_no, name: d.name })))
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/reports/dimension-pnl?${reportQs}`)
+      .then((res) => res.json())
+      .then((payload) => {
+        if (cancelled) return
+        if (payload.error) {
+          setResult({
+            qs: reportQs,
+            data: null,
+            error: typeof payload.error === 'string' ? payload.error : 'Kunde inte hämta rapporten',
+          })
+        } else {
+          setResult({ qs: reportQs, data: payload.data, error: null })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ qs: reportQs, data: null, error: 'Kunde inte hämta rapporten' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reportQs])
+
+  const loading = result?.qs !== reportQs
+  const error = loading ? null : result?.error ?? null
+  const data = loading ? null : result?.data ?? null
+
+  const pivotPicker = dims.length > 1 && (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {dims.map((d) => {
+        const active = String(d.sie_dim_no) === dimNo
+        return (
+          <button
+            key={d.sie_dim_no}
+            type="button"
+            onClick={() => setDimNo(String(d.sie_dim_no))}
+            className={
+              active
+                ? 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-secondary border-border text-foreground'
+                : 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+            }
+          >
+            {d.name}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        {pivotPicker}
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            Laddar rapport...
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-4">
+        {pivotPicker}
+        <Card>
+          <CardContent className="p-8 text-center text-destructive">
+            <AlertCircle className="h-6 w-6 mx-auto mb-2" />
+            {error}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (!data || data.groups.length === 0) {
+    return (
+      <div className="space-y-4">
+        {pivotPicker}
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            Inga taggade intäkter eller kostnader i denna period.
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  const columnLabel = (c: DimensionPnlReport['columns'][number]) =>
+    c.code === null ? '(Utan dimension)' : c.code
+
+  const colCount = 2 + data.columns.length + 1
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {pivotPicker || <span />}
+        <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/dimension-pnl/xlsx?${reportQs}` }]} />
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
+                  <th className="text-left font-medium px-4 py-2">Kontonamn</th>
+                  {data.columns.map((c, i) => (
+                    <th key={i} className="text-right font-medium px-4 py-2 w-32 tabular-nums" title={c.name ?? undefined}>
+                      {columnLabel(c)}
+                    </th>
+                  ))}
+                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Totalt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.groups.map((group) => (
+                  <React.Fragment key={group.class}>
+                    <tr className="bg-muted/30">
+                      <td colSpan={colCount} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                        {group.class_label}
+                      </td>
+                    </tr>
+                    {group.rows.map((row) => (
+                      <tr key={row.account_number} className="border-b last:border-0">
+                        <td className="px-4 py-1.5">
+                          <AccountNumber number={row.account_number} name={row.account_name} />
+                        </td>
+                        <td className="px-4 py-1.5">{row.account_name}</td>
+                        {row.values.map((v, i) => (
+                          <td key={i} className="px-4 py-1.5 text-right tabular-nums">
+                            {Math.abs(v) >= 0.005 ? formatAmount(v) : ''}
+                          </td>
+                        ))}
+                        <td className="px-4 py-1.5 text-right tabular-nums font-medium">{formatAmount(row.total)}</td>
+                      </tr>
+                    ))}
+                    <tr className="border-b font-medium">
+                      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
+                        Summa
+                      </td>
+                      {group.subtotals.map((v, i) => (
+                        <td key={i} className="px-4 py-1.5 text-right tabular-nums">{formatAmount(v)}</td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_total)}</td>
+                    </tr>
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2">
+        <CardContent className="py-4">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <tbody>
+                <tr>
+                  <td className="px-4 font-bold text-lg">Beräknat resultat</td>
+                  <td className="px-4" />
+                  {data.net_per_column.map((v, i) => (
+                    <td key={i} className={`px-4 text-right tabular-nums font-semibold w-32 ${v >= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {formatAmount(v)}
+                    </td>
+                  ))}
+                  <td className={`px-4 text-right tabular-nums font-bold text-lg w-32 ${data.net_total >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {formatAmount(data.net_total)} kr
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

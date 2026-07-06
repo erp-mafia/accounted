@@ -1,7 +1,7 @@
 /**
  * Client-safe account name map for UI display.
  * Covers the ~30 accounts used in transaction categorization.
- * No server dependencies — safe for 'use client' components.
+ * No server dependencies: safe for 'use client' components.
  */
 
 const ACCOUNT_NAMES: Record<string, string> = {

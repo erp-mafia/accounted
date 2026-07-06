@@ -38,7 +38,7 @@ const VISIBLE_SOURCE_TYPES: Array<{ key: JournalEntrySourceType; labelKey: strin
   { key: 'year_end', labelKey: 'year_end' },
 ]
 
-// Swedish labels. Kept inline so this component is self-contained — these
+// Swedish labels. Kept inline so this component is self-contained: these
 // labels are bookkeeping-domain terms that intentionally stay Swedish across
 // locales (see CLAUDE.md i18n table).
 const SV_LABELS: Record<string, string> = {

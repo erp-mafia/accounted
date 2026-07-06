@@ -92,10 +92,10 @@ describe('buildStableExternalIds', () => {
 
   // FORMAT-FREEZE guard. `external_id` is a STORED key: changing the template
   // string orphans every prior row (its stored id stops matching the new scheme)
-  // and re-imports the lot on the next sync — the June 2026 fleet-wide incident.
+  // and re-imports the lot on the next sync: the June 2026 fleet-wide incident.
   // If you must change the format, you MUST ship a coordinated backfill of
   // existing rows; updating this assertion without one is the bug.
-  it('FORMAT IS FROZEN — changing this template silently orphans every prior external_id', () => {
+  it('FORMAT IS FROZEN: changing this template silently orphans every prior external_id', () => {
     expect(
       buildStableExternalIds('eb', 'SE0000000000000000000000', [
         { date: '2026-04-07', amount: -11231 },
@@ -105,7 +105,7 @@ describe('buildStableExternalIds', () => {
 })
 
 describe('contentBucketKey', () => {
-  it('keys off (date, öre) only — no description', () => {
+  it('keys off (date, öre) only: no description', () => {
     expect(contentBucketKey('2024-06-15', -250)).toBe('2024-06-15|-25000')
   })
 
@@ -136,9 +136,9 @@ describe('descriptionsBridge', () => {
 
   it('does NOT bridge genuinely distinct descriptions sharing a date+amount', () => {
     // Distinct reference codes on same-day same-amount rows (e.g. verification
-    // micro-deposits) must NOT collapse — each is a real transaction.
+    // micro-deposits) must NOT collapse: each is a real transaction.
     expect(descriptionsBridge('REF-AAAA1111', 'REF-BBBB2222')).toBe(false)
-    // Same common stem, diverging tails — still distinct.
+    // Same common stem, diverging tails: still distinct.
     expect(descriptionsBridge('PMT.Ref AAA', 'PMT.Ref BBB')).toBe(false)
     expect(descriptionsBridge('Coffee', 'Lunch')).toBe(false)
   })

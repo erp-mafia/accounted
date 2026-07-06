@@ -57,7 +57,7 @@ Kivra is the **de facto digital mailbox in Sweden**. Numbers (April 2026):
 - Invoice delivery + storage.
 - Tink-based PISP payments and Swish integration (one-tap pay from inbox).
 - Receipts, contracts, official mail.
-- Per-document pricing typically **3–5 SEK**.
+- Per-document pricing typically **3-5 SEK**.
 
 ### API integration
 
@@ -77,7 +77,7 @@ DIGG-operated digital mailbox for government communications. Significantly lower
 | Onboarding | Recipient publishes in SMP | Recipient consents in their bank/Kivra |
 | Discovery | Peppol Directory | Bank-side recipient lookup or Kivra API |
 | Payment | OCR/Bankgiro/Plusgiro/IBAN | One-tap from bank/Kivra (Swish/PISP) |
-| Cost per doc | 3–3.50 SEK | 3–5 SEK (Kivra), 1–3 SEK (bank) |
+| Cost per doc | 3-3.50 SEK | 3-5 SEK (Kivra), 1-3 SEK (bank) |
 
 ## Bankgirot and Plusgirot, ownership
 
@@ -101,7 +101,7 @@ if recipient is org → Peppol BIS Billing 3
 elif recipient has Kivra registered → Kivra API
 elif recipient has bank e-faktura registered → Bankgirot e-faktura privat
 elif recipient prefers email → PDF + email (BGC's Stora Inbetalningskortet legacy or own)
-else → paper postal (8.25–20 SEK)
+else → paper postal (8.25-20 SEK)
 ```
 
 Most B2C-heavy senders end up using Kivra preferentially because of higher engagement (99% open rate), but bank e-faktura still dominates recurring/predictable invoices (utilities, telecom, mortgages).

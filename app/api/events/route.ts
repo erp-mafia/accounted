@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   let supabase: SupabaseClient
   // When authenticated via an API key, the key is BOUND to a specific company.
   // Honor that binding (least privilege) rather than resolving the user's
-  // active company — otherwise a key scoped to company A would leak company B's
+  // active company: otherwise a key scoped to company A would leak company B's
   // events whenever the user's active_company_id happened to point elsewhere.
   let keyCompanyId: string | null = null
 

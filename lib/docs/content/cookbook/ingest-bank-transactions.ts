@@ -1,4 +1,4 @@
-export const COOKBOOK_INGEST_BANK_MD = `# Cookbook — ingest and categorise bank transactions
+export const COOKBOOK_INGEST_BANK_MD = `# Cookbook: ingest and categorise bank transactions
 
 > Push a bank statement file into Accounted, get AI-assisted category suggestions, commit the categorisations, and match payments against open invoices. End-to-end transaction-to-booking pipeline.
 
@@ -8,11 +8,11 @@ This is the operational companion to the [Transactions reference](/docs/api/refe
 
 - A test API key with \`transactions:write\`, \`transactions:read\`, and \`imports:write\` scopes.
 - A bank statement file in one of the supported formats: CSV (SEB / Swedbank / Handelsbanken / Nordea / Danske / ICA / Lendo / Ålandsbanken / SBAB / Marginalen / others auto-detected), CAMT.053 XML, or a plain account-statement CSV with at minimum date + amount + description columns.
-- The settlement account for the bank — typically \`'1930'\` for an SEK business account. Check via \`GET /accounts\`.
+- The settlement account for the bank: typically \`'1930'\` for an SEK business account. Check via \`GET /accounts\`.
 
 ## 1. Upload the bank file
 
-\`POST /imports/bank\` accepts multipart upload. Format detection is automatic; the response includes the matched parser. The endpoint kicks off an async operation — you'll poll for the result.
+\`POST /imports/bank\` accepts multipart upload. Format detection is automatic; the response includes the matched parser. The endpoint kicks off an async operation: you'll poll for the result.
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/imports/bank" \\
@@ -126,7 +126,7 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/$T
         "account_number": "6071",
         "vat_treatment": "standard_25",
         "confidence": 0.15,
-        "reason": "Fallback — SJ has occasionally been booked as kund-representation"
+        "reason": "Fallback: SJ has occasionally been booked as kund-representation"
       }
     ]
   }
@@ -190,7 +190,7 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/batch-cate
   }'
 \`\`\`
 
-Response shape — every item has its own \`ok\` flag:
+Response shape: every item has its own \`ok\` flag:
 
 \`\`\`json
 {
@@ -216,25 +216,25 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/$T
   -d '{ "invoice_id": "inv_...", "payment_date": "2026-04-15" }'
 \`\`\`
 
-For supplier-invoice payments use \`POST /transactions/{id}/match-supplier-invoice\` — same shape, different counterparty side.
+For supplier-invoice payments use \`POST /transactions/{id}/match-supplier-invoice\`, same shape, different counterparty side.
 
 ## Multicurrency
 
 Bank statements that include non-SEK transactions are imported with the foreign amount preserved in \`amount_foreign\` + \`currency_foreign\`. When you categorise, the engine looks up the Riksbanken FX rate for the transaction date and books the SEK equivalent on the GL side. The FX delta (rate at booking vs rate at month-end revaluation) is later picked up by the currency-revaluation job.
 
-If you import a multi-currency statement, ensure the company has \`base_currency\` set (defaults to SEK) and that the relevant FX rates are available — fetch via \`GET /currency/rate?date=...&from=...&to=...\` or rely on the cached daily snapshot.
+If you import a multi-currency statement, ensure the company has \`base_currency\` set (defaults to SEK) and that the relevant FX rates are available: fetch via \`GET /currency/rate?date=...&from=...&to=...\` or rely on the cached daily snapshot.
 
 ## Common pitfalls
 
 - **Re-running the same file is safe; date-only overlap is also safe.** The dedup keys on \`(date, amount, description_hash)\` so partial overlap of two statements doesn't double-import.
 - **Settlement account selection matters.** Importing into the wrong settlement account silently breaks bank reconciliation later. \`1930\` (företagskonto) is the default for SEK; a foreign-currency bank account uses its own asset account (e.g. \`1932\` for USD).
-- **Cash-method companies and partial payments don't mix.** If \`company_settings.accounting_method = 'cash'\` and you try to match a partial payment, the response is \`VALIDATION_ERROR\` rather than booking accrual entries — cash-method cannot model the per-installment moms event correctly (ML 13 kap 8 §). Either book the partial payment as a separate categorisation or switch to accrual.
+- **Cash-method companies and partial payments don't mix.** If \`company_settings.accounting_method = 'cash'\` and you try to match a partial payment, the response is \`VALIDATION_ERROR\` rather than booking accrual entries: cash-method cannot model the per-installment moms event correctly (ML 13 kap 8 §). Either book the partial payment as a separate categorisation or switch to accrual.
 - **Batch-categorize is partial-success by default.** If one item hits a locked period, the others still commit. The summary block tells you the totals; check per-item \`ok\` flags.
 
 ## Next steps
 
-- **[Set up webhooks](/docs/api/cookbook/webhooks)** — get notified of \`transaction.categorized\` events without polling.
-- **[File a VAT declaration](/docs/api/cookbook/file-vat-declaration)** — compute the rutor 05–62 from your now-categorised transactions.
-- **[Transactions reference](/docs/api/reference/transactions)** — every parameter, every filter.
-- **[Imports reference](/docs/api/reference/imports)** — full bank-file format coverage.
+- **[Set up webhooks](/docs/api/cookbook/webhooks)**: get notified of \`transaction.categorized\` events without polling.
+- **[File a VAT declaration](/docs/api/cookbook/file-vat-declaration)**: compute the rutor 05-62 from your now-categorised transactions.
+- **[Transactions reference](/docs/api/reference/transactions)**: every parameter, every filter.
+- **[Imports reference](/docs/api/reference/imports)**: full bank-file format coverage.
 `

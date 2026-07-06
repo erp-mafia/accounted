@@ -1,6 +1,6 @@
 /**
  * Tests for the shared declaration-prep functions. These are the single
- * source of truth for what gets filed to Skatteverket — the HTTP route
+ * source of truth for what gets filed to Skatteverket: the HTTP route
  * handlers and the commit-side services both go through them, so a regression
  * here would mean different numbers filed than the user reviewed (no-drift
  * compliance guarantee).
@@ -61,7 +61,7 @@ describe('buildMomsuppgift', () => {
 
     expect(result.redovisare).toBe('165560000000')
     expect(result.redovisningsperiod).toBe('202503')
-    // Identical to the direct mapper output — locks the no-drift guarantee.
+    // Identical to the direct mapper output: locks the no-drift guarantee.
     expect(result.momsuppgift).toEqual(rutorToMomsuppgift(rutor))
     expect(result.momsuppgift.momsForsaljningUtgaendeHog).toBe(250)
     expect(result.momsuppgift.ingaendeMomsAvdrag).toBe(100)

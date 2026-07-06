@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
 
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
-      // Check MFA status — redirect to verify if factor is enrolled but session is AAL1
+      // Check MFA status: redirect to verify if factor is enrolled but session is AAL1
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
         const response = NextResponse.redirect(new URL('/mfa/verify', origin))
@@ -113,8 +113,8 @@ export async function GET(request: NextRequest) {
               source: 'direct',
             })
 
-            // Set active company. Non-fatal on failure — middleware falls
-            // back to the membership created above — but log so silent
+            // Set active company. Non-fatal on failure (middleware falls
+            // back to the membership created above) but log so silent
             // persistence failures (#701) are observable.
             const { error: prefError } = await serviceClient.from('user_preferences').upsert({
               user_id: user.id,
@@ -131,7 +131,7 @@ export async function GET(request: NextRequest) {
               .update({ status: 'accepted' })
               .eq('id', invite.id)
 
-            // Invited user goes straight to dashboard — no onboarding needed
+            // Invited user goes straight to dashboard: no onboarding needed
             redirectPath = '/'
 
             // Clear invite cookie and set company cookie on response
@@ -184,7 +184,7 @@ export async function GET(request: NextRequest) {
         })
       }
 
-      // Always redirect to dashboard — it handles zero-company and incomplete states
+      // Always redirect to dashboard: it handles zero-company and incomplete states
       redirectPath = '/'
     }
 
@@ -198,6 +198,6 @@ export async function GET(request: NextRequest) {
     return response
   }
 
-  // Authentication failed — redirect to login with error
+  // Authentication failed: redirect to login with error
   return NextResponse.redirect(new URL('/login?error=auth_error', origin))
 }

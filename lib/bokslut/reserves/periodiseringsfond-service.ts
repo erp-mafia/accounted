@@ -7,7 +7,7 @@ import type { ProposedDisposition } from '../types'
 export const PFOND_AB_RATE = 0.25
 export const PFOND_AB_RATE_PCT = '25 %'
 
-/** Mandatory holding period — a fond avsatt år N must be återförd no later
+/** Mandatory holding period: a fond avsatt år N must be återförd no later
  *  than räkenskapsår N+6 (IL 30 kap 7 §). */
 export const PFOND_MAX_HOLD_YEARS = 6
 
@@ -114,7 +114,7 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
 
 /**
  * List existing periodiseringsfonder by querying the account balance of every
- * 2110–2199 account as of the closing date of the fiscal period. Marks any
+ * 2110-2199 account as of the closing date of the fiscal period. Marks any
  * fond whose cohort_year + 6 ≤ closing_year as `must_return_this_year`.
  *
  * Uses the trial-balance pattern: sum debit/credit on each 21xx account from
@@ -132,7 +132,7 @@ export async function listExistingPeriodiseringsfonder(
   }
 
   // Sum debit/credit per 21xx account up to and including the closing date.
-  // Use the journal_entry_lines table directly — RLS scopes to the company.
+  // Use the journal_entry_lines table directly: RLS scopes to the company.
   const { data, error } = await supabase
     .from('journal_entry_lines')
     .select(
@@ -183,7 +183,7 @@ function cohortYearFromAccount(accountNumber: string): number | null {
   const lastDigit = parseInt(accountNumber.slice(-1), 10)
   // BAS 2020: 2129 represents 2019 by convention; 2128 = 2028.
   if (lastDigit === 9) return 2019
-  // For 0–8, the cohort year is in the 2020s. As fiscal years extend past
+  // For 0-8, the cohort year is in the 2020s. As fiscal years extend past
   // 2029 the convention will recycle (2120 might mean 2030 then); cap at
   // 2020-decade interpretation for now and surface ambiguity in a warning.
   return 2020 + lastDigit
@@ -194,7 +194,7 @@ export interface PfondAteforingProposal {
    *  as separate cards; mandatory ones (must_return_this_year) cannot be skipped. */
   proposals: ProposedDisposition[]
   /** Total schablonintäkt computed on the OPENING balance of all 21xx accounts.
-   *  This is NOT booked — it goes into INK2 as a manual adjustment to taxable
+   *  This is NOT booked: it goes into INK2 as a manual adjustment to taxable
    *  result. Caller (bolagsskatt-calculator) reads this to add to taxable result. */
   schablonintaktAmount: number
 }
@@ -203,7 +203,7 @@ export interface PfondAteforingProposal {
  * Propose periodiseringsfond reversals. Forces reversal of any fond reaching
  * its 6-year limit; offers optional reversal of newer fonder. Also computes
  * the schablonintäkt on the opening balance of all 21xx accounts (per IL 30
- * kap 6a §) — caller adds this to taxable result when computing bolagsskatt.
+ * kap 6a §): caller adds this to taxable result when computing bolagsskatt.
  *
  * @param schablonintaktRate Statslåneräntan 30 nov året före, plus 1 pe, min
  *   0.5 %. For income year 2025: ~3.0 %. Caller passes this in because the

@@ -36,7 +36,7 @@ function MfaVerifyContent() {
   const supabase = createClient()
 
   // Step-up landing target. Set by callers that need AAL2 to do something
-  // sensitive (set/change password, unenroll MFA, etc.) — /api/account/password
+  // sensitive (set/change password, unenroll MFA, etc.): /api/account/password
   // and SecuritySettings redirect here when GoTrue rejects with "AAL2 session
   // is required". Falls back to the dashboard for direct visits.
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
@@ -221,7 +221,7 @@ function MfaVerifyContent() {
 
         <p className="text-xs text-muted-foreground text-center mt-4">
           {t('lost_authenticator')}{' '}
-          <SupportLink variant="muted" subject="MFA — cannot sign in" className="inline">
+          <SupportLink variant="muted" subject="MFA: cannot sign in" className="inline">
             {t('contact_support')}
           </SupportLink>
         </p>

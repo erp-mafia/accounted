@@ -36,8 +36,8 @@ export async function GET(
     return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
   }
 
-  // Strip the encrypted personnummer ciphertext before sending to the browser
-  // — replace it with the YYYYMMDD-XXXX masked form so the page can render
+  // Strip the encrypted personnummer ciphertext before sending to the browser:
+  // replace it with the YYYYMMDD-XXXX masked form so the page can render
   // identity without exposing the suffix or the raw cipher blob.
   const masked = {
     ...data,
@@ -56,12 +56,12 @@ export async function GET(
  * Per-employee edits within a salary run. Two operations, gated to different
  * statuses (never combined in one request):
  *
- *  • monthly_salary — set this month's base salary for the employee. Allowed
+ *  • monthly_salary: set this month's base salary for the employee. Allowed
  *    only in `draft`. 0 is valid (an intentional nollkörning). The engine reads
  *    this per-run value (not the employee master) when the run is calculated, so
  *    each month's gross can differ without touching the employee's standard pay.
  *
- *  • tax_withheld_override / avgifter_*_override — manual tax/avgifter
+ *  • tax_withheld_override / avgifter_*_override: manual tax/avgifter
  *    adjustment (advanced mode). Allowed only in `review`: the engine has run
  *    but the run isn't approved/booked. After approval, vouchers and AGI lock in
  *    the effective values; further changes require correction flows. Pass `null`
@@ -136,8 +136,8 @@ export async function PATCH(
     }
 
     // Keep the displayed 'Grundlön' line consistent with the new salary. This is
-    // display-only — the engine recomputes baseSalary from monthly_salary at
-    // calc time — but it avoids a stale row before the user clicks Beräkna.
+    // display-only: the engine recomputes baseSalary from monthly_salary at
+    // calc time, but it avoids a stale row before the user clicks Beräkna.
     if (sre.salary_type === 'monthly') {
       const baseAmount = Math.round(monthly * (sre.employment_degree / 100) * 100) / 100
       await supabase
@@ -159,7 +159,7 @@ export async function PATCH(
     )
   }
 
-  // Build patch — only include fields that were explicitly provided so
+  // Build patch: only include fields that were explicitly provided so
   // unrelated overrides are not nulled.
   const patch: Record<string, number | string | null> = {}
   if ('tax_withheld_override' in parsed.data) {

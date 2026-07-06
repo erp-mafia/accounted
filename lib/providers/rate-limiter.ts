@@ -62,7 +62,7 @@ export class TokenBucketRateLimiter {
     // Retry once after waiting
     const retry = await this.upstashLimiter!.limit('global');
     if (!retry.success) {
-      // Still limited — wait for the new reset
+      // Still limited: wait for the new reset
       const retryWait = Math.max(0, retry.reset - Date.now());
       await new Promise((resolve) => setTimeout(resolve, retryWait));
     }

@@ -123,7 +123,7 @@ describe('parseOpeningBalanceFile', () => {
     const data = [
       ['Kontonr', 'Debet', 'Kredit'],
       ['1930', 50000, 0],
-      ['3001', 0, 50000], // Revenue account — should warn
+      ['3001', 0, 50000], // Revenue account: should warn
     ]
     const ws = XLSX.utils.aoa_to_sheet(data)
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')

@@ -87,7 +87,7 @@ async function main() {
 
     const imp = hashToImport.get(hash)
     if (!imp) {
-      console.log(`  ${filename} — no matching import (hash: ${hash.substring(0, 12)}...)`)
+      console.log(`  ${filename}: no matching import (hash: ${hash.substring(0, 12)}...)`)
       continue
     }
 

@@ -30,7 +30,7 @@ import { NextResponse } from 'next/server'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
-// Body fields are uuid-validated (LinkDocumentSchema) — request fixtures must
+// Body fields are uuid-validated (LinkDocumentSchema): request fixtures must
 // be real UUIDs. The enqueue mock rows keep their short ids; the queued mock
 // doesn't correlate request input with mocked output.
 const JE_ID = '11111111-1111-4111-8111-111111111111'
@@ -152,7 +152,7 @@ describe('POST /api/documents/[id]/link', () => {
     expect(mockSupabase.from).not.toHaveBeenCalledWith('transactions')
   })
 
-  it('tolerates a failing transaction pin — the JE link is the primary effect', async () => {
+  it('tolerates a failing transaction pin: the JE link is the primary effect', async () => {
     enqueue({ data: { id: 'je-1' } }) // journal entry company check
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
     enqueue({ data: null, error: { message: 'rls denied' } }) // transaction pin fails
@@ -199,7 +199,7 @@ describe('POST /api/documents/[id]/link', () => {
   })
 
   it('rejects a journal entry outside the active company with DOC_LINK_ENTRY_NOT_FOUND', async () => {
-    // The company-scoped lookup finds no row — same result whether the id is
+    // The company-scoped lookup finds no row: same result whether the id is
     // bogus or belongs to another tenant. The document must never be updated.
     enqueue({ data: null }) // journal entry company check → no match
     const res = await POST(

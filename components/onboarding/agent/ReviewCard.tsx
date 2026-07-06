@@ -29,7 +29,7 @@ interface ProfilePayload {
   is_multi_vertical: boolean
   profile_summary: string
   // Still carried from the composer + stored on the profile row, but no
-  // longer surfaced as a form step here — the Phase C chat intake owns the
+  // longer surfaced as a form step here: the Phase C chat intake owns the
   // questions now (reads them server-side). Kept on the type so the payload
   // shape stays aligned with the stream event.
   verification_questions: string[]
@@ -42,7 +42,7 @@ interface Props {
   companyId: string
   companyName: string
   initialFields: InitialFields
-  // Pre-fetched atom titles from agent_atom_registry — used to render chips
+  // Pre-fetched atom titles from agent_atom_registry: used to render chips
   // with the authored title instead of a naive slug-derived label. Missing
   // ids fall through to deriveSlugTitle which is intentionally minimal.
   atomTitles: Record<string, string>
@@ -82,7 +82,7 @@ export default function ReviewCard({
   const [horizontal, setHorizontal] = useState<string[]>(profile?.horizontal_atoms ?? [])
   const [vertical, setVertical] = useState<string[]>(profile?.vertical_atoms ?? [])
   const [modifier, setModifier] = useState<string[]>(profile?.modifier_atoms ?? [])
-  // Agent identity — name shown on the FAB, avatar shown alongside.
+  // Agent identity: name shown on the FAB, avatar shown alongside.
   const [displayName, setDisplayName] = useState('')
   const [avatarId, setAvatarId] = useState<string>(AVATAR_OPTIONS[0].id)
   const [seedMemory, setSeedMemory] = useState('')
@@ -90,11 +90,11 @@ export default function ReviewCard({
   const [verifyError, setVerifyError] = useState<string | null>(null)
 
   // Two steps now:
-  //   1 — meet your assistant (name + avatar)
-  //   2 — agree on the facts (profile + specialties + form fields + optional
+  //   1: meet your assistant (name + avatar)
+  //   2: agree on the facts (profile + specialties + form fields + optional
   //       seed note), then "kör" which hands off to the Phase C chat intake.
   // The verification-question interview that used to live here as a form
-  // stepper is gone — the chat conducts the real interview instead.
+  // stepper is gone: the chat conducts the real interview instead.
   type Step = 1 | 2
   const [step, setStep] = useState<Step>(1)
   const totalPositions = 2
@@ -199,7 +199,7 @@ export default function ReviewCard({
         <p className="text-muted-foreground mt-2">{stepSubtitle}</p>
       </header>
 
-      {/* Progress — one segment per step. Back navigation lives on the
+      {/* Progress: one segment per step. Back navigation lives on the
           "Tillbaka" button below. */}
       <div className="flex items-center gap-1.5 mb-6" aria-hidden="true">
         {Array.from({ length: totalPositions }, (_, i) => i).map((pos) => (
@@ -267,7 +267,7 @@ export default function ReviewCard({
 
           {step === 2 && (
             <>
-              {/* Value first — the prose summary the composer wrote, so the
+              {/* Value first: the prose summary the composer wrote, so the
                   user sees the assistant understood them before being asked to
                   check dry registry facts. */}
               <section>
@@ -301,7 +301,7 @@ export default function ReviewCard({
                 )}
               </section>
 
-              {/* What the assistant can actually do — the differentiated
+              {/* What the assistant can actually do: the differentiated
                   output of the build. Plain-language heading, not the internal
                   "atoms/specialiteter" framing. */}
               {(horizontal.length > 0 || vertical.length > 0 || modifier.length > 0) && (
@@ -347,7 +347,7 @@ export default function ReviewCard({
                   <FieldRow
                     label="Säte"
                     value={fields.city ?? ''}
-                    placeholder="—"
+                    placeholder="-"
                     editing={editing === 'city'}
                     onEdit={() => setEditing('city')}
                     onChange={(v) => setFields((f) => ({ ...f, city: v }))}
@@ -356,7 +356,7 @@ export default function ReviewCard({
                   <FieldRow
                     label="Räkenskapsår"
                     value={fields.fiscal_period ?? ''}
-                    placeholder="januari–december"
+                    placeholder="januari-december"
                     editing={editing === 'fiscal_period'}
                     onEdit={() => setEditing('fiscal_period')}
                     onChange={(v) => setFields((f) => ({ ...f, fiscal_period: v }))}
@@ -392,7 +392,7 @@ export default function ReviewCard({
                 </dl>
               </section>
 
-              {/* Verksamhetsbeskrivning from Bolagsverket — verbatim, since
+              {/* Verksamhetsbeskrivning from Bolagsverket: verbatim, since
                   authoritative legal text. Hidden when TIC didn't return one. */}
               {fields.purpose && (
                 <section>
@@ -405,7 +405,7 @@ export default function ReviewCard({
                 </section>
               )}
 
-              {/* Optional seed note — the fast path for users who'd rather jot
+              {/* Optional seed note: the fast path for users who'd rather jot
                   one thing than chat. The Phase C intake will draw the rest
                   out conversationally. */}
               <section>
@@ -413,7 +413,7 @@ export default function ReviewCard({
                   Bra att veta
                 </h2>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Valfritt — du kan också berätta i chatten strax. T.ex. återkommande kunder, en hyresfaktura som kommer den 25:e, eller att kunderna mest finns i Tyskland.
+                  Valfritt: du kan också berätta i chatten strax. T.ex. återkommande kunder, en hyresfaktura som kommer den 25:e, eller att kunderna mest finns i Tyskland.
                 </p>
                 <textarea
                   id="seed-memory"
@@ -472,7 +472,7 @@ export default function ReviewCard({
 }
 
 // Renders one or more SNI codes alongside their human-readable industry
-// labels. Read-only for the POC — TIC is authoritative for SNI and we don't
+// labels. Read-only for the POC: TIC is authoritative for SNI and we don't
 // surface a UI to add codes that Bolagsverket doesn't have.
 //
 // TIC occasionally returns the same SNI code twice (e.g. as both primary and
@@ -549,7 +549,7 @@ function FieldRow({
               !value && 'text-muted-foreground/60 italic',
             )}
           >
-            {value || placeholder || '—'}
+            {value || placeholder || '-'}
           </span>
         )}
       </dd>

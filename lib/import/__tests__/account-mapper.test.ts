@@ -211,7 +211,7 @@ describe('suggestMappings', () => {
     expect(result[0].targetAccount).toBe('2641')
   })
 
-  it('handles empty BAS accounts — bas_range fallback for valid accounts', () => {
+  it('handles empty BAS accounts: bas_range fallback for valid accounts', () => {
     const source = [makeSIEAccount('1510', 'Kundfordringar')]
     const result = suggestMappings(source, [])
 

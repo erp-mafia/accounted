@@ -30,7 +30,7 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ invoiceId: id })
 
-    // The sandbox must never deliver a real email to a real customer — block
+    // The sandbox must never deliver a real email to a real customer: block
     // the entire send pipeline (PDF render + Resend send + status flip).
     const blocked = await guardSandbox(supabase, companyId)
     if (blocked) return blocked
@@ -59,7 +59,7 @@ export const POST = withRouteContext(
     }
 
     // A cancelled invoice keeps its F-series number for compliance with ML 17
-    // kap 24§ but is not a valid faktura — sending it would silently
+    // kap 24§ but is not a valid faktura: sending it would silently
     // re-activate it (the .update({ status: 'sent' }) below has no status
     // guard) and could deliver a "MAKULERAD" PDF as if it were live.
     if (invoice.status === 'cancelled') {
@@ -101,7 +101,7 @@ export const POST = withRouteContext(
     }
 
     // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
-    // number. If the row is already numbered (retry path), skip — we'd just
+    // number. If the row is already numbered (retry path), skip: we'd just
     // render twice for no gain.
     const isFreshAllocation = !invoice.invoice_number
     if (isFreshAllocation) {
@@ -123,7 +123,7 @@ export const POST = withRouteContext(
       }
     }
 
-    // Allocate the F-series number. Idempotent — retries reuse the same number.
+    // Allocate the F-series number. Idempotent: retries reuse the same number.
     try {
       await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
     } catch (err) {
@@ -131,11 +131,11 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
     }
 
-    // Final render with the assigned number — this is the buffer attached to
+    // Final render with the assigned number: this is the buffer attached to
     // the email and later archived as underlag. Override status to 'sent' on
     // the in-memory copy: the DB flip happens after email delivery (line
     // ~185), but if we render with the stale 'draft' status the customer
-    // receives a PDF stamped "UTKAST – inte en giltig faktura".
+    // receives a PDF stamped "UTKAST: inte en giltig faktura".
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
@@ -199,7 +199,7 @@ export const POST = withRouteContext(
     }
 
     // From here on the invoice has reached the customer. Failures in the
-    // follow-up steps degrade the response to PARTIAL — the user gets a
+    // follow-up steps degrade the response to PARTIAL: the user gets a
     // success toast with a sub-warning, and the audit trail records exactly
     // which sub-step broke.
     const partialFailures: Array<{ step: string; reason: string }> = []
@@ -239,7 +239,7 @@ export const POST = withRouteContext(
 
           // Periodiserade lines: create their schedules + catch-up
           // dissolutions now that the revenue entry exists. Failures degrade
-          // to PARTIAL — the entry is committed and must not be rolled back.
+          // to PARTIAL: the entry is committed and must not be rolled back.
           const accrual = await createSchedulesForCustomerInvoice(
             supabase,
             companyId!,

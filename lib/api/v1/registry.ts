@@ -8,7 +8,7 @@
  *
  * Three artefacts are derived from this registry:
  *   1. The OpenAPI 3.1 spec at /api/v1/openapi.json (this file).
- *   2. The MCP tool list (future — Phase 5).
+ *   2. The MCP tool list (future: Phase 5).
  *   3. Runtime validators (Zod itself, used by handlers).
  *
  * Phase 1 ships a minimal Zod→JSON-Schema converter. Phase 2 will swap in
@@ -38,7 +38,7 @@ const ResponseAuditSchema = z.object({
  * `lib/api/v1/response.ts`). List endpoints additionally populate
  * `next_cursor`; it is absent on the final page. Writes may surface an
  * `audit` block, and soft-degraded `?expand=` responses a `partial_expansions`
- * list — both optional, so reads and lists omit them.
+ * list: both optional, so reads and lists omit them.
  */
 export const ResponseMetaSchema = z.object({
   request_id: z.string(),
@@ -54,7 +54,7 @@ export const ResponseMetaSchema = z.object({
  * OpenAPI contract matches the runtime body.
  *
  * Previously each list endpoint declared a bare `{ <name>: [...] }` success
- * object (e.g. `{ companies: [...] }`) that no handler ever emits — the
+ * object (e.g. `{ companies: [...] }`) that no handler ever emits: the
  * generated spec advertised a shape the API never returns. See issue #781.
  */
 export function listEnvelope<T extends ZodTypeAny>(item: T) {
@@ -69,7 +69,7 @@ export function listEnvelope<T extends ZodTypeAny>(item: T) {
  * under `data` (via `ok()`), rather than a bare array under `data`.
  *
  * Most list endpoints return `{ data: [...] }` (use {@link listEnvelope}). A
- * few — `accounts`, `fiscal-periods`, `webhooks` — deliberately wrap their
+ * few (`accounts`, `fiscal-periods`, `webhooks`) deliberately wrap their
  * array in a named key (`{ data: { accounts: [...] } }`); their handlers and
  * route tests lock that shape in. Declare those with
  * `dataEnvelope(z.object({ <name>: z.array(Item) }))` so the OpenAPI contract
@@ -84,12 +84,12 @@ export function dataEnvelope<T extends ZodTypeAny>(data: T) {
 
 /**
  * Sentinel `response.success` for endpoints that return 204 No Content with an
- * empty body — e.g. DELETE handlers calling `noContent()`. The OpenAPI
+ * empty body: e.g. DELETE handlers calling `noContent()`. The OpenAPI
  * generator emits a bare `204` response (no schema) for these instead of a
  * `200 { data, meta }`, and the envelope contract test exempts them.
  *
  * Identified by REFERENCE equality, so every 204 route MUST import this exact
- * constant rather than declaring its own `z.object({})` — that is what lets the
+ * constant rather than declaring its own `z.object({})`: that is what lets the
  * generator and the contract test recognise the "no body" intent.
  */
 export const NoBodyResponse = z.object({})
@@ -110,10 +110,10 @@ export interface EndpointDefinition {
   /** Longer prose for the docs and the registered MCP tool description. */
   description: string
 
-  /** Positive trigger — when should an agent reach for this endpoint? */
+  /** Positive trigger: when should an agent reach for this endpoint? */
   useWhen: string
 
-  /** Negative trigger — what looks similar but isn't this. */
+  /** Negative trigger: what looks similar but isn't this. */
   doNotUseFor: string
 
   /** Common pitfalls. Bullet-list style; agents see this in tool docs. */
@@ -128,7 +128,7 @@ export interface EndpointDefinition {
   /** Required scope; null for public endpoints. */
   scope: ApiKeyScope | null
 
-  /** Action risk — informs whether the agent should confirm before calling. */
+  /** Action risk: informs whether the agent should confirm before calling. */
   risk: ActionRisk
 
   /** True for GET requests and well-known idempotent writes. */
@@ -186,14 +186,14 @@ const ENDPOINTS = new Map<string, EndpointDefinition>()
  *     ...
  *   })
  *
- * The wrapper does not depend on registration — scope resolution lives in
+ * The wrapper does not depend on registration: scope resolution lives in
  * `lib/auth/scopes.ts` so a missing register() call only affects docs, not
  * runtime auth. CI test asserts every wrapped route appears in the registry.
  */
 export function registerEndpoint(def: EndpointDefinition): void {
   const key = `${def.method} ${def.path}`
   if (ENDPOINTS.has(key)) {
-    // Duplicate registration is a bug — log loudly. Throwing during a route
+    // Duplicate registration is a bug: log loudly. Throwing during a route
     // module's top-level eval would break unrelated routes; warn instead.
     // eslint-disable-next-line no-console
     console.warn(`[api/v1/registry] duplicate endpoint registration: ${key}`)
@@ -213,7 +213,7 @@ export function getEndpoint(method: HttpMethod, path: string): EndpointDefinitio
  * Resolve the registered endpoint for a CONCRETE request path (e.g.
  * `/api/v1/companies/abc/customers`) by matching it against the registered
  * `:param` patterns. Used by the wrapper to read an endpoint's `dryRunSupported`
- * flag at request time — the route module being served has already run its
+ * flag at request time: the route module being served has already run its
  * `registerEndpoint()` call, so its pattern is present. Returns undefined when
  * no pattern matches (the wrapper treats that as "cannot be simulated").
  */
@@ -316,7 +316,7 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
     case 'union':
     case 'ZodUnion': {
       // Best-effort: emit a oneOf with each member converted. No top-level
-      // `type` constraint — the individual branches carry their own types
+      // `type` constraint: the individual branches carry their own types
       // (valid JSON Schema for a union).
       const options = (def as { options?: ZodTypeAny[] }).options ?? []
       return { oneOf: options.map(zodToJsonSchema) } as unknown as JsonSchema
@@ -355,7 +355,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       ? { [def.response.contentType]: { schema: { type: 'string', format: 'binary' } } }
       : { 'application/json': { schema: zodToJsonSchema(def.response.success) } }
 
-    // 204 No Content endpoints (DELETEs returning noContent()) carry no body —
+    // 204 No Content endpoints (DELETEs returning noContent()) carry no body:
     // emit a bare 204 instead of a 200 { data, meta } so the spec stops
     // advertising a response shape these handlers never send.
     const successResponse = def.response.success === NoBodyResponse
@@ -398,7 +398,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       title: 'Accounted API',
       version: API_V1_VERSION,
       description:
-        'Public REST API for Accounted — Swedish double-entry bookkeeping. ' +
+        'Public REST API for Accounted: Swedish double-entry bookkeeping. ' +
         'Every write supports dry-run via `?dry_run=true`. Every request must include ' +
         '`Authorization: Bearer gnubok_sk_...`. See /docs/api for the cookbook.',
     },
@@ -418,7 +418,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
 }
 
 /**
- * Test-only escape hatch. Clears the registry — used in unit tests so a test
+ * Test-only escape hatch. Clears the registry: used in unit tests so a test
  * that registers a fake endpoint doesn't leak into the next test.
  */
 export function _resetRegistryForTests(): void {

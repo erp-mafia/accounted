@@ -6,7 +6,7 @@ import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
 
-/** Ingest function signature — matches lib/transactions/ingest */
+/** Ingest function signature: matches lib/transactions/ingest */
 export type IngestFn = (
   supabase: SupabaseClient,
   companyId: string,
@@ -100,14 +100,14 @@ export async function syncAccountTransactions(
 
   const bankTransactions = transactions.map(tx => convertTransaction(tx, account.currency))
 
-  // Only ingest BOOKED transactions — those the ASPSP returned with a real
+  // Only ingest BOOKED transactions: those the ASPSP returned with a real
   // booking_date. Pending entries are intentionally skipped: a pending row is
   // unstable across syncs (a later "synka nu" returns the same transaction
   // either still pending or finally booked, often with a *different* effective
   // date). Because BOTH the dedup external_id and the content-dedup key are
   // date-derived, that drift mints a brand-new id and re-imports a transaction
   // that already exists. Observed in production as the same amount+description
-  // landing twice with different dates — the bank's value_date in one sync, its
+  // landing twice with different dates: the bank's value_date in one sync, its
   // booking_date in another. Gating the import set on a stable booking_date
   // removes the drift at the source, and leaves booked rows' ids byte-identical
   // (so the existing rows are NOT re-orphaned).
@@ -152,7 +152,7 @@ export async function syncAccountTransactions(
 
   // Convert Enable Banking format to generic RawTransaction. counterparty
   // identification: prefer IBAN (international, normalized) over BBAN/BG
-  // numbers — the own-account detector matches on IBAN first, falling back
+  // numbers: the own-account detector matches on IBAN first, falling back
   // to counterparty_account for Swedish domestic transfers.
   const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate }, i) => {
     const cpAccount = tx.counterparty_account ?? null
@@ -181,7 +181,7 @@ export async function syncAccountTransactions(
   const ingestOptions: IngestOptions = {}
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
-  // Per-account ledger routing — the mapping engine consumes settlementAccount
+  // Per-account ledger routing: the mapping engine consumes settlementAccount
   // for the bank-side leg, falling back to '1930' when unset.
   if (account.ledger_account) ingestOptions.settlementAccount = account.ledger_account
   const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)

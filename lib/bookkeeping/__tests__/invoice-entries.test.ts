@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getRevenueAccount, getOutputVatAccount } from '../invoice-entries'
+import { roundOre } from '@/lib/money'
 import type { Invoice, InvoiceItem, CreateJournalEntryInput } from '@/types'
 
 // Mock the engine so we can capture the input passed to createJournalEntry
@@ -152,7 +153,7 @@ describe('getOutputVatAccount', () => {
   })
 })
 
-describe('createInvoiceJournalEntry — per-line VAT', () => {
+describe('createInvoiceJournalEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -298,7 +299,7 @@ describe('createInvoiceJournalEntry — per-line VAT', () => {
   })
 })
 
-describe('createInvoiceJournalEntry — per-article revenue account override', () => {
+describe('createInvoiceJournalEntry: per-article revenue account override', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -355,7 +356,7 @@ describe('createInvoiceJournalEntry — per-article revenue account override', (
     expect(debit).toBe(1250)
   })
 
-  it('ignores a per-line override on reverse charge — revenue stays on 3308', async () => {
+  it('ignores a per-line override on reverse charge: revenue stays on 3308', async () => {
     const invoice = makeInvoice({
       subtotal: 5000,
       vat_amount: 0,
@@ -405,7 +406,7 @@ describe('createInvoiceJournalEntry — per-article revenue account override', (
   })
 })
 
-describe('createCreditNoteJournalEntry — per-line VAT', () => {
+describe('createCreditNoteJournalEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -454,7 +455,7 @@ describe('createCreditNoteJournalEntry — per-line VAT', () => {
   })
 })
 
-describe('createInvoiceCashEntry — per-line VAT', () => {
+describe('createInvoiceCashEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -497,7 +498,7 @@ describe('createInvoiceCashEntry — per-line VAT', () => {
   })
 })
 
-describe('createInvoiceJournalEntry — EUR foreign currency', () => {
+describe('createInvoiceJournalEntry: EUR foreign currency', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -680,7 +681,7 @@ describe('BFL-compliant descriptions with counterparty names', () => {
   })
 })
 
-describe('createInvoicePaymentJournalEntry — exchange rate difference', () => {
+describe('createInvoicePaymentJournalEntry: exchange rate difference', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -765,7 +766,7 @@ describe('createInvoicePaymentJournalEntry — exchange rate difference', () => 
   })
 })
 
-describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
+describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -819,7 +820,7 @@ describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
     expect(totalDebit).toBe(12500)
   })
 
-  it('mixed invoice: ROT line + non-deduction line — per-item handling', async () => {
+  it('mixed invoice: ROT line + non-deduction line, per-item handling', async () => {
     // ROT line 10 000 (deduction 3 000) + non-deduction materials line 4 000.
     // Total 14 000 + 25% VAT = 17 500. Customer owes 14 500. Skatteverket 3 000.
     const invoice = makeInvoice({
@@ -974,7 +975,319 @@ describe('createInvoiceJournalEntry — ROT/RUT-avdrag', () => {
   })
 })
 
-describe('createInvoiceCashEntry — ROT/RUT-avdrag', () => {
+describe('dimensions propagation (PR7): createInvoiceJournalEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('1510 + VAT lines carry the invoice default; revenue lines carry the merged item-over-default bag', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01' },
+      items: [
+        makeItem({ description: 'A', unit_price: 600, line_total: 600, vat_rate: 25, vat_amount: 150, dimensions: { '6': 'P001' } }),
+        makeItem({ id: 'item-2', description: 'B', unit_price: 400, line_total: 400, vat_rate: 25, vat_amount: 100, dimensions: { '1': 'KS02' } }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.dimensions).toEqual({ '1': 'KS01' })
+
+    const vat2611 = input.lines.filter((l) => l.account_number === '2611')
+    expect(vat2611).toHaveLength(1)
+    expect(vat2611[0].dimensions).toEqual({ '1': 'KS01' })
+
+    // Same vat_rate + account, DIFFERENT bags → separate revenue lines
+    // (aggregation identity = account + bag).
+    const rev3001 = input.lines.filter((l) => l.account_number === '3001')
+    expect(rev3001).toHaveLength(2)
+    expect(rev3001[0].credit_amount).toBe(600)
+    expect(rev3001[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(rev3001[1].credit_amount).toBe(400)
+    // The item bag wins per key over the invoice default.
+    expect(rev3001[1].dimensions).toEqual({ '1': 'KS02' })
+  })
+
+  it('items with the identical merged bag still aggregate into one revenue line', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01' },
+      items: [
+        makeItem({ description: 'A', unit_price: 600, line_total: 600, vat_rate: 25, vat_amount: 150, dimensions: { '6': 'P001' } }),
+        makeItem({ id: 'item-2', description: 'B', unit_price: 400, line_total: 400, vat_rate: 25, vat_amount: 100, dimensions: { '6': 'P001' } }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const rev3001 = input.lines.filter((l) => l.account_number === '3001')
+    expect(rev3001).toHaveLength(1)
+    expect(rev3001[0].credit_amount).toBe(1000)
+    expect(rev3001[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+
+  it('per-rate rounding remainder is absorbed by the last dimension bucket (balanced against 1510)', async () => {
+    // Same account, same 25% rate: split only by the dimensions bag. The
+    // rate-level total (20.01) is the balance anchor; independent per-bucket
+    // rounding would give 2 × 10.01 = 20.02, so the last bucket must absorb.
+    const invoice = makeInvoice({
+      subtotal: 20.01,
+      vat_amount: 5.0,
+      total: 25.01,
+      vat_treatment: 'standard_25',
+      vat_rate: null as unknown as number,
+      items: [
+        makeItem({ description: 'A', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5 }),
+        makeItem({ id: 'item-2', description: 'B', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5, dimensions: { '6': 'P001' } }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const rev3001 = input.lines.filter((l) => l.account_number === '3001')
+    expect(rev3001).toHaveLength(2)
+    expect(rev3001[0].dimensions).toBeUndefined()
+    expect(rev3001[1].dimensions).toEqual({ '6': 'P001' })
+
+    const revSum = rev3001.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(revSum)).toBe(20.01)
+
+    const debit = roundOre(input.lines.reduce((s, l) => s + l.debit_amount, 0))
+    const credit = roundOre(input.lines.reduce((s, l) => s + l.credit_amount, 0))
+    expect(debit).toBe(credit)
+    expect(debit).toBe(25.01)
+  })
+
+  it('ROT 1513 line carries the item merged bag', async () => {
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01' },
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 25,
+          vat_amount: 2500,
+          deduction_type: 'rot',
+          deduction_amount: 3000,
+          dimensions: { '6': 'P001' },
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1513 = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513?.debit_amount).toBe(3000)
+    expect(debit1513?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+
+    // 1510 still carries the default only.
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.dimensions).toEqual({ '1': 'KS01' })
+  })
+
+  it('fallback path (no items) carries the invoice default on revenue + VAT lines', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01', '6': 'P001' },
+      items: [],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const rev3001 = input.lines.find((l) => l.account_number === '3001')
+    expect(rev3001?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    const vat2611 = input.lines.find((l) => l.account_number === '2611')
+    expect(vat2611?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(debit1510?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+
+  it('no default and no item bags → line.dimensions stays undefined', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({ unit_price: 1000, line_total: 1000, vat_rate: 25, vat_amount: 250 }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1510 = input.lines.find((l) => l.account_number === '1510')
+    // toEqual ignores undefined-valued keys: the line shape is unchanged.
+    expect(debit1510).toEqual({
+      account_number: '1510',
+      debit_amount: 1250,
+      credit_amount: 0,
+      line_description: 'Faktura 1001',
+    })
+    expect(debit1510?.dimensions).toBeUndefined()
+    expect(input.lines.find((l) => l.account_number === '3001')?.dimensions).toBeUndefined()
+    expect(input.lines.find((l) => l.account_number === '2611')?.dimensions).toBeUndefined()
+  })
+})
+
+describe('dimensions propagation (PR7): createInvoicePaymentJournalEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('SEK payment: both 1930 and 1510 carry the invoice default', async () => {
+    const invoice = makeInvoice({ total: 1250, default_dimensions: { '1': 'KS01', '6': 'P001' } })
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines).toHaveLength(2)
+    for (const line of input.lines) {
+      expect(line.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    }
+  })
+
+  it('FX payment: the 3960 kursvinst line carries the default too', async () => {
+    const invoice = makeInvoice({
+      currency: 'EUR',
+      exchange_rate: 11.5,
+      total: 1000,
+      total_sek: 11500,
+      default_dimensions: { '6': 'P001' },
+    })
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', 200)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines).toHaveLength(3)
+    for (const account of ['1930', '1510', '3960']) {
+      const line = input.lines.find((l) => l.account_number === account)
+      expect(line?.dimensions).toEqual({ '6': 'P001' })
+    }
+  })
+
+  it('FX loss payment: the 7960 kursförlust line carries the default too', async () => {
+    const invoice = makeInvoice({
+      currency: 'EUR',
+      exchange_rate: 11.5,
+      total: 1000,
+      total_sek: 11500,
+      default_dimensions: { '6': 'P001' },
+    })
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', -300)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const loss7960 = input.lines.find((l) => l.account_number === '7960')
+    expect(loss7960?.dimensions).toEqual({ '6': 'P001' })
+  })
+
+  it('no default bag → payment lines carry no dimensions', async () => {
+    const invoice = makeInvoice({ total: 1250 })
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    for (const line of input.lines) {
+      expect(line.dimensions).toBeUndefined()
+    }
+  })
+})
+
+describe('dimensions propagation (PR7): createInvoiceCashEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('1930 carries the default; revenue carries the merged item bag; VAT carries the default', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01' },
+      items: [
+        makeItem({ unit_price: 1000, line_total: 1000, vat_rate: 25, vat_amount: 250, dimensions: { '6': 'P001' } }),
+      ],
+    })
+
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit1930 = input.lines.find((l) => l.account_number === '1930')
+    expect(debit1930?.dimensions).toEqual({ '1': 'KS01' })
+
+    const rev3001 = input.lines.find((l) => l.account_number === '3001')
+    expect(rev3001?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+
+    const vat2611 = input.lines.find((l) => l.account_number === '2611')
+    expect(vat2611?.dimensions).toEqual({ '1': 'KS01' })
+  })
+})
+
+describe('dimensions propagation (PR7): createCreditNoteJournalEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('swapped lines keep the item bags; 1510 carries the credit note default', async () => {
+    const creditNote = makeInvoice({
+      invoice_number: 'KR-1001',
+      subtotal: -1000,
+      vat_amount: -198,
+      total: -1198,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01' },
+      items: [
+        makeItem({ quantity: -1, unit_price: 600, line_total: -600, vat_rate: 25, vat_amount: -150, dimensions: { '6': 'P001' } }),
+        makeItem({ id: 'item-2', quantity: -1, unit_price: 400, line_total: -400, vat_rate: 12, vat_amount: -48 }),
+      ],
+    })
+
+    await createCreditNoteJournalEntry(null as never, 'company-1', 'user-1', creditNote)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // The reversed (debit) revenue lines keep the merged item bags.
+    const debit3001 = input.lines.find((l) => l.account_number === '3001')
+    expect(debit3001?.debit_amount).toBe(600)
+    expect(debit3001?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+
+    const debit3002 = input.lines.find((l) => l.account_number === '3002')
+    expect(debit3002?.dimensions).toEqual({ '1': 'KS01' })
+
+    // VAT lines carry the default only.
+    expect(input.lines.find((l) => l.account_number === '2611')?.dimensions).toEqual({ '1': 'KS01' })
+    expect(input.lines.find((l) => l.account_number === '2621')?.dimensions).toEqual({ '1': 'KS01' })
+
+    // 1510 carries the credit note's own default bag.
+    const credit1510 = input.lines.find((l) => l.account_number === '1510')
+    expect(credit1510?.credit_amount).toBe(1198)
+    expect(credit1510?.dimensions).toEqual({ '1': 'KS01' })
+  })
+})
+
+describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

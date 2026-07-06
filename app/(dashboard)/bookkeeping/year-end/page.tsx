@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowLeft, Lock } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, Lock } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
@@ -55,6 +55,9 @@ export default function YearEndPage() {
 
   // ---- Period selection ----
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
+  // Whether the company has ANY fiscal periods (eligible or not) — separates
+  // "inget att stänga ännu" from "inget räkenskapsår har skapats".
+  const [hasAnyPeriods, setHasAnyPeriods] = useState(true)
   const [periodsError, setPeriodsError] = useState<string | null>(null)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(
     searchParams.get('period') ?? null,
@@ -87,10 +90,11 @@ export default function YearEndPage() {
         const eligible = (data ?? []).filter(
           (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
         )
-        // Oldest first — accountants close in order.
+        // Oldest first: accountants close in order.
         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
         if (cancelled) return
         setPeriods(eligible)
+        setHasAnyPeriods((data ?? []).length > 0)
         if (!selectedPeriodId && eligible.length > 0) {
           setSelectedPeriodId(eligible[0].id)
         }
@@ -174,7 +178,7 @@ export default function YearEndPage() {
       if (!res.ok) {
         // body.error.message is the localized Swedish message picked by
         // the structured-error registry. Do NOT interpolate raw details
-        // here — they can contain DB-sourced strings (V2.3 finding).
+        // here: they can contain DB-sourced strings (V2.3 finding).
         setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
         return
       }
@@ -235,11 +239,21 @@ export default function YearEndPage() {
       )}
 
       {periods !== null && periods.length === 0 && (
-        <EmptyState
-          icon={Lock}
-          title="Inga perioder att stänga"
-          description="Det finns ingen öppen räkenskapsperiod vars slutdatum redan har passerat. Bokslut görs efter att periodens slutdatum är passerat."
-        />
+        hasAnyPeriods ? (
+          <EmptyState
+            icon={Lock}
+            title="Inga perioder att stänga"
+            description="Det finns ingen öppen räkenskapsperiod vars slutdatum redan har passerat. Bokslut görs efter att periodens slutdatum är passerat."
+          />
+        ) : (
+          <EmptyState
+            icon={CalendarPlus}
+            title="Inget räkenskapsår ännu"
+            description="Bokslut görs per räkenskapsår. Skapa företagets räkenskapsår i bokföringsinställningarna för att komma igång."
+            actionLabel="Öppna bokföringsinställningar"
+            actionHref="/settings/bookkeeping"
+          />
+        )
       )}
 
       {showWizard && periods && periods.length > 1 && step !== 'result' && (
@@ -262,7 +276,7 @@ export default function YearEndPage() {
               <SelectContent>
                 {periods.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} ({p.period_start} – {p.period_end})
+                    {p.name} ({p.period_start} till {p.period_end})
                   </SelectItem>
                 ))}
               </SelectContent>

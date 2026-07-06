@@ -3,7 +3,7 @@
  *
  * Mirrors the customers test pattern: a Proxy-backed Supabase mock returns
  * whatever the route awaits, keyed by table name. Each suite focuses on
- * outcome (status / body shape) rather than query mechanics — the wrapper
+ * outcome (status / body shape) rather than query mechanics: the wrapper
  * already validates auth, scope, idempotency, and dry-run resolution.
  */
 
@@ -278,7 +278,7 @@ describe('POST /api/v1/companies/:companyId/suppliers', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('SUPPLIER_DUPLICATE_ORG_NUMBER')
-    // GDPR Art.5(1)(c) defense-in-depth — error never echoes the value back.
+    // GDPR Art.5(1)(c) defense-in-depth: error never echoes the value back.
     expect(JSON.stringify(body.error)).not.toContain('TEST-0000-0001')
   })
 
@@ -428,7 +428,7 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
   })
 
   it('allows non-identifying field edits (notes) on an archived supplier', async () => {
-    // BFL 7 kap protects räkenskapsinformation — internal notes are not
+    // BFL 7 kap protects räkenskapsinformation: internal notes are not
     // referenced by any verifikation, so they remain editable.
     const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(

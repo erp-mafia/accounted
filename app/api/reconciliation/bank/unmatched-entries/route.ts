@@ -20,20 +20,20 @@ export async function GET(request: Request) {
   const accountNumber = searchParams.get('account_number') || '1930'
   // Optional: when set, rank the returned candidates for this specific bank
   // transaction (used by the Transactions-page "Matcha mot befintlig
-  // verifikation" dialog). Ranking happens server-side on purpose —
+  // verifikation" dialog). Ranking happens server-side on purpose:
   // lib/reconciliation/bank-reconciliation pulls in server-only deps (event
   // bus, match-log) and must never reach the client bundle.
   const transactionId = searchParams.get('transaction_id') || undefined
   // When true, also return vouchers already matched to a bank transaction (each
   // carries linked_transaction_count) so the user can attach a second/third
-  // transaction to the same verifikat — the N:1 "lägga på flera" case. Default
+  // transaction to the same verifikat, the N:1 "lägga på flera" case. Default
   // false keeps the list to unmatched candidates only.
   const includeMatched = searchParams.get('include_matched') === 'true'
 
   // Defense-in-depth: only allow account numbers that the company has actually
   // registered as a cash account. Without this, a curious caller could probe
   // arbitrary GL accounts for posted-but-unmatched amounts. Applies uniformly
-  // including '1930' — the cash_accounts backfill seeds 1930 for every company
+  // including '1930': the cash_accounts backfill seeds 1930 for every company
   // that had a SEK PSD2 account, and the AccountPickerDialog seeds it for new
   // companies on first connection.
   const { data: cashAccount } = await supabase
@@ -64,7 +64,7 @@ export async function GET(request: Request) {
 
     if (!tx) {
       // transaction_id was supplied but doesn't resolve to a row in the
-      // caller's company — the ranking context is invalid. Return no candidates
+      // caller's company: the ranking context is invalid. Return no candidates
       // rather than silently falling back to the full unranked list, so a
       // fabricated or foreign id can never yield a broader result set.
       return NextResponse.json({ data: [] })
@@ -75,7 +75,7 @@ export async function GET(request: Request) {
     const ranked = lines
       .map((line) => {
         // Score each line in isolation; confidence 0 means "no auto-match
-        // rule fired" — the line still appears so the user can pick it
+        // rule fired": the line still appears so the user can pick it
         // manually (e.g. a salary or Fortnox voucher with a tweaked date).
         const match = tryReconcileTransaction(tx as unknown as Transaction, [line], txCurrency)
         return { ...line, confidence: match?.confidence ?? 0 }

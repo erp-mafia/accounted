@@ -25,7 +25,7 @@ export function isValidSwish(normalised: string): boolean {
 }
 
 /**
- * Build the Swish "Type C" QR payload — `C<payee>;<amount>;<message>;<editmask>`.
+ * Build the Swish "Type C" QR payload: `C<payee>;<amount>;<message>;<editmask>`.
  *
  * editmask 0 locks payee, amount and message, so the Swish app opens prefilled
  * and uneditable. This is the documented format the Swish app scans directly,

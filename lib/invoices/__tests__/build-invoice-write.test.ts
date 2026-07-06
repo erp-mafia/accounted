@@ -42,11 +42,11 @@ describe('buildInvoiceWriteData', () => {
     expect(result.invoiceFields.total).toBe(12500)
     expect(result.invoiceFields.remaining_amount).toBe(12500)
     expect(result.invoiceFields.vat_rate).toBe(25)
-    // The route owns these — the builder must never set them.
+    // The route owns these: the builder must never set them.
     expect(result.invoiceFields).not.toHaveProperty('invoice_number')
     expect(result.invoiceFields).not.toHaveProperty('status')
     expect(result.invoiceFields).not.toHaveProperty('user_id')
-    // Item row carries no invoice_id — the route adds it.
+    // Item row carries no invoice_id: the route adds it.
     expect(result.items).toHaveLength(1)
     expect(result.items[0]).not.toHaveProperty('invoice_id')
     expect(result.items[0]).toMatchObject({

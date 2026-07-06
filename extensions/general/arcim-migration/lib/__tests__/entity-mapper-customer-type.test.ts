@@ -8,7 +8,7 @@ import type { CustomerDto, PartyDto } from '@/lib/providers/dto'
  *    not be misfiled as a foreign org number → non_eu_business (the Johan
  *    Ekengren 19700616-7113 bug);
  *  - an individual's number must land in personal_number (not org_number), or
- *    the individual customer form — which renders personal_number — hides it.
+ *    the individual customer form (which renders personal_number) hides it.
  */
 
 function makeCustomer(over: {
@@ -34,7 +34,7 @@ function makeCustomer(over: {
   }
 }
 
-describe('mapCustomer — type inference & identity-number routing', () => {
+describe('mapCustomer: type inference & identity-number routing', () => {
   it('12-digit personnummer (no VAT, provider type=company) → swedish_business, not non_eu', () => {
     const row = mapCustomer(makeCustomer({ type: 'company', number: '19700616-7113' }), 'u', 'c')
     expect(row.customer_type).toBe('swedish_business')

@@ -27,7 +27,7 @@ export interface SalaryCalculationInput {
   fSkattStatus: string
 
   /** Age (from personnummer) */
-  personnummer: string // encrypted — will be decrypted for age calc
+  personnummer: string // encrypted, will be decrypted for age calc
   paymentDate: string
 
   /** Vacation */
@@ -112,7 +112,7 @@ function r(x: number): number {
 /**
  * Sum vacation-basis line items that ADD to base salary (overtime, bonus,
  * etc). Excludes monthly_salary/hourly_salary because those line items mirror
- * the engine's own baseSalary computation — counting them would double the
+ * the engine's own baseSalary computation: counting them would double the
  * vacation basis.
  */
 function vacationBasisAdditions(lineItems: CalculationLineItem[]): number {
@@ -164,8 +164,8 @@ function minDate(a: string, b: string): string {
 }
 
 /**
- * Count Mon–Fri days inclusive between start and end (YYYY-MM-DD). Returns 0
- * when start > end. Swedish bank holidays are NOT excluded — the engine uses
+ * Count Mon-Fri days inclusive between start and end (YYYY-MM-DD). Returns 0
+ * when start > end. Swedish bank holidays are NOT excluded: the engine uses
  * the same 21-workday convention used elsewhere (monthlySalary / 21), so a
  * variable workday count that excluded holidays would diverge from the
  * baseline daily rate convention.
@@ -186,13 +186,13 @@ function countWorkdaysInclusive(start: string, end: string): number {
 
 /**
  * Fraction of the pay period the employee was actually employed, measured in
- * Mon–Fri workdays. Returns 1 when the employee was employed for the full
+ * Mon-Fri workdays. Returns 1 when the employee was employed for the full
  * period (or when employment dates / period bounds are missing). Returns 0
  * when the employee was not employed at all during the period.
  *
  * This is the standard Swedish payroll convention for partial-month proration:
- * an employee hired 2026-05-15 gets workdays-in-(May 15–31) / workdays-in-May.
- * Hourly employees are not prorated here — they are paid for actually-worked
+ * an employee hired 2026-05-15 gets workdays-in-(May 15-31) / workdays-in-May.
+ * Hourly employees are not prorated here: they are paid for actually-worked
  * hours, so the calling code passes salaryType='monthly' to gate this.
  */
 export function prorateBaseSalaryForPeriod(
@@ -403,7 +403,7 @@ export function calculateSalary(
     taxWithheld = 0
     steps.push({
       label: 'Skatteavdrag (F-skatt)',
-      formula: 'F-skattsedel — inget skatteavdrag görs',
+      formula: 'F-skattsedel: inget skatteavdrag görs',
       input: {},
       output: 0,
     })
@@ -509,7 +509,7 @@ export function calculateSalary(
   // ─── Step 9: Vacation accrual ───
   // Vacation basis = baseSalary (computed at the top) + any *additional*
   // vacation-basis line items (overtime, bonus, etc). We must NOT add
-  // monthly_salary/hourly_salary line items here — those are auto-created at
+  // monthly_salary/hourly_salary line items here: those are auto-created at
   // employee-add time and represent the same baseSalary already accounted for.
   const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
   let vacationAccrual: number
@@ -517,7 +517,7 @@ export function calculateSalary(
     vacationAccrual = 0
     steps.push({
       label: 'Semesteravsättning (avstängd)',
-      formula: 'ingen semesteravsättning bokas — semester ingår i månadslönen',
+      formula: 'ingen semesteravsättning bokas: semester ingår i månadslönen',
       input: {},
       output: 0,
     })
@@ -525,7 +525,7 @@ export function calculateSalary(
     vacationAccrual = 0
     steps.push({
       label: 'Semesteravsättning (semesterersättning betald direkt)',
-      formula: 'ingen avsättning — 12 % betalas ut på varje lön',
+      formula: 'ingen avsättning: 12 % betalas ut på varje lön',
       input: {},
       output: 0,
     })
@@ -544,7 +544,7 @@ export function calculateSalary(
     // Accrual = tillägg only (salary cost is already in normal monthly expense)
     // The liability (2920) for sammalöneregeln is the tillägg portion,
     // since the base salary is expensed monthly regardless of vacation.
-    // Use baseSalary (degree-adjusted) — a 50% part-timer's tillägg should be
+    // Use baseSalary (degree-adjusted): a 50% part-timer's tillägg should be
     // half a full-timer's, not the same.
     const dailyRate = r(baseSalary / 21)
     const tillagg = r(dailyRate * input.semestertillaggRate * input.vacationDaysPerYear)
@@ -635,14 +635,14 @@ export function calculateAvgifterRate(
   if (birthYear <= 1937) {
     steps.push({
       label: 'Avgiftskategori',
-      formula: 'Född 1937 eller tidigare — inga arbetsgivaravgifter',
+      formula: 'Född 1937 eller tidigare: inga arbetsgivaravgifter',
       input: { birth_year: birthYear },
       output: null,
     })
     return { rate: 0, amount: 0, basis: 0, category: 'exempt', steps }
   }
 
-  // 67+ at year start (reduced — only ålderspension)
+  // 67+ at year start (reduced: only ålderspension)
   if (ageAtYearStart >= config.reducedAvgiftAge) {
     steps.push({
       label: 'Avgiftskategori',
@@ -670,7 +670,7 @@ export function calculateAvgifterRate(
   // Youth rate (ungdomsrabatt 2026-2027, Prop. 2025/26:66):
   //   "personer som vid årets ingång har fyllt 18 men inte 23 år"
   // → eligible at årets ingång: age >= 18 AND age < 23 (i.e. age ≤ 22 on Jan 1).
-  // The Riksdag betänkande's "19-23-åringar" wording is colloquial — those
+  // The Riksdag betänkande's "19-23-åringar" wording is colloquial: those
   // eligible at year start (18-22) become 19-23 during the year. We test the
   // year-start age, not the during-year age. Skatteverket's AGI validator
   // rejects 23-year-olds at year start as not eligible.
@@ -738,7 +738,7 @@ export function calculateSjuklon(
   const sjuklonDays = Math.min(Math.max(sickDays - 1, 0), 13)
   const sjuklon = r(dailyRate * config.sjuklonRate * sjuklonDays)
   steps.push({
-    label: 'Sjuklön dag 2–14',
+    label: 'Sjuklön dag 2-14',
     formula: `dagslön × ${fmtPct(config.sjuklonRate)} × (sjukdagar − 1)`,
     input: { daily_rate: dailyRate, sjuklon_rate: config.sjuklonRate, days: sjuklonDays },
     output: sjuklon,
@@ -782,7 +782,7 @@ export function calculateVacationAccrual(params: {
   if (params.vacationRule === 'semesterersattning') {
     steps.push({
       label: 'Semesteravsättning (semesterersättning betald direkt)',
-      formula: 'ingen avsättning — 12 % betalas ut på varje lön',
+      formula: 'ingen avsättning: 12 % betalas ut på varje lön',
       input: {},
       output: 0,
     })
@@ -801,7 +801,7 @@ export function calculateVacationAccrual(params: {
     return { accrual, steps }
   } else {
     // Sammalöneregeln: tillägg per vacation day. Use vacationBasis as the
-    // degree-adjusted reference — callers must pass the part-time-adjusted
+    // degree-adjusted reference: callers must pass the part-time-adjusted
     // monthly amount, never the raw full-time monthlySalary.
     const dailyRate = r(params.vacationBasis / 21)
     const accrual = r(dailyRate * params.semestertillaggRate * params.vacationDaysPerYear)

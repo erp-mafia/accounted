@@ -38,7 +38,7 @@ describe('BrioxClient', () => {
   }
 
   describe('auth header', () => {
-    it('sends the RAW access token in Authorization — no Bearer prefix', async () => {
+    it('sends the RAW access token in Authorization: no Bearer prefix', async () => {
       fetchSpy.mockResolvedValueOnce(jsonResponse({ data: {} }));
 
       const client = new BrioxClient();

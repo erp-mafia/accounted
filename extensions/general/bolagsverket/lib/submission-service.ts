@@ -65,8 +65,8 @@ export function normalizeOrgnr(orgNumber: string): string {
 
 /**
  * SECURITY: `avsandarePnr` and `undertecknare.pnr` are plaintext personnummer,
- * needed only for the Bolagsverket API calls. They must NEVER reach a log sink
- * — log structured fields (companyId, fiscalPeriodId, submissionId) and never
+ * needed only for the Bolagsverket API calls. They must NEVER reach a log sink:
+ * log structured fields (companyId, fiscalPeriodId, submissionId) and never
  * the params object itself. At rest only company-salted SHA-256 hashes are
  * stored (see hashPnr).
  */
@@ -74,7 +74,7 @@ export interface SubmitParams {
   companyId: string
   userId: string
   fiscalPeriodId: string
-  /** Avsändarens personnummer (12 siffror) — required by skapa-inlamningtoken. */
+  /** Avsändarens personnummer (12 siffror): required by skapa-inlamningtoken. */
   avsandarePnr: string
   /** Undertecknare of fastställelseintyget. */
   undertecknare: {
@@ -114,7 +114,7 @@ interface ServiceDeps {
   client: BolagsverketClient
   /** Absolute base URL of this install, for the webhook subscription. */
   appUrl: string
-  /** Extension logger — non-fatal failures must be visible, never swallowed. */
+  /** Extension logger: non-fatal failures must be visible, never swallowed. */
   log: ExtensionLogger
 }
 
@@ -157,7 +157,7 @@ export async function submitArsredovisning(
   //    would file a second handling (and store a second audit document).
   //    Refuse while a submission for this period is still open with the
   //    authority. Rows in draft/kontrollerad/error/registrerad/avslutad do
-  //    not block — retries after failure create a fresh row.
+  //    not block: retries after failure create a fresh row.
   const { data: activeRows } = await supabase
     .from('arsredovisning_submissions')
     .select('id, status')
@@ -202,7 +202,7 @@ export async function submitArsredovisning(
     })
   }
 
-  // 3. Generate the iXBRL + local pre-flight (layer 1) — cheaper than a
+  // 3. Generate the iXBRL + local pre-flight (layer 1): cheaper than a
   //    kontrollera round-trip and catches data problems with better messages.
   const input = await buildIxbrlInput(supabase, params.companyId, params.fiscalPeriodId, {
     proposedDividend: params.proposedDividend,
@@ -231,7 +231,7 @@ export async function submitArsredovisning(
     xhtml = embedKontrollsumma(xhtml, checksum.kontrollsumma, checksum.algoritm)
   } catch (err) {
     kontrollsumma = null
-    log.warn('kontrollsumma generation failed — continuing without embedded checksum', {
+    log.warn('kontrollsumma generation failed: continuing without embedded checksum', {
       companyId: params.companyId,
       fiscalPeriodId: params.fiscalPeriodId,
       error: err instanceof Error ? err.message : String(err),
@@ -266,13 +266,13 @@ export async function submitArsredovisning(
   }
   const submissionId = (submissionRow as { id: string }).id
 
-  // Steps 6–8 talk to Bolagsverket with a persisted row in play. Any failure
-  // here must flip the row to status='error' with the message — otherwise it
+  // Steps 6-8 talk to Bolagsverket with a persisted row in play. Any failure
+  // here must flip the row to status='error' with the message: otherwise it
   // sits in draft/kontrollerad forever and the failed attempt is invisible.
   let svar: Awaited<ReturnType<BolagsverketClient['lamnaIn']>>
   let utfall: KontrolleraUtfall[]
   try {
-    // 6. Kontrollera (layer 3) — always run; surface utfall to the user.
+    // 6. Kontrollera (layer 3): always run; surface utfall to the user.
     const kontrollSvar = await client.kontrollera(token.token, fileBase64, 'arsredovisning_komplett')
     utfall = kontrollSvar.utfall ?? []
     await supabase
@@ -362,12 +362,12 @@ export async function submitArsredovisning(
     },
   })
 
-  // 9. Subscribe to händelser (idempotent; extends TTL 6 months — GUIDE §4.3).
+  // 9. Subscribe to händelser (idempotent; extends TTL 6 months: GUIDE §4.3).
   try {
     await ensureSubscription(deps, params.companyId, params.userId, orgnr)
   } catch (err) {
     // Non-fatal: polling fallback (hamta-handelser) covers missed webhooks.
-    log.warn('handelseprenumeration could not be created/renewed — relying on polling fallback', {
+    log.warn('handelseprenumeration could not be created/renewed: relying on polling fallback', {
       submissionId,
       companyId: params.companyId,
       error: err instanceof Error ? err.message : String(err),
@@ -393,9 +393,9 @@ export async function ensureSubscription(
   const { supabase, client, appUrl } = deps
   if (!/^https?:\/\//.test(appUrl)) {
     // A relative/empty base URL would register a broken webhook endpoint at
-    // Bolagsverket. Fail fast — the caller logs this as a subscription failure.
+    // Bolagsverket. Fail fast: the caller logs this as a subscription failure.
     throw new Error(
-      'NEXT_PUBLIC_APP_URL saknas eller är inte en absolut URL — kan inte registrera webhook hos Bolagsverket.',
+      'NEXT_PUBLIC_APP_URL saknas eller är inte en absolut URL: kan inte registrera webhook hos Bolagsverket.',
     )
   }
   const url = `${appUrl.replace(/\/$/, '')}/api/extensions/ext/bolagsverket/webhook`
@@ -411,7 +411,7 @@ export async function ensureSubscription(
   // subscriptions per (url, orgnr): registering a NEW secret here would
   // overwrite the delivery auth another company sharing this orgnr already
   // depends on, 401-ing their webhooks. Reuse any existing secret for the
-  // same (orgnr, url, environment) across ALL companies (service client —
+  // same (orgnr, url, environment) across ALL companies (service client:
   // RLS would hide other tenants' rows) so everyone sharing the orgnr
   // authenticates the same deliveries.
   let sharedSecret: string | null = null
@@ -469,7 +469,7 @@ export interface WebhookHandlingResult {
 /**
  * Apply one händelsemeddelande to the submission rows. Used by both the
  * webhook receiver and the polling fallback. `serviceClient` is the
- * cookieless service-role client — all queries still filter by company.
+ * cookieless service-role client: all queries still filter by company.
  */
 export async function applyHandelse(
   serviceClient: SupabaseClient,
@@ -478,7 +478,7 @@ export async function applyHandelse(
   log?: Pick<ExtensionLogger, 'warn' | 'error'>,
 ): Promise<void> {
   const mapped = STATUS_MAP[message.data.status]
-  if (!mapped) return // 'test' or future statuses — nothing to apply
+  if (!mapped) return // 'test' or future statuses: nothing to apply
 
   const idnummerList = (message.data.handlingsinfo ?? [])
     .filter((info) => info.handling === 'arsredovisning')
@@ -512,9 +512,9 @@ export async function applyHandelse(
       .eq('id', submission.id)
     if (error) {
       // Transition rejected by the DB state machine (or other write failure).
-      // Don't apply, but never silently — a divergence between our status and
+      // Don't apply, but never silently: a divergence between our status and
       // Bolagsverket's must be investigable.
-      log?.warn('handelse rejected — submission status not updated', {
+      log?.warn('handelse rejected: submission status not updated', {
         submissionId: submission.id,
         companyId,
         fromStatus: submission.status,

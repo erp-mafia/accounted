@@ -14,7 +14,7 @@ jobs:
       - name: Verify skill bodies are in sync with the seed migration
         # Fails if a .claude/skills/**/SKILL.md changed without regenerating the
         # seed migration (npm run skills:generate). Keeps prod skill content from
-        # silently drifting out of sync. No DB needed — reads files + manifest.
+        # silently drifting out of sync. No DB needed: reads files + manifest.
         run: npm run skills:check
       - name: Verify taxonomy registry is in sync with the element lists
         # Fails if dev_docs/bokslut/taxonomi/** changed without regenerating

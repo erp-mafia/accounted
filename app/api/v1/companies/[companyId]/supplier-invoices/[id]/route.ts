@@ -1,13 +1,13 @@
 /**
- * /api/v1/companies/{companyId}/supplier-invoices/{id} — detail + update.
+ * /api/v1/companies/{companyId}/supplier-invoices/{id}: detail + update.
  *
- * GET   — full record. ?expand=supplier,items,payments embeds related rows.
- * PATCH — partial update. Only allowed on `registered` status (mirrors the
+ * GET   : full record. ?expand=supplier,items,payments embeds related rows.
+ * PATCH : partial update. Only allowed on `registered` status (mirrors the
  *         dashboard: an approved/paid SI is effectively immutable from the
  *         caller's perspective; for those, use the action verbs or :credit).
  *         Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
- * No DELETE — supplier-invoice withdrawal is via :credit (mirrors v1 invoices).
+ * No DELETE: supplier-invoice withdrawal is via :credit (mirrors v1 invoices).
  * The credit verb keeps both originals AND credit notes in the audit trail per
  * BFL 5 kap 5 § (corrections via reversing entries).
  */
@@ -22,7 +22,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 
 // V1-only strict variant. The shared `UpdateSupplierInvoiceSchema` is also
-// consumed by the dashboard, where unknown keys are silently stripped — fine
+// consumed by the dashboard, where unknown keys are silently stripped, fine
 // for a UI that controls its own payload. The public API treats unknown keys
 // as a contract violation: if a future schema iteration ever adds a
 // protected field (status, company_id, user_id), `.strict()` makes the
@@ -31,10 +31,10 @@ import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 const V1PatchSupplierInvoiceSchema = UpdateSupplierInvoiceSchema.strict()
 
 const SI_DETAIL_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, reversed_at, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, default_dimensions, reversed_at, created_at, updated_at'
 
 const SI_ITEM_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate'
+  'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions'
 
 const SI_PAYMENT_COLUMNS =
   'id, payment_date, amount, currency, exchange_rate, exchange_rate_difference, journal_entry_id, transaction_id, notes, created_at'
@@ -80,7 +80,7 @@ registerEndpoint({
   description:
     'Returns the full supplier-invoice record. Pass ?expand=supplier,items,payments to embed the related rows in the same response.',
   useWhen:
-    'You need the full record before approving, paying, or crediting it — or for audit trail / reconciliation.',
+    'You need the full record before approving, paying, or crediting it, or for audit trail / reconciliation.',
   doNotUseFor:
     'Listing supplier invoices (use the list endpoint). Customer-invoice lookups (different resource).',
   pitfalls: [
@@ -166,7 +166,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — partial update (registered-only)
+// PATCH: partial update (registered-only)
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -175,11 +175,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices/:id',
   summary: 'Update a registered supplier invoice.',
   description:
-    'Patches a supplier invoice with the supplied fields. Only allowed on `registered` status — once approved, paid, or credited, the record is effectively immutable from the API\'s perspective. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+    'Patches a supplier invoice with the supplied fields. Only allowed on `registered` status: once approved, paid, or credited, the record is effectively immutable from the API\'s perspective. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
   useWhen:
     'You need to fix a typo in supplier_invoice_number, adjust dates, or attach a payment reference / notes to a registered SI before approval. Use dry-run to confirm the merged state first.',
   doNotUseFor:
-    'Editing line items (immutable — credit the SI and register a new one). Changing status (use action verbs). Approved/paid/credited SIs (returns 400 SI_NOT_DRAFT).',
+    'Editing line items (immutable: credit the SI and register a new one). Changing status (use action verbs). Approved/paid/credited SIs (returns 400 SI_NOT_DRAFT).',
   pitfalls: [
     'Returns 400 SI_NOT_DRAFT when current status !== "registered".',
     'invoice_date / due_date changes do not re-post the registration JE; if the entry date needs to change, credit the SI and re-register.',

@@ -5,7 +5,7 @@ import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 
 const FETCH_TIMEOUT_MS = 15_000;
 // The SIE export renders a whole fiscal year server-side (megabytes for an
-// active company) — give it more room than ordinary CRUD reads.
+// active company): give it more room than ordinary CRUD reads.
 const SIE_FETCH_TIMEOUT_MS = 60_000;
 
 export class BjornLundenApiError extends Error {
@@ -107,7 +107,7 @@ export class BjornLundenClient {
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
     // Sandbox-verified: the batch endpoints honor `page` and `rows`. The
     // response envelope echoes `pageRequested`, but a `pageRequested` REQUEST
-    // param is silently ignored (as is `rowsRequested`) — sending those would
+    // param is silently ignored (as is `rowsRequested`): sending those would
     // re-fetch page 1 forever.
     const params = new URLSearchParams();
     params.set('page', String(options?.page ?? 1));
@@ -136,7 +136,7 @@ export class BjornLundenClient {
    * Fetch a binary resource with the same rate-limit/retry behavior as get().
    * Used for the SIE export, which BL serves as raw bytes
    * (Content-Type: text/vnd.sie-gruppen.si, typically CP437-encoded) despite
-   * the swagger declaring a base64 string — callers must run the bytes
+   * the swagger declaring a base64 string: callers must run the bytes
    * through detectEncoding()/decodeBuffer().
    */
   async getBytes(accessToken: string, userKey: string, path: string): Promise<ArrayBuffer> {

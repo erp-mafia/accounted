@@ -61,7 +61,7 @@ interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
   searchTerm?: string
-  /** Underlag status per journal_entry_id (computeJeUnderlagStatus) — drives
+  /** Underlag status per journal_entry_id (computeJeUnderlagStatus): drives
    *  the per-row "Underlag"/"Underlag saknas" badges on booked rows. */
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
@@ -95,7 +95,7 @@ export default function TransactionHistoryList({
   const [filter, setFilter] = useState<HistoryFilter>('all')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
-  // The bank/private filter doesn't apply to SKV rows — they have no
+  // The bank/private filter doesn't apply to SKV rows: they have no
   // is_business flag. So when the filter is 'business' or 'private' we
   // implicitly hide SKV.
   const bankFiltered = transactions.filter((tx) => {
@@ -252,7 +252,7 @@ function BankHistoryRow({
   const hasInvoiceMatch =
     !isLinkedToInvoice && !!transaction.potential_invoice && !isBooked
 
-  // Underlag status — see computeJeUnderlagStatus. Unknown/not-yet-loaded JE
+  // Underlag status: see computeJeUnderlagStatus. Unknown/not-yet-loaded JE
   // renders neither badge (no false "saknas" flash while the enrichment loads).
   const jeStatus = transaction.journal_entry_id
     ? jeUnderlagStatus?.[transaction.journal_entry_id]
@@ -261,7 +261,7 @@ function BankHistoryRow({
   const missingUnderlag = isBooked && !transaction.document_id && jeStatus === 'missing'
   const showAttachItem = canWrite && !!onOpenAttachDocument
 
-  // Primary status badge — pick the most informative one.
+  // Primary status badge: pick the most informative one.
   const statusBadge = (() => {
     if (isBooked) {
       return (
@@ -364,7 +364,7 @@ function BankHistoryRow({
                     })}
                   </DropdownMenuItem>
                 )}
-                {/* Attach underlag — available on both booked rows (the route
+                {/* Attach underlag: available on both booked rows (the route
                     propagates the doc onto the verifikation) and unbooked. */}
                 {showAttachItem && (
                   <DropdownMenuItem onSelect={() => onOpenAttachDocument!(transaction)}>

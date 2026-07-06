@@ -79,7 +79,7 @@ describe('GET /api/salary/tax-tables/kommuner', () => {
     expect(fetchKommunTaxRates).toHaveBeenCalledWith(currentYear)
   })
 
-  it('caches per year — a second request for the same year does not refetch', async () => {
+  it('caches per year: a second request for the same year does not refetch', async () => {
     const req1 = new Request('http://localhost/api/salary/tax-tables/kommuner?year=2032')
     await GET(req1, { params: Promise.resolve({}) })
     const req2 = new Request('http://localhost/api/salary/tax-tables/kommuner?year=2032')

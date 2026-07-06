@@ -1,5 +1,5 @@
 /**
- * Focused tests for computeVatReport — the shared VAT computation used by
+ * Focused tests for computeVatReport: the shared VAT computation used by
  * gnubok_get_vat_report and gnubok_vat_review_widget. These exist because the
  * tools/call integration tests can't reach into the rutor math; this file
  * mocks Supabase to feed synthetic journal entry lines and asserts the rutor
@@ -65,7 +65,7 @@ describe('computeVatReport', () => {
 
   it('aggregates reverse-charge output VAT into ruta30/31/32 and the ruta49 formula', async () => {
     const lines: MockLine[] = [
-      // Reverse-charge purchase 25% — both sides booked correctly
+      // Reverse-charge purchase 25%: both sides booked correctly
       { account_number: '2614', debit_amount: 0, credit_amount: 500 },  // ruta30
       { account_number: '2645', debit_amount: 500, credit_amount: 0 },  // matching input → ruta48
       // Reverse-charge purchase 6%
@@ -103,7 +103,7 @@ describe('computeVatReport', () => {
 
     expect(result.rutor.ruta30).toBe(500)
     expect(result.rutor.ruta48).toBe(0)
-    // Without the matching input, ruta49 is inflated by 500 — the warning surfaces this.
+    // Without the matching input, ruta49 is inflated by 500: the warning surfaces this.
     expect(result.rutor.ruta49).toBe(500)
     expect(result.warnings.length).toBe(1)
     expect(result.warnings[0]).toMatch(/Omvänd betalningsskyldighet/)
@@ -113,8 +113,7 @@ describe('computeVatReport', () => {
   })
 
   it('does NOT warn when reverse-charge output is balanced by 2647 (domestic, no 2645)', async () => {
-    // Domestic reverse charge per ML 16:13 (byggtjänster, electronics > 100k SEK) —
-    // matching input lands on 2647, not 2645. The earlier check missed this.
+    // Domestic reverse charge per ML 16:13 (byggtjänster, electronics > 100k SEK):     // matching input lands on 2647, not 2645. The earlier check missed this.
     const lines: MockLine[] = [
       { account_number: '2614', debit_amount: 0, credit_amount: 500 },  // ruta30
       { account_number: '2647', debit_amount: 500, credit_amount: 0 },  // domestic input → ruta48
@@ -129,7 +128,7 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta30).toBe(500)
     expect(result.rutor.ruta48).toBe(500)
     expect(result.rutor.ruta49).toBe(0)
-    // No warning — the domestic mirror is correctly booked.
+    // No warning: the domestic mirror is correctly booked.
     expect(result.warnings).toEqual([])
   })
 
@@ -151,10 +150,10 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta05).toBe(2100)
   })
 
-  it('excludes 3004 (momsfri) from ruta05 — exempt sales must NOT be in the taxable base', async () => {
+  it('excludes 3004 (momsfri) from ruta05: exempt sales must NOT be in the taxable base', async () => {
     const lines: MockLine[] = [
       { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
-      { account_number: '3004', debit_amount: 0, credit_amount: 500 }, // exempt — must be excluded
+      { account_number: '3004', debit_amount: 0, credit_amount: 500 }, // exempt: must be excluded
     ]
 
     const result = await computeVatReport(
@@ -232,11 +231,11 @@ describe('computeVatReport', () => {
 
     await expect(
       computeVatReport({ period_type: 'monthly', year: 2026, period: 13 }, 'c', supabase)
-    ).rejects.toThrow(/period must be 1–12/)
+    ).rejects.toThrow(/period must be 1-12/)
 
     await expect(
       computeVatReport({ period_type: 'quarterly', year: 2026, period: 5 }, 'c', supabase)
-    ).rejects.toThrow(/period must be 1–4/)
+    ).rejects.toThrow(/period must be 1-4/)
 
     await expect(
       computeVatReport({ period_type: 'monthly', year: 1900, period: 1 }, 'c', supabase)

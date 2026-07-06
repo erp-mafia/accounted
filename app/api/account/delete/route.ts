@@ -1,7 +1,8 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
@@ -25,15 +26,18 @@ const DeleteAccountSchema = z.object({
  *
  * Precondition: the user must own zero non-archived companies. The RPC
  * enforces this at the DB level and raises SQLSTATE P0001 with a message
- * if the precondition fails — we return 409 in that case.
+ * if the precondition fails: we return 409 in that case.
+ *
+ * Not wrapped in withRouteContext: deletion must work for users with zero
+ * companies, so there is no company context to resolve. requireAuth() is
+ * used directly so MFA (AAL2) is still enforced on hosted: a stolen AAL1
+ * cookie must not be able to destroy the account. BankID-linked users are
+ * exempt from the AAL2 gate (BankID is inherently 2FA, see shouldEnforceMfa).
  */
 export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { user, supabase } = auth
 
   const result = await validateBody(request, DeleteAccountSchema)
   if (!result.success) return result.response
@@ -92,16 +96,16 @@ export async function POST(request: Request) {
   // Note: auth.users.email is intentionally NOT scrubbed. The original
   // address is retained as a legitimate-interest tombstone so that:
   //   (1) re-signup with the same email is blocked by Supabase's unique
-  //       constraint — deletion must feel permanent, not trivially
+  //       constraint: deletion must feel permanent, not trivially
   //       reversible by re-registering
   //   (2) support can verify identity when a former user asks to recover
   //       BFL-retained räkenskapsinformation
   // This must be documented in the privacy policy under legitimate
   // interest (GDPR Art. 6(1)(f)). The email is never read by the app
-  // after this point — login is impossible (row is banned) and the
+  // after this point: login is impossible (row is banned) and the
   // profile is anonymized, so no UI ever surfaces it.
   //
-  // user_metadata / app_metadata ARE wiped — they may contain display
+  // user_metadata / app_metadata ARE wiped: they may contain display
   // name, avatar, or provider info that isn't needed for recovery.
   // The admin API replaces (not merges) these, so passing {} clears them.
   const service = createServiceClient()
@@ -129,9 +133,6 @@ export async function POST(request: Request) {
 
   // Best-effort: clear the caller's session cookie too.
   await supabase.auth.signOut().catch(() => {})
-
-  // Request body is consumed; avoid unused-var lint.
-  void request
 
   return NextResponse.json({ success: true })
 }

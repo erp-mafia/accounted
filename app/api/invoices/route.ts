@@ -111,7 +111,7 @@ export const POST = withRouteContext(
 
     // Shared validation + computation (VAT rules, accrual guards, totals,
     // revenue-account override checks, server-side ROT/RUT, currency, item
-    // rows). Identical to the PATCH (draft edit) path — see build-invoice-write.
+    // rows). Identical to the PATCH (draft edit) path: see build-invoice-write.
     const build = await buildInvoiceWriteData({
       supabase,
       companyId: companyId!,
@@ -172,7 +172,7 @@ export const POST = withRouteContext(
       })
     }
 
-    // Allocate the F-series number on save (Fortnox-style) — UNLESS the caller
+    // Allocate the F-series number on save (Fortnox-style): UNLESS the caller
     // asked to save as an unnumbered draft. A direct create gives the user a
     // numbered draft they can download and send manually; "Spara som utkast"
     // (save_as_draft) defers numbering to the explicit "Granska och skapa" step
@@ -195,7 +195,7 @@ export const POST = withRouteContext(
           .select('invoice_number')
           .eq('id', invoice.id)
           .single()
-        // Guard on status='draft' for symmetry with the DELETE handler — only
+        // Guard on status='draft' for symmetry with the DELETE handler: only
         // drafts may be cancelled. At this point in the create flow the row
         // can't realistically be anything else, but the symmetry prevents a
         // future caller adding a status flip between insert and number-
@@ -231,7 +231,7 @@ export const POST = withRouteContext(
       .single()
 
     // Emit event only for real, issued invoices. Unnumbered drafts (save_as_draft)
-    // are not issued yet — the invoice.created event (which drives webhooks and the
+    // are not issued yet: the invoice.created event (which drives webhooks and the
     // audit log) fires when the user finalizes via "Granska och skapa".
     if (completeInvoice && documentType === 'invoice' && !invoiceInput.save_as_draft) {
       await eventBus.emit({
@@ -315,6 +315,9 @@ async function createCreditNote(
       our_reference: originalInvoice.our_reference,
       notes: input.reason || `Krediterar faktura ${originalInvoice.invoice_number}`,
       credited_invoice_id: input.credited_invoice_id,
+      // Copy the original's dimension bag so the credit-note verifikat nets
+      // against the same dimension cells in reports (dimensions PR7).
+      default_dimensions: originalInvoice.default_dimensions ?? {},
       status: 'sent',
     })
     .select()
@@ -328,7 +331,7 @@ async function createCreditNote(
     })
   }
 
-  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number; revenue_account?: string | null; article_id?: string | null; accrual_period_start?: string | null; accrual_period_end?: string | null; accrual_balance_account?: string | null }) => ({
+  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number; revenue_account?: string | null; article_id?: string | null; accrual_period_start?: string | null; accrual_period_end?: string | null; accrual_balance_account?: string | null; dimensions?: Record<string, string> }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
     line_type: item.line_type ?? 'product',
@@ -341,7 +344,7 @@ async function createCreditNote(
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
     // Carry the original's per-line revenue-account override so the reversal
     // hits the SAME account it originally credited (e.g. 3041, not the
-    // VAT-derived 3001) — otherwise the override account keeps a dangling
+    // VAT-derived 3001): otherwise the override account keeps a dangling
     // balance. article_id is preserved for the usage history.
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
@@ -353,6 +356,9 @@ async function createCreditNote(
     accrual_period_start: item.accrual_period_start ?? null,
     accrual_period_end: item.accrual_period_end ?? null,
     accrual_balance_account: item.accrual_balance_account ?? null,
+    // Same reasoning as revenue_account: the reversal must carry the exact
+    // per-item bag the original booked with (dimensions PR7).
+    dimensions: item.dimensions ?? {},
   }))
 
   const { error: itemsError } = await supabase.from('invoice_items').insert(creditNoteItems)
@@ -388,7 +394,7 @@ async function createCreditNote(
   const entityType = (creditNoteSettings?.entity_type as EntityType) || 'enskild_firma'
   const accountingMethod = (creditNoteSettings?.accounting_method as AccountingMethod) || 'accrual'
 
-  // Cash method skips: there's no original invoice JE to reverse — recognition
+  // Cash method skips: there's no original invoice JE to reverse, recognition
   // is deferred until refund.
   if (completeCreditNote && accountingMethod === 'accrual') {
     try {
@@ -410,12 +416,12 @@ async function createCreditNote(
       log.error('failed to create credit note journal entry', err as Error, {
         creditNoteId: creditNote.id,
       })
-      // Non-blocking — credit note still exists.
+      // Non-blocking: credit note still exists.
     }
 
     // Periodisering interplay: cancel remaining months and storno posted
     // dissolutions so origin + dissolutions + stornos + credit net to zero on
-    // both 29xx and 3xxx. Best-effort — never blocks the credit itself, but
+    // both 29xx and 3xxx. Best-effort: never blocks the credit itself, but
     // partial reversals are surfaced as a response warning so the user knows
     // the schedule stayed active.
     try {
@@ -431,7 +437,7 @@ async function createCreditNote(
           code: 'ACCRUAL_CANCEL_PARTIAL',
           message:
             'Fakturan krediterades, men en eller flera periodiseringsverifikat ' +
-            'kunde inte vändas. Periodiseringen är fortfarande aktiv — ' +
+            'kunde inte vändas. Periodiseringen är fortfarande aktiv: ' +
             'kontrollera under Bokföring → Periodiseringar.',
         })
       }

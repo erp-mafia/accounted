@@ -147,7 +147,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
       // not active in the chart. The engine throws AccountsNotInChartError; the
       // dispatcher must release the op back to 'pending' (retryable, see the
       // 6th enqueued response) and the route must return the structured error
-      // with code + account_numbers so the chat can offer activation — NOT a
+      // with code + account_numbers so the chat can offer activation: NOT a
       // raw error string.
       const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
       const settings = makeCompanySettings()
@@ -256,7 +256,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: { id: 'op-1' } },                     // CAS claim
         { data: customer },                           // fetch customer
         { data: { vat_registered: true } },           // company_settings VAT registration gate
-        { data: { id: 'inv-1', invoice_number: null } }, // insert invoice (no number — assigned at send)
+        { data: { id: 'inv-1', invoice_number: null } }, // insert invoice (no number: assigned at send)
         { data: null, error: null },                  // insert items
         { data: { id: 'inv-1', invoice_number: null, customer: customer, items: [] } }, // fetch complete invoice
         { data: null, error: null },                  // update pending op status
@@ -268,7 +268,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       expect(status).toBe(200)
       expect(body.data.invoice_id).toBe('inv-1')
-      // Drafts no longer reserve a number — assigned at send time instead
+      // Drafts no longer reserve a number: assigned at send time instead
       expect(body.data.invoice_number).toBeNull()
     })
 

@@ -41,7 +41,7 @@ interface MatchCandidate {
  * journal entry. Used by both /skattekonto and /transactions so we don't
  * have two copies of the same dialog drifting apart.
  *
- * The dialog owns its own data fetch — pass the row + open flag and it
+ * The dialog owns its own data fetch: pass the row + open flag and it
  * handles the rest. On successful match it calls onMatched(), letting the
  * caller refresh its data.
  */

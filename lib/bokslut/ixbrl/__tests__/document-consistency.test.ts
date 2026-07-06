@@ -1,5 +1,5 @@
 /**
- * Mechanical guards for TA §2.7.3 (repeated facts must be value-identical —
+ * Mechanical guards for TA §2.7.3 (repeated facts must be value-identical:
  * Bolagsverket rejects inconsistent duplicates) and TA §3.2 (valid XHTML with
  * only the five XML escape entities).
  */
@@ -59,7 +59,7 @@ describe('duplicate-fact consistency (TA §2.7.3)', () => {
     const input = makeInput()
     input.br['Overkursfond'] = { current: 50_000, previous: 50_000 }
     // FrittEgetKapital is tagged both as the BR subtotal and the disposition
-    // "Summa" — keep the single source consistent like build-input does.
+    // "Summa": keep the single source consistent like build-input does.
     input.totals.frittEgetKapital = { current: 270_000, previous: 150_000 }
     input.forvaltningsberattelse.resultatdisposition.overkursfond = 50_000
     input.forvaltningsberattelse.resultatdisposition.summa = 270_000

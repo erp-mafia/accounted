@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events/bus'
 import { makeFiscalPeriod } from '@/tests/helpers'
 
 // ============================================================
-// Mock — separate client (no .then) from query builder (thenable)
+// Mock: separate client (no .then) from query builder (thenable)
 // ============================================================
 
 let resultIdx: number
@@ -213,7 +213,7 @@ describe('validateYearEndReadiness', () => {
       { data: null, error: null, count: 0 },                                   // count drafts
       { data: [{ voucher_series: 'A' }], error: null },                        // voucher_sequences
       // rpc for detect_voucher_gaps handled by custom mock
-      { data: [], error: null },                                               // gap_explanations — empty
+      { data: [], error: null },                                               // gap_explanations: empty
       { data: { last_number: 10 }, error: null },                              // reconciliation: last_number
       { data: { voucher_number: 10 }, error: null },                           // reconciliation: max voucher
       { data: null, error: null, count: 5 },                                   // count posted
@@ -258,7 +258,7 @@ describe('validateYearEndReadiness', () => {
       { data: null, error: null, count: 0 },                                            // count drafts
       { data: [{ voucher_series: 'A' }, { voucher_series: 'B' }], error: null },        // voucher_sequences
       // rpc calls handled by custom mock
-      { data: [], error: null },                                                         // gap_explanations — empty
+      { data: [], error: null },                                                         // gap_explanations: empty
       { data: { last_number: 5 }, error: null },                                         // reconciliation A: last_number
       { data: { voucher_number: 5 }, error: null },                                      // reconciliation A: max voucher
       { data: { last_number: 3 }, error: null },                                         // reconciliation B: last_number
@@ -368,7 +368,7 @@ describe('validateYearEndReadiness', () => {
     const supabase = makeClient()
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(true)
-    // Period name intentionally not interpolated into the warning — see
+    // Period name intentionally not interpolated into the warning: see
     // year-end-service for rationale. We assert on the stable English
     // substring instead.
     expect(result.warnings.some((w: string) => w.includes('Next fiscal period already exists'))).toBe(true)

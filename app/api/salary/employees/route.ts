@@ -35,7 +35,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Mask personnummer — show birthdate, hide the 4-digit suffix
+  // Mask personnummer: show birthdate, hide the 4-digit suffix
   const masked = (data || []).map(emp => ({
     ...emp,
     personnummer: maskPersonnummer(decryptPersonnummer(emp.personnummer)),
@@ -111,6 +111,8 @@ export async function POST(request: Request) {
       vaxa_stod_eligible: body.vaxa_stod_eligible,
       vaxa_stod_start: body.vaxa_stod_start || null,
       vaxa_stod_end: body.vaxa_stod_end || null,
+      // Dimensions PR8: bag for the employee's P&L cost lines at booking.
+      default_dimensions: body.default_dimensions ?? {},
     })
     .select()
     .single()

@@ -184,9 +184,9 @@ async function backfillForUser(userId: string): Promise<number> {
     const sieName = sieNames.get(accountNumber)
     const classNum = parseInt(accountNumber.charAt(0), 10)
     if (sieName) {
-      console.warn(`  INFO: Account ${accountNumber} not in BAS — using SIE name: "${sieName}"`)
+      console.warn(`  INFO: Account ${accountNumber} not in BAS: using SIE name: "${sieName}"`)
     } else {
-      console.warn(`  WARNING: Account ${accountNumber} not in BAS or SIE — deriving all metadata`)
+      console.warn(`  WARNING: Account ${accountNumber} not in BAS or SIE: deriving all metadata`)
     }
 
     const classified = classifyAccount(accountNumber)
@@ -213,7 +213,7 @@ async function backfillForUser(userId: string): Promise<number> {
   console.log(`  ${fromBAS} from BAS, ${fromOverride} from overrides, ${fromFallback} from SIE/derived`)
 
   for (const row of rows) {
-    console.log(`    ${row.account_number} — ${row.account_name} (${row.account_type}, SRU: ${row.sru_code ?? 'none'})`)
+    console.log(`    ${row.account_number}: ${row.account_name} (${row.account_type}, SRU: ${row.sru_code ?? 'none'})`)
   }
 
   if (DRY_RUN) {

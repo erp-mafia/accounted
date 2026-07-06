@@ -36,7 +36,7 @@ function MfaEnrollContent() {
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
 
-  // UX defense — middleware already blocks this route for BankID-only users
+  // UX defense: middleware already blocks this route for BankID-only users
   // without a password, but a stale tab might land here too. Bounce them to
   // the set-password flow before they enroll a factor they cannot later
   // un-enroll without AAL2.

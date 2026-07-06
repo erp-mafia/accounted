@@ -31,14 +31,17 @@ import { eventBus } from '@/lib/events'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
+// default_dimensions stays in this projection: the inserted credit-note row is
+// handed to createSupplierCreditNoteEntry, which reads the bag off the row so
+// the reversing JE nets against the same dimension cells as the original.
 const SI_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, default_dimensions, created_at, updated_at'
 
 // GDPR Art.25 data minimisation: the original SI's `user_id` (the row's
-// historical creator) is never used in the credit flow — the new credit-note
+// historical creator) is never used in the credit flow: the new credit-note
 // row uses `ctx.userId` (the actor performing the credit). Don't fetch what
 // you don't need. `company_id` is already scoped by the `.eq('company_id')`
-// filter, so omit that too — the route can't write to a different one.
+// filter, so omit that too: the route can't write to a different one.
 // GDPR Art.25 data minimisation: only fields actually read in the credit
 // flow are projected. `user_id` and `company_id` were dropped earlier; this
 // round drops `notes` (the original SI's free-text notes are never copied
@@ -47,7 +50,7 @@ const SI_RESPONSE_COLUMNS =
 // `document_id`, `payment_reference`, `paid_amount`, `delivery_date`,
 // `received_date`, `is_credit_note`, `reversed_at`, `created_at`,
 // `updated_at`) that the credit handler never reads. SEK-conversion fields
-// (`subtotal_sek` / `vat_amount_sek` / `total_sek`) ARE read — they're
+// (`subtotal_sek` / `vat_amount_sek` / `total_sek`) ARE read: they're
 // copied verbatim onto the credit-note row so the 2440 reversal nets
 // correctly.
 const SI_FULL_COLUMNS = `
@@ -55,9 +58,9 @@ const SI_FULL_COLUMNS = `
   currency, exchange_rate,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
   vat_treatment, reverse_charge, remaining_amount,
-  is_credit_note, credited_invoice_id, arrival_number,
+  is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
   supplier:suppliers(id, name, supplier_type),
-  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate)
+  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions)
 `
 
 const SupplierInvoiceCredited = z.object({
@@ -76,13 +79,13 @@ registerEndpoint({
   description:
     'Creates a kreditfaktura that reverses the original supplier invoice. Under accrual the reversing JE is posted atomically (Debit 2440 / Credit expense + Credit 2641). The original status flips to `credited`. Strict-mode: any failure rolls back the credit-note row. Idempotent. Dry-runnable.',
   useWhen:
-    'You need to nullify a registered, approved, partially_paid, or paid supplier invoice — for a returned shipment, an over-invoice, or a vendor dispute resolution. Use dry-run to confirm the totals first.',
+    'You need to nullify a registered, approved, partially_paid, or paid supplier invoice: for a returned shipment, an over-invoice, or a vendor dispute resolution. Use dry-run to confirm the totals first.',
   doNotUseFor:
-    'Editing line items on an unchanged invoice (use PATCH on `registered` SIs). Crediting an already-credited SI (returns 409 SI_CREDIT_ALREADY_CREDITED). Reversing a v1-issued credit (no v1 endpoint today — use the dashboard).',
+    'Editing line items on an unchanged invoice (use PATCH on `registered` SIs). Crediting an already-credited SI (returns 409 SI_CREDIT_ALREADY_CREDITED). Reversing a v1-issued credit (no v1 endpoint today: use the dashboard).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'Today\'s date is used as the credit-note invoice_date. It must fall in an open fiscal period — locked period returns 400 SI_CREDIT_PERIOD_LOCKED.',
-    'Cash basis (kontantmetoden): no reversing JE is posted — recognition is deferred until a refund transaction is booked. The credit-note row is still created so the AP audit trail stays consistent.',
+    'Today\'s date is used as the credit-note invoice_date. It must fall in an open fiscal period: locked period returns 400 SI_CREDIT_PERIOD_LOCKED.',
+    'Cash basis (kontantmetoden): no reversing JE is posted: recognition is deferred until a refund transaction is booked. The credit-note row is still created so the AP audit trail stays consistent.',
     'The original SI is flipped to `credited` regardless of how much of it was already paid; reconcile the bank refund via the transactions endpoints.',
   ],
   example: {
@@ -154,6 +157,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       credited_invoice_id: string | null
       supplier_invoice_number: string
       arrival_number: number
+      default_dimensions: Record<string, string> | null
       supplier: SupplierObj | SupplierObj[] | null
       items?: Array<{
         sort_order: number
@@ -167,6 +171,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         vat_rate: number
         vat_amount: number
         reverse_charge_rate: number | null
+        dimensions: Record<string, string> | null
       }>
     } & Record<string, unknown>
 
@@ -278,6 +283,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         remaining_amount: 0,
         is_credit_note: true,
         credited_invoice_id: typed.id,
+        // Copy the original's dimension bag so the credit-note verifikat nets
+        // against the same dimension cells in reports (dimensions PR7).
+        default_dimensions: typed.default_dimensions ?? {},
       })
       .select(SI_RESPONSE_COLUMNS)
       .single()
@@ -311,13 +319,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // Preserve the self-assessed RC rate so the credit note reverses fiktiv
       // moms at the same rate the original was booked at.
       reverse_charge_rate: item.reverse_charge_rate,
+      // Same reasoning: the reversal must carry the exact per-item bag the
+      // original booked with (dimensions PR7).
+      dimensions: item.dimensions ?? {},
     }))
     if (creditItems.length > 0) {
       const { error: itemsErr } = await ctx.supabase
         .from('supplier_invoice_items')
         .insert(creditItems)
       if (itemsErr) {
-        // items_insert fires before any engine call — no JE could exist.
+        // items_insert fires before any engine call: no JE could exist.
         await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'items_insert', false)
         return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
           requestId: ctx.requestId,
@@ -361,7 +372,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             // roll back the credit note before returning, so we never leave
             // a credit note row with registration_journal_entry_id=null while
             // the reversing JE sits live on the books.
-            ctx.log.error('credit-note JE link update failed — stornoing JE and rolling back row', linkErr, {
+            ctx.log.error('credit-note JE link update failed: stornoing JE and rolling back row', linkErr, {
               creditNoteId,
               originalId: typed.id,
               journalEntryId: entry.id,
@@ -371,7 +382,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             try {
               await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entry.id, today)
             } catch (revErr) {
-              ctx.log.error('JE storno failed after credit-note link-update error — manual reconciliation required', revErr as Error, {
+              ctx.log.error('JE storno failed after credit-note link-update error: manual reconciliation required', revErr as Error, {
                 creditNoteId,
                 journalEntryId: entry.id,
                 userId: ctx.userId,
@@ -386,7 +397,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             })
           }
         } else {
-          // Engine returned null before posting — no JE exists.
+          // Engine returned null before posting: no JE exists.
           await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'no_fiscal_period', false)
           return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
             requestId: ctx.requestId,
@@ -394,7 +405,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           })
         }
       } catch (err) {
-        // Engine threw — conservatively assume the JE may have committed.
+        // Engine threw: conservatively assume the JE may have committed.
         await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'credit_journal_entry', true)
         if (isBookkeepingError(err)) {
           return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
@@ -418,7 +429,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // A kreditfaktura nullifies the AP obligation on the original (BFL 5 kap
     // 5 §); refunds of already-paid amounts are recorded separately via the
     // transactions endpoints. So both `remaining_amount` and `status` are set
-    // unconditionally — no arithmetic on remaining_amount - total (the prior
+    // unconditionally: no arithmetic on remaining_amount - total (the prior
     // calc was a logic error: remaining_amount ≤ total, so the result was
     // always ≤ 0, forcing status to 'credited' anyway via the clamp).
     const { data: originalUpdated, error: originalUpdateErr } = await ctx.supabase
@@ -439,7 +450,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         originalId: typed.id,
         creditNoteId,
       })
-      // Don't roll back the credit note here — the JE exists on the books
+      // Don't roll back the credit note here: the JE exists on the books
       // and rolling back leaves a partial state. Surface the error; manual
       // reconciliation will flip the original.
       return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
@@ -524,7 +535,7 @@ async function rollbackCreditNote(
       .eq('id', creditNoteId)
       .eq('company_id', companyId)
     if (parentErr) {
-      log.error('credit-note hard-rollback failed — orphan row', parentErr, {
+      log.error('credit-note hard-rollback failed: orphan row', parentErr, {
         creditNoteId,
         companyId,
         rollbackReason: reason,
@@ -545,7 +556,7 @@ async function rollbackCreditNote(
     .eq('id', creditNoteId)
     .eq('company_id', companyId)
   if (updateErr) {
-    log.error('credit-note soft-rollback failed — manual reconciliation required', updateErr, {
+    log.error('credit-note soft-rollback failed: manual reconciliation required', updateErr, {
       creditNoteId,
       companyId,
       rollbackReason: reason,

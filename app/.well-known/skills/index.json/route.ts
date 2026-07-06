@@ -1,5 +1,5 @@
 /**
- * /.well-known/skills/index.json — workflow catalogue exposed at a well-known URL.
+ * /.well-known/skills/index.json: workflow catalogue exposed at a well-known URL.
  *
  * Mirrors the MCP `gnubok_list_skills` tool: a flat array of skill descriptors
  * (slug, name, summary, tags) that external agents can discover without

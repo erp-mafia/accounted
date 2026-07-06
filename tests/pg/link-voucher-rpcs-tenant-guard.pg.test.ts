@@ -7,7 +7,7 @@
  * authenticated user could call them directly with another company's id and
  * mutate that tenant's invoices + payment rows. The guard enforces membership
  * for anon/authenticated while leaving service_role and direct/superuser access
- * (this harness, migrations) untouched — same pattern as the GL read-RPC guard
+ * (this harness, migrations) untouched, same pattern as the GL read-RPC guard
  * (tests/pg/gl_lines_rpc_tenant_guard.pg.test.ts).
  */
 import { describe, it, expect } from 'vitest'
@@ -111,7 +111,7 @@ async function seedPostedVoucher(params: {
 const LINK_INVOICE = `SELECT public.link_invoice_to_voucher($1, $2, $3, $4, $5) AS result`
 const LINK_SUPPLIER = `SELECT public.link_supplier_invoice_to_voucher($1, $2, $3, $4, $5) AS result`
 
-describe('voucher-link write RPCs — tenant-isolation guard', () => {
+describe('voucher-link write RPCs: tenant-isolation guard', () => {
   it('blocks an authenticated non-member from linking another company\'s invoice', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
@@ -139,11 +139,11 @@ describe('voucher-link write RPCs — tenant-isolation guard', () => {
     )
     expect(payments.rows).toHaveLength(0)
 
-    // A member of company A still links successfully through the same path —
+    // A member of company A still links successfully through the same path:
     // the guard must not break legitimate user-session calls. The spoofed
     // p_user_id is ignored for user-session callers: the JWT sub is
     // authoritative for payment-row attribution (GDPR Art. 32). Asserted
-    // inside the context — withUserContext rolls its transaction back.
+    // inside the context: withUserContext rolls its transaction back.
     const spoofedUserId = randomUUID()
     await withUserContext(a.userId, async (client) => {
       const res = await client.query(LINK_INVOICE, [invoiceId, voucherId, spoofedUserId, a.companyId, null])
@@ -195,7 +195,7 @@ describe('voucher-link write RPCs — tenant-isolation guard', () => {
       side: 'ar',
     })
 
-    // The bare pool has no request.jwt.claims — the trusted bypass that the
+    // The bare pool has no request.jwt.claims: the trusted bypass that the
     // harness, migrations and service-role API paths rely on.
     const res = await getPool().query(LINK_INVOICE, [invoiceId, voucherId, a.userId, a.companyId, null])
     expect(res.rows[0].result).toMatchObject({ ok: true, invoice_status: 'paid' })

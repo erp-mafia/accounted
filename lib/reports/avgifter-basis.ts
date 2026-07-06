@@ -2,12 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
- * Arbetsgivaravgiftsunderlag — Employer contribution basis report.
+ * Arbetsgivaravgiftsunderlag: Employer contribution basis report.
  *
  * Monthly breakdown by avgifter rate category:
  * - Standard (31.42%)
  * - Reduced 65+ (10.21%)
- * - Youth (20.81%, Apr 2026–Sep 2027)
+ * - Youth (20.81%, Apr 2026-Sep 2027)
  * - Växa-stöd (10.21%)
  *
  * Used for reconciling against AGI filings (Ruta 060-062)

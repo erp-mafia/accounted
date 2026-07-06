@@ -9,13 +9,13 @@ const log = createLogger('account-backfill')
  * Seed missing standard BAS accounts into a company's chart on demand.
  *
  * A company chart starts minimal, and legitimate engine flows routinely reach
- * accounts that exist in BAS 2026 but were never added — öresavrundning on
+ * accounts that exist in BAS 2026 but were never added: öresavrundning on
  * 3740 the first time a Bankgiro payment lands a sub-krona off, a first legal
  * invoice on 6580. Failing the whole entry for that (AccountsNotInChartError)
  * turns a standard account into a dead end, so the engine backfills instead.
  *
  * Deliberately conservative:
- *  - Only accounts present in BAS_REFERENCE are seeded — unknown numbers stay
+ *  - Only accounts present in BAS_REFERENCE are seeded: unknown numbers stay
  *    missing and surface as AccountsNotInChartError in the caller.
  *  - An account that exists but is INACTIVE is never touched: deactivation is
  *    a deliberate user choice, and silently reactivating would override it.
@@ -39,7 +39,7 @@ export async function backfillStandardBASAccounts(
     )
   if (candidates.length === 0) return []
 
-  // Never resurrect rows that already exist (active or inactive) — the caller
+  // Never resurrect rows that already exist (active or inactive): the caller
   // saw them as missing because they are inactive, and that stays their state.
   const { data: existing, error: existingError } = await supabase
     .from('chart_of_accounts')
@@ -74,7 +74,7 @@ export async function backfillStandardBASAccounts(
 
   const { error: insertError } = await supabase.from('chart_of_accounts').insert(rows)
   if (insertError) {
-    // Unique violation = another request seeded it concurrently — that's fine,
+    // Unique violation = another request seeded it concurrently: that's fine,
     // the account exists now. Anything else: log and let the caller's
     // re-resolution decide what is still missing.
     if (insertError.code !== '23505' && !insertError.message?.includes('duplicate')) {

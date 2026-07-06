@@ -29,7 +29,7 @@ export interface ProposedDisposition {
   /** Calculator-specific breakdown the UI can render in an "Visa beräkning"
    *  panel. Free-form so each calculator can show its own details. */
   computation?: Record<string, unknown>
-  /** True if this proposal cannot be skipped — e.g. periodiseringsfond from
+  /** True if this proposal cannot be skipped: e.g. periodiseringsfond from
    *  tax year N-6 that must be reversed. UI disables the skip control. */
   required?: boolean
 }

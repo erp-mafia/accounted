@@ -1,5 +1,5 @@
 /**
- * Support recipient — server-side only.
+ * Support recipient: server-side only.
  * Used by the /api/support/contact route. Never exposed to the client.
  *
  * Resolution order (evaluated lazily so extensions registered via

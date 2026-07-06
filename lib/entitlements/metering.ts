@@ -6,7 +6,7 @@ import type { CapabilityKey } from './keys'
  * metering must never break the feature it measures, so failures are swallowed.
  *
  * Usage cannot be backfilled, so we capture it from day one even though no
- * usage-based pricing exists yet — it is the raw material for future firm-level
+ * usage-based pricing exists yet: it is the raw material for future firm-level
  * "active company" / consumption billing.
  */
 export async function recordMeteredEvent(

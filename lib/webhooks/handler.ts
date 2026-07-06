@@ -2,7 +2,7 @@
  * Webhook event-bus handler.
  *
  * Subscribes to every CoreEventType the v1 API surface emits and converts
- * each emission into N rows in `webhook_deliveries` — one per active webhook
+ * each emission into N rows in `webhook_deliveries`: one per active webhook
  * subscribed to (company_id, event_type). The dispatcher cron picks them
  * up at next-minute boundary and POSTs to the receiver.
  *
@@ -14,8 +14,8 @@
  *     runs inside Promise.allSettled in the bus (see lib/events/bus.ts), so
  *     a DB insert failure is logged but doesn't crash the emitter.
  *   - We capture `previous_attributes` only for events whose payload carries
- *     both a prior and current shape. Phase 6 PR-1 emits null for everything
- *     — adding the diff is a follow-up that requires touching each route's
+ *     both a prior and current shape. Phase 6 PR-1 emits null for everything:
+ *     adding the diff is a follow-up that requires touching each route's
  *     emit() call site to capture the prior row.
  *   - Service-role client because this code runs from the bus, outside any
  *     authenticated Supabase context.
@@ -35,7 +35,7 @@ const log = createLogger('webhooks/handler')
  * MCP telemetry events and internal-only flows (event_log writes, etc.) are
  * deliberately excluded.
  *
- * Adding a new event type to this set is a public-API change — bump
+ * Adding a new event type to this set is a public-API change: bump
  * API_V1_VERSION + add to the changelog when you do.
  */
 const PUBLIC_WEBHOOK_EVENTS = new Set<CoreEventType>([
@@ -69,7 +69,7 @@ let registered = false
 
 /**
  * Subscribe the webhook handler to every event in PUBLIC_WEBHOOK_EVENTS.
- * Idempotent — safe to call from ensureInitialized() across hot reloads.
+ * Idempotent: safe to call from ensureInitialized() across hot reloads.
  */
 export function registerWebhookHandler(): void {
   if (registered) return
@@ -78,7 +78,7 @@ export function registerWebhookHandler(): void {
   for (const eventType of PUBLIC_WEBHOOK_EVENTS) {
     eventBus.on(eventType, async (payload) => {
       // payload type depends on eventType but every variant carries
-      // companyId — the only field we structurally need here.
+      // companyId: the only field we structurally need here.
       const companyId = (payload as { companyId?: string }).companyId
       if (!companyId) {
         // Surface as an error: every CoreEvent payload variant types
@@ -86,7 +86,7 @@ export function registerWebhookHandler(): void {
         // bug that silently breaks webhook delivery for that event. Logging
         // at error level ensures it shows up in monitoring rather than
         // disappearing into routine warn-noise.
-        log.error('event missing companyId — webhook fanout skipped', new Error('missing companyId'), { eventType })
+        log.error('event missing companyId: webhook fanout skipped', new Error('missing companyId'), { eventType })
         return
       }
 
@@ -108,7 +108,7 @@ export function registerWebhookHandler(): void {
 /**
  * Drop fields from the in-process event payload that have no value to an
  * external webhook receiver. Currently strips:
- *   - userId: an internal Supabase auth.users.id UUID — no value to the
+ *   - userId: an internal Supabase auth.users.id UUID: no value to the
  *     receiver, identifies the gnubok-side actor not the resource. The
  *     companyId stays (it's the tenant scope, useful for multi-tenant
  *     receivers).
@@ -156,7 +156,7 @@ async function fanOutToWebhooks(args: {
   if (!webhooks || webhooks.length === 0) return
 
   // Synthesise a correlation id for the fanout batch. The event bus is
-  // async — by the time we reach here the originating route's request
+  // async: by the time we reach here the originating route's request
   // context is gone, so we can't recover the live request_id. A fresh
   // 'whfan_<uuid>' keeps the BFNAR 2013:2 kap 8 § behandlingshistorik
   // requirement satisfied (the column is never NULL on a fresh insert)

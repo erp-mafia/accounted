@@ -1,9 +1,9 @@
 /**
- * /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret — POST :rotate-secret verb.
+ * /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret: POST :rotate-secret verb.
  *
  * Generates a fresh HMAC signing secret for the webhook and returns it
- * EXACTLY ONCE in the response. The old secret is invalidated immediately
- * — there is no grace period. Callers must coordinate the rotation:
+ * EXACTLY ONCE in the response. The old secret is invalidated immediately:
+ * there is no grace period. Callers must coordinate the rotation:
  *
  *   1. Stage the new secret on the receiver (separate config slot,
  *      do NOT activate yet).
@@ -12,7 +12,7 @@
  *   4. POST /webhooks/{id}/test to verify the receiver accepts the new
  *      signature.
  *
- * Steps 2–3 are the window where in-flight deliveries from the dispatcher
+ * Steps 2-3 are the window where in-flight deliveries from the dispatcher
  * may carry the new signature; receivers must accept both for at most a
  * few seconds. If your operational tolerance for that window is zero,
  * disable the webhook before rotation (`PATCH active=false`) and re-enable
@@ -42,11 +42,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks/:id/rotate-secret',
   summary: 'Rotate the HMAC signing secret on a webhook.',
   description:
-    'Generates a fresh HMAC signing secret for the webhook and returns it EXACTLY ONCE. The previous secret is invalidated immediately. There is no grace period — coordinate the rotation on the receiver side BEFORE calling this endpoint, or temporarily disable the webhook (PATCH active=false) to pause delivery while you swap secrets.',
+    'Generates a fresh HMAC signing secret for the webhook and returns it EXACTLY ONCE. The previous secret is invalidated immediately. There is no grace period: coordinate the rotation on the receiver side BEFORE calling this endpoint, or temporarily disable the webhook (PATCH active=false) to pause delivery while you swap secrets.',
   useWhen:
     'After a suspected secret leak, on a routine rotation cadence (Stripe pattern: every 90 days for compliance-grade integrations), or when changing the receiver implementation and you want to invalidate the old secret deliberately.',
   doNotUseFor:
-    'Routine integration setup — the secret returned at create time is the canonical one. Recovering a lost secret (rotation does not recover the prior value; it issues a fresh one).',
+    'Routine integration setup: the secret returned at create time is the canonical one. Recovering a lost secret (rotation does not recover the prior value; it issues a fresh one).',
   pitfalls: [
     'The secret is returned exactly once. If you lose this response, the recovery path is to rotate again.',
     'In-flight deliveries between the rotation and the receiver-side update may fail signature verification on the new secret. Pause the webhook (PATCH active=false) first if your tolerance for that window is zero.',
@@ -79,7 +79,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Single atomic UPDATE … RETURNING name. The preflight existence-check
     // SELECT is unnecessary because PostgREST's .select(...).maybeSingle()
-    // on the UPDATE returns null when no row matched — which is the same
+    // on the UPDATE returns null when no row matched: which is the same
     // signal (existence) the SELECT gave us, but in one round trip and
     // without the TOCTOU window a separate SELECT introduces.
     //
@@ -99,10 +99,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const w = updatedRow as { id: string; name: string }
 
-    // Audit log entry — V16 security event. Records the rotation with
+    // Audit log entry: V16 security event. Records the rotation with
     // actor attribution but NEVER the secret value itself (signing
     // material must not land in the audit trail). new_state carries the
-    // event metadata; the secret is omitted by design. CC7.2 — surface
+    // event metadata; the secret is omitted by design. CC7.2: surface
     // a structured warning when the audit write fails so SIEM can alert.
     const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
       user_id: ctx.userId,
@@ -124,7 +124,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Cache-Control: no-store prevents any intermediary (CDN, proxy,
     // load-balancer access log, API gateway, browser cache) from
     // persisting the response body. The HMAC secret is sensitive
-    // credential material returned exactly once — landing it in an
+    // credential material returned exactly once: landing it in an
     // intermediary log store with a different retention policy than
     // intended would defeat the rotation's purpose (Art.25 / CC6.1).
     return ok(

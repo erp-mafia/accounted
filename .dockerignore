@@ -15,6 +15,7 @@ tests/
 .vscode/
 *.md
 !README.md
-!DOCKER.md
+docs/*.md
+!docs/DOCKER.md
 LICENSE
 docker-compose*.yml

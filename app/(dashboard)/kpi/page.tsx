@@ -73,7 +73,7 @@ export default function KpiPage() {
       setPreferences(data)
       if (selectedPeriod) await fetchReport(selectedPeriod)
     } catch {
-      // Silently fail — user can retry
+      // Silently fail: user can retry
     } finally {
       setIsSavingPrefs(false)
     }

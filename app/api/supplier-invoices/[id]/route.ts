@@ -126,7 +126,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  // Block direct deletion of credit notes — deleting just the row would orphan the
+  // Block direct deletion of credit notes: deleting just the row would orphan the
   // posted reversal JE and silently break momsdeklaration. The user must instead
   // run "Ångra kreditering" on the original, which storno-reverses the JE and
   // restores the original's status atomically.
@@ -149,9 +149,9 @@ export async function DELETE(
 
   // Booked invoices must go through the credit flow (mirrors the credit-note
   // guard above). Two independent blockers:
-  //   (a) a posted registration verifikat — deleting the row would orphan it
+  //   (a) a posted registration verifikat: deleting the row would orphan it
   //       and silently understate 2440/2641 for the momsdeklaration;
-  //   (b) an accrual schedule — accrual_schedules.supplier_invoice_id is
+  //   (b) an accrual schedule: accrual_schedules.supplier_invoice_id is
   //       ON DELETE RESTRICT, so the invoice DELETE below would fail AFTER the
   //       items were already deleted, leaving a broken invoice with zero rows.
   if (existing.registration_journal_entry_id) {

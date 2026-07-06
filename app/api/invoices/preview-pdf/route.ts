@@ -32,7 +32,7 @@ export async function POST(request: Request) {
   }
 
   // When customer_id is omitted, only allow the synthetic preview if the
-  // company has no real customers — this is the settings-preview dead-end
+  // company has no real customers: this is the settings-preview dead-end
   // case. Derived server-side so a client can't bypass the ownership check
   // by passing a flag.
   const isMockCustomer = !customer_id
@@ -104,7 +104,7 @@ export async function POST(request: Request) {
   const docType: InvoiceDocumentType = document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
 
-  // VAT registration gate — mirror the server-side write gate
+  // VAT registration gate: mirror the server-side write gate
   // (lib/invoices/build-invoice-write.ts) so the preview never shows output VAT
   // for a non-momsregistrerad seller. Without this the per-item fallback below
   // (`?? vatRules.rate`) would render 25% for a Swedish customer even though the

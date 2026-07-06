@@ -71,7 +71,7 @@ describe('reverseCp437Mojibake (CP437 read as CP1252)', () => {
   })
 })
 
-describe('resolveCorrectName — CP437 branch', () => {
+describe('resolveCorrectName: CP437 branch', () => {
   it('reverses a CP437-as-CP1252 name without a sibling', () => {
     expect(resolveCorrectName('™vriga fastighetskostnader', [])).toEqual({
       corrected: 'Övriga fastighetskostnader',
@@ -104,7 +104,7 @@ describe('resolveCorrectName', () => {
   it('restores a lost-byte name by wildcard-matching one sibling', () => {
     const r = resolveCorrectName(`Ackumulerade nedskrivningar p${REPLACEMENT_CHAR} bilar`, [
       'Ackumulerade nedskrivningar på bilar',
-      'Ackumulerade avskrivningar på bilar', // same length but different word — must NOT match
+      'Ackumulerade avskrivningar på bilar', // same length but different word: must NOT match
     ])
     expect(r).toEqual({
       corrected: 'Ackumulerade nedskrivningar på bilar',
@@ -135,7 +135,7 @@ describe('resolveCorrectName', () => {
 
   it('ignores corrupt candidates when choosing a canonical', () => {
     const r = resolveCorrectName('Leverantorsskulder', [
-      'LeverantÃ¶rsskulder', // mojibake candidate — ignored
+      'LeverantÃ¶rsskulder', // mojibake candidate: ignored
       'Leverantörsskulder', // the clean one
     ])
     expect(r?.corrected).toBe('Leverantörsskulder')
@@ -155,7 +155,7 @@ describe('resolveCorrectName', () => {
     // The dry-run bug: "F�rmedlad frakt" wildcard-matched "F”rmedlad frakt"
     // (itself a different mojibake). Only the genuinely clean sibling wins.
     const r = resolveCorrectName(`F${REPLACEMENT_CHAR}rmedlad frakt`, [
-      'F”rmedlad frakt', // CP1252 artifact — not clean, must be ignored
+      'F”rmedlad frakt', // CP1252 artifact: not clean, must be ignored
       'Förmedlad frakt', // the clean one
     ])
     expect(r).toEqual({ corrected: 'Förmedlad frakt', method: 'sibling_lostbyte' })

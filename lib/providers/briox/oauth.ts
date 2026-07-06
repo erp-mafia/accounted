@@ -10,7 +10,7 @@ interface BrioxTokenData {
   access_token: string;
   refresh_token: string;
   // Swagger declares both as strings ("35649125", "1640772931") but be
-  // tolerant of numbers — toTokenResponse coerces before arithmetic.
+  // tolerant of numbers: toTokenResponse coerces before arithmetic.
   client_id: string | number;
   expire_date: string;
   expire_timestamp: string | number;
@@ -56,8 +56,8 @@ async function postForToken(url: string, description: string): Promise<TokenResp
 /**
  * Exchange the user's account ID + application token for an access/refresh
  * token pair. The "clientid" is the user's Briox account ID (the long number
- * next to the company name under "Your Account"), NOT an app-level credential
- * — Briox has no developer client id/secret on our side.
+ * next to the company name under "Your Account"), NOT an app-level credential:
+ * Briox has no developer client id/secret on our side.
  */
 export async function exchangeBrioxCode(
   accountId: string,
@@ -70,7 +70,7 @@ export async function exchangeBrioxCode(
 /**
  * Refresh an expired access token. Per the swagger, /tokenrefresh takes the
  * refresh token as `refreshtoken` and the CURRENT (expired) access token as
- * `token`. Briox rotates both tokens — the caller must persist the new
+ * `token`. Briox rotates both tokens: the caller must persist the new
  * refresh_token from the response or the next refresh will fail.
  */
 export async function refreshBrioxToken(

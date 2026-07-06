@@ -6,7 +6,7 @@
  * registered with Bankgirot; the file is uploaded and Bankgirot routes the
  * funds to the receiver bank accounts.
  *
- * Format reference: Bankgirot — "Leverantörsbetalningar Användarmanual",
+ * Format reference: Bankgirot: "Leverantörsbetalningar Användarmanual",
  *                   Posttyp specification (TK 11, 14, 54, 29).
  *                   https://www.bankgirot.se/tjanster/leverantorsbetalningar
  *
@@ -26,7 +26,7 @@ export interface BgLbCompanyData {
 
 export interface BgLbEmployee {
   name: string
-  /** 4–5 digit clearing number. */
+  /** 4-5 digit clearing number. */
   clearingNumber: string
   /** Up to 10-digit bank account number. */
   bankAccountNumber: string
@@ -81,7 +81,7 @@ export function generateBgLb(
 
   const records: string[] = []
 
-  // ─── Posttyp 11 — Öppningspost ───
+  // ─── Posttyp 11: Öppningspost ───
   // Pos 1-2:   "11"
   // Pos 3-12:  Sender bankgiro (10 digits, right-justified, zero-padded)
   // Pos 13-18: Created date YYMMDD
@@ -101,7 +101,7 @@ export function generateBgLb(
       pad('', 28)
   )
 
-  // ─── Posttyp 54 — Betalning till bankkonto (one per employee) ───
+  // ─── Posttyp 54: Betalning till bankkonto (one per employee) ───
   // Pos 1-2:   "54"
   // Pos 3-6:   Clearing number (4 digits, right-justified, zero-padded)
   //            5-digit Swedbank clearings: digit 5 goes in pos 7 (we shift
@@ -130,7 +130,7 @@ export function generateBgLb(
     )
   }
 
-  // ─── Posttyp 29 — Slutpost ───
+  // ─── Posttyp 29: Slutpost ───
   // Pos 1-2:   "29"
   // Pos 3-12:  Sender bankgiro
   // Pos 13-20: Total record count incl. opening + closing (8 digits)
@@ -171,7 +171,7 @@ export function generateBgLb(
  *
  * Layout:
  *   1× Öppningspost (TK 11)
- *   1× Betalning till BG (TK 14) — receiver BG, OCR, amount
+ *   1× Betalning till BG (TK 14): receiver BG, OCR, amount
  *   1× Slutpost (TK 29)
  */
 export function generateBankgiroPaymentBgLb(
@@ -207,7 +207,7 @@ export function generateBankgiroPaymentBgLb(
 
   const records: string[] = []
 
-  // ─── Posttyp 11 — Öppningspost ───
+  // ─── Posttyp 11: Öppningspost ───
   records.push(
     pad('11', 2) +
       padNumber(senderBg, 10) +
@@ -219,7 +219,7 @@ export function generateBankgiroPaymentBgLb(
       pad('', 28)
   )
 
-  // ─── Posttyp 14 — Betalning till BG ───
+  // ─── Posttyp 14: Betalning till BG ───
   // Pos 1-2:   "14"
   // Pos 3-12:  Receiver bankgiro (10 digits)
   // Pos 13-37: OCR / reference (25 chars, right-justified zero-padded for OCR)
@@ -235,7 +235,7 @@ export function generateBankgiroPaymentBgLb(
       padText(payment.receiverName ?? options.periodLabel, 25)
   )
 
-  // ─── Posttyp 29 — Slutpost ───
+  // ─── Posttyp 29: Slutpost ───
   const totalRecords = records.length + 1
   records.push(
     pad('29', 2) +

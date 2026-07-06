@@ -11,7 +11,7 @@ export type ContextFactory = (
   extensionId: string
 ) => ExtensionContext
 
-/** Lazy-loaded context factory — set during initialization */
+/** Lazy-loaded context factory: set during initialization */
 let contextFactory: ContextFactory | null = null
 
 /**
@@ -23,7 +23,7 @@ export function setContextFactory(factory: ContextFactory): void {
 }
 
 /**
- * Extension Registry — singleton that manages extension lifecycle.
+ * Extension Registry: singleton that manages extension lifecycle.
  *
  * - register() stores extension and wires event handlers to the bus
  * - unregister() unhooks handlers and removes extension
@@ -42,7 +42,7 @@ class ExtensionRegistry {
    */
   register(extension: Extension): void {
     if (this.extensions.has(extension.id)) {
-      // Extension already registered — skip silently (expected during hot reloads)
+      // Extension already registered: skip silently (expected during hot reloads)
       return
     }
 
@@ -64,7 +64,7 @@ class ExtensionRegistry {
               ctx = contextFactory(supabase, payload.userId, companyId, extension.id)
             } catch {
               // Context creation failed (e.g. no request cookies in cron jobs).
-              // Handler still gets called — ctx will be undefined.
+              // Handler still gets called: ctx will be undefined.
             }
           }
           return handler(payload, ctx)

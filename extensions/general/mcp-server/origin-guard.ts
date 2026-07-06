@@ -10,7 +10,7 @@
  * backend connector, Claude Desktop, the npx gnubok-mcp bridge, Claude Code,
  * and MCP Inspector (whose Node proxy makes the actual call). A browser page
  * sends its own origin: allowed only when it matches the deployment's own
- * host — compared against the request Host (covers Vercel previews and
+ * host: compared against the request Host (covers Vercel previews and
  * self-hosted domains without hardcoding) and NEXT_PUBLIC_APP_URL (covers
  * proxies that rewrite Host). Anything else is a cross-site browser request
  * the endpoint never serves (it sets no CORS headers), so reject explicitly.
@@ -24,7 +24,7 @@ export function isForbiddenOrigin(request: Request): boolean {
     originHost = new URL(origin).host
   } catch {
     // Malformed Origin (including the literal "null" some browsers send for
-    // sandboxed/opaque contexts) — treat as foreign.
+    // sandboxed/opaque contexts): treat as foreign.
     return true
   }
 
@@ -40,7 +40,7 @@ export function isForbiddenOrigin(request: Request): boolean {
     try {
       allowedHosts.add(new URL(process.env.NEXT_PUBLIC_APP_URL).host)
     } catch {
-      // Misconfigured env var — fall through to the request-derived hosts.
+      // Misconfigured env var: fall through to the request-derived hosts.
     }
   }
 

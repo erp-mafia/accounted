@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue
+// Mock: sequential result queue
 // ============================================================
 
 let resultIdx: number
@@ -80,7 +80,7 @@ describe('generateARReconciliation', () => {
         ],
         error: null,
       },
-      // 1: journal_entry_lines — manual debit on 1510 creates mismatch
+      // 1: journal_entry_lines: manual debit on 1510 creates mismatch
       {
         data: [
           { debit_amount: 5000, credit_amount: 0, journal_entry_id: 'e1' },
@@ -152,7 +152,7 @@ describe('generateARReconciliation', () => {
 
   it('converts foreign-currency outstanding to SEK before reconciliation', async () => {
     results = [
-      // 0: invoices — 225 EUR at 11 (with 25 EUR paid) → 200 EUR → 2 200 SEK,
+      // 0: invoices: 225 EUR at 11 (with 25 EUR paid) → 200 EUR → 2 200 SEK,
       //    plus 1 000 SEK invoice (no payment)
       {
         data: [
@@ -181,7 +181,7 @@ describe('generateARReconciliation', () => {
 
   it('excludes FX invoices without exchange_rate from the SEK total and counts them', async () => {
     results = [
-      // 0: invoices — 100 EUR without rate (excluded), 500 SEK control
+      // 0: invoices: 100 EUR without rate (excluded), 500 SEK control
       {
         data: [
           { total: 100, paid_amount: 0, currency: 'EUR', exchange_rate: null },
@@ -215,12 +215,12 @@ describe('generateARReconciliation', () => {
     // invoice ever splits the AR receivable across 1510 (customer portion)
     // and 1513 (Skatteverket claim), both must be included to reconcile.
     results = [
-      // 0: invoices — single 1 500 SEK invoice
+      // 0: invoices: single 1 500 SEK invoice
       {
         data: [{ total: 1500, paid_amount: 0, currency: 'SEK', exchange_rate: null }],
         error: null,
       },
-      // 1: GL — 1 200 on 1510, 300 on 1513 → combined 1 500
+      // 1: GL: 1 200 on 1510, 300 on 1513 → combined 1 500
       {
         data: [
           { debit_amount: 1200, credit_amount: 0, journal_entry_id: 'e1' },
@@ -243,7 +243,7 @@ describe('generateARReconciliation', () => {
     // posted storno/correction or a corrected, settled invoice shows a phantom
     // gap against the kundreskontra.
     results = [
-      // 0: invoices — single 5 000 SEK invoice still open
+      // 0: invoices: single 5 000 SEK invoice still open
       {
         data: [{ total: 5000, paid_amount: 0, currency: 'SEK', exchange_rate: null }],
         error: null,

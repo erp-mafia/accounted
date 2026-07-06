@@ -65,8 +65,8 @@ export async function GET() {
   }
 
   // Scope to the SELECTED company: system + this company + this company's team.
-  // RLS (btl_select) is membership-wide — it returns templates from *every*
-  // company the user belongs to — so the active-company narrowing must happen
+  // RLS (btl_select) is membership-wide: it returns templates from *every*
+  // company the user belongs to: so the active-company narrowing must happen
   // here in the API layer (mirrors counterparty-templates). Without this, a
   // user who owns several companies sees all of their templates merged.
   // Only interpolate a team id that passes the strict UUID guard.
@@ -93,7 +93,7 @@ export async function GET() {
   if (templatesRes.error) {
     return NextResponse.json({ error: templatesRes.error.message }, { status: 500 })
   }
-  // usage lookup failing is non-fatal — we just fall back to default ordering
+  // usage lookup failing is non-fatal: we just fall back to default ordering
   const usageByTemplate = new Map<string, string>()
   if (!usageRes.error && usageRes.data) {
     for (const row of usageRes.data) {
@@ -109,7 +109,7 @@ export async function GET() {
 
   // Stable-sort: templates with last_used_at come first (most-recent first).
   // Templates without usage keep their category/name order from the query.
-  // ISO 8601 timestamps are fixed-width ASCII — plain relational comparison
+  // ISO 8601 timestamps are fixed-width ASCII: plain relational comparison
   // is correct and avoids any locale-dependent behaviour from localeCompare.
   decorated.sort((a, b) => {
     const aUsed = a.last_used_at

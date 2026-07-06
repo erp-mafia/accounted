@@ -12,11 +12,11 @@ ensureInitialized()
  * POST /api/invoices/[id]/link-to-voucher
  *
  * Marks an invoice as paid by linking an existing posted verifikat whose
- * lines already credit AR (1510). Creates no new journal entry — only an
+ * lines already credit AR (1510). Creates no new journal entry: only an
  * invoice_payments row + invoice status advance.
  *
  * Rejects with LINK_VOUCHER_NO_AR_CREDIT for vouchers that book income
- * directly (e.g. 1930→3001) — those require gnubok_correct_entry first.
+ * directly (e.g. 1930→3001): those require gnubok_correct_entry first.
  */
 export const POST = withRouteContext(
   'invoice.link_to_voucher',

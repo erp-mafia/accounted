@@ -13,7 +13,7 @@ ensureInitialized()
  * Per Skatteförfarandelagen 15 kap: Must be filed by January 31 of the
  * following year. Reports total annual income, tax, and benefits per employee.
  *
- * The XML is räkenskapsinformation per BFL 7 kap — 7-year retention.
+ * The XML is räkenskapsinformation per BFL 7 kap, 7-year retention.
  */
 export async function GET(
   request: Request,

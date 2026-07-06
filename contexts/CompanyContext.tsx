@@ -39,7 +39,7 @@ export function useCompanyOptional() {
 
 /**
  * Whether the active company holds a given paid capability. Controls UI
- * affordances only — the server gate (lib/entitlements) is the real enforcement.
+ * affordances only: the server gate (lib/entitlements) is the real enforcement.
  * Fail-open when rendered outside a CompanyProvider (e.g. standalone dialogs):
  * the server still blocks; this only decides whether to show/disable/upsell.
  */

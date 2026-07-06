@@ -445,7 +445,7 @@ describe('mapping-engine', () => {
 
       const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
 
-      // Only fiktiv-moms pair — basbelopp already covered by the expense line
+      // Only fiktiv-moms pair: basbelopp already covered by the expense line
       expect(result.vat_lines).toHaveLength(2)
       expect(result.vat_lines[0].account_number).toBe('2645')
       expect(result.vat_lines[1].account_number).toBe('2614')

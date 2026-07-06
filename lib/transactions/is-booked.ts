@@ -1,22 +1,22 @@
 /**
  * Centralised predicate for "is this bank transaction anchored to a
- * verifikat?" — single source of truth that readers across the inbox,
+ * verifikat?": single source of truth that readers across the inbox,
  * history list, and MCP filters use to decide whether a tx is unbooked
  * (needs categorisation) vs already attached to a journal entry.
  *
  * Three storage locations to consider, all of which can independently
  * make a tx "booked":
  *
- *  1. transactions.journal_entry_id — the 1:1 case (single tx → single
+ *  1. transactions.journal_entry_id: the 1:1 case (single tx → single
  *     verifikat via categorisation, match-invoice, or match-supplier-invoice).
  *
- *  2. invoice_payments / supplier_invoice_payments — the multi-allocation
+ *  2. invoice_payments / supplier_invoice_payments: the multi-allocation
  *     case (PR #603's match_batch_allocate). One tx with multiple payment
  *     rows pointing at the same combined verifikat; the row in transactions
  *     itself has journal_entry_id = NULL because no single invoice ID
  *     captures the full picture.
  *
- *  3. transaction_voucher_links — the N-tx-to-1-JE case (the bulk-book
+ *  3. transaction_voucher_links: the N-tx-to-1-JE case (the bulk-book
  *     flow). Same combined verifikat, multiple bank lines, each tx's row
  *     in transactions has journal_entry_id = NULL for N>1.
  *
@@ -26,7 +26,7 @@
  * to avoid that.
  *
  * The Postgres mirror is `public.is_transaction_booked(uuid)`
- * (migration 20260529120000_transaction_voucher_links.sql) — same
+ * (migration 20260529120000_transaction_voucher_links.sql): same
  * predicate, three storage locations, in SQL.
  */
 
@@ -66,7 +66,7 @@ export function isTransactionBooked(
  * Resolve the "primary" journal_entry_id to link to from the UI when a
  * tx has multiple anchoring rows. Order of precedence:
  *
- *   1. tx.journal_entry_id (the 1:1 case — always the right answer)
+ *   1. tx.journal_entry_id (the 1:1 case, always the right answer)
  *   2. First voucher-link row (multi-tx bulk-book points all txs at one JE)
  *   3. First payment row (multi-allocation puts each invoice on its own
  *      payment row but they all share the combined verifikat)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractLocalPartForDomain } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
+import { extractLocalPartForDomain, parseRecipients } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
 
 describe('extractLocalPartForDomain', () => {
   it('returns the local part when a recipient matches the domain', () => {
@@ -48,5 +48,26 @@ describe('extractLocalPartForDomain', () => {
       'arcim.io'
     )
     expect(result).toBe('acme-xxx')
+  })
+})
+
+describe('parseRecipients', () => {
+  it('splits recipients into lowercased localPart/domain pairs in order', () => {
+    expect(
+      parseRecipients(['Faktura@HansBolag.SE', 'billing@acme.se'])
+    ).toEqual([
+      { localPart: 'faktura', domain: 'hansbolag.se' },
+      { localPart: 'billing', domain: 'acme.se' },
+    ])
+  })
+
+  it('skips malformed addresses', () => {
+    expect(parseRecipients(['not-an-email', '@x.se', 'foo@', 'ok@a.se'])).toEqual([
+      { localPart: 'ok', domain: 'a.se' },
+    ])
+  })
+
+  it('returns an empty array for no recipients', () => {
+    expect(parseRecipients([])).toEqual([])
   })
 })

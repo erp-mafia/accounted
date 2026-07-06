@@ -143,7 +143,7 @@ export const PATCH = withRouteContext(
             .insert(restoreRows)
           if (restoreError) {
             log.error(
-              'failed to restore schedule items after failed replace — schedule may be left empty',
+              'failed to restore schedule items after failed replace: schedule may be left empty',
               restoreError,
               { scheduleId: id },
             )

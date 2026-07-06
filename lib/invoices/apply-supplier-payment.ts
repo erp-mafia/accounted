@@ -1,5 +1,5 @@
 /**
- * Single source of truth for applying a payment amount to a SUPPLIER invoice —
+ * Single source of truth for applying a payment amount to a SUPPLIER invoice:
  * the supplier-side mirror of `planInvoicePayment` (@/lib/invoices/apply-invoice-payment).
  *
  * Computes the new paid/remaining/status and REJECTS overpayment before the
@@ -12,7 +12,7 @@
  *
  * When `absorbOreRounding` is set (callers pass it only for same-currency SEK
  * settlements), a payment within `ORE_ROUNDING_SETTLEMENT_MAX` of the remaining
- * — short OR over — settles the invoice IN FULL; the residual is booked to BAS
+ * (short or over) settles the invoice IN FULL; the residual is booked to BAS
  * 3740 by the line builder (`buildSupplierPaymentClearingLines`). Without the
  * flag the behaviour is the strict legacy one (half-öre overshoot tolerance,
  * any real shortfall left as a partial), preserving every other caller.
@@ -84,7 +84,7 @@ export function planSupplierPayment(
         newRemaining: 0,
         isFullyPaid: true,
         newStatus: 'paid',
-        // Only flag öre settlement when there is an actual residual to book —
+        // Only flag öre settlement when there is an actual residual to book:
         // an exact payment needs no 3740 line.
         oreSettled: Math.abs(diff) >= ORE_TOLERANCE,
       },

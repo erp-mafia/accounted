@@ -1,5 +1,5 @@
 /**
- * Unit tests for toSummary — trims the long, keyword-stuffed SKILL.md
+ * Unit tests for toSummary: trims the long, keyword-stuffed SKILL.md
  * frontmatter descriptions into clean one-liners for gnubok_list_skills and
  * gnubok_get_agent_briefing, so the client never truncates one mid-sentence.
  */

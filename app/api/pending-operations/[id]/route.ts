@@ -5,13 +5,14 @@ import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
+import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
 
 // PATCH /api/pending-operations/[id]
 //
 // Edit-before-approve. Today only supports staged categorize_transaction
-// operations — the user can pick a different category (and/or VAT treatment)
+// operations: the user can pick a different category (and/or VAT treatment)
 // before clicking Godkänn. We re-derive the booking via the same mapping
 // engine the commit path uses so the preview the user approves equals the
 // preview that gets posted.
@@ -81,7 +82,7 @@ export async function PATCH(
 
   if (op.status !== 'pending') {
     return NextResponse.json(
-      { error: `Operation already ${op.status} — cannot edit.` },
+      { error: `Operation already ${op.status}: cannot edit.` },
       { status: 409 },
     )
   }
@@ -134,7 +135,7 @@ export async function PATCH(
   const isBusiness = newCategory !== 'private'
 
   // Resolve whether the (possibly defaulted) treatment carries a rate-based
-  // VAT line — only then can a vat_amount override survive. An explicit
+  // VAT line: only then can a vat_amount override survive. An explicit
   // override on a VAT-less treatment is a caller error; a preserved one from
   // before the edit is simply stale and gets dropped.
   const probe = getCategoryAccountMapping(
@@ -191,6 +192,14 @@ export async function PATCH(
     credit_account: mapping.credit_account,
     amount: Math.abs((tx as Transaction).amount),
     currency: (tx as Transaction).currency,
+    // Re-derive the exact journal lines (net cost line, VAT, gross bank) —
+    // spreading oldPreview would otherwise leave stale lines from staging.
+    lines: buildTransactionEntryLines(tx as Transaction, mapping).map((l) => ({
+      account_number: l.account_number,
+      debit_amount: l.debit_amount,
+      credit_amount: l.credit_amount,
+      description: l.line_description ?? '',
+    })),
     vat_lines: (mapping.vat_lines ?? []).map((v) => ({
       account: v.account_number,
       amount: v.debit_amount || v.credit_amount,

@@ -31,12 +31,19 @@ export interface ASPSP {
   bic?: string
   beta?: boolean
   max_consent_validity?: number
-  available_auth_methods?: AuthMethod[]
+  // Enable Banking returns this field as `auth_methods` on the ASPSP object.
+  auth_methods?: AuthMethod[]
 }
 
 export interface AuthMethod {
   name: string
   title?: string
+  // How the SCA is performed. Mobile BankID at several Swedish banks is a
+  // DECOUPLED method; the visible default is often a REDIRECT method.
+  approach?: 'REDIRECT' | 'DECOUPLED' | 'EMBEDDED'
+  // When true, Enable Banking only uses this method if it is requested
+  // explicitly via auth_method (it is not the implicit default).
+  hidden_method?: boolean
   psu_types?: ('personal' | 'business')[]
 }
 
@@ -124,8 +131,8 @@ export interface TransactionsResponse {
 
 /**
  * Strategy for how Enable Banking fetches transactions from the upstream ASPSP.
- * - 'default' — fast path, may return only the most recent window even if date_from is older
- * - 'longest' — fetch the longest available history (up to PSD2 90-day max), slower
+ * - 'default': fast path, may return only the most recent window even if date_from is older
+ * - 'longest': fetch the longest available history (up to PSD2 90-day max), slower
  *
  * When omitted, Enable Banking applies its default strategy.
  */
@@ -151,7 +158,7 @@ export interface BankTransaction {
   counterparty_account?: string
   reference?: string
   merchant_category_code?: string
-  // ISO 20022 / proprietary transaction codes — carried through so the
+  // ISO 20022 / proprietary transaction codes: carried through so the
   // description fallback can derive a meaningful Swedish label when remittance
   // text and a counterparty name are both absent. See deriveTransactionLabel.
   bank_transaction_code?: string
@@ -183,13 +190,13 @@ class TransactionsFetchError extends Error {
 
 /**
  * Normalized signatures (uppercase, non-alphanumerics stripped) of the
- * responses Enable Banking — or the upstream ASPSP via Enable Banking's
- * envelope — returns when the PSD2 session can no longer be used: the consent
+ * responses Enable Banking (or the upstream ASPSP via Enable Banking's
+ * envelope) returns when the PSD2 session can no longer be used: the consent
  * was closed, expired, or invalidated bank-side. Spelling and casing vary by
  * bank (CLOSED_SESSION, EXPIRED_SESSION, SESSION_EXPIRED / session_expired,
  * INVALID_SESSION, SESSION_NOT_FOUND, WRONG_SESSION_STATUS, and the plain
  * "Session is closed" message), so we match the whole family. A dead session
- * is unrecoverable by retrying — the user must re-authorize.
+ * is unrecoverable by retrying: the user must re-authorize.
  */
 const SESSION_DEAD_NEEDLES = [
   'CLOSEDSESSION', // CLOSED_SESSION
@@ -205,7 +212,7 @@ const SESSION_DEAD_NEEDLES = [
 /**
  * Whether a failed transactions response signals a dead PSD2 session (vs. a
  * transient error or a config-level auth failure). Only 401/403 with a
- * session-expiry signal in the body counts — a bare 401 "Unauthorized" is an
+ * session-expiry signal in the body counts: a bare 401 "Unauthorized" is an
  * app-credential problem, not a closed consent, and must NOT be misread as
  * "reconnect the bank". The match is deterministic: normalize the body and
  * test for any known session-dead needle.
@@ -334,6 +341,40 @@ export async function getASPSPs(country: string = 'SE', psuType?: 'personal' | '
 }
 
 /**
+ * Resolve the auth_method we should request for a given bank, or undefined to
+ * let Enable Banking use the ASPSP's visible default.
+ *
+ * Why: several Swedish ASPSPs (notably Handelsbanken) expose Mobile BankID only
+ * as a DECOUPLED method flagged hidden_method=true. When we send no auth_method,
+ * Enable Banking falls back to the visible REDIRECT method, which for
+ * Handelsbanken *corporate* PSUs does not support Mobile BankID, so the consent
+ * fails right after the user approves in the BankID app ("fel efter BankID").
+ * Pinning the decoupled (Mobile BankID) method makes the flow work for both
+ * business and personal PSUs. We return undefined when the bank exposes no
+ * decoupled method or the lookup fails, so banks that already work are untouched.
+ */
+export async function getPreferredAuthMethod(
+  aspspName: string,
+  country: string,
+  psuType: 'personal' | 'business'
+): Promise<string | undefined> {
+  try {
+    const aspsps = await getASPSPs(country, psuType)
+    const aspsp = aspsps.find((a) => a.name === aspspName)
+    const decoupled = aspsp?.auth_methods?.find((m) => m.approach === 'DECOUPLED')
+    return decoupled?.name
+  } catch (error) {
+    console.error('[enable-banking] getPreferredAuthMethod failed; using ASPSP default', {
+      aspspName,
+      country,
+      psuType,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
+/**
  * Get list of supported banks (legacy format for backward compatibility)
  */
 export async function getSupportedBanks(): Promise<Bank[]> {
@@ -367,19 +408,30 @@ export async function getSupportedBanks(): Promise<Bank[]> {
  * @param redirectUrl - URL to redirect user after bank authorization
  * @param state - State parameter returned in callback (e.g., user ID)
  * @param psuType - Type of user: 'personal' or 'business'
+ * @param authMethod - Optional Enable Banking auth_method name. When omitted,
+ *   Enable Banking uses the ASPSP's visible default method. See
+ *   getPreferredAuthMethod for why we pin Mobile BankID at some banks.
  */
 export async function startAuthorization(
   aspspName: string,
   aspspCountry: string,
   redirectUrl: string,
   state: string,
-  psuType: 'personal' | 'business' = 'personal'
+  psuType: 'personal' | 'business' = 'personal',
+  authMethod?: string
 ): Promise<AuthResponse> {
   // Calculate consent validity (90 days)
   const validUntil = new Date()
   validUntil.setDate(validUntil.getDate() + 90)
 
-  const requestBody = {
+  const requestBody: {
+    access: { valid_until: string }
+    aspsp: { name: string; country: string }
+    state: string
+    redirect_url: string
+    psu_type: 'personal' | 'business'
+    auth_method?: string
+  } = {
     access: {
       valid_until: validUntil.toISOString()
     },
@@ -390,6 +442,9 @@ export async function startAuthorization(
     state,
     redirect_url: redirectUrl,
     psu_type: psuType
+  }
+  if (authMethod) {
+    requestBody.auth_method = authMethod
   }
 
   const response = await authenticatedFetch('/auth', {
@@ -671,7 +726,7 @@ const ASPSP_HISTORY_FALLBACK_DAYS = [90, 60, 30] as const
 /**
  * Enable Banking wraps upstream-bank failures in a generic envelope, e.g.
  * {"code":400,"message":"Error interacting with ASPSP","error":"ASPSP_ERROR"}.
- * A too-wide history window is the most common trigger — see the date-narrowing
+ * A too-wide history window is the most common trigger: see the date-narrowing
  * fallback in getAllTransactionsWithRaw.
  */
 function isAspspError(body: string): boolean {
@@ -707,14 +762,14 @@ function nextNarrowerDateFrom(
 /**
  * First-page recovery policy shared by getAllTransactions and
  * getAllTransactionsWithRaw, so the two pagination loops can't drift. Fallbacks
- * apply only to the very first request (page 0, no continuation_key) — a
+ * apply only to the very first request (page 0, no continuation_key): a
  * continuation_key is scoped to the window/strategy that produced it, so the
  * query is never rewritten mid-pagination.
  *
- *  - 'drop-strategy' — an unsupported strategy enum: retry the same window.
- *  - 'narrow'        — the ASPSP rejected the history window: retry with a
+ *  - 'drop-strategy' : an unsupported strategy enum: retry the same window.
+ *  - 'narrow'        : the ASPSP rejected the history window: retry with a
  *                      narrower date_from (the bank caps history below the ask).
- *  - 'give-up'       — nothing left to try; the caller should rethrow.
+ *  - 'give-up'       : nothing left to try; the caller should rethrow.
  */
 type FirstPageRecovery =
   | { type: 'drop-strategy' }
@@ -732,7 +787,7 @@ function planFirstPageRecovery(args: {
 }): FirstPageRecovery {
   const { status, body, page, hasContinuationKey, activeStrategy, activeDateFrom, dateTo } = args
   if (status !== 400 || page !== 0 || hasContinuationKey) return { type: 'give-up' }
-  // Drop an unsupported strategy first — preserves the full requested window.
+  // Drop an unsupported strategy first: preserves the full requested window.
   if (activeStrategy) return { type: 'drop-strategy' }
   // Then handle the ASPSP rejecting the window itself (e.g. Danske past ~90
   // days): step date_from toward date_to so a partial sync survives.

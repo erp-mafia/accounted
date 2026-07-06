@@ -9,7 +9,7 @@ import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/rep
  *   - BLANKETTER.SRU: a single NE blankett block with the räkenskapsschema rutor
  *
  * The NE-bilaga is an appendix to Inkomstdeklaration 1 (INK1) filed by a physical
- * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN) —
+ * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN):
  * NOT a juridisk-person org number with the "16" century prefix used by INK2.
  *
  * Encoding: ISO 8859-1 (applied by the API route via encodeISO88591).
@@ -162,7 +162,7 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
   lines.push(`#UPPGIFT ${FISCAL_START_CODE} ${dateStringToSRU(declaration.fiscalYear.start)}`)
   lines.push(`#UPPGIFT ${FISCAL_END_CODE} ${dateStringToSRU(declaration.fiscalYear.end)}`)
 
-  // NE rutor R1-R11 — emit non-zero values only (zero/empty fields must be omitted)
+  // NE rutor R1-R11: emit non-zero values only (zero/empty fields must be omitted)
   const rutaOrder: (keyof NEDeclarationRutor)[] = [
     'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11',
   ]
@@ -187,7 +187,7 @@ export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmissi
 
   // A valid NE filing requires the owner's personnummer. Refuse rather than ship a
   // structurally well-formed file with a placeholder #IDENTITET that Skatteverket
-  // would reject at upload — surface it as a generation error the route can show.
+  // would reject at upload: surface it as a generation error the route can show.
   if (!/^\d{12}$/.test(identity12) || identity12 === '000000000000') {
     throw new Error(
       'NE-bilagan kräver ett giltigt personnummer (ÅÅÅÅMMDDNNNN) för den enskilda näringsidkaren. ' +

@@ -10,7 +10,7 @@ interface PageProps {
   searchParams: Promise<{ intent?: string; prompt?: string }>
 }
 
-// /chat/new — generic conversation bootstrap. Reads ?intent= and ?prompt=
+// /chat/new: generic conversation bootstrap. Reads ?intent= and ?prompt=
 // from the URL and mounts AgentChat in fresh mode; AgentChat creates the
 // conversation server-side on first invoke and the client swaps the URL
 // to /chat/[id] when the id streams back. Mirrors /chat/intake but with
@@ -26,7 +26,7 @@ export default async function ChatNewPage({ searchParams }: PageProps) {
 
   const sp = await searchParams
   const requested = typeof sp.intent === 'string' && sp.intent.trim() ? sp.intent.trim() : 'general.help'
-  // Validate against the registry — a bogus ?intent= would otherwise render the
+  // Validate against the registry: a bogus ?intent= would otherwise render the
   // chat shell and then fail at invoke with a 400, which reads as "Anna is broken"
   // rather than "bad link". Fall back to general help instead.
   const intent = getIntent(requested) ? requested : 'general.help'

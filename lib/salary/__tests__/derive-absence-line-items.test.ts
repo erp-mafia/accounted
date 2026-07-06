@@ -99,7 +99,7 @@ describe('buildSjukloneperioder', () => {
   })
 })
 
-describe('deriveAbsenceLineItems — sick', () => {
+describe('deriveAbsenceLineItems: sick', () => {
   it('emits karensavdrag for a single sick day', () => {
     const result = deriveAbsenceLineItems(
       baseInput({ periodDays: days([['2026-04-06', 'sick']]) }),
@@ -190,7 +190,7 @@ describe('deriveAbsenceLineItems — sick', () => {
   })
 })
 
-describe('deriveAbsenceLineItems — VAB', () => {
+describe('deriveAbsenceLineItems: VAB', () => {
   it('emits VAB line item with deduction', () => {
     const result = deriveAbsenceLineItems(
       baseInput({
@@ -219,7 +219,7 @@ describe('deriveAbsenceLineItems — VAB', () => {
   })
 })
 
-describe('deriveAbsenceLineItems — parental', () => {
+describe('deriveAbsenceLineItems: parental', () => {
   it('emits parental line item with deduction', () => {
     const result = deriveAbsenceLineItems(
       baseInput({
@@ -237,7 +237,7 @@ describe('deriveAbsenceLineItems — parental', () => {
   })
 })
 
-describe('deriveAbsenceLineItems — unpaid_leave', () => {
+describe('deriveAbsenceLineItems: unpaid_leave', () => {
   it('emits unpaid_leave line item with a per-day daily-rate deduction', () => {
     const result = deriveAbsenceLineItems(
       baseInput({
@@ -252,7 +252,7 @@ describe('deriveAbsenceLineItems — unpaid_leave', () => {
     expect(unpaid).toBeDefined()
     expect(unpaid!.quantity).toBe(2)
     expect(unpaid!.amount).toBe(-4000)
-    // false — engine's Step 3 absence sum already subtracts unpaid_leave;
+    // false: engine's Step 3 absence sum already subtracts unpaid_leave;
     // setting the flag would double-count in Step 4 totalGrossDeductions.
     expect(unpaid!.is_gross_deduction).toBe(false)
     expect(unpaid!.is_vacation_basis).toBe(false)
@@ -260,7 +260,7 @@ describe('deriveAbsenceLineItems — unpaid_leave', () => {
   })
 })
 
-describe('deriveAbsenceLineItems — empty', () => {
+describe('deriveAbsenceLineItems: empty', () => {
   it('returns empty result for no absence', () => {
     const result = deriveAbsenceLineItems(baseInput())
     expect(result.lineItems).toEqual([])

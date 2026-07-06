@@ -7,9 +7,9 @@ description: "Generate Supabase database migrations for the Accounted project wi
 
 ## Migration Numbering
 
-Early migrations used the sequential series `20240101000001`–`20240101000038`; the project has long since moved to real timestamps. **New migrations use a current UTC timestamp** `YYYYMMDDHHMMSS_description.sql` (e.g. `20260603120000_add_x.sql`). Never reuse or back-date a number.
+Early migrations used the sequential series `20240101000001`-`20240101000038`; the project has long since moved to real timestamps. **New migrations use a current UTC timestamp** `YYYYMMDDHHMMSS_description.sql` (e.g. `20260603120000_add_x.sql`). Never reuse or back-date a number.
 
-## New Table — Complete Template
+## New Table: Complete Template
 
 Accounted is multi-tenant: company-scoped business data is owned by `company_id` and secured with the `user_company_ids()` RLS helper (NOT `auth.uid() = user_id`). Every new company-scoped table requires ALL of these. Missing any is a bug.
 
@@ -27,7 +27,7 @@ CREATE TABLE public.tablename (
 -- 2. RLS
 ALTER TABLE public.tablename ENABLE ROW LEVEL SECURITY;
 
--- 3. All four CRUD policies — scope to the user's companies
+-- 3. All four CRUD policies: scope to the user's companies
 CREATE POLICY "view own-company tablename"
   ON public.tablename FOR SELECT USING (company_id IN (SELECT user_company_ids()));
 CREATE POLICY "insert own-company tablename"
@@ -89,15 +89,15 @@ ALTER TABLE public.journal_entries
   ));
 ```
 
-## Protected Triggers — NEVER Modify
+## Protected Triggers: NEVER Modify
 
 Migration `20240101000017` defines legally-required triggers:
-- `enforce_journal_entry_immutability` — blocks edits/deletes on posted/reversed entries
-- `enforce_journal_entry_line_immutability` — blocks line mods on committed entries
-- `enforce_period_lock` — blocks writes to closed/locked periods
-- `block_document_deletion` — prevents deletion of docs linked to committed entries
-- `enforce_retention_journal_entries` — 7-year retention
-- `set_committed_at` / `calculate_retention_expiry` — auto-set timestamps
+- `enforce_journal_entry_immutability`: blocks edits/deletes on posted/reversed entries
+- `enforce_journal_entry_line_immutability`: blocks line mods on committed entries
+- `enforce_period_lock`: blocks writes to closed/locked periods
+- `block_document_deletion`: prevents deletion of docs linked to committed entries
+- `enforce_retention_journal_entries`: 7-year retention
+- `set_committed_at` / `calculate_retention_expiry`: auto-set timestamps
 
 ## Apply
 
@@ -105,9 +105,9 @@ Use `mcp__plugin_supabase_supabase__apply_migration` with snake_case `name`. Nev
 
 ## Common Mistakes
 
-1. Missing `ENABLE ROW LEVEL SECURITY` — table publicly accessible
-2. Missing DELETE policy — users can't remove own records
-3. Missing `updated_at` trigger — column never updates
-4. Missing audit trigger — no audit trail
-5. Hardcoded UUIDs in data migrations — use subqueries
+1. Missing `ENABLE ROW LEVEL SECURITY`: table publicly accessible
+2. Missing DELETE policy: users can't remove own records
+3. Missing `updated_at` trigger: column never updates
+4. Missing audit trigger: no audit trail
+5. Hardcoded UUIDs in data migrations: use subqueries
 6. Forgetting `source_type` CHECK expansion for new entry generators

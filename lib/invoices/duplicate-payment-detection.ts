@@ -4,7 +4,7 @@
  * Scenario: the user manually booked the receipt as a verifikation
  * (Dr 19xx / Cr 1510 or Cr 30xx) *outside* the match-invoice flow. The
  * invoice's status stays 'sent', no `invoice_payments` row exists, and the
- * matcher would happily propose a second payment voucher — double-booking
+ * matcher would happily propose a second payment voucher: double-booking
  * the bank receipt.
  *
  * Heuristic: a posted journal entry within a tight date window whose lines
@@ -14,7 +14,7 @@
  * refuses the match unless the caller passes `force: true`.
  *
  * Mirrors `findDuplicatePaymentCandidatesForInvoice` (which scans for the
- * reverse direction — unlinked transactions that look like a manually-marked
+ * reverse direction: unlinked transactions that look like a manually-marked
  * invoice payment).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -55,7 +55,7 @@ interface DetectArgs {
  *  - not already linked from `transactions.journal_entry_id` (for any row)
  *  - not already referenced by `invoice_payments.journal_entry_id`
  *  - not the storno/correction entry for any prior original (source_type
- *    excluded — those are valid second-line vouchers, not duplicates)
+ *    excluded: those are valid second-line vouchers, not duplicates)
  */
 export async function detectDuplicatePaymentVoucher(
   supabase: SupabaseClient,
@@ -75,7 +75,7 @@ export async function detectDuplicatePaymentVoucher(
     .split('T')[0]
 
   // Query journal_entry_lines for bank-account debits within the window.
-  // The join filters by company_id at the parent — RLS handles isolation,
+  // The join filters by company_id at the parent: RLS handles isolation,
   // but we filter explicitly as defense-in-depth.
   const { data: lines, error } = await supabase
     .from('journal_entry_lines')
@@ -124,7 +124,7 @@ export async function detectDuplicatePaymentVoucher(
       return Math.abs(debit - targetAmount) < 0.01
     })
     // System-generated payment vouchers (invoice_paid etc.) ARE valid
-    // duplicates to surface — those are exactly the case where the user
+    // duplicates to surface: those are exactly the case where the user
     // already booked through a different flow. Only exclude reversals
     // and corrections, which are bookkeeping noise rather than payment
     // candidates the user would want to link to.
@@ -153,7 +153,7 @@ export async function detectDuplicatePaymentVoucher(
     if (row.journal_entry_id) linkedIds.add(row.journal_entry_id)
   }
   for (const row of (txLinks ?? []) as { id: string; journal_entry_id: string | null }[]) {
-    // A transaction can link to its own JE via the current match flow — but
+    // A transaction can link to its own JE via the current match flow: but
     // we're called *before* that link is created, so the caller's own
     // transactionId shouldn't appear. Guard anyway in case of a retry.
     if (row.journal_entry_id && row.id !== transactionId) {

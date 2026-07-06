@@ -5,7 +5,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/deadlines/status/cron — daily 06:00 UTC.
+ * GET /api/deadlines/status/cron: daily 06:00 UTC.
  * Updates deadline statuses across all companies.
  */
 export const GET = withCronContext('cron.deadlines_status', async (_request, ctx) => {

@@ -158,9 +158,9 @@ export function TaxTodoWidget({ deadlines, onStatusChange }: TaxTodoWidgetProps)
                         {formatDate(deadline.due_date)}
                       </span>
                       {deadline.tax_deadline_type && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5">
-                          {TAX_DEADLINE_TYPE_LABELS[deadline.tax_deadline_type]}
-                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          · {TAX_DEADLINE_TYPE_LABELS[deadline.tax_deadline_type]}
+                        </span>
                       )}
                     </div>
                   </div>

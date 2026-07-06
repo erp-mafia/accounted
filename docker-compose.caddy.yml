@@ -10,7 +10,7 @@
 # binds a host port at all.
 services:
   app:
-    # Remove the loopback binding from the base file — traffic comes via Caddy.
+    # Remove the loopback binding from the base file: traffic comes via Caddy.
     ports: !reset null
 
   caddy:

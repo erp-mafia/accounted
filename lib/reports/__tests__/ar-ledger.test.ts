@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue
+// Mock: sequential result queue
 // ============================================================
 
 let resultIdx: number
@@ -260,7 +260,7 @@ describe('generateARLedger', () => {
     results = [
       {
         data: [
-          // 100 EUR with no rate — listed in detail but excluded from buckets
+          // 100 EUR with no rate: listed in detail but excluded from buckets
           {
             id: 'inv-1',
             customer_id: 'cust-a',
@@ -296,7 +296,7 @@ describe('generateARLedger', () => {
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
     expect(report.unconverted_fx_count).toBe(1)
-    // EUR row excluded from total — only the 500 SEK invoice contributes
+    // EUR row excluded from total: only the 500 SEK invoice contributes
     expect(report.total_outstanding).toBe(500)
 
     const entry = report.entries[0]
@@ -380,7 +380,7 @@ describe('generateARLedger', () => {
   })
 
   it('keeps a credit note outstanding when it offsets an already-paid invoice', async () => {
-    // Original was paid in full, then credited — we owe the customer the refund.
+    // Original was paid in full, then credited: we owe the customer the refund.
     results = [
       {
         data: [

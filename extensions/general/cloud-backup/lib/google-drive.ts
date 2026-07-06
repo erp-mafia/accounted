@@ -1,5 +1,5 @@
 /**
- * Minimal Google Drive v3 client — just enough to:
+ * Minimal Google Drive v3 client: just enough to:
  *   - find or create a named folder,
  *   - upload a file via multipart.
  *

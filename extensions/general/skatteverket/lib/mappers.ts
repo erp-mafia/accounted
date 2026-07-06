@@ -11,8 +11,8 @@ export { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/f
  * This keeps the payload clean and avoids sending unnecessary data.
  *
  * Rounding: every ruta is rounded to whole kronor (SKV's schema is integers).
- * summaMoms is recomputed from the rounded VAT-amount rutor — not from the
- * pre-rounding ruta49 — so the payload is internally consistent with how
+ * summaMoms is recomputed from the rounded VAT-amount rutor: not from the
+ * pre-rounding ruta49: so the payload is internally consistent with how
  * Skatteverket recomputes the sum on their side. Rounding ruta49 separately
  * from the components causes ±1 SEK drift on fractional-öres inputs and
  * triggers SKV's FK009 ("summaMoms stämmer inte överens med övriga

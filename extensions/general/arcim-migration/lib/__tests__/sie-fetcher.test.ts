@@ -5,7 +5,7 @@ import {
   getAllowedFiscalYears,
 } from '../sie-fetcher'
 
-// The allowed window is rolling (current year and the two before it) — derive
+// The allowed window is rolling (current year and the two before it): derive
 // fixture years from the clock so these tests never go stale at new year.
 const CY = new Date().getFullYear()
 
@@ -159,7 +159,7 @@ describe('fetchProviderSieFiles', () => {
 
       expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 1])
       expect(result.availableYears).toEqual([CY - 2, CY - 1])
-      // The failed year must NOT be dropped silently — importing only the
+      // The failed year must NOT be dropped silently: importing only the
       // surviving years would break IB/UB continuity unnoticed.
       expect(result.failedYears).toEqual([
         { year: CY - 2, error: expect.stringContaining('404') },
@@ -204,7 +204,7 @@ describe('fetchProviderSieFiles', () => {
     it('decodes CP437 bytes from the Fortnox SIE endpoint (no blind UTF-8 text())', async () => {
       // Some Fortnox endpoint variants serve the SIE body in CP437 (the SIE
       // spec encoding). A blind response.text() would turn å/ä/ö into U+FFFD
-      // irrecoverably — the byte-level path must detect-decode like Briox/BL.
+      // irrecoverably: the byte-level path must detect-decode like Briox/BL.
       routeFetch(fetchSpy, [
         yearRoutes,
         {

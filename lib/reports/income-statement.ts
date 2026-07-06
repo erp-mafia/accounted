@@ -15,7 +15,12 @@ export async function generateIncomeStatement(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options?: { fromDate?: string; toDate?: string }
+  options?: {
+    fromDate?: string
+    toDate?: string
+    /** SIE dim → code filter ({"6":"P001"}). P&L-safe: see trial-balance.ts. */
+    dimensions?: Record<string, string>
+  }
 ): Promise<IncomeStatementReport> {
   // Exclude year-end closing entries: after closing, P&L accounts (3-8) are
   // zeroed by the closing verifikat (8999 → 2099). Including them collapses
@@ -25,6 +30,7 @@ export async function generateIncomeStatement(
     excludeYearEndClosing: true,
     fromDate: options?.fromDate,
     toDate: options?.toDate,
+    dimensions: options?.dimensions,
   })
 
   // Filter to income/expense accounts (class 3-8)
@@ -98,7 +104,7 @@ export async function generateIncomeStatement(
     'Övriga kostnader',
   )
 
-  // Financial sections (class 8) — exclude 8999 "Årets resultat".
+  // Financial sections (class 8): exclude 8999 "Årets resultat".
   // 8999 is a closing account: when year-end posts "8999 debit → 2099 credit"
   // to move the computed profit into equity, including 8999's debit balance
   // here cancels out the revenue/expense difference and drives net_result to
@@ -142,7 +148,7 @@ export async function generateIncomeStatement(
  *
  * Every row is assigned to exactly one section: either a known 2-digit group
  * (from `groupLabels`) or the `fallbackTitle` catch-all for any group not in
- * the map. The catch-all is what keeps the report complete — without it, an
+ * the map. The catch-all is what keeps the report complete: without it, an
  * account whose group code is missing from `groupLabels` (e.g. 53xx
  * energikostnader, 48xx, 67xx) would be silently dropped from both the
  * breakdown and the computed subtotal/total/net_result.

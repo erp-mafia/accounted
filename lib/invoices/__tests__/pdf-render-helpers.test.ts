@@ -1,5 +1,5 @@
 /**
- * Regression tests for issue #772 — "Logotyp kommer inte med på fakturor".
+ * Regression tests for issue #772: "Logotyp kommer inte med på fakturor".
  *
  * Root cause: @react-pdf/renderer's <Image> only decodes JPG/PNG, but the logo
  * upload route and the `logos` bucket accept SVG and WebP. When a logo was an
@@ -44,7 +44,7 @@ async function expectValidEmbeddedPng(logoUrl: string | null | undefined) {
   expect(meta.format).toBe('png')
 }
 
-describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
+describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
   })
@@ -105,7 +105,7 @@ describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
 
     const { company: resolved } = await prepareInvoicePdfRender(company)
 
-    // Unchanged — never worse than before (@react-pdf still fetches PNG/JPEG).
+    // Unchanged: never worse than before (@react-pdf still fetches PNG/JPEG).
     expect(resolved.logo_url).toBe(url)
   })
 

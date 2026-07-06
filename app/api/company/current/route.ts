@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
-import { getActiveCompanyId, requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { getActiveCompanyId } from '@/lib/company/context'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { AccountingFrameworkSchema } from '@/lib/api/schemas'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -25,22 +25,19 @@ const K3_LATENT_TAX_ACCOUNTS = ['2240', '8940'] as const
  * when a tab was hidden/backgrounded during a switch in another tab) and
  * force a hard reload on mismatch.
  *
- * Never cached — the whole point is that the response reflects the current
+ * Never cached: the whole point is that the response reflects the current
  * authoritative value in user_preferences.
+ *
+ * Uses requireAuth() directly (not withRouteContext): a null companyId is a
+ * valid answer here — the wrapper would short-circuit it into an error.
  */
 export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      {
-        status: 401,
-        headers: { 'Cache-Control': 'private, no-store' },
-      },
-    )
+  const auth = await requireAuth()
+  if (auth.error) {
+    auth.error.headers.set('Cache-Control', 'private, no-store')
+    return auth.error
   }
+  const { user, supabase } = auth
 
   const companyId = await getActiveCompanyId(supabase, user.id)
 
@@ -68,21 +65,14 @@ const PatchBodySchema = z.object({
  * company. Separate from /api/settings (which writes to `company_settings`)
  * because the columns live on different tables.
  *
- * Currently scoped to `accounting_framework` (K2 / K3) — only meaningful for
+ * Currently scoped to `accounting_framework` (K2 / K3), only meaningful for
  * entity_type='aktiebolag'. The handler rejects K3 for non-AB to prevent
  * impossible chart-of-accounts states downstream.
  */
-export async function PATCH(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const PATCH = withRouteContext(
+  'company.update_current',
+  async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
 
   const validation = await validateBody(request, PatchBodySchema)
   if (!validation.success) return validation.response
@@ -90,7 +80,7 @@ export async function PATCH(request: Request) {
   const updates: Record<string, unknown> = {}
 
   if (validation.data.accounting_framework !== undefined) {
-    // Only AB can opt in to K3 — EF stays on the simpler EF rules and never
+    // Only AB can opt in to K3; EF stays on the simpler EF rules and never
     // touches K2/K3. Fetch the entity_type before applying.
     const { data: company } = await supabase
       .from('companies')
@@ -116,7 +106,7 @@ export async function PATCH(request: Request) {
   }
 
   if (Object.keys(updates).length === 0) {
-    // Nothing to write — surface the current row so the client can refresh
+    // Nothing to write: surface the current row so the client can refresh
     // its local state without a no-op write.
     const { data } = await supabase
       .from('companies')
@@ -142,7 +132,7 @@ export async function PATCH(request: Request) {
   // them for K2 companies via k2_excluded=true, so without this backfill
   // the engine cannot resolve account_id for the first latent-tax post.
   // Wrapped in try/catch so a CoA insert failure does not block the
-  // framework update — the user can still re-trigger the seed later.
+  // framework update: the user can still re-trigger the seed later.
   // The reverse switch (K3 → K2) intentionally keeps the rows for audit
   // history; the legal record of past K3 postings must remain intact.
   if (data.accounting_framework === 'k3') {
@@ -188,4 +178,6 @@ export async function PATCH(request: Request) {
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)

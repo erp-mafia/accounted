@@ -6,7 +6,7 @@
  * carrying BOTH a parent FK and their own company_id. A row whose company_id
  * disagrees with its parent's company_id is a tenant-isolation defect. The
  * BEFORE INSERT/UPDATE triggers make a mismatched pair impossible to persist
- * regardless of how it is written — so these probes go through the superuser
+ * regardless of how it is written: so these probes go through the superuser
  * pool (which bypasses RLS), proving the trigger fires even for the most
  * privileged writer.
  */
@@ -82,7 +82,7 @@ const INSERT_SUPPLIER_PAYMENT = `
   VALUES ($1, $2, $3, '2026-05-05', 100, 'SEK')
   RETURNING id`
 
-describe('invoice_payments — company-consistency trigger', () => {
+describe('invoice_payments: company-consistency trigger', () => {
   it('accepts a payment whose company_id matches its invoice', async () => {
     const a = await seedCompany()
     const invoiceId = await seedCustomerInvoice({ userId: a.userId, companyId: a.companyId })
@@ -133,7 +133,7 @@ describe('invoice_payments — company-consistency trigger', () => {
     const ins = await getPool().query(INSERT_INVOICE_PAYMENT, [a.userId, a.companyId, invoiceA])
     const paymentId = ins.rows[0].id as string
 
-    // company_id stays A; only the parent FK is rerouted to B's invoice —
+    // company_id stays A; only the parent FK is rerouted to B's invoice:
     // exercises the UPDATE OF invoice_id leg of the trigger column filter.
     await expect(
       getPool().query(`UPDATE public.invoice_payments SET invoice_id = $1 WHERE id = $2`, [
@@ -144,7 +144,7 @@ describe('invoice_payments — company-consistency trigger', () => {
   })
 })
 
-describe('supplier_invoice_payments — company-consistency trigger', () => {
+describe('supplier_invoice_payments: company-consistency trigger', () => {
   it('accepts a payment whose company_id matches its supplier invoice', async () => {
     const a = await seedCompany()
     const supplierInvoiceId = await seedSupplierInvoice({ userId: a.userId, companyId: a.companyId })

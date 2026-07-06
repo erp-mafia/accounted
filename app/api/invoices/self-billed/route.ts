@@ -21,12 +21,12 @@ ensureInitialized()
  * the output VAT lands in our momsdeklaration.
  *
  * It differs from a normal customer invoice in two ways:
- *   - We do NOT assign a number from our own series — the counterparty's number
+ *   - We do NOT assign a number from our own series: the counterparty's number
  *     is stored in external_invoice_number and our invoice_number stays null
  *     (BFL 5 kap 6§). Enforced by the invoices_self_billed_numbering constraint.
  *   - There is no send step. Under faktureringsmetoden (accrual) we book the
  *     registration entry here. Under kontantmetoden (cash) we leave it unbooked
- *     until payment — identical to a normal invoice — and the existing mark-paid
+ *     until payment (identical to a normal invoice) and the existing mark-paid
  *     flow books the cash entry then.
  *
  * Payment is handled by the existing flows: the row is created with status
@@ -63,7 +63,7 @@ export const POST = withRouteContext(
 
     // The issuer of a self-billing invoice is, in our books, the customer we
     // sold to. Require an existing customer row so VAT rules + reporting work.
-    // Project only the fields used below (data minimisation — GDPR Art. 25 /
+    // Project only the fields used below (data minimisation, GDPR Art. 25 /
     // SOC 2 CC6.3): VAT treatment derivation and the verifikat description.
     const { data: customer, error: customerError } = await supabase
       .from('customers')
@@ -118,7 +118,7 @@ export const POST = withRouteContext(
     if (input.currency !== 'SEK') {
       const rateData = await fetchExchangeRate(input.currency, new Date(input.invoice_date))
       if (!rateData) {
-        // No FX rate for the invoice date — refuse rather than letting the
+        // No FX rate for the invoice date: refuse rather than letting the
         // booking fall through to resolveSekAmount's legacy 1:1 fallback, which
         // would treat e.g. 1 000 USD as 1 000 SEK and commit a balanced but
         // silently wrong-magnitude verifikat. ML 7 kap 7§ requires the
@@ -149,7 +149,7 @@ export const POST = withRouteContext(
         user_id: user.id,
         company_id: companyId,
         customer_id: input.customer_id,
-        // No own number — the counterparty's number lives in external_invoice_number.
+        // No own number: the counterparty's number lives in external_invoice_number.
         invoice_number: null,
         is_self_billed: true,
         external_invoice_number: input.external_invoice_number,
@@ -157,7 +157,7 @@ export const POST = withRouteContext(
         received_date: input.received_date,
         invoice_date: input.invoice_date,
         due_date: input.due_date,
-        // Booked + awaiting/with payment — never a draft, so it shows in the AR
+        // Booked + awaiting/with payment: never a draft, so it shows in the AR
         // ledger and is payable via the existing mark-paid / matching flows.
         status: 'sent',
         currency: input.currency,
@@ -206,7 +206,7 @@ export const POST = withRouteContext(
 
     const { error: itemsError } = await supabase.from('invoice_items').insert(items)
     if (itemsError) {
-      // The item insert failed, so nothing was written there — just remove the
+      // The item insert failed, so nothing was written there: just remove the
       // orphaned invoice header.
       await supabase.from('invoices').delete().eq('id', invoice.id)
       log.error('self-billed invoice items insert failed; rolled back', itemsError, { invoiceId: invoice.id })
@@ -232,11 +232,11 @@ export const POST = withRouteContext(
 
     // Faktureringsmetoden: book the registration entry now (Debit 1510, Credit
     // 30xx + 26xx). Kontantmetoden: leave unbooked until payment, exactly like a
-    // normal invoice — the mark-paid flow books the cash entry then.
+    // normal invoice: the mark-paid flow books the cash entry then.
     if (accountingMethod === 'accrual') {
       if (!completeInvoice) {
         // The row was inserted but the re-fetch came back empty (transient DB
-        // issue). Roll back rather than crash on a null cast inside the engine —
+        // issue). Roll back rather than crash on a null cast inside the engine,
         // and surface it as a fetch failure, not an opaque booking error.
         await supabase.from('invoices').delete().eq('id', invoice.id)
         log.error('self-billed invoice re-fetch returned no row before booking; rolled back', undefined, {
@@ -258,7 +258,7 @@ export const POST = withRouteContext(
           { descriptionPrefix: 'Självfaktura', numberOverride: input.external_invoice_number },
         )
         if (!journalEntry) {
-          // No open fiscal period for the invoice date — roll the row back so we
+          // No open fiscal period for the invoice date: roll the row back so we
           // never leave an unbooked self-billing sale sitting as 'sent'.
           await supabase.from('invoices').delete().eq('id', invoice.id)
           return NextResponse.json(
@@ -272,7 +272,7 @@ export const POST = withRouteContext(
           .eq('id', invoice.id)
           .eq('company_id', companyId!)
         if (linkError) {
-          // The verifikat is already committed (immutable) — don't roll it back
+          // The verifikat is already committed (immutable): don't roll it back
           // over a failed convenience link. Log loudly: this is the exact write
           // that silently no-ops if the journal_entry_id column is ever missing
           // again (it was absent in prod for months before 20260613100000).
@@ -296,7 +296,7 @@ export const POST = withRouteContext(
 
     // The invoice is committed (and, under accrual, booked) by this point. If the
     // final re-fetch comes back empty under transient load, fall back to the
-    // shapes we already hold so the 200 always carries a usable id — otherwise
+    // shapes we already hold so the 200 always carries a usable id; otherwise
     // the client's redirect to /invoices/{id} would throw on a null result.
     const responseInvoice = (finalInvoice ?? completeInvoice ?? invoice) as Invoice
 

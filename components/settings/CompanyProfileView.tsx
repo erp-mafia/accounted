@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { formatDate, formatDateLong } from '@/lib/utils'
 
 // Read-only "Bolagsuppgifter" view of the cached TIC company profile
-// (companies.tic_snapshot). Lives in core — reads the snapshot as plain
+// (companies.tic_snapshot). Lives in core: reads the snapshot as plain
 // JSON rather than importing the TIC extension's types, so the
 // core-build CI boundary (no core → @/extensions/) stays intact.
 //
@@ -115,7 +115,7 @@ export function CompanyProfileView({
 
   const fyLabel =
     snapshot.fiscalYear?.startMonthDay && snapshot.fiscalYear?.endMonthDay
-      ? `${snapshot.fiscalYear.startMonthDay} – ${snapshot.fiscalYear.endMonthDay}`
+      ? `${snapshot.fiscalYear.startMonthDay} till ${snapshot.fiscalYear.endMonthDay}`
       : null
 
   return (
@@ -204,13 +204,13 @@ export function CompanyProfileView({
               <dd className="text-right tabular-nums">
                 {snapshot.financials.netSalesK != null
                   ? `${snapshot.financials.netSalesK.toLocaleString('sv-SE')} tkr`
-                  : '—'}
+                  : '-'}
               </dd>
               <dt className="text-muted-foreground">Rörelseresultat</dt>
               <dd className="text-right tabular-nums">
                 {snapshot.financials.operatingProfitK != null
                   ? `${snapshot.financials.operatingProfitK.toLocaleString('sv-SE')} tkr`
-                  : '—'}
+                  : '-'}
               </dd>
             </dl>
           ) : (
@@ -219,7 +219,7 @@ export function CompanyProfileView({
         </Section>
 
         {(() => {
-          // Only show dated status entries — Bolagsverket emits informational
+          // Only show dated status entries: Bolagsverket emits informational
           // flags like "Har aldrig varit verksam" with no date that read as
           // noise next to the real ones. Plain text, no colour: per the
           // design system, semantic colour is data-only and never chrome.
@@ -231,7 +231,7 @@ export function CompanyProfileView({
                 {datedStatuses.map((s, i) => (
                   <div key={`${s.code}-${i}`} className="flex items-center justify-between gap-3 text-sm">
                     <dt className={s.isCeased ? 'text-destructive' : 'text-foreground'}>
-                      {s.description ?? s.code ?? '—'}
+                      {s.description ?? s.code ?? '-'}
                     </dt>
                     <dd className="text-xs text-muted-foreground tabular-nums">
                       {formatDate(s.statusDate!)}
@@ -251,7 +251,7 @@ export function CompanyProfileView({
 
         {(() => {
           // Flatten every signatory row, clean ">" markers, split run-on
-          // clauses, and dedupe — the source repeats "Firman tecknas av
+          // clauses, and dedupe: the source repeats "Firman tecknas av
           // styrelsen" across rows.
           const rules = Array.from(
             new Set(
@@ -291,7 +291,7 @@ export function CompanyProfileView({
             <ul className="space-y-1">
               {snapshot.representatives.map((r, i) => (
                 <li key={`${r.name}-${i}`} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-foreground">{r.name ?? '—'}</span>
+                  <span className="text-foreground">{r.name ?? '-'}</span>
                   <span className="text-xs text-muted-foreground text-right">
                     {[r.positionType, r.positionStart ? formatDate(r.positionStart) : null]
                       .filter(Boolean)

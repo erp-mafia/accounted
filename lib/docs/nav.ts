@@ -27,7 +27,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: 'Introduction', href: '/docs/api', summary: 'What the Accounted REST API is and how to authenticate.' },
       { label: 'Quickstart', href: '/docs/api/cookbook/quickstart', summary: 'Send your first invoice in five minutes.' },
       { label: 'Authentication', href: '/docs/api#authentication', summary: 'API keys, scopes, test mode.' },
-      { label: 'Connect with Claude', href: '/docs/api/connect-claude', summary: 'Connect Claude via the MCP server — OAuth connector or npx gnubok-mcp bridge.' },
+      { label: 'Connect with Claude', href: '/docs/api/connect-claude', summary: 'Connect Claude via the MCP server: OAuth connector or npx gnubok-mcp bridge.' },
     ],
   },
   {
@@ -35,7 +35,7 @@ export const DOCS_NAV: DocsNavSection[] = [
     links: [
       { label: 'Send your first invoice', href: '/docs/api/cookbook/send-first-invoice', summary: 'Create a customer, draft an invoice, send it, mark it paid.' },
       { label: 'Ingest and categorise bank transactions', href: '/docs/api/cookbook/ingest-bank-transactions', summary: 'Push CSV/CAMT into the engine, get AI suggestions, commit.' },
-      { label: 'Compute and review a VAT declaration', href: '/docs/api/cookbook/file-vat-declaration', summary: 'Compute momsdeklaration rutor 05–62 and reconcile before manual Skatteverket submission.' },
+      { label: 'Compute and review a VAT declaration', href: '/docs/api/cookbook/file-vat-declaration', summary: 'Compute momsdeklaration rutor 05-62 and reconcile before manual Skatteverket submission.' },
       { label: 'Run payroll and generate AGI', href: '/docs/api/cookbook/run-payroll-and-agi', summary: 'Calculate, approve, mark paid, book, generate AGI XML for manual Skatteverket upload.' },
       { label: 'Set up webhooks and verify signatures', href: '/docs/api/cookbook/webhooks', summary: 'Subscribe to events, verify HMAC, handle retries idempotently.' },
       { label: 'Year-end closing', href: '/docs/api/cookbook/year-end-closing', summary: 'Lock periods, run year-end, set opening balances.' },

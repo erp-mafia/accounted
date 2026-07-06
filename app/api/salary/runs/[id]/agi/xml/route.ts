@@ -20,7 +20,7 @@ ensureInitialized()
  *
  * Per agi-filing.md:
  *   - FK570 (specifikationsnummer) MUST stay consistent per employee
- *   - Corrections resubmit with same FK570 — different number = new record
+ *   - Corrections resubmit with same FK570: different number = new record
  *   - XML is räkenskapsinformation, stored for 7-year retention per BFL 7 kap
  *   - Filing deadline: the 12th of the following month (17th in Jan/Aug for
  *     companies ≤ 40 MSEK turnover)
@@ -58,7 +58,7 @@ export async function GET(
     })
   }
 
-  // OWASP V3.2 / V4 (HTTP response header injection prevention) — sanitise
+  // OWASP V3.2 / V4 (HTTP response header injection prevention): sanitise
   // header-interpolated values. orgNumber comes from company_settings
   // (user-editable) and period_* from the run's own columns, but defense
   // in depth requires we strip anything that could be construed as a

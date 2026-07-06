@@ -3,7 +3,7 @@
  *
  * Returns the trial-balance (huvudbok-summa) for a fiscal period: opening
  * balance + period debit + period credit + closing balance per active
- * account. Mirrors the dashboard report byte-equivalently — same `lib/reports/
+ * account. Mirrors the dashboard report byte-equivalently: same `lib/reports/
  * trial-balance.ts` generator backs both surfaces.
  */
 
@@ -38,13 +38,13 @@ registerEndpoint({
   description:
     'Returns the per-account opening balance + period debit/credit + closing balance plus run-level totals and an `isBalanced` flag. The numbers come from the same `lib/reports/trial-balance.ts` generator the dashboard uses.',
   useWhen:
-    'You need a snapshot of every active account\'s movement during a period — typically the first report an accountant checks before running balance sheet or income statement.',
+    'You need a snapshot of every active account\'s movement during a period: typically the first report an accountant checks before running balance sheet or income statement.',
   doNotUseFor:
     'Reconciliation against AR/AP (use /reports/ar-ledger or /supplier-ledger). Specific account drill-in (use /reports/general-ledger with account_from/account_to filters).',
   pitfalls: [
     '`period_id` is required as a query parameter.',
-    '`isBalanced=false` means the period has unbalanced postings — a data-integrity red flag. The lib generator rounds at the source so a true imbalance is rare; investigate immediately.',
-    'Closed/locked periods are still queryable — the report is read-only.',
+    '`isBalanced=false` means the period has unbalanced postings: a data-integrity red flag. The lib generator rounds at the source so a true imbalance is rare; investigate immediately.',
+    'Closed/locked periods are still queryable: the report is read-only.',
   ],
   example: {
     response: {

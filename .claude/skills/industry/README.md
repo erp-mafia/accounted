@@ -1,6 +1,6 @@
 # Industry (vertical) atoms
 
-Each subdirectory here is one vertical atom — industry-specific knowledge the
+Each subdirectory here is one vertical atom: industry-specific knowledge the
 specialized accountant agent loads when the composer picks it for a company.
 
 ```
@@ -40,15 +40,15 @@ version: 1
 
 Body sections (suggested, not enforced):
 
-1. **When to use** — short paragraph; helps the agent decide when to lean on
+1. **When to use**: short paragraph; helps the agent decide when to lean on
    this knowledge mid-conversation.
-2. **Typical patterns** — workflow cadence (invoicing, expenses, reconciliation).
-3. **BAS account patterns** — the accounts this industry uses heavily.
-4. **Regulatory edge cases** — quirks specific to the industry (e.g. ROT/RUT
+2. **Typical patterns**: workflow cadence (invoicing, expenses, reconciliation).
+3. **BAS account patterns**: the accounts this industry uses heavily.
+4. **Regulatory edge cases**: quirks specific to the industry (e.g. ROT/RUT
    for bygg, alkohollagen for restaurang, EU OSS for e-handel).
-5. **Counterparties to recognize** — common suppliers, payment processors,
+5. **Counterparties to recognize**: common suppliers, payment processors,
    trade associations.
-6. **References** — links into deeper `references/*.md` files in the same dir.
+6. **References**: links into deeper `references/*.md` files in the same dir.
 
 ## Authoring tips
 
@@ -56,7 +56,7 @@ Body sections (suggested, not enforced):
   developer-oriented, precise, sparse. Not user-facing prose.
 - Quote BAS account numbers as strings (`"1465"`, not `1465`).
 - Mention SNI codes explicitly when relevant (`SNI 56.10`).
-- Avoid duplicating content from the horizontal skills — the composer loads
+- Avoid duplicating content from the horizontal skills: the composer loads
   both. If a topic belongs in `swedish-vat`, link to it (`[[horizontal/swedish-vat]]`)
   instead of inlining it.
 - If a section is going to be > 200 lines, split it into a file under
@@ -69,7 +69,7 @@ Body sections (suggested, not enforced):
 3. Run `npx tsx scripts/seed-agent-atom-registry.ts` to upsert the atom row
    into `agent_atom_registry`.
 4. The composer will start considering the atom on the next signup or
-   "Bygg om" rebuild — no code changes required.
+   "Bygg om" rebuild: no code changes required.
 
 ## Removing or deprecating
 

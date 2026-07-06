@@ -38,7 +38,7 @@ export async function POST(
     const emp = sre.employee as unknown as { first_name: string; last_name: string; f_skatt_status: string } | null
     if (emp?.f_skatt_status === 'not_verified') {
       warnings.push(
-        `${emp.first_name} ${emp.last_name}: F-skatt ej verifierad — 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`
+        `${emp.first_name} ${emp.last_name}: F-skatt ej verifierad: 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`
       )
     }
   }

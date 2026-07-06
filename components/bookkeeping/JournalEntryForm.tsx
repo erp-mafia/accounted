@@ -10,12 +10,15 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser } from 'lucide-react'
+import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
@@ -52,6 +55,8 @@ export interface FormLine {
   currency?: string
   amount_in_currency?: number
   exchange_rate?: number
+  /** SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}. */
+  dimensions?: Record<string, string>
 }
 
 interface Props {
@@ -105,6 +110,20 @@ export default function JournalEntryForm({
   const [description, setDescription] = useState(initialDescription ?? '')
   const [notes, setNotes] = useState(initialNotes ?? '')
   const [showNotes, setShowNotes] = useState(false)
+  // Dimension tagging (kostnadsställe/projekt). The affordances render only
+  // when company_settings.dimensions_enabled: a UI-visibility gate; lines
+  // that already carry dimensions (e.g. a draft being edited) still round-trip
+  // untouched when the toggle is off.
+  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  const [showDims, setShowDims] = useState(false)
+  // Header-level default dims ("gäller alla rader"). The per-row maps on
+  // `lines` are the ONE source of truth: this state only drives the header
+  // comboboxes; setHeaderDimension writes the default through to the rows.
+  const [headerDims, setHeaderDims] = useState<Record<string, string>>({})
+  // Which row's dimension popover is open (desktop table), and its container
+  // for the outside-click close.
+  const [dimPopoverRow, setDimPopoverRow] = useState<number | null>(null)
+  const dimPopoverRef = useRef<HTMLDivElement | null>(null)
   const [lines, setLines] = useState<FormLine[]>(
     initialLines ?? [{ ...BLANK_LINE }, { ...BLANK_LINE }]
   )
@@ -114,7 +133,7 @@ export default function JournalEntryForm({
   // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): the
   // /book endpoint flags an already-booked sibling sharing date+amount+account.
   // Surface it and let the user book anyway. The override is bound to the
-  // reviewed candidate via a ref the next submit reads — force is sent ONLY on
+  // reviewed candidate via a ref the next submit reads: force is sent ONLY on
   // that retry, never on a normal submit or to the manual journal-entry endpoint.
   const [duplicateCandidate, setDuplicateCandidate] = useState<BookedDuplicateCandidate | null>(null)
   const forceDuplicateRef = useRef<{ force: true; expected_duplicate_journal_entry_id: string } | null>(null)
@@ -124,6 +143,10 @@ export default function JournalEntryForm({
   const [showNoDocWarning, setShowNoDocWarning] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // Full BAS catalogue (static reference data, fetched once per session). Lets
+  // the account picker surface standard accounts the company hasn't activated
+  // yet; picking one activates it at commit via the existing rail.
+  const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [entryCurrency, setEntryCurrency] = useState<Currency>('SEK')
   const [exchangeRate, setExchangeRate] = useState('')
   const [isFetchingRate, setIsFetchingRate] = useState(false)
@@ -133,7 +156,7 @@ export default function JournalEntryForm({
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   // Month (YYYY-MM) of the most recently posted voucher this session. Used to
   // flag, at the review step, when the user is about to book into a different
-  // month — guards against accidentally posting to the wrong month.
+  // month: guards against accidentally posting to the wrong month.
   const [lastPostedMonth, setLastPostedMonth] = useState<string | null>(null)
   // Per-account saldo as of entryDate, keyed by account_number.
   // undefined = not fetched, null = fetch in flight.
@@ -142,11 +165,18 @@ export default function JournalEntryForm({
   // user typed in the combobox so we can prefill the dialog.
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string>('')
-  // Per-row refs to the debit inputs so we can auto-advance focus there once an
-  // account is committed on a row. Two layouts render simultaneously (mobile
-  // cards + desktop table); we focus whichever one is actually visible.
+  // Per-row refs to the account/debit/credit inputs so the keyboard flow can
+  // advance focus with Enter: konto → debet → kredit → nästa rads konto. Two
+  // layouts render simultaneously (mobile cards + desktop table); we focus
+  // whichever one is actually visible.
+  const desktopAccountRefs = useRef<(HTMLInputElement | null)[]>([])
+  const mobileAccountRefs = useRef<(HTMLInputElement | null)[]>([])
   const desktopDebitRefs = useRef<(HTMLInputElement | null)[]>([])
   const mobileDebitRefs = useRef<(HTMLInputElement | null)[]>([])
+  const desktopCreditRefs = useRef<(HTMLInputElement | null)[]>([])
+  const mobileCreditRefs = useRef<(HTMLInputElement | null)[]>([])
+  // Confirm button in the inline (bare) review, focused on open so Enter posts.
+  const bareConfirmRef = useRef<HTMLButtonElement>(null)
 
   const isForeign = entryCurrency !== 'SEK'
 
@@ -185,14 +215,17 @@ export default function JournalEntryForm({
   useEffect(() => {
     fetchPeriods()
     fetchAccounts()
-    // Fetch default voucher series from company settings — prefer the
-    // per-source-type mapping when present; fall back to the legacy
-    // default_voucher_series, then to 'A'.
-    // In edit mode the draft's own series is pre-filled — never override it
-    // from the company defaults.
-    if (!embedded && !editEntryId) {
-      fetch('/api/settings').then(r => r.json()).then(({ data }) => {
-        if (!data) return
+    loadBasCatalog().then(setCatalog).catch(() => {/* search degrades to the active chart */})
+    // Company settings power two things here: dimensions_enabled gates the
+    // tagging affordances (all modes, incl. the TransactionBookingDialog
+    // embed), and the default voucher series seeds the standalone form:
+    // prefer the per-source-type mapping when present; fall back to the legacy
+    // default_voucher_series, then to 'A'. In edit mode the draft's own series
+    // is pre-filled: never override it from the company defaults.
+    fetch('/api/settings').then(r => r.json()).then(({ data }) => {
+      if (!data) return
+      setDimensionsEnabled(data.dimensions_enabled === true)
+      if (!embedded && !editEntryId) {
         const effectiveSourceType = sourceType ?? 'manual'
         const perSource = resolveDefaultSeriesForSource(
           data as { default_voucher_series_per_source_type?: Record<string, string> | null } | null,
@@ -200,8 +233,8 @@ export default function JournalEntryForm({
         )
         const fallback = data.default_voucher_series || 'A'
         setVoucherSeries(perSource !== 'A' ? perSource : fallback)
-      }).catch(() => {/* keep 'A' */})
-    }
+      }
+    }).catch(() => {/* keep 'A' + hidden dimension affordances */})
   }, [embedded, sourceType, editEntryId])
 
   // Auto-select period when entry date changes
@@ -256,7 +289,7 @@ export default function JournalEntryForm({
         }
       }
     } catch {
-      // Non-critical — user can enter rate manually
+      // Non-critical: user can enter rate manually
     } finally {
       setIsFetchingRate(false)
     }
@@ -281,7 +314,7 @@ export default function JournalEntryForm({
   )
 
   // Fetch per-account saldo as of entryDate for the accounts currently on the
-  // form. Balances are reference-only ("saldo before this entry") — they ignore
+  // form. Balances are reference-only ("saldo before this entry"): they ignore
   // the draft lines the user is typing, by design.
   useEffect(() => {
     if (!accountsKey) {
@@ -306,7 +339,7 @@ export default function JournalEntryForm({
         if (!res.ok) {
           // 4xx (e.g. future entryDate rejected by Zod) or 5xx: collapse the
           // loading skeleton so the column doesn't get stuck. Saldo is a
-          // reference value, not authoritative — showing 0 here is preferable
+          // reference value, not authoritative: showing 0 here is preferable
           // to an indefinite spinner.
           if (cancelled) return
           setAccountBalances((prev) => {
@@ -328,7 +361,7 @@ export default function JournalEntryForm({
           return next
         })
       } catch {
-        // Reference value — failure is non-fatal, just leave previous state.
+        // Reference value: failure is non-fatal, just leave previous state.
       }
     }, 150)
 
@@ -338,14 +371,94 @@ export default function JournalEntryForm({
     }
   }, [accountsKey, entryDate])
 
+  // New rows inherit the current header default (a row without a per-row
+  // override follows the header (see setHeaderDimension).
+  const makeBlankLine = useCallback(
+    (): FormLine =>
+      Object.keys(headerDims).length > 0
+        ? { ...BLANK_LINE, dimensions: { ...headerDims } }
+        : { ...BLANK_LINE },
+    [headerDims]
+  )
+
   const addLine = () => {
-    setLines([...lines, { ...BLANK_LINE }])
+    setLines([...lines, makeBlankLine()])
   }
 
   const removeLine = (index: number) => {
     if (lines.length <= 2) return
     setLines(lines.filter((_, i) => i !== index))
+    // Keep the open dimension popover attached to the same row after the splice.
+    setDimPopoverRow((r) => (r === null ? r : r === index ? null : r > index ? r - 1 : r))
   }
+
+  /**
+   * Header default write-through. Inheritance rule: a row inherits dimension
+   * `dimNo` iff its current value equals the previous header default (unset
+   * counts as equal to an unset default). Inheriting rows follow the change
+   * (including clearing); rows whose value differs are per-row overrides and
+   * are left untouched. A row explicitly set to the same code as the header is
+   * indistinguishable from an inherited one and follows later header changes
+   * by design: the per-row maps stay the single source of truth.
+   */
+  const setHeaderDimension = (dimNo: string, code: string | null) => {
+    const prev = headerDims[dimNo]
+    const next = code?.trim() || undefined
+    setHeaderDims((h) => {
+      const out = { ...h }
+      if (next) out[dimNo] = next
+      else delete out[dimNo]
+      return out
+    })
+    setLines((ls) =>
+      ls.map((l) => {
+        if (l.dimensions?.[dimNo] !== prev) return l // per-row override: keep
+        const dims = { ...(l.dimensions ?? {}) }
+        if (next) dims[dimNo] = next
+        else delete dims[dimNo]
+        return { ...l, dimensions: Object.keys(dims).length > 0 ? dims : undefined }
+      })
+    )
+  }
+
+  const updateLineDimension = (index: number, dimNo: string, code: string | null) => {
+    setLines((ls) =>
+      ls.map((l, i) => {
+        if (i !== index) return l
+        const dims = { ...(l.dimensions ?? {}) }
+        const trimmed = code?.trim()
+        if (trimmed) dims[dimNo] = trimmed
+        else delete dims[dimNo]
+        return { ...l, dimensions: Object.keys(dims).length > 0 ? dims : undefined }
+      })
+    )
+  }
+
+  // Compact per-row display, e.g. "KS01 · P001" (dim number order).
+  const compactDims = (dims: Record<string, string>) =>
+    Object.entries(dims)
+      .filter(([, v]) => v)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([, v]) => v)
+      .join(' · ')
+
+  // Close the row dimension popover on outside click (same pattern as the
+  // comboboxes' own dropdowns; their option clicks preventDefault so a
+  // selection never counts as outside).
+  useEffect(() => {
+    if (dimPopoverRow === null) return
+    function handlePointerDown(e: MouseEvent | TouchEvent) {
+      if (dimPopoverRef.current && !dimPopoverRef.current.contains(e.target as Node)) {
+        setDimPopoverRow(null)
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+    }
+  }, [dimPopoverRow])
 
   const updateLine = (index: number, field: keyof FormLine, value: string) => {
     const updated = [...lines]
@@ -359,15 +472,19 @@ export default function JournalEntryForm({
     }
 
     // Auto-fill line description from account name when selecting an account.
-    // NOTE: we intentionally do NOT auto-fill a balancing amount here — that was
+    // NOTE: we intentionally do NOT auto-fill a balancing amount here: that was
     // surprising when splitting across several lines. The balancing amount is
     // now opt-in via double-clicking a debit/credit field (handleFillBalance).
     if (field === 'account_number' && value) {
-      const account = accounts.find((a) => a.account_number === value)
+      // Fall back to the BAS catalogue so the description still auto-fills when
+      // the chosen account isn't in the active chart yet.
+      const account =
+        accounts.find((a) => a.account_number === value) ??
+        catalog.find((a) => a.account_number === value)
       if (account) {
         updated[index].line_description = account.account_name
         // Fortnox-style: seed the verifikationstext from the first row's account
-        // when the user hasn't typed one yet. Non-destructive — never overwrites.
+        // when the user hasn't typed one yet. Non-destructive: never overwrites.
         if (index === 0 && !description.trim()) {
           setDescription(account.account_name)
         }
@@ -400,24 +517,43 @@ export default function JournalEntryForm({
     updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
   }
 
-  // Move focus to a row's debit input. Deferred a frame so it runs after any
+  // Move focus to a row's input. Deferred a frame so it runs after any
   // re-render (e.g. the auto-appended trailing row). offsetParent is null for
   // display:none elements, so this picks whichever layout is currently visible.
-  const focusDebit = useCallback((index: number) => {
-    requestAnimationFrame(() => {
-      const d = desktopDebitRefs.current[index]
-      const m = mobileDebitRefs.current[index]
-      const target = d && d.offsetParent !== null ? d : m && m.offsetParent !== null ? m : (d ?? m)
-      target?.focus()
-      target?.select?.()
-    })
-  }, [])
+  const focusRowInput = useCallback(
+    (
+      desktop: React.RefObject<(HTMLInputElement | null)[]>,
+      mobile: React.RefObject<(HTMLInputElement | null)[]>,
+      index: number
+    ) => {
+      requestAnimationFrame(() => {
+        const d = desktop.current?.[index]
+        const m = mobile.current?.[index]
+        const target = d && d.offsetParent !== null ? d : m && m.offsetParent !== null ? m : (d ?? m)
+        target?.focus()
+        target?.select?.()
+      })
+    },
+    []
+  )
+  const focusAccount = useCallback(
+    (index: number) => focusRowInput(desktopAccountRefs, mobileAccountRefs, index),
+    [focusRowInput]
+  )
+  const focusDebit = useCallback(
+    (index: number) => focusRowInput(desktopDebitRefs, mobileDebitRefs, index),
+    [focusRowInput]
+  )
+  const focusCredit = useCallback(
+    (index: number) => focusRowInput(desktopCreditRefs, mobileCreditRefs, index),
+    [focusRowInput]
+  )
 
   // Keep exactly one trailing blank row so the user never has to click "Lägg
   // till rad": once the last row is started (account or amount), append a fresh
   // blank below it. Applies uniformly to typed, templated and copied lines.
   // The guard lives inside the functional updater so chained updates see each
-  // other's result — making it idempotent and safe under StrictMode's dev-only
+  // other's result, making it idempotent and safe under StrictMode's dev-only
   // double-invoke (no runaway append, no double blank row).
   useEffect(() => {
     setLines((prev) => {
@@ -425,9 +561,17 @@ export default function JournalEntryForm({
       if (!last) return prev
       const trailingBlank =
         last.account_number === '' && last.debit_amount === '' && last.credit_amount === ''
-      return trailingBlank ? prev : [...prev, { ...BLANK_LINE }]
+      return trailingBlank ? prev : [...prev, makeBlankLine()]
     })
-  }, [lines])
+  }, [lines, makeBlankLine])
+
+  // Inline (bare) review: move focus to the confirm button when it opens so
+  // Enter posts: parity with the ConfirmationDialog's autoFocusConfirm.
+  useEffect(() => {
+    if (bare && showReview) {
+      requestAnimationFrame(() => bareConfirmRef.current?.focus())
+    }
+  }, [bare, showReview])
 
   // Only lines with both an account and a non-zero amount end up in the submit
   // payload (see the filter in handleConfirm). Compute totals and balance from
@@ -467,7 +611,7 @@ export default function JournalEntryForm({
     : 0
 
   // Month/period safety signals surfaced at the review step (not as a blocking
-  // dialog on every date change — that would add friction to routine entry).
+  // dialog on every date change (that would add friction to routine entry).
   const monthLabel = useCallback(
     (ym: string) => {
       const [y, m] = ym.split('-').map(Number)
@@ -498,6 +642,7 @@ export default function JournalEntryForm({
     setNotes('')
     setUploadedFiles([])
     setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
+    setHeaderDims({})
     setEntryCurrency('SEK')
     setExchangeRate('')
     setForeignAmount('')
@@ -510,7 +655,7 @@ export default function JournalEntryForm({
 
   // After a new account is created, refresh the chart, auto-select it on the
   // line that initiated the create, and close the dialog. All other form
-  // state is preserved — we never navigate away from the form.
+  // state is preserved: we never navigate away from the form.
   const handleAccountCreated = async (account: BASAccount) => {
     await fetchAccounts()
     if (creatingAccountForLine != null) {
@@ -530,6 +675,69 @@ export default function JournalEntryForm({
     setShowReview(true)
   }
 
+  // Whether an Enter should open the review: mirrors the review button's
+  // enable gate exactly, so Enter never submits something the button wouldn't.
+  const canSubmitReview = () =>
+    isBalanced &&
+    !!description &&
+    !!selectedPeriod &&
+    !periodMismatch &&
+    !isUploading &&
+    canWrite &&
+    !isSubmitting &&
+    !isSavingDraft
+
+  // Enter anywhere in the form = "Granska & skapa": opens the review exactly as
+  // the button does, from any field. Navigation is Tab's job. Two Enter
+  // exceptions stay intact: the account combobox (it calls preventDefault to
+  // select the highlighted account (we skip when defaultPrevented) and the
+  // internal-note textarea (newlines). The inline review owns its own Enter.
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter') return
+    if (e.defaultPrevented || showReview) return
+    if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+    e.preventDefault()
+    if (canSubmitReview()) handleReview()
+  }
+
+  // Enter-to-advance inside the konteringsrader: konto → debet → kredit →
+  // nästa rads konto. Navigation only fires while the entry is NOT
+  // submittable: once the voucher balances, Enter falls through to the
+  // form-level handler above and opens the review instead, so a single Enter
+  // never both moves focus and submits.
+  const handleAmountKeyDown =
+    (index: number, side: 'debit' | 'credit') =>
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== 'Enter' || canSubmitReview()) return
+      e.preventDefault()
+      // An amount on this side finishes the row (debit clears credit and vice
+      // versa) → jump to the next row's account. An empty debit means the row
+      // books on the credit side → hop across first.
+      if (side === 'debit' && !(parseFloat(lines[index].debit_amount) > 0)) {
+        focusCredit(index)
+      } else {
+        focusAccount(index + 1)
+      }
+    }
+
+  // Enter in a radbeskrivning continues to that row's amount.
+  const handleLineDescKeyDown =
+    (index: number) => (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== 'Enter' || canSubmitReview()) return
+      e.preventDefault()
+      focusDebit(index)
+    }
+
+  // Enter in the verifikationstext drops into the first row still missing an
+  // account, so the top-to-bottom keyboard flow never needs the mouse.
+  const handleHeaderDescKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || canSubmitReview()) return
+    const idx = lines.findIndex((l) => !l.account_number)
+    if (idx === -1) return
+    e.preventDefault()
+    focusAccount(idx)
+  }
+
   // Inner submit: builds payload, POSTs, throws a structured error on failure
   // (so the activation hook can intercept ACCOUNTS_NOT_IN_CHART).
   const postJournalEntry = useCallback(async () => {
@@ -542,6 +750,13 @@ export default function JournalEntryForm({
           debit_amount: parseFloat(l.debit_amount) || 0,
           credit_amount: parseFloat(l.credit_amount) || 0,
           line_description: l.line_description || undefined,
+        }
+
+        if (l.dimensions) {
+          const dims = Object.fromEntries(
+            Object.entries(l.dimensions).filter(([, v]) => typeof v === 'string' && v.trim() !== '')
+          )
+          if (Object.keys(dims).length > 0) base.dimensions = dims
         }
 
         if (l.currency) {
@@ -630,6 +845,7 @@ export default function JournalEntryForm({
       setNotes('')
       setUploadedFiles([])
       setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
+      setHeaderDims({})
       setEntryCurrency('SEK')
       setExchangeRate('')
       setForeignAmount('')
@@ -639,7 +855,7 @@ export default function JournalEntryForm({
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // User dismissed the activation dialog — no toast needed
+        // User dismissed the activation dialog: no toast needed
       } else {
         const anyErr = err as {
           body?: { error?: { code?: string; details?: { candidate?: BookedDuplicateCandidate } } }
@@ -647,7 +863,7 @@ export default function JournalEntryForm({
         }
         const candidate = anyErr.body?.error?.details?.candidate
         if (anyErr.body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
-          // Soft duplicate guard fired — don't dead-end on a toast that merely
+          // Soft duplicate guard fired: don't dead-end on a toast that merely
           // says "book anyway". Open the dialog so the user can review the
           // existing verifikat or confirm. handleBookAnyway re-submits with
           // force bound to this candidate.
@@ -674,7 +890,7 @@ export default function JournalEntryForm({
     if (!candidate) return
     forceDuplicateRef.current = {
       force: true,
-      // Bind on the voucher id — present on both a sibling-transaction candidate
+      // Bind on the voucher id: present on both a sibling-transaction candidate
       // and a ledger-only voucher candidate (which has no transaction_id).
       expected_duplicate_journal_entry_id: candidate.journal_entry_id,
     }
@@ -717,6 +933,7 @@ export default function JournalEntryForm({
       setNotes('')
       setUploadedFiles([])
       setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
+      setHeaderDims({})
       setEntryCurrency('SEK')
       setExchangeRate('')
       setForeignAmount('')
@@ -726,7 +943,7 @@ export default function JournalEntryForm({
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // Activation dialog dismissed — silent
+        // Activation dialog dismissed: silent
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
@@ -742,7 +959,7 @@ export default function JournalEntryForm({
   }
 
   // Edit an existing draft: PATCH in place (postJournalEntry routes to the
-  // editEntryId URL) and keep it a draft. No field reset — the host dialog
+  // editEntryId URL) and keep it a draft. No field reset: the host dialog
   // closes on success via onUpdated.
   const handleSaveEdit = async () => {
     if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
@@ -756,7 +973,7 @@ export default function JournalEntryForm({
       onUpdated?.()
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // Activation dialog dismissed — silent
+        // Activation dialog dismissed: silent
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
@@ -774,7 +991,17 @@ export default function JournalEntryForm({
   // summary instead of stacking a second dialog over the form dialog. The
   // no-underlag caveat folds in here so there's a single confirm step.
   const reviewPanel = (
-    <div className="space-y-4">
+    <div
+      className="space-y-4"
+      // The host dialog swallows Escape (accidental-close guard), so Escape
+      // here is free to mean "back to the form": keyboard mirror of ←.
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !isSubmitting) {
+          e.stopPropagation()
+          setShowReview(false)
+        }
+      }}
+    >
       <div className="flex items-center justify-between gap-2">
         <button
           type="button"
@@ -829,7 +1056,7 @@ export default function JournalEntryForm({
         <Button variant="outline" onClick={() => setShowReview(false)} disabled={isSubmitting}>
           {t('review_back')}
         </Button>
-        <Button onClick={handleConfirm} disabled={isSubmitting}>
+        <Button ref={bareConfirmRef} onClick={handleConfirm} disabled={isSubmitting}>
           {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {/* No underlag attached → explicit acknowledgement, equivalent to the
               blocking "Bokför utan underlag" dialog in the non-bare flow (BFL
@@ -843,10 +1070,10 @@ export default function JournalEntryForm({
   )
 
   const formContent = (
-    <div className="space-y-4">
+    <div className="space-y-4" onKeyDown={handleFormKeyDown}>
       {bare && showReview ? reviewPanel : (
       <>
-      {/* Verifikat metadata — compact bar on top (Fortnox-style). Date, series
+      {/* Verifikat metadata: compact bar on top (Fortnox-style). Date, series
           and period are pre-filled; the period derives from the date. The
           konteringsrader below are the focus. */}
       <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
@@ -867,6 +1094,7 @@ export default function JournalEntryForm({
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              onKeyDown={handleHeaderDescKeyDown}
               placeholder={t('description_placeholder')}
               className="mt-1 h-8"
             />
@@ -950,6 +1178,15 @@ export default function JournalEntryForm({
               + {t('internal_note')}
             </button>
           )}
+          {dimensionsEnabled && !showDims && (
+            <button
+              type="button"
+              onClick={() => setShowDims(true)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              + {t('add_dimensions')}
+            </button>
+          )}
         </div>
 
         {isForeign && (
@@ -1012,6 +1249,19 @@ export default function JournalEntryForm({
           </div>
         )}
 
+        {/* Header default dims: writes through to all rows without a per-row
+            override (see setHeaderDimension for the inheritance rule). */}
+        {dimensionsEnabled && showDims && (
+          <div className="max-w-md space-y-1">
+            <LineDimensionFields
+              dimensions={headerDims}
+              onChange={setHeaderDimension}
+              inputClassName="h-8"
+            />
+            <p className="text-xs text-muted-foreground">{t('dimensions_apply_all_hint')}</p>
+          </div>
+        )}
+
         {periodMismatch === 'no_period' && (
           <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
             <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
@@ -1032,7 +1282,7 @@ export default function JournalEntryForm({
         )}
       </div>
 
-      {/* Entry lines — mobile cards */}
+      {/* Entry lines: mobile cards */}
       <div className="sm:hidden space-y-3">
         {lines.map((line, index) => (
           <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
@@ -1041,9 +1291,12 @@ export default function JournalEntryForm({
                 <AccountCombobox
                   value={line.account_number}
                   accounts={accounts}
+                  catalog={catalog}
+                  notActivatedLabel={t('account_not_activated')}
                   onChange={(num) => updateLine(index, 'account_number', num)}
                   onCommit={() => focusDebit(index)}
                   onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
+                  inputRef={(el) => { mobileAccountRefs.current[index] = el }}
                 />
               </div>
               <Button
@@ -1059,6 +1312,7 @@ export default function JournalEntryForm({
             <Input
               value={line.line_description}
               onChange={(e) => updateLine(index, 'line_description', e.target.value)}
+              onKeyDown={handleLineDescKeyDown(index)}
               placeholder={t('line_description_placeholder')}
             />
             <div className="grid grid-cols-2 gap-2">
@@ -1069,6 +1323,7 @@ export default function JournalEntryForm({
                   type="number"
                   value={line.debit_amount}
                   onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                  onKeyDown={handleAmountKeyDown(index, 'debit')}
                   onDoubleClick={() => handleFillBalance(index, 'debit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
@@ -1081,9 +1336,11 @@ export default function JournalEntryForm({
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{t('col_credit')}</Label>
                 <Input
+                  ref={(el) => { mobileCreditRefs.current[index] = el }}
                   type="number"
                   value={line.credit_amount}
                   onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                  onKeyDown={handleAmountKeyDown(index, 'credit')}
                   onDoubleClick={() => handleFillBalance(index, 'credit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
@@ -1094,6 +1351,12 @@ export default function JournalEntryForm({
                 />
               </div>
             </div>
+            {dimensionsEnabled && (
+              <LineDimensionFields
+                dimensions={line.dimensions}
+                onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
+              />
+            )}
             {/^\d{4}$/.test(line.account_number) && (
               <div className="flex justify-end text-xs text-muted-foreground tabular-nums pt-0.5">
                 {accountBalances[line.account_number] === null || accountBalances[line.account_number] === undefined ? (
@@ -1138,7 +1401,7 @@ export default function JournalEntryForm({
         </div>
       </div>
 
-      {/* Entry lines — desktop table */}
+      {/* Entry lines: desktop table */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -1158,9 +1421,12 @@ export default function JournalEntryForm({
                   <AccountCombobox
                     value={line.account_number}
                     accounts={accounts}
+                    catalog={catalog}
+                    notActivatedLabel={t('account_not_activated')}
                     onChange={(num) => updateLine(index, 'account_number', num)}
                     onCommit={() => focusDebit(index)}
                     onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
+                    inputRef={(el) => { desktopAccountRefs.current[index] = el }}
                     className="h-8"
                   />
                 </td>
@@ -1168,9 +1434,17 @@ export default function JournalEntryForm({
                   <Input
                     value={line.line_description}
                     onChange={(e) => updateLine(index, 'line_description', e.target.value)}
+                    onKeyDown={handleLineDescKeyDown(index)}
                     placeholder={t('line_description_placeholder')}
                     className="h-8"
                   />
+                  {line.dimensions &&
+                    Object.keys(line.dimensions).length > 0 &&
+                    (line.account_number || line.debit_amount || line.credit_amount) && (
+                      <Badge variant="outline" className="mt-1 font-mono text-[11px] font-normal">
+                        {compactDims(line.dimensions)}
+                      </Badge>
+                    )}
                 </td>
                 <td className="py-1.5 px-1">
                   <Input
@@ -1178,6 +1452,7 @@ export default function JournalEntryForm({
                     type="number"
                     value={line.debit_amount}
                     onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                    onKeyDown={handleAmountKeyDown(index, 'debit')}
                     onDoubleClick={() => handleFillBalance(index, 'debit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"
@@ -1189,9 +1464,11 @@ export default function JournalEntryForm({
                 </td>
                 <td className="py-1.5 px-1">
                   <Input
+                    ref={(el) => { desktopCreditRefs.current[index] = el }}
                     type="number"
                     value={line.credit_amount}
                     onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                    onKeyDown={handleAmountKeyDown(index, 'credit')}
                     onDoubleClick={() => handleFillBalance(index, 'credit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"
@@ -1212,15 +1489,61 @@ export default function JournalEntryForm({
                   })()}
                 </td>
                 <td className="py-1.5">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeLine(index)}
-                    disabled={lines.length <= 2}
-                    className="h-8 w-8 p-0 min-h-[44px] min-w-[44px]"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <div className="flex items-center justify-end">
+                    {dimensionsEnabled && (
+                      <div
+                        className="relative"
+                        ref={dimPopoverRow === index ? dimPopoverRef : undefined}
+                      >
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
+                          className={`h-8 w-8 p-0 min-h-[44px] min-w-[44px] ${
+                            line.dimensions && Object.keys(line.dimensions).length > 0
+                              ? 'text-foreground'
+                              : 'text-muted-foreground'
+                          }`}
+                          aria-label={t('row_dimensions_aria')}
+                          aria-expanded={dimPopoverRow === index}
+                          title={t('row_dimensions_aria')}
+                        >
+                          <Tags className="h-3.5 w-3.5" />
+                        </Button>
+                        {dimPopoverRow === index && (
+                          <div
+                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border bg-card p-3 shadow-md"
+                            onKeyDown={(e) => {
+                              // The comboboxes preventDefault their own Escape
+                              // (closing their dropdown): only an unhandled
+                              // Escape closes the popover.
+                              if (e.key === 'Escape' && !e.defaultPrevented) {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                setDimPopoverRow(null)
+                              }
+                            }}
+                          >
+                            <LineDimensionFields
+                              stacked
+                              dimensions={line.dimensions}
+                              onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
+                              inputClassName="h-8"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeLine(index)}
+                      disabled={lines.length <= 2}
+                      className="h-8 w-8 p-0 min-h-[44px] min-w-[44px]"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -1264,10 +1587,12 @@ export default function JournalEntryForm({
             entityType={company?.entity_type}
           />
         </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">{t('fill_balance_hint')}</p>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {t('fill_balance_hint')} {t('keyboard_hint')}
+        </p>
       </div>
 
-      {/* Document attachments — hidden when editing a draft; underlag is
+      {/* Document attachments: hidden when editing a draft; underlag is
           managed from the verifikat detail page (JournalEntryAttachments). */}
       {!embedded && !editEntryId && (
         <div>
@@ -1378,6 +1703,7 @@ export default function JournalEntryForm({
         onOpenChange={setShowReview}
         onConfirm={handleConfirm}
         isSubmitting={isSubmitting}
+        autoFocusConfirm
         title={
           !embedded && nextVoucherNumber != null
             ? t('review_title_with_voucher', { voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }) })
@@ -1425,6 +1751,7 @@ export default function JournalEntryForm({
           setShowReview(true)
         }}
         isSubmitting={false}
+        autoFocusConfirm
         title={t('no_doc_dialog_title')}
         warningText={t('no_doc_dialog_warning')}
         confirmLabel={t('no_doc_confirm')}

@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
-  Receipt,
+  ReceiptText,
   ArrowLeftRight,
   Users,
   Wallet,
   Building2,
   BookOpen,
+  ListTree,
   BarChart3,
   Upload,
   Package,
@@ -35,10 +36,10 @@ type Entry = {
 }
 
 const ACTION_ENTRIES: Entry[] = [
-  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: Receipt, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
+  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: ReceiptText, href: '/invoices?new=1', keywords: 'fakturera ny invoice send create' },
   { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
   { id: 'new-customer', label: 'Lägg till kund', icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
-  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices/new', keywords: 'leverantörsfaktura supplier invoice ny' },
+  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
   { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: BarChart3, href: '/reports', keywords: 'rapport resultat balans report' },
 ]
 
@@ -47,6 +48,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'leverantörer', label: 'Leverantörer', icon: Building2, href: '/suppliers' },
   { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
   { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
+  { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
   { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: Package, href: '/assets', keywords: 'tillgångar assets' },
   { id: 'rapporter', label: 'Rapporter', icon: BarChart3, href: '/reports' },
   { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: BarChart3, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },
@@ -55,6 +57,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: BarChart3, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
   { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions' },
   { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
+  { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reports/bank-reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
   { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
   { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
   { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },

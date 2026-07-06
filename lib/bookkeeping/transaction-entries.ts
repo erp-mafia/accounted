@@ -1,5 +1,6 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
+import { coerceDimensionsBag } from './dimension-resolver'
 import { extractNetAmount, extractVatAmount } from './vat-entries'
 import { InvalidMappingResultError } from '@/lib/bookkeeping/errors'
 import { createLogger } from '@/lib/logger'
@@ -15,7 +16,11 @@ import type {
 const log = createLogger('transaction-entries')
 
 /**
- * Create a journal entry from a bank transaction using mapping engine result
+ * Build the journal entry lines for a bank transaction from a mapping engine
+ * result. Single source of truth for the gross→net split: the expense account
+ * gets the amount net of deductible input VAT while the bank line stays gross.
+ * Used both by createTransactionJournalEntry (commit) and by the staged
+ * categorization preview, so the lines a user approves are the lines posted.
  *
  * Standard expense pattern (domestic purchase with 25% VAT):
  *   Debit  5xxx/6xxx Expense account  [net amount]
@@ -40,26 +45,12 @@ const log = createLogger('transaction-entries')
  *   Debit  1930 Företagskonto          [total]
  *   Credit 3xxx Revenue account        [total]
  */
-export async function createTransactionJournalEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+export function buildTransactionEntryLines(
   transaction: Transaction,
   mappingResult: MappingResult,
-  // Optional audit-trail text to append to the verifikation's description.
-  // Used by the agent for representation bookings to capture deltagare +
-  // syfte directly on the journal entry (SKV's representationsregler /
-  // ML 8 kap require the verifikation to document who attended and why).
-  notes?: string,
-): Promise<JournalEntry | null> {
+): CreateJournalEntryLineInput[] {
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new InvalidMappingResultError(mappingResult.debit_account, mappingResult.credit_account)
-  }
-
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for transaction date:', transaction.date)
-    return null
   }
 
   const absAmountSek = Math.abs(resolveSekAmount(
@@ -74,9 +65,14 @@ export async function createTransactionJournalEntry(
     transaction.exchange_rate
   )
   const lines: CreateJournalEntryLineInput[] = []
+  // Dimensions PR7: the bag tags the business (expense/revenue) lines only:
+  // bank/settlement and VAT lines stay untagged. In the multi-line template
+  // path each pattern line carries its own bag instead (LinePatternEntry).
+  // The private path books to a balance account (2013/2893): never tagged.
+  const businessDimensions = coerceDimensionsBag(mappingResult.dimensions)
 
   if (mappingResult.default_private) {
-    // Private expense — use entity-specific account from mappingResult
+    // Private expense: use entity-specific account from mappingResult
     lines.push(
       {
         account_number: mappingResult.debit_account,
@@ -99,13 +95,16 @@ export async function createTransactionJournalEntry(
       : (mappingResult.debit_account || '1930')
 
     if (isExpense) {
-      // All non-settlement lines (business, VAT, tax, rounding)
+      // All non-settlement lines (business, VAT, tax, rounding). Per-line bags
+      // are authoritative here: the pattern marks business lines only, so no
+      // fallback to the categorize-level bag (it would mis-tag VAT/tax lines).
       for (const line of mappingResult.vat_lines) {
         lines.push({
           account_number: line.account_number,
           debit_amount: line.debit_amount,
           credit_amount: line.credit_amount,
           line_description: line.description || transaction.description,
+          dimensions: coerceDimensionsBag(line.dimensions),
         })
       }
       // Credit bank for full amount
@@ -125,13 +124,14 @@ export async function createTransactionJournalEntry(
         line_description: transaction.description,
         ...(isForeign ? currencyMeta : {}),
       })
-      // All non-settlement lines
+      // All non-settlement lines: per-line bags authoritative (see above).
       for (const line of mappingResult.vat_lines) {
         lines.push({
           account_number: line.account_number,
           debit_amount: line.debit_amount,
           credit_amount: line.credit_amount,
           line_description: line.description || transaction.description,
+          dimensions: coerceDimensionsBag(line.dimensions),
         })
       }
     }
@@ -163,6 +163,7 @@ export async function createTransactionJournalEntry(
         debit_amount: netAmount,
         credit_amount: 0,
         line_description: transaction.description,
+        dimensions: businessDimensions,
       })
     } else {
       // No VAT handling - debit full amount to expense account
@@ -171,6 +172,7 @@ export async function createTransactionJournalEntry(
         debit_amount: absAmount,
         credit_amount: 0,
         line_description: transaction.description,
+        dimensions: businessDimensions,
       })
     }
 
@@ -208,6 +210,7 @@ export async function createTransactionJournalEntry(
         debit_amount: 0,
         credit_amount: netAmount,
         line_description: transaction.description,
+        dimensions: businessDimensions,
       })
       // Credit output VAT
       for (const vatLine of mappingResult.vat_lines) {
@@ -238,10 +241,39 @@ export async function createTransactionJournalEntry(
     }
   }
 
+  return lines
+}
+
+/**
+ * Create a journal entry from a bank transaction using mapping engine result.
+ * Line patterns are documented on buildTransactionEntryLines above.
+ */
+export async function createTransactionJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  transaction: Transaction,
+  mappingResult: MappingResult,
+  // Optional audit-trail text to append to the verifikation's description.
+  // Used by the agent for representation bookings to capture deltagare +
+  // syfte directly on the journal entry (SKV's representationsregler /
+  // ML 8 kap require the verifikation to document who attended and why).
+  notes?: string,
+): Promise<JournalEntry | null> {
+  // Build lines first — throws InvalidMappingResultError on a broken mapping
+  // before any period lookup, preserving the original validation order.
+  const lines = buildTransactionEntryLines(transaction, mappingResult)
+
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for transaction date:', transaction.date)
+    return null
+  }
+
   // Compose the verifikation's description (verifikationstext). journal_entries
-  // has no separate notes column — the description IS the BFL audit field, so
+  // has no separate notes column: the description IS the BFL audit field, so
   // representation deltagare/syfte etc. belong here. Separate the bank text
-  // and the note with a middle dot (never an em-dash — house style), and only
+  // and the note with a middle dot (never an em-dash: house style), and only
   // append when the note isn't already implied by the bank text.
   const trimmedNotes = notes?.trim()
   const baseDescription = (transaction.description ?? '').trim()

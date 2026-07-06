@@ -60,7 +60,7 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-// A line is periodiserad when both period dates are set — the cost was parked
+// A line is periodiserad when both period dates are set: the cost was parked
 // on the 17xx interim account and dissolves monthly via accrual_schedules.
 const itemHasAccrual = (item: SupplierInvoiceItem): boolean =>
   !!(item.accrual_period_start && item.accrual_period_end)
@@ -147,7 +147,7 @@ export default function SupplierInvoiceDetailPage() {
   }, [isPayDialogOpen])
 
   // Mirror the preview into the editable working copy. Only resets when not
-  // currently editing — otherwise typing in the inputs would clobber on
+  // currently editing: otherwise typing in the inputs would clobber on
   // every keystroke since the preview refetches on input change.
   useEffect(() => {
     if (!isEditingLines && markPaidPreview) {
@@ -426,7 +426,7 @@ export default function SupplierInvoiceDetailPage() {
   // Display-only öresavrundning. The stored total/booked verifikat keep the
   // exact öre; this only adjusts the rendered total. Supplier invoices never
   // had rounding historically, so a null flag resolves to off (company arg
-  // false) — only an explicit per-invoice `true` rounds the display.
+  // false); only an explicit per-invoice `true` rounds the display.
   const rounding = getDisplayTotal(
     { total: invoice.total, currency: invoice.currency, ore_rounding: invoice.ore_rounding },
     { ore_rounding: false },
@@ -531,7 +531,7 @@ export default function SupplierInvoiceDetailPage() {
         </div>
       </div>
 
-      {/* Credit note banner — explain why this row has no edit/delete affordances and where to undo */}
+      {/* Credit note banner: explain why this row has no edit/delete affordances and where to undo */}
       {invoice.is_credit_note && (
         <div className="rounded-lg border bg-muted/40 p-4 flex gap-3 text-sm">
           <Info className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />
@@ -894,7 +894,7 @@ export default function SupplierInvoiceDetailPage() {
                   </p>
                 </div>
 
-                {/* Bokföringspreview — visar exakt vad som kommer postas.
+                {/* Bokföringspreview: visar exakt vad som kommer postas.
                     Redigerbar via "Redigera"-knappen så användaren kan välja
                     andra konton eller flytta belopp mellan debet/kredit. */}
                 {(markPaidPreview || markPaidPreviewFailed) && (

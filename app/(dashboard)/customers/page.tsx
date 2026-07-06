@@ -244,6 +244,7 @@ function CustomersPageInner() {
         action={
           <div className="flex items-center gap-2">
             <ReportExportMenu
+              size="default"
               items={[
                 { format: 'xlsx', href: '/api/export/customers' },
                 { format: 'csv', href: '/api/export/customers?format=csv' },
@@ -366,14 +367,12 @@ function CustomersPageInner() {
                             {customer.name}
                           </Link>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
-                          </Badge>
+                        <TableCell className="text-muted-foreground">
+                          {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
                         </TableCell>
                         <TableCell className="tabular-nums text-muted-foreground">
                           <div className="flex items-center gap-2">
-                            <span>{identifier || '—'}</span>
+                            <span>{identifier || '-'}</span>
                             {customer.org_number && customer.vat_number_validated && (
                               <Badge variant="success" className="text-xs">
                                 {t('verified')}
@@ -382,10 +381,10 @@ function CustomersPageInner() {
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground truncate max-w-[220px]">
-                          {customer.email || '—'}
+                          {customer.email || '-'}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
-                          {customer.city || '—'}
+                          {customer.city || '-'}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">
                           {formatDate(customer.created_at)}
@@ -412,9 +411,9 @@ function CustomersPageInner() {
                         <CardTitle className="text-base truncate group-hover:text-primary transition-colors">
                           {customer.name}
                         </CardTitle>
-                        <Badge variant="secondary" className="mt-1">
+                        <p className="text-sm text-muted-foreground mt-1 truncate">
                           {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
-                        </Badge>
+                        </p>
                       </div>
                     </div>
                   </CardHeader>

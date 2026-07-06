@@ -8,8 +8,8 @@ The deterministic detection layer of any OSS compliance scanner rests on the SPD
 
 Two repositories under the SPDX organization, with distinct roles:
 
-* **`spdx/license-list-XML`** — the governance and authoring repository. Contains the source XML schema for every license and exception. Maintained by the SPDX Legal Team. Do **not** parse this directly from a scanner; the XML is structured for human curation, not machine evaluation.
-* **`spdx/license-list-data`** — the downstream distribution repository. Compiled from `license-list-XML` into stable machine-readable formats: JSON, RDFa, HTML, plaintext. This is what the scanner ingests.
+* **`spdx/license-list-XML`**: the governance and authoring repository. Contains the source XML schema for every license and exception. Maintained by the SPDX Legal Team. Do **not** parse this directly from a scanner; the XML is structured for human curation, not machine evaluation.
+* **`spdx/license-list-data`**: the downstream distribution repository. Compiled from `license-list-XML` into stable machine-readable formats: JSON, RDFa, HTML, plaintext. This is what the scanner ingests.
 
 Both repositories release under semantic versioning tags (`vX.Y` or `vX.Y.Z`). Pin to a specific release in `.compliance/sources.lock` so two runs of the scanner against the same commit always evaluate against the same license catalog.
 
@@ -17,8 +17,8 @@ Both repositories release under semantic versioning tags (`vX.Y` or `vX.Y.Z`). P
 
 Pull two arrays from `license-list-data`:
 
-* `licenses.json` — every active and deprecated license entry.
-* `exceptions.json` — every license exception (e.g., `Classpath-exception-2.0`, `LLVM-exception`, `Autoconf-exception-2.0`).
+* `licenses.json`: every active and deprecated license entry.
+* `exceptions.json`: every license exception (e.g., `Classpath-exception-2.0`, `LLVM-exception`, `Autoconf-exception-2.0`).
 
 Per-entry fields the scanner must consume:
 
@@ -42,8 +42,8 @@ License texts in the wild differ from canonical text by typography, formatting, 
 
 The XML schema marks regions of license text with attributes that the matcher must respect:
 
-* **Omittable text** — visually styled blue in HTML; tagged via `altParagraphType` in the XML. Can be absent from a candidate without disqualifying the match. Common for optional preambles or address blocks.
-* **Replaceable text** — visually styled red in HTML; represents fields like copyright holder name, year, project title. The matcher must capture these via wildcard / placeholder logic, not literal matching.
+* **Omittable text**: visually styled blue in HTML; tagged via `altParagraphType` in the XML. Can be absent from a candidate without disqualifying the match. Common for optional preambles or address blocks.
+* **Replaceable text**: visually styled red in HTML; represents fields like copyright holder name, year, project title. The matcher must capture these via wildcard / placeholder logic, not literal matching.
 
 ### Equivalent words
 
@@ -59,10 +59,10 @@ A single component may declare a compound license. The expression syntax must be
 
 ### Operators
 
-* `OR` — disjunction. `(MIT OR Apache-2.0)` means the consumer chooses one. The scanner must record the **chosen** license; an unresolved `OR` is a finding requiring agentic resolution or `.ort.yml` curation.
-* `AND` — conjunction. All terms apply simultaneously.
-* `WITH` — appends a standardized exception. `GPL-2.0-only WITH Classpath-exception-2.0` means GPLv2 with the linking exception. Look up the exception in `exceptions.json`.
-* `+` — "or any later version". `GPL-2.0+` means GPLv2 or any later GPL. Operationally this is dangerous: future GPL versions cannot be evaluated for compatibility today, so policy should treat `+` as a flag for review.
+* `OR`: disjunction. `(MIT OR Apache-2.0)` means the consumer chooses one. The scanner must record the **chosen** license; an unresolved `OR` is a finding requiring agentic resolution or `.ort.yml` curation.
+* `AND`: conjunction. All terms apply simultaneously.
+* `WITH`: appends a standardized exception. `GPL-2.0-only WITH Classpath-exception-2.0` means GPLv2 with the linking exception. Look up the exception in `exceptions.json`.
+* `+`: "or any later version". `GPL-2.0+` means GPLv2 or any later GPL. Operationally this is dangerous: future GPL versions cannot be evaluated for compatibility today, so policy should treat `+` as a flag for review.
 
 ### Suffixed identifiers
 
@@ -100,9 +100,9 @@ The REUSE specification (FSFE) makes file-level license attribution machine-read
 
 The `reuse` linter checks three things:
 
-1. **Bulk metadata** — `REUSE.toml` (current spec) or `.reuse/dep5` (legacy DEP-5 syntax) for directories where per-file headers are impractical (assets, generated files).
-2. **File-level identifiers** — every source file carries a header comment with `SPDX-FileCopyrightText:` and `SPDX-License-Identifier:` lines. Format depends on the file's comment syntax.
-3. **License texts** — `LICENSES/` directory at the repository root containing the unaltered text of every license referenced anywhere in the codebase.
+1. **Bulk metadata**: `REUSE.toml` (current spec) or `.reuse/dep5` (legacy DEP-5 syntax) for directories where per-file headers are impractical (assets, generated files).
+2. **File-level identifiers**: every source file carries a header comment with `SPDX-FileCopyrightText:` and `SPDX-License-Identifier:` lines. Format depends on the file's comment syntax.
+3. **License texts**: `LICENSES/` directory at the repository root containing the unaltered text of every license referenced anywhere in the codebase.
 
 ### Enforcement integration
 
@@ -116,8 +116,8 @@ REUSE conformance is a high bar for older codebases. If a repository ships only 
 
 Patterns that produce false negatives in naive scanners:
 
-* **License in subdirectory** — Many projects place `LICENSE.txt` next to `README.md` in a subdirectory rather than the repo root. Recursive scanning is required.
-* **License inside header comment** — Some projects (especially smaller libraries) embed the entire license in a top-of-file comment with no separate `LICENSE` file.
-* **License by reference** — A `README.md` line "Licensed under MIT" with no actual license text. Scanner should detect the reference but flag the missing canonical text.
-* **Dual-licensed files with single header** — A file declaring `SPDX-License-Identifier: MIT OR Apache-2.0` is dual-licensed; downstream choice must be recorded, not silently defaulted.
-* **License changed mid-repo** — A package that flipped license between versions (Redis pre/post 7.4, Elastic pre/post 7.11) requires version-specific resolution. Lockfile-based version pinning is the input; the scanner must not default to `HEAD`.
+* **License in subdirectory**: Many projects place `LICENSE.txt` next to `README.md` in a subdirectory rather than the repo root. Recursive scanning is required.
+* **License inside header comment**: Some projects (especially smaller libraries) embed the entire license in a top-of-file comment with no separate `LICENSE` file.
+* **License by reference**: A `README.md` line "Licensed under MIT" with no actual license text. Scanner should detect the reference but flag the missing canonical text.
+* **Dual-licensed files with single header**: A file declaring `SPDX-License-Identifier: MIT OR Apache-2.0` is dual-licensed; downstream choice must be recorded, not silently defaulted.
+* **License changed mid-repo**: A package that flipped license between versions (Redis pre/post 7.4, Elastic pre/post 7.11) requires version-specific resolution. Lockfile-based version pinning is the input; the scanner must not default to `HEAD`.

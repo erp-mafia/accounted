@@ -19,7 +19,7 @@ const log = createLogger('skattekonto-drift-route')
  *
  * Access is recorded through the structured logger (Sentry / Vercel logs)
  * because the response carries sensitive GL drift figures. Persisting every
- * dashboard tile poll into event_log would be too noisy — the structured
+ * dashboard tile poll into event_log would be too noisy: the structured
  * log line gives an auditable record without overrunning the 30-day event
  * log retention (SOC 2 CC8.1, ISO 27001 A.8.15).
  */

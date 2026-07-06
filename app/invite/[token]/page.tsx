@@ -39,7 +39,7 @@ export default function InvitePage() {
   useEffect(() => {
     async function loadInvite() {
       try {
-        // Load invite info and current session in parallel — the page needs
+        // Load invite info and current session in parallel: the page needs
         // both to decide which CTA to render.
         const supabase = createClient()
         const [inviteRes, sessionRes] = await Promise.all([
@@ -66,7 +66,7 @@ export default function InvitePage() {
 
   const secureCookieFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; secure' : ''
 
-  // True when the signed-in user's email matches the invite — in that case
+  // True when the signed-in user's email matches the invite: in that case
   // we can accept the invite with a single click, no re-login required.
   const isLoggedInAsInvitee =
     !!currentUserEmail &&
@@ -90,7 +90,7 @@ export default function InvitePage() {
     router.push('/login')
   }
 
-  // Already signed in as the invitee — accept directly, no login detour.
+  // Already signed in as the invitee: accept directly, no login detour.
   // POST /api/team/accept handles the membership insert + sets the active
   // company; we then full-reload to '/' so middleware picks up the new
   // company context and the switcher shows it.
@@ -213,7 +213,7 @@ export default function InvitePage() {
                 </div>
               </Card>
             ) : isLoggedInAsInvitee ? (
-              // Already signed in as the invitee — one-click join.
+              // Already signed in as the invitee: one-click join.
               // Prioritized over alreadyHasAccount to avoid the broken flow
               // where a false-negative from the email check would send a
               // logged-in user to /register, which middleware bounces to /.
@@ -255,7 +255,7 @@ export default function InvitePage() {
                 </Button>
               </div>
             ) : isLoggedInAsOther ? (
-              // Signed in as a different user — ask them to sign out first.
+              // Signed in as a different user: ask them to sign out first.
               <div className="space-y-6">
                 <Card className="p-6">
                   <div className="flex items-start gap-4">
@@ -283,7 +283,7 @@ export default function InvitePage() {
                 </Button>
               </div>
             ) : invite?.alreadyHasAccount ? (
-              // Not signed in — email has an existing account, bounce to login.
+              // Not signed in: email has an existing account, bounce to login.
               <div className="space-y-6">
                 <Card className="p-6">
                   <div className="flex items-start gap-4">
@@ -311,7 +311,7 @@ export default function InvitePage() {
                 </Button>
               </div>
             ) : invite ? (
-              // Not signed in, no existing account — register.
+              // Not signed in, no existing account: register.
               <div className="space-y-6">
                 <Card className="p-6">
                   <div className="flex items-start gap-4">

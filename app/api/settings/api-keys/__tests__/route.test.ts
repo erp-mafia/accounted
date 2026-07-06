@@ -216,12 +216,12 @@ describe('POST /api/settings/api-keys', () => {
     )
     const { status, body } = await parseJsonResponse<{ data: { key: string } }>(res)
     expect(status).toBe(200)
-    // Real generateApiKey('test') runs — the returned secret carries the infix.
+    // Real generateApiKey('test') runs: the returned secret carries the infix.
     expect(body.data.key).toMatch(/^gnubok_sk_test_/)
 
     const payload = insertSpy.mock.calls[0][0] as Record<string, unknown>
     expect(payload.mode).toBe('test')
-    // Test keys are simulation-only — they bind to the active company (the v1
+    // Test keys are simulation-only: they bind to the active company (the v1
     // wrapper forces dry-run so they never persist).
     expect(payload.company_id).toBe('company-1')
   })

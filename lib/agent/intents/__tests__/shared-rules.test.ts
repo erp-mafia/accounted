@@ -9,14 +9,14 @@ import { renderAgentGroundRules, AGENT_GROUND_RULES } from '../shared-rules'
 //
 // The cross-cutting EPISTEMICS rules (load before quoting a rate; don't infer
 // the business from an SNI code) deliberately do NOT live here anymore. They
-// live exactly once, in the always-on system prompt (buildIdentityBlock — see
+// live exactly once, in the always-on system prompt (buildIdentityBlock: see
 // system-prompt.test.ts), which is re-sent every turn in the high-salience
 // system position. This file guards both: that the heuristics stay, and that
 // the epistemics are not re-duplicated back into the first user message.
 
 const text = renderAgentGroundRules()
 
-describe('agent ground rules — bookkeeping heuristics it owns', () => {
+describe('agent ground rules: bookkeeping heuristics it owns', () => {
   it('keeps underlag-first, no-BAS-in-chat, history, representation, known counterparties', () => {
     expect(text).toContain('UNDERLAG FÖRST')
     expect(text).toContain('INGA BAS-KONTONUMMER')
@@ -31,7 +31,7 @@ describe('agent ground rules — bookkeeping heuristics it owns', () => {
   })
 })
 
-describe('agent ground rules — epistemics live in the system prompt, not here', () => {
+describe('agent ground rules: epistemics live in the system prompt, not here', () => {
   it('does not re-duplicate the always-on epistemics / anti-speculation rules', () => {
     // These moved to buildIdentityBlock (always-on Block 2). Re-adding them here
     // restores the triplication this cleanup removed.

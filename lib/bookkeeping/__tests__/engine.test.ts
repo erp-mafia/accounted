@@ -26,7 +26,7 @@ vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue([]) },
 }))
 
-// Mock the on-demand BAS backfill — default: nothing seedable. Individual
+// Mock the on-demand BAS backfill, default: nothing seedable. Individual
 // tests override per scenario.
 const mockBackfill = vi.fn().mockResolvedValue([])
 vi.mock('@/lib/bookkeeping/account-backfill', () => ({
@@ -107,7 +107,7 @@ describe('getSwedishLocalDate', () => {
   })
 })
 
-describe('createDraftEntry — cancelled status on line-insert failure', () => {
+describe('createDraftEntry: cancelled status on line-insert failure', () => {
   it('sets status to cancelled (not delete) when line insert fails', async () => {
     const updateMock = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
 
@@ -182,7 +182,7 @@ describe('createDraftEntry — cancelled status on line-insert failure', () => {
   })
 })
 
-describe('createDraftEntry — date/period cross-validation', () => {
+describe('createDraftEntry: date/period cross-validation', () => {
   function buildSupabase(periodData: { name: string; period_start: string; period_end: string } | null) {
     return {
       from: vi.fn().mockImplementation((table: string) => {
@@ -362,7 +362,7 @@ describe('JournalEntryStatus type includes cancelled', () => {
   })
 })
 
-describe('createDraftEntry — on-demand BAS account backfill', () => {
+describe('createDraftEntry: on-demand BAS account backfill', () => {
   // Engine seeds standard BAS accounts missing from the chart instead of
   // failing (June 2026 incident: 3740 öresavrundning missing → payment
   // voucher dead end). Non-seedable numbers still throw.
@@ -484,7 +484,7 @@ describe('createDraftEntry — on-demand BAS account backfill', () => {
   })
 })
 
-describe('reverseEntry — entry_date defaults to original entry date', () => {
+describe('reverseEntry: entry_date defaults to original entry date', () => {
   it('uses original entry_date when no reversalDate is provided', async () => {
     const original = {
       id: 'entry-1',
@@ -612,7 +612,7 @@ describe('reverseEntry — entry_date defaults to original entry date', () => {
   })
 })
 
-describe('reverseEntry — rejects reversing a storno or correction', () => {
+describe('reverseEntry: rejects reversing a storno or correction', () => {
   // BFL 5 kap 5§: a storno-of-a-storno makes the original verifikat's
   // cancellation chain ambiguous. The UI hides "Återför" for these source
   // types; the engine is the server-side backstop against a direct API call.
@@ -655,13 +655,13 @@ describe('reverseEntry — rejects reversing a storno or correction', () => {
         reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1'),
       ).rejects.toBeInstanceOf(CannotReverseStornoError)
 
-      // No reversal was written — the guard fires before any voucher number is drawn.
+      // No reversal was written: the guard fires before any voucher number is drawn.
       expect(supabase.rpc).not.toHaveBeenCalled()
     })
   }
 })
 
-describe('reverseEntry — bank transaction unlink', () => {
+describe('reverseEntry: bank transaction unlink', () => {
   // After a reversal the booked bank transaction must return to "Att bokföra"
   // (journal_entry_id cleared) so the user can book it again. The agent paths
   // in lib/pending-operations/commit.ts did this manually; the engine now owns

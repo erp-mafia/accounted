@@ -42,7 +42,7 @@ interface AccountPickerDialogProps {
   connectionId: string
   bankName: string
   accounts: StoredAccount[]
-  // True when the connection is still in pending_selection — closing without
+  // True when the connection is still in pending_selection: closing without
   // saving is allowed but the user is reminded that no sync runs until they
   // confirm.
   isInitialSelection: boolean
@@ -109,12 +109,19 @@ export function AccountPickerDialog({
       setCustomDate('')
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
-      // back to currency-based suggestions for accounts the user hasn't mapped yet.
+      // back to currency-based suggestions for accounts the user hasn't mapped
+      // yet. The currency default is suggested at most once — two SEK accounts
+      // both pre-filled with 1930 would collide on the UNIQUE
+      // (company_id, ledger_account) constraint at save; the second account is
+      // left blank so the user picks a distinct slot.
       const initialLedger: Record<string, string> = {}
+      const suggested = new Set<string>()
       for (const a of accounts) {
         const fromStored = a.ledger_account
         const fromDefault = CURRENCY_DEFAULTS[a.currency] ?? ''
-        initialLedger[a.uid] = fromStored ?? fromDefault
+        const pick = fromStored ?? (suggested.has(fromDefault) ? '' : fromDefault)
+        if (pick) suggested.add(pick)
+        initialLedger[a.uid] = pick
       }
       setLedgerByUid(initialLedger)
     }
@@ -139,7 +146,7 @@ export function AccountPickerDialog({
 
   // Fetch the latest SIE import end date so we can offer "day after last SIE entry"
   // as a one-click escape from the default fiscal-year start. Only matters on the
-  // initial activation flow — selection edits don't re-run sync.
+  // initial activation flow: selection edits don't re-run sync.
   useEffect(() => {
     if (!open || !isInitialSelection || !company?.id) {
       setSieLastDate(null)
@@ -188,7 +195,7 @@ export function AccountPickerDialog({
   )
 
   // Detect cases where the user routed two enabled accounts with different
-  // currencies to the same BAS account — usually a mistake, but allowed.
+  // currencies to the same BAS account, usually a mistake, but allowed.
   const currencyConflicts = useMemo(() => {
     const byLedger = new Map<string, Set<string>>()
     for (const a of accounts) {
@@ -244,7 +251,7 @@ export function AccountPickerDialog({
 
     // Block save when the user picked "Anpassat datum" but left the date blank.
     // Without this guard, lookback.body is null and the PATCH would silently
-    // fall back to the backend's 120-day default — not what the user asked for.
+    // fall back to the backend's 120-day default, not what the user asked for.
     if (
       isInitialSelection &&
       lookbackMode === 'custom' &&
@@ -262,7 +269,7 @@ export function AccountPickerDialog({
     setIsSaving(true)
 
     // For the initial-selection path, open the progress modal up-front so the
-    // user has visible feedback during the 30–60s backfill. Selection edits
+    // user has visible feedback during the 30-60s backfill. Selection edits
     // (no backfill) keep the existing toast-only feedback.
     if (isInitialSelection) {
       setProgressState({ kind: 'syncing' })
@@ -272,7 +279,7 @@ export function AccountPickerDialog({
 
     try {
       // Send a mapping entry per selected account. Account_mappings doesn't
-      // include disabled accounts — their existing ledger_account stays untouched.
+      // include disabled accounts: their existing ledger_account stays untouched.
       const account_mappings = Array.from(selected).map(uid => ({
         uid,
         ledger_account: ledgerByUid[uid] || null,
@@ -380,7 +387,7 @@ export function AccountPickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Välj konton att synka — {bankName}</DialogTitle>
+          <DialogTitle>Välj konton att synka: {bankName}</DialogTitle>
           <DialogDescription>
             {isInitialSelection
               ? 'Banken har gett åtkomst till följande konton. Avmarkera de konton du inte vill synka transaktioner från, och välj vilket bokföringskonto varje konto ska bokföras mot. Inga transaktioner hämtas innan du sparar.'
@@ -545,7 +552,7 @@ export function AccountPickerDialog({
 
         {currencyConflicts.length > 0 && (
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            Varning: samma bokföringskonto används för flera valutor —
+            Varning: samma bokföringskonto används för flera valutor:
             {currencyConflicts.map(c => ` ${c.ledger} (${c.currencies.join(', ')})`).join(';')}.
             Det fungerar tekniskt men gör årsskifte med valutaomvärdering svårare.
           </div>
@@ -563,7 +570,7 @@ export function AccountPickerDialog({
               >
                 {/* Toggle area: label + Checkbox (a Radix Checkbox renders as
                     its own <button role="checkbox">, so wrapping it in another
-                    <button> would be nested interactive elements — invalid HTML
+                    <button> would be nested interactive elements: invalid HTML
                     that browsers silently flatten and breaks event routing). */}
                 <label className="flex flex-1 min-w-0 cursor-pointer items-center gap-3">
                   <Checkbox
@@ -593,7 +600,7 @@ export function AccountPickerDialog({
                     </p>
                   )}
                 </label>
-                {/* Ledger picker is a sibling of the label, not inside it —
+                {/* Ledger picker is a sibling of the label, not inside it:
                     otherwise clicking the Select would also toggle the checkbox. */}
                 <div className="w-44 shrink-0">
                   {isChecked && (
@@ -609,7 +616,7 @@ export function AccountPickerDialog({
                         {/* Surface a non-existent default so the user can see/correct it. */}
                         {ledger && !ledgerExistsInChart && (
                           <SelectItem value={ledger} disabled>
-                            {ledger} — finns ej i kontoplan
+                            {ledger}: finns ej i kontoplan
                           </SelectItem>
                         )}
                         {chartAccounts.map(acc => (

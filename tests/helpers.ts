@@ -1,5 +1,5 @@
 /**
- * Shared test helpers — mock factories and fixture builders
+ * Shared test helpers: mock factories and fixture builders
  */
 import { vi } from 'vitest'
 import type {
@@ -60,7 +60,7 @@ export function createMockSupabase() {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
-          // Make the chain thenable — resolves to pendingResult
+          // Make the chain thenable: resolves to pendingResult
           return (resolve: (v: unknown) => void) => resolve(pendingResult)
         }
         // Return a function that returns a new chain
@@ -583,10 +583,15 @@ export function makeCompanySettings(
     invoice_font_family: 'Helvetica',
     invoice_header_text: null,
     invoice_footer_text: null,
+    invoice_email_texts: null,
     send_invoice_reminders: true,
     reminder_fee_enabled: true,
     reminder_fee_amount: 60,
     reminder_interest_rate_override: null,
+    dimensions_enabled: false,
+    preferred_payment_format: 'pain001',
+    salary_pay_day: 25,
+    salary_default_bank: null,
     logo_url: null,
     onboarding_step: 6,
     onboarding_complete: true,

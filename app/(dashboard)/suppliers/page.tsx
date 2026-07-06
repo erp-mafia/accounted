@@ -116,12 +116,10 @@ export default function SuppliersPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
-          <p className="text-muted-foreground">
-            {t('subtitle')}
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <ReportExportMenu
+            size="default"
             items={[
               { format: 'xlsx', href: '/api/export/suppliers' },
               { format: 'csv', href: '/api/export/suppliers?format=csv' },

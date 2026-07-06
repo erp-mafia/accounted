@@ -38,7 +38,7 @@ interface Step2Props {
   onBack: () => void
   isSaving: boolean
   orgNumberLocked?: boolean
-  // Orgnr we already trust without a Lens call — typically because it came
+  // Orgnr we already trust without a Lens call: typically because it came
   // from BankID CompanyRoles which confirms the user has a director role at
   // this company. When set and the form's orgnr matches, Step 2 skips the
   // debounced `/lookup` to avoid burning a Lens call on something we know
@@ -84,7 +84,7 @@ export default function Step2CompanyDetails({
   const dupAbortRef = useRef<AbortController | null>(null)
   // Tracks an orgnr that's been pre-verified (BankID CompanyRoles match) so
   // the client-side Lens lookup is skipped for that exact value. Cleared
-  // (set to null) the moment the user edits the org number — a different
+  // (set to null) the moment the user edits the org number: a different
   // orgnr is no longer covered by the BankID confirmation and needs a real
   // lookup.
   const prefetchedForOrgRef = useRef<string | null>(
@@ -116,7 +116,7 @@ export default function Step2CompanyDetails({
           setExistingOwn(data?.companies?.[0] ?? null)
         })
         .catch(() => {
-          // Advisory only — never blocks creation.
+          // Advisory only: never blocks creation.
         })
     }, 500)
     return () => {
@@ -159,7 +159,7 @@ export default function Step2CompanyDetails({
           if (controller.signal.aborted) return
 
           if (res.status === 403) {
-            // Extension disabled — silently ignore
+            // Extension disabled: silently ignore
             return
           }
           if (res.status === 404) {
@@ -181,7 +181,7 @@ export default function Step2CompanyDetails({
           setLookupDone(data)
           onTicLookup?.(data)
 
-          // Auto-fill from TIC — overwrite since user just entered a new org number
+          // Auto-fill from TIC: overwrite since user just entered a new org number
           if (data.companyName) setValue('company_name', data.companyName)
           if (data.address?.street) setValue('address_line1', data.address.street)
           if (data.address?.postalCode) setValue('postal_code', data.address.postalCode)

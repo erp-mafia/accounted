@@ -4,7 +4,7 @@ import { generateIncomeStatement } from './income-statement'
 import type { TrialBalanceRow } from '@/types'
 
 /**
- * Kassaflödesanalys (Cash Flow Statement) — indirect method per BFNAR 2012:1 ch 7.
+ * Kassaflödesanalys (Cash Flow Statement): indirect method per BFNAR 2012:1 ch 7.
  *
  * Three sections:
  *   - Löpande verksamhet (Operating activities)
@@ -155,14 +155,14 @@ export async function generateKassaflodesanalys(
   const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
 
   // Resultat efter finansiella poster = total_revenue - total_expenses + total_financial
-  // EXCEPT we want to keep tax (89xx) out — net_result already nets tax in.
+  // EXCEPT we want to keep tax (89xx) out: net_result already nets tax in.
   // Use the same formula as net_result but without subtracting 89xx items:
   // net_result = revenue - expenses + financial (where financial includes 89xx)
   // We want: revenue - expenses + (financial - tax_portion)
   //
   // To keep this simple: scan financial_sections, separate tax (89xx) from
   // rest, and assemble resultat efter finansiella poster.
-  // Filter ROWS by 89xx prefix (not just the section's first row) — a single
+  // Filter ROWS by 89xx prefix (not just the section's first row): a single
   // section can mix tax and non-tax accounts, and the old first-row heuristic
   // silently misclassified the rest.
   const taxAmount = incomeStatement.financial_sections.reduce((sum, s) => {
@@ -186,7 +186,7 @@ export async function generateKassaflodesanalys(
 
   // Övriga ej-kassaflödesposter: this category is used for non-cash items
   // beyond depreciation (e.g., reversals of provisions, unrealized FX).
-  // v1 places it at 0 — extensions can compute it from specific account
+  // v1 places it at 0: extensions can compute it from specific account
   // patterns. Kept in the type so the structure is stable.
   const ovrigaEjKassaflodesposter = 0
 
@@ -236,8 +236,8 @@ export async function generateKassaflodesanalys(
   //
   // We exclude accumulated-depreciation contra-asset accounts because their
   // movement is non-cash (it's already added back to löpande as avskrivningar).
-  // Without this filter, depreciation would show up twice — once as an
-  // add-back in löpande and once as a phantom "avyttring" in investeringar —
+  // Without this filter, depreciation would show up twice: once as an
+  // add-back in löpande and once as a phantom "avyttring" in investeringar:
   // breaking the reconciliation against 19xx.
   //
   // Note: this naive netting can blend purchases with disposals when a
@@ -271,20 +271,20 @@ export async function generateKassaflodesanalys(
   const totalInvesterings = r2(forvarv + avyttring)
 
   // ─── Finansieringsverksamhet ───────────────────────────────────────────
-  // Δ Lån (23xx — långfristiga skulder). Credit-normal: increase in loan
+  // Δ Lån (23xx: långfristiga skulder). Credit-normal: increase in loan
   // = cash inflow → ADD credit-side delta = negate debit-side delta.
   const deltaLan = r2(-sumDeltaByPrefix(rows, ['23']))
 
   // Utdelningar: capture as the debit movements on 2898 (decided dividends)
   // and 8910 isn't a dividend (it's tax). Better marker is 2091 / 2898.
-  // v1: scan for 2898 period_debit. Conservative — better to under-report
+  // v1: scan for 2898 period_debit. Conservative: better to under-report
   // than to mis-classify. Report as negative cash flow.
   const utdelningar = r2(-sumPeriodDebitByPrefix(rows, ['2898']))
 
   // Nyemission: increase in 20xx equity (excluding result-of-the-year and
   // dividends). Credit-normal: positive credit-side delta = cash inflow.
   // We sum 2081 (share capital) + 2082 (ej registrerat aktiekapital) + 2083
-  // (medlemsinsatser) + 2086/2097 (bunden/fri överkursfond — the premium on
+  // (medlemsinsatser) + 2086/2097 (bunden/fri överkursfond: the premium on
   // an emission lands there under K2/K3) + 2087 (pågående nyemission),
   // specifically avoiding 2099 (årets resultat is non-cash).
   const nyemissionDebit = sumDeltaByPrefix(rows, ['2081', '2082', '2083', '2086', '2087', '2097'])

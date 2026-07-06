@@ -170,9 +170,9 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(body.data.status).toBe('paid')
   })
 
-  it('handles cash method (credit row without registration_journal_entry_id) — skips reverseEntry and restores to registered', async () => {
+  it('handles cash method (credit row without registration_journal_entry_id): skips reverseEntry and restores to registered', async () => {
     // Pure cash-method: neither the original nor the credit row have a
-    // registration JE. The original must not be restored to 'approved' —
+    // registration JE. The original must not be restored to 'approved':
     // that would assert a verifikation that never existed (sambandskravet,
     // BFL 4 kap 2§). 'registered' is the correct state.
     const original = makeSupplierInvoice({
@@ -276,7 +276,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     })
 
     enqueue({ data: original, error: null })
-    // Find credit row filters out status='reversed' — nothing comes back
+    // Find credit row filters out status='reversed': nothing comes back
     enqueue({ data: null, error: null })
     enqueue({
       data: { ...original, status: 'approved', remaining_amount: 5000 },

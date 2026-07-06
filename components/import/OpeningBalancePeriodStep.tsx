@@ -18,7 +18,9 @@ interface EditableRow {
 
 interface OpeningBalancePeriodStepProps {
   rows: EditableRow[]
-  onExecute: (fiscalPeriodId: string) => void
+  /** `replace` is true when the selected period already has opening balances
+   *  (the existing IB verifikat will be stornoed and replaced). */
+  onExecute: (fiscalPeriodId: string, replace: boolean) => void
   onBack: () => void
   isLoading: boolean
   error: string | null
@@ -62,7 +64,7 @@ export default function OpeningBalancePeriodStep({
           }
         }
       } catch {
-        // Silent — user can still select period
+        // Silent, user can still select period
       } finally {
         setLoadingPeriods(false)
       }
@@ -71,22 +73,23 @@ export default function OpeningBalancePeriodStep({
   }, [])
 
   const selectedPeriod = periods.find((p) => p.id === selectedPeriodId)
-  const periodHasOB = selectedPeriod?.opening_balances_set
+  const periodHasOB = !!selectedPeriod?.opening_balances_set
   const periodIsClosed = selectedPeriod?.is_closed
   const periodIsLocked = !!selectedPeriod?.locked_at
 
+  // A period that already has IB can still be corrected, as long as it is open
+  // and unlocked: the existing IB verifikat is stornoed and replaced.
   const canExecute =
-    selectedPeriodId &&
-    !periodHasOB &&
+    !!selectedPeriodId &&
     !periodIsClosed &&
     !periodIsLocked &&
     !isLoading
 
   const handleExecute = useCallback(() => {
     if (canExecute) {
-      onExecute(selectedPeriodId)
+      onExecute(selectedPeriodId, periodHasOB)
     }
-  }, [canExecute, selectedPeriodId, onExecute])
+  }, [canExecute, selectedPeriodId, periodHasOB, onExecute])
 
   return (
     <Card>
@@ -120,10 +123,10 @@ export default function OpeningBalancePeriodStep({
               <SelectContent>
                 {periods.map((p) => (
                   <SelectItem key={p.id} value={p.id} disabled={p.is_closed || !!p.locked_at}>
-                    {p.name} ({p.period_start} — {p.period_end})
-                    {p.opening_balances_set && ' — har redan IB'}
-                    {p.is_closed && ' — stängd'}
-                    {p.locked_at && !p.is_closed && ' — låst'}
+                    {p.name} ({p.period_start} till {p.period_end})
+                    {p.opening_balances_set && ', har redan IB'}
+                    {p.is_closed && ', stängd'}
+                    {p.locked_at && !p.is_closed && ', låst'}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -131,13 +134,13 @@ export default function OpeningBalancePeriodStep({
           )}
         </div>
 
-        {/* Warnings */}
-        {periodHasOB && (
-          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-            <p className="text-sm text-destructive">
-              Denna period har redan ingående balanser. Ta bort den befintliga verifikationen
-              (via stornering) innan du importerar nya.
+        {/* Replace notice: selecting a period that already has IB corrects it */}
+        {periodHasOB && !periodIsClosed && !periodIsLocked && (
+          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+            <AlertCircle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
+            <p className="text-sm text-warning">
+              Denna period har redan ingående balanser. Om du fortsätter makuleras (stornas) den
+              befintliga IB-verifikationen och en ny bokförs med beloppen nedan.
             </p>
           </div>
         )}
@@ -180,8 +183,10 @@ export default function OpeningBalancePeriodStep({
             {isLoading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Bokför...
+                {periodHasOB ? 'Ersätter...' : 'Bokför...'}
               </>
+            ) : periodHasOB ? (
+              'Ersätt ingående balanser'
             ) : (
               'Bokför ingående balanser'
             )}

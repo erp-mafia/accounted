@@ -2,7 +2,7 @@
  * executeSIEImport ↔ syncMappedAccounts wiring (F: customized #KONTO names
  * from Fortnox were lost on import).
  *
- * The name-resolution behavior itself is covered by account-sync.test.ts —
+ * The name-resolution behavior itself is covered by account-sync.test.ts:
  * these tests assert that executeSIEImport threads the updateAccountNames
  * option through (default ON), surfaces rename counts as Swedish warnings,
  * and aborts on a fatal create error.
@@ -46,6 +46,8 @@ function makeParsedFile(): ParsedSIEFile {
     openingBalances: [],
     closingBalances: [],
     resultBalances: [],
+    dimensions: [],
+    dimensionValues: [],
     vouchers: [
       {
         series: 'A',
@@ -95,7 +97,7 @@ function makeMappings(): AccountMapping[] {
 function buildSupabase() {
   const { supabase, enqueueMany } = createQueuedMockSupabase()
   enqueueMany([
-    { data: null }, // checkDuplicateImport — no prior import
+    { data: null }, // checkDuplicateImport: no prior import
     { data: null }, // cleanupStaleImportRecords
     { data: { id: 'imp-1' } }, // createPendingImportRecord insert
   ])
@@ -131,7 +133,7 @@ beforeEach(() => {
   })
 })
 
-describe('executeSIEImport — account name sync wiring', () => {
+describe('executeSIEImport: account name sync wiring', () => {
   it('defaults updateAccountNames to true', async () => {
     await runImport()
 

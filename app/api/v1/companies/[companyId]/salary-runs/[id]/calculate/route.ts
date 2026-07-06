@@ -49,14 +49,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/calculate',
   summary: 'Calculate a draft salary run and advance it to review.',
   description:
-    'Runs the per-employee payroll calculation (tax withholding, employer contributions, vacation accrual) for every employee on a draft run, persists the line items + run totals + calculation_params snapshot, then promotes status from draft to review in a single atomic verb. Returns the updated run plus a `warnings` array surfacing non-blocking issues (Skatteverket tax-table fallback, läkarintyg day-8 transition, Försäkringskassan day-15 transition, F-skatt not-verified employees). Strict-mode: any failure (validation, tax-table unavailable, DB error) aborts before the status flip — the run stays in draft.',
+    'Runs the per-employee payroll calculation (tax withholding, employer contributions, vacation accrual) for every employee on a draft run, persists the line items + run totals + calculation_params snapshot, then promotes status from draft to review in a single atomic verb. Returns the updated run plus a `warnings` array surfacing non-blocking issues (Skatteverket tax-table fallback, läkarintyg day-8 transition, Försäkringskassan day-15 transition, F-skatt not-verified employees). Strict-mode: any failure (validation, tax-table unavailable, DB error) aborts before the status flip: the run stays in draft.',
   useWhen:
     'You have a draft salary run with employees added and want to compute the numbers + freeze them for approval. This is the first lifecycle verb after creating a run.',
   doNotUseFor:
-    're-running a salary run already in review or later (only `draft` is accepted — call POST :correct in Phase 5 PR-3 once that ships to revise a booked run). Adding employees to the run (that surface is not yet on v1; use the dashboard).',
+    're-running a salary run already in review or later (only `draft` is accepted: call POST :correct in Phase 5 PR-3 once that ships to revise a booked run). Adding employees to the run (that surface is not yet on v1; use the dashboard).',
   pitfalls: [
-    'Run must be in `draft` status — calculate on a non-draft run returns 400 SALARY_RUN_CALCULATE_NOT_DRAFT.',
-    'Salary run must have at least one employee — empty runs return 400 SALARY_RUN_NO_EMPLOYEES.',
+    'Run must be in `draft` status: calculate on a non-draft run returns 400 SALARY_RUN_CALCULATE_NOT_DRAFT.',
+    'Salary run must have at least one employee: empty runs return 400 SALARY_RUN_NO_EMPLOYEES.',
     'If Skatteverket\'s tax-table API is down and local fallback is missing the required table, calculate returns 503 SALARY_RUN_TAX_TABLE_MISSING. Retry is safe; the operation is idempotent at the helper level.',
     'F-skatt "not_verified" employees produce a non-blocking warning; an integrator should treat the warning as a hard signal that withholding will be wrong until F-skatt is verified.',
     'Warnings about tax-table fallback or läkarintyg / FK day-15 transitions are non-blocking; the run still advances to review. Surface them to a human reviewer before calling :approve.',
@@ -123,7 +123,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (ctx.dryRun) {
-      // The helper is a heavy operation with hundreds of DB writes — we
+      // The helper is a heavy operation with hundreds of DB writes: we
       // cannot meaningfully "dry-run" it without committing real state.
       // Instead the dry-run surfaces what WOULD happen at the contract
       // level: status flip + a hint that the math will run. Agents can
@@ -178,7 +178,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       const emp = sre.employee
       if (emp?.f_skatt_status === 'not_verified') {
         fskattWarnings.push(
-          `${emp.first_name} ${emp.last_name}: F-skatt ej verifierad — 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`,
+          `${emp.first_name} ${emp.last_name}: F-skatt ej verifierad: 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`,
         )
       }
     }

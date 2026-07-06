@@ -1,5 +1,5 @@
 /**
- * Tests for the VAT review widget — registration, resource serving,
+ * Tests for the VAT review widget: registration, resource serving,
  * and tool _meta wiring. Does NOT re-test the underlying VAT computation
  * (covered by existing get_vat_report tests); only the widget plumbing.
  */
@@ -22,7 +22,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       companyId: 'company-1',
       scopes: ['reports:read'],
     }),
-    // Fully-chainable, awaitable proxy resolving to empty data — satisfies both
+    // Fully-chainable, awaitable proxy resolving to empty data: satisfies both
     // loadAtomsAsSkills (select→eq→eq→order) and computeVatReport (select→eq→in→
     // gte→lte→…) without hand-enumerating each chain.
     createServiceClientNoCookies: vi.fn(() => {
@@ -145,7 +145,7 @@ describe('VAT review widget', () => {
     })
   })
 
-  describe('gnubok_get_vat_report — render_ui merge', () => {
+  describe('gnubok_get_vat_report: render_ui merge', () => {
     it('declares render_ui and points at the vat-review widget', () => {
       const tool = tools.find((t) => t.name === 'gnubok_get_vat_report')!
       expect((tool as { uiResourceUri?: string }).uiResourceUri).toBe('ui://vat-review/app.html')

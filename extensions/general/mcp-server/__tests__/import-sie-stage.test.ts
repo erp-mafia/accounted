@@ -54,7 +54,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('gnubok_import_sie — stage-time validation', () => {
+describe('gnubok_import_sie: stage-time validation', () => {
   it('stages a valid file with a parsed, content-rich preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-sie' }, error: null }) // pending_operations insert
@@ -178,7 +178,7 @@ describe('gnubok_import_sie — stage-time validation', () => {
   })
 })
 
-describe('gnubok_import_sie — update_account_names staging', () => {
+describe('gnubok_import_sie: update_account_names staging', () => {
   // Captures the pending_operations insert payload so the staged params can
   // be asserted (createQueuedMockSupabase cannot inspect arguments).
   function buildCapturingSupabase() {

@@ -2,11 +2,11 @@
  * POST /api/v1/companies/{companyId}/transactions/{id}/uncategorize
  *
  * Reverse the categorization of a transaction:
- *   1. Storno the existing journal entry (BFL-compliant — JEs are never
+ *   1. Storno the existing journal entry (BFL-compliant: JEs are never
  *      deleted, they're cancelled via a reversing entry).
  *   2. Reset is_business / category / journal_entry_id on the transaction.
  *
- * Idempotent. Dry-runnable. The body is empty — the transaction id in the
+ * Idempotent. Dry-runnable. The body is empty: the transaction id in the
  * path is the only input.
  */
 import { z } from 'zod'
@@ -30,15 +30,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/transactions/:id/uncategorize',
   summary: 'Reverse the categorization of a transaction (storno + reset).',
   description:
-    'Storno the transaction\'s journal entry (BFL 5 kap 5 §: posted entries are never deleted, only cancelled via a reversing entry) and reset is_business / category / journal_entry_id on the transaction row. Idempotent — a second call on an already-uncategorized transaction returns 400 TX_UNCATEGORIZE_NOT_BOOKED. Dry-runnable.',
+    'Storno the transaction\'s journal entry (BFL 5 kap 5 §: posted entries are never deleted, only cancelled via a reversing entry) and reset is_business / category / journal_entry_id on the transaction row. Idempotent: a second call on an already-uncategorized transaction returns 400 TX_UNCATEGORIZE_NOT_BOOKED. Dry-runnable.',
   useWhen:
     'You categorized a transaction by mistake and want to redo it from scratch. The storno keeps the audit trail intact.',
   doNotUseFor:
-    'Changing the categorization of an already-booked transaction — categorize again instead (the second call sees journal_entry_id and only updates flags). Reversing a payment match — there is no v1 verb for that yet.',
+    'Changing the categorization of an already-booked transaction: categorize again instead (the second call sees journal_entry_id and only updates flags). Reversing a payment match: there is no v1 verb for that yet.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'The storno creates a new (cancelling) journal entry. The original entry stays in the ledger marked as cancelled — voucher gaps are documented automatically.',
-    'A transaction without a journal_entry_id returns 400 TX_UNCATEGORIZE_NOT_BOOKED — there is nothing to reverse.',
+    'The storno creates a new (cancelling) journal entry. The original entry stays in the ledger marked as cancelled: voucher gaps are documented automatically.',
+    'A transaction without a journal_entry_id returns 400 TX_UNCATEGORIZE_NOT_BOOKED: there is nothing to reverse.',
   ],
   example: {
     response: {

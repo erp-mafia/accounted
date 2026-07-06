@@ -47,7 +47,7 @@ export async function GET(
  * Delete an import record.
  *
  * Only failed or pending imports can be deleted. Completed imports have created
- * journal entries that are part of räkenskapsinformation — deleting the metadata
+ * journal entries that are part of räkenskapsinformation: deleting the metadata
  * without reversing entries would leave orphaned bookkeeping data, and deleting
  * both is prohibited under BFL 7 kap (7-year retention).
  */

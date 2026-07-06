@@ -1,4 +1,4 @@
-# Cross-Framework Mapping — NIST 800-53, CIS Controls, SOC 2
+# Cross-Framework Mapping: NIST 800-53, CIS Controls, SOC 2
 
 A single ISO 27001 finding can be projected onto NIST SP 800-53 Rev. 5, CIS Controls v8.1, and SOC 2 Trust Services Criteria. Embedding these mappings into the scanner's data model lets a single scan produce dual- or quad-compliance reports.
 
@@ -20,12 +20,12 @@ The official NIST mapping uses an asterisk convention: an unmarked mapping means
 |---|---|---|
 | A.5.1 (Policies) | PL-1, PM-1 | Full |
 | A.5.2 (Roles) | PS-2, AC-1 | Full |
-| A.5.7 (Threat Intelligence) | PM-15, PM-16, RA-3, SI-5 | Partial — NIST is more prescriptive on TI sources |
-| A.5.9 (Inventory) | CM-8, PM-5 | Partial — NIST CM-8 demands more frequent reconciliation |
+| A.5.7 (Threat Intelligence) | PM-15, PM-16, RA-3, SI-5 | Partial: NIST is more prescriptive on TI sources |
+| A.5.9 (Inventory) | CM-8, PM-5 | Partial: NIST CM-8 demands more frequent reconciliation |
 | A.5.15 (Access control) | AC-1, AC-2, AC-3, AC-5, AC-6 | Full |
 | A.5.23 (Cloud security) | SA-9 (External system services), CA-3 | Partial |
 | A.5.30 (BC readiness) | CP-2, CP-7, CP-10 | Full |
-| A.5.34 (Privacy / PII) | PT-1 through PT-8 (Privacy family) | **Significant gap — see below** |
+| A.5.34 (Privacy / PII) | PT-1 through PT-8 (Privacy family) | **Significant gap: see below** |
 | A.6.1 (Screening) | PS-3 | Full |
 | A.6.3 (Awareness) | AT-1, AT-2 | Full |
 | A.7.1 (Physical perimeter) | PE-3 | Full |
@@ -47,7 +47,7 @@ The official NIST mapping uses an asterisk convention: an unmarked mapping means
 | A.8.28 (Secure coding) | SA-11, SI-10 | Full |
 | A.8.32 (Change management) | CM-3, CM-4 | Full |
 
-### Critical NIST gap — privacy
+### Critical NIST gap: privacy
 
 NIST SP 800-53 Rev. 5 integrates a full Privacy (PT) control family directly into the catalog. ISO 27001 addresses privacy primarily through A.5.34 and points to ISO 27701 for full privacy management. Organizations claiming dual ISO 27001 + NIST 800-53 compliance must either:
 1. Adopt ISO 27701 in addition, OR

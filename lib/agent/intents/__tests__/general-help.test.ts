@@ -27,7 +27,7 @@ function renderPrompt() {
   })
 }
 
-describe('general.help — the /chat read-only assistant', () => {
+describe('general.help: the /chat read-only assistant', () => {
   it('exposes no write tools (so /chat cannot stage a booking)', () => {
     for (const t of WRITE_TOOLS) {
       expect(generalHelp.tools).not.toContain(t)
@@ -37,7 +37,7 @@ describe('general.help — the /chat read-only assistant', () => {
   it('redirects categorization to the Dokumentinkorgen flow instead of proposing in prose', () => {
     const out = renderPrompt()
     // Per-transaction agent help now lives in Dokumentinkorgen (match the
-    // underlag to the transaction, then ask there) — not a transactions-page row
+    // underlag to the transaction, then ask there): not a transactions-page row
     // button, which was removed.
     expect(out).toContain('Dokumentinkorgen')
     expect(out).toContain('matcha det mot transaktionen')

@@ -75,7 +75,7 @@ export async function evaluateMappingRules(
       )
     }
   } catch (err) {
-    // Non-fatal — falling through to normal categorization is correct when
+    // Non-fatal: falling through to normal categorization is correct when
     // the detector fails. We log so an unexpected upstream error is visible.
     log.warn('own-account transfer detection failed', {
       companyId,
@@ -166,7 +166,7 @@ async function evaluateCounterpartyTemplates(
       entityType || 'enskild_firma'
     )
   } catch {
-    // Non-critical — fall through to next fallback
+    // Non-critical: fall through to next fallback
     return null
   }
 }
@@ -252,9 +252,9 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
     if (rule.vat_treatment === 'reverse_charge') {
       // Reverse charge: emit BOTH the fiktiv-moms pair (2645/2614) AND the
       // basbelopp pair (44xx|45xx / 4598). The basbelopp pair populates
-      // momsdeklaration rutor 20–24; without it Skatteverket rejects with
+      // momsdeklaration rutor 20-24; without it Skatteverket rejects with
       // FK004. Mapping rules don't carry supplier-country today, so we
-      // default to EU services — the most common reverse-charge scenario.
+      // default to EU services: the most common reverse-charge scenario.
       const rcRate = 0.25
       const rcLines = generateReverseChargeLines(absAmount, rcRate, false)
       for (const rcl of rcLines) {
@@ -343,7 +343,7 @@ function getDefaultResult(transaction: Transaction, bankAccount = '1930'): Mappi
  * `isFx` flips `requires_review` to true when the two legs sit on different
  * currencies (e.g. SEK 1930 → EUR 1932). A cross-currency leg generally
  * realises a kursvinst/kursförlust on 3960/7960 (ÅRL 4 kap 10 §) that the
- * two-line transfer entry doesn't capture — a human must confirm the FX gain
+ * two-line transfer entry doesn't capture: a human must confirm the FX gain
  * or loss line rather than auto-booking a potentially incomplete entry.
  * Same-currency transfers stay auto-bookable.
  */
@@ -364,7 +364,7 @@ function buildOwnAccountTransferResult(
     default_private: false,
     vat_lines: [],
     description: isFx
-      ? 'Överföring mellan egna konton (FX — granska kursvinst/förlust)'
+      ? 'Överföring mellan egna konton (FX: granska kursvinst/förlust)'
       : 'Överföring mellan egna konton',
   }
 }
@@ -435,7 +435,7 @@ export async function saveUserMappingRule(
     })
 
     if (error) {
-      // Silently fail — saving learned rules is non-critical
+      // Silently fail: saving learned rules is non-critical
     }
   } else {
     const { error } = await supabase.from('mapping_rules').insert({
@@ -454,7 +454,7 @@ export async function saveUserMappingRule(
     })
 
     if (error) {
-      // Silently fail — saving learned rules is non-critical
+      // Silently fail: saving learned rules is non-critical
     }
   }
 }

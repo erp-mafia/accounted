@@ -141,7 +141,7 @@ export function isSwedishHoliday(date: Date): boolean {
 
 /**
  * Check if an ISO date string (YYYY-MM-DD) is a Swedish public holiday.
- * Parses by string only — no Date / timezone math — so callers using UTC
+ * Parses by string only: no Date / timezone math: so callers using UTC
  * boundaries (e.g. the shift-premium engine) get a stable answer.
  */
 export function isSwedishHolidayISO(isoDate: string): boolean {

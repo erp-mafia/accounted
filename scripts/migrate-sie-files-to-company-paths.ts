@@ -7,7 +7,7 @@
  * Pre multi-tenant refactor (commit 1534979) SIE archives were uploaded to
  * {user_id}/{import_id}.se. After the refactor the upload path switched to
  * {company_id}/{import_id}.se, but the production storage policies weren't
- * updated — so every post-refactor archive silently failed RLS. The new
+ * updated: so every post-refactor archive silently failed RLS. The new
  * policies scope access by company; legacy files still live under user_id
  * prefixes and would become unreadable for anyone except the original
  * uploader. This script moves them to the canonical company_id prefix.
@@ -67,7 +67,7 @@ async function main() {
   )
 
   console.log(`${rows?.length ?? 0} archived imports total; ${candidates.length} need migration.`)
-  if (dryRun) console.log('(dry run — no changes will be made)')
+  if (dryRun) console.log('(dry run: no changes will be made)')
 
   let migrated = 0
   let skipped = 0
@@ -93,7 +93,7 @@ async function main() {
     }
 
     if (await objectExists(newPath)) {
-      console.log(`  target already exists — just updating DB row`)
+      console.log(`  target already exists: just updating DB row`)
     } else {
       const { error: upError } = await supabase.storage
         .from('sie-files')

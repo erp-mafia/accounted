@@ -142,7 +142,7 @@ describe('fetchTaxTableRates fallback behavior', () => {
     await fetchTaxTableRates(2026, 33, 1)
     await fetchTaxTableRates(2026, 33, 1)
 
-    // Only one API attempt despite two calls — second hit the cache
+    // Only one API attempt despite two calls: second hit the cache
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })
@@ -160,12 +160,12 @@ describe('fetchKommunTaxRates', () => {
 
   it('pages through every församling row and dedupes to one entry per kommun', async () => {
     // The dataset returns one row per församling. Page 1 is full (so the loop
-    // continues); page 2 is short (so it stops). Göteborg only appears on page 2
-    // — the bug this guards against was a single 500-row page dropping it.
+    // continues); page 2 is short (so it stops). Göteborg only appears on page 2:
+    // the bug this guards against was a single 500-row page dropping it.
     const page1 = Array.from({ length: 500 }, () => row('STOCKHOLM', '30.62'))
     const page2 = [
       row('GÖTEBORG', '32.892'),
-      row('GÖTEBORG', '33.50'), // duplicate församling — must not override the first
+      row('GÖTEBORG', '33.50'), // duplicate församling: must not override the first
       row('UPPLANDS VÄSBY', '32.042'),
     ]
 

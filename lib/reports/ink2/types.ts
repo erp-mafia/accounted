@@ -1,5 +1,5 @@
 /**
- * INK2R — Räkenskapsschema (balance sheet + income statement)
+ * INK2R: Räkenskapsschema (balance sheet + income statement)
  * Field codes per Skatteverket spec and bas.se/kontoplaner/sru/
  */
 export interface INK2RRutor {
@@ -90,7 +90,7 @@ export interface INK2RRutor {
 export type INK2RSRUCode = keyof INK2RRutor
 
 /**
- * INK2 — Huvudblankett (main declaration, page 1)
+ * INK2: Huvudblankett (main declaration, page 1)
  */
 export interface INK2Rutor {
   '7011': string  // Räkenskapsår fr.o.m. (YYYYMMDD)
@@ -100,7 +100,7 @@ export interface INK2Rutor {
 }
 
 /**
- * INK2S — Skattemässiga justeringar (page 4)
+ * INK2S: Skattemässiga justeringar (page 4)
  * Auto-derived fields only. Manual tax adjustments are handled by the accountant.
  */
 export interface INK2SRutor {
@@ -166,7 +166,7 @@ export interface INK2Declaration {
   warnings: string[]
 }
 
-// SRU file types — no longer shared with NE-bilaga since the structure
+// SRU file types: no longer shared with NE-bilaga since the structure
 // is fundamentally different (INFO.SRU + BLANKETTER.SRU two-file format)
 export interface SRUSubmission {
   infoSru: string

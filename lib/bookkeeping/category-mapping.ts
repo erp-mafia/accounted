@@ -93,7 +93,7 @@ function getIncomeAccount(category: string, vatTreatment?: VatTreatment): string
     }
   }
 
-  // No vatTreatment provided — fall back to static mapping
+  // No vatTreatment provided: fall back to static mapping
   return INCOME_ACCOUNTS[category] || '3999'
 }
 
@@ -143,7 +143,7 @@ export function getCategoryAccountMapping(
 
     if (amount > 0) {
       // Incoming refund: bank receives money, expense account is reduced (credited).
-      // Ingående moms is reversed — credit 2641 instead of debit.
+      // Ingående moms is reversed: credit 2641 instead of debit.
       return {
         debitAccount: BANK_ACCOUNT,
         creditAccount: expenseAccount,
@@ -220,7 +220,7 @@ export function getCategoryAccountMapping(
  * Used by the categorization API to create journal entries
  *
  * `vatAmountOverride` is the underlag's actual VAT when it differs from the
- * rate-derived amount — e.g. a restaurant receipt where dricks carries no
+ * rate-derived amount: e.g. a restaurant receipt where dricks carries no
  * moms, so the document's VAT is lower than rate × gross. It can only replace
  * a rate-based VAT line (standard_25/reduced_12/reduced_6); it never applies
  * to fictive reverse-charge VAT and never conjures a line for treatments
@@ -246,11 +246,11 @@ export function buildMappingResultFromCategory(
 
   if (hasVatOverride) {
     // Treatment compatibility first: an invalid override on reverse_charge is
-    // a treatment problem, not an amount problem — the agent should get the
+    // a treatment problem, not an amount problem: the agent should get the
     // correction hint that matches the actual mistake.
     if (!isBusiness || !treatment || treatment === 'reverse_charge' || getVatRate(treatment) <= 0) {
       throw new Error(
-        `vat_amount cannot be combined with vat_treatment "${treatment ?? 'none'}" — ` +
+        `vat_amount cannot be combined with vat_treatment "${treatment ?? 'none'}": ` +
         'it only overrides a rate-based VAT line (standard_25, reduced_12, reduced_6).'
       )
     }
@@ -264,12 +264,12 @@ export function buildMappingResultFromCategory(
     }
     const grossAmount = Math.abs(transaction.amount)
     // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds
-    // any legitimate document VAT — even on mixed-rate receipts.
+    // any legitimate document VAT: even on mixed-rate receipts.
     const maxVat = roundOre(grossAmount * 0.25 / 1.25)
     if (vatAmountOverride > maxVat) {
       throw new Error(
         `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${grossAmount} ` +
-        `(${maxVat} at 25%). Check the underlag — the override must be the document's actual moms.`
+        `(${maxVat} at 25%). Check the underlag: the override must be the document's actual moms.`
       )
     }
   }

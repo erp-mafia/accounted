@@ -151,7 +151,7 @@ export function BankConnectionStatus({
               <DropdownMenuContent align="end">
                 {/* Let the user pick the account type for the bank login. The
                     server reuses the last-used type by default, but some banks
-                    (notably Handelsbanken) only sign with one of them — e.g. an
+                    (notably Handelsbanken) only sign with one of them: e.g. an
                     AB owner who signs with a personal Mobile BankID needs
                     "Privatkonto", not the company default "Företagskonto". */}
                 <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
@@ -264,7 +264,7 @@ export function BankConnectionStatus({
         </div>
       )}
 
-      {/* Initial backfill summary — shows what the bank actually returned vs what we asked for. */}
+      {/* Initial backfill summary: shows what the bank actually returned vs what we asked for. */}
       {connection.initial_sync_completed_at && connection.initial_sync_requested_from && (() => {
         const requested = connection.initial_sync_requested_from
         const min = connection.initial_sync_returned_min_date
@@ -282,13 +282,13 @@ export function BankConnectionStatus({
             <span>
               Initial historik:{' '}
               <span className="tabular-nums">
-                {min ? formatDate(min) : '—'} → {max ? formatDate(max) : '—'}
+                {min ? formatDate(min) : '-'} → {max ? formatDate(max) : '-'}
               </span>
               {' '}(begärde <span className="tabular-nums">{formatDate(requested)}</span>)
             </span>
             {truncated && (
               <Badge variant="outline">
-                Bankens API returnerade kortare period än begärt — använd SIE-import för äldre data
+                Bankens API returnerade kortare period än begärt: använd SIE-import för äldre data
               </Badge>
             )}
           </div>

@@ -66,7 +66,7 @@ describe('gnubok_search_tools', () => {
     }
   })
 
-  it('ranks by relevance — the most on-point tool comes first', async () => {
+  it('ranks by relevance: the most on-point tool comes first', async () => {
     // "vat" should surface the canonical report tool ahead of other vat-* tools,
     // not whichever is defined earliest by accident.
     const vat = await call({ query: 'vat' })
@@ -85,7 +85,7 @@ describe('gnubok_search_tools', () => {
   })
 
   it('filters out tools the caller cannot invoke based on scopes', async () => {
-    // Caller has only reports:read — should not see invoices:write tools.
+    // Caller has only reports:read: should not see invoices:write tools.
     const result = await call({ query: '', limit: 50 }, ['reports:read'])
     const names = result.tools.map((t) => t.name)
     expect(names).not.toContain('gnubok_create_invoice')
@@ -111,10 +111,10 @@ describe('gnubok_search_tools', () => {
 
   // Security: when the dispatcher fails to inject __keyScopes (rename, refactor
   // regression, direct invocation outside the dispatcher), the search MUST fall
-  // back to a fail-closed default — only unscoped tools visible. The earlier
+  // back to a fail-closed default: only unscoped tools visible. The earlier
   // permissive default leaked the full inventory.
   it('fail-closed: hides scoped tools when __keyScopes is not injected', async () => {
-    // Bypass the helper which always injects __keyScopes — call execute() directly.
+    // Bypass the helper which always injects __keyScopes: call execute() directly.
     const result = (await searchTool.execute(
       { limit: 50 }, // no __keyScopes
       'company-id',
@@ -130,7 +130,7 @@ describe('gnubok_search_tools', () => {
     expect(names).toContain('gnubok_list_skills')
     expect(names).toContain('gnubok_load_skill')
 
-    // No scoped tool should leak — pick representatives from each scope domain.
+    // No scoped tool should leak: pick representatives from each scope domain.
     expect(names).not.toContain('gnubok_create_invoice')         // invoices:write
     expect(names).not.toContain('gnubok_get_trial_balance')      // reports:read
     expect(names).not.toContain('gnubok_list_uncategorized_transactions') // transactions:read

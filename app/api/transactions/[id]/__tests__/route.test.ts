@@ -75,12 +75,12 @@ describe('DELETE /api/transactions/[id]', () => {
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('TRANSACTION_DELETE_BOOKED')
-    // Swedish, actionable — not the generic "Ladda om sidan" 409 fallback.
+    // Swedish, actionable: not the generic "Ladda om sidan" 409 fallback.
     expect(body.error.message).toMatch(/Bankavstämning|storna/)
   })
 
   it('blocks deleting an unbooked bank-synced transaction (ignore-only)', async () => {
-    // A live bank connection (PSD2) makes this an imported row — not the user's
+    // A live bank connection (PSD2) makes this an imported row: not the user's
     // to delete, only to ignore.
     const tx = makeTransaction({ bank_connection_id: 'bc-1', journal_entry_id: null, import_source: null })
     enqueue({ data: tx, error: null }) // fetch (no delete should follow)
@@ -161,8 +161,8 @@ describe('DELETE /api/transactions/[id]', () => {
   })
 
   it('returns 409 with an audit-trail code when the immutability trigger blocks the delete', async () => {
-    // A user-created (deletable) row that still carries payment_match_log rows
-    // — e.g. it was auto-suggested a match. The cascade on delete hits the
+    // A user-created (deletable) row that still carries payment_match_log rows,
+    // e.g. it was auto-suggested a match. The cascade on delete hits the
     // audit_log_immutable trigger (P0001), not a clean FK error. Fixture must be
     // user-created (no bank link / import source) so it passes the imported
     // guard and actually reaches the delete.

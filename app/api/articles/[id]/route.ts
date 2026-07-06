@@ -66,7 +66,7 @@ export const PATCH = withRouteContext(
       }
     }
 
-    // Sparse update — only the fields the caller actually sent.
+    // Sparse update: only the fields the caller actually sent.
     const updateData: Record<string, unknown> = {}
     for (const key of [
       'name', 'name_en', 'type', 'unit', 'price_excl_vat', 'vat_rate',

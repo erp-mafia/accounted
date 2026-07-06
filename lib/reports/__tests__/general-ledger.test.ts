@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — table-keyed result queues
+// Mock: table-keyed result queues
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown }
@@ -62,7 +62,7 @@ describe('generateGeneralLedger', () => {
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
       journal_entry_lines: [
-        // period lines — empty (prior lines come from RPC, defaults to empty)
+        // period lines: empty (prior lines come from RPC, defaults to empty)
         { data: [], error: null },
       ],
     }
@@ -151,8 +151,8 @@ describe('generateGeneralLedger', () => {
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
       journal_entry_lines: [
-        { data: [...filler, rentLine], error: null }, // page 1 — full → triggers page 2
-        { data: [rentLine], error: null },            // page 2 — duplicate of the 5010 line
+        { data: [...filler, rentLine], error: null }, // page 1: full → triggers page 2
+        { data: [rentLine], error: null },            // page 2: duplicate of the 5010 line
       ],
       chart_of_accounts: [
         {
@@ -235,7 +235,7 @@ describe('generateGeneralLedger', () => {
 
     const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', '1500', '1999')
 
-    // Only accounts in 1500–1999 range
+    // Only accounts in 1500-1999 range
     expect(report.accounts.map((a) => a.account_number)).toEqual(['1510', '1930'])
   })
 
@@ -245,7 +245,7 @@ describe('generateGeneralLedger', () => {
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
       journal_entry_lines: [
-        // period lines — out of order
+        // period lines: out of order
         {
           data: [
             { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entries: { entry_date: '2024-01-10', voucher_number: 2, voucher_series: 'A', description: 'Second', source_type: 'manual' } },

@@ -3,7 +3,7 @@
  *
  * Link a bank transaction to an already-posted journal entry without
  * creating new bookkeeping. Used by the duplicate-payment UI when the user
- * confirms the suggested candidate already books this receipt — typically
+ * confirms the suggested candidate already books this receipt: typically
  * a manual verifikation made outside the match-invoice flow.
  *
  * Body:
@@ -25,7 +25,7 @@
  * exists. The match log records 'linked_to_existing_voucher' for audit.
  *
  * Core logic is shared with the MCP commit handler in lib/pending-operations/commit.ts
- * (gnubok_link_transaction_to_journal_entry) — see lib/transactions/link-journal-entry.ts.
+ * (gnubok_link_transaction_to_journal_entry): see lib/transactions/link-journal-entry.ts.
  */
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'

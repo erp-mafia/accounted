@@ -63,7 +63,7 @@ describe('createReminderFeeEntry', () => {
     expect(creditLine?.credit_amount).toBe(60)
   })
 
-  it('rounds the fee to 2 decimals (defense in depth — caller should already round)', async () => {
+  it('rounds the fee to 2 decimals (defense in depth, caller should already round)', async () => {
     await createReminderFeeEntry({} as never, {
       invoiceId: 'inv-1',
       invoiceNumber: 'F2026001',

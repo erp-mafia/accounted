@@ -89,7 +89,7 @@ export const PERIODISERING_TEMPLATES: PeriodiseringTemplate[] = [
   {
     kind: 'accrued_utilities',
     name: 'Upplupna förbrukningar',
-    hint: 'El, vatten, sophämtning eller bredband — kostnaden har uppstått men fakturan dröjer.',
+    hint: 'El, vatten, sophämtning eller bredband: kostnaden har uppstått men fakturan dröjer.',
     side: 'accrued_utility',
     accrued_account: '2990',
     expense_account: '5020',

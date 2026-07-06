@@ -103,7 +103,7 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
     expect(body.error.code).toBe('SI_DELETE_HAS_BOOKING')
     expect(body.error.details.reason).toBe('accrual_schedule')
     expect(body.error.details.scheduleId).toBe('sched-1')
-    // Only the existence fetch + schedule lookup ran — no item deletion.
+    // Only the existence fetch + schedule lookup ran: no item deletion.
     expect(mockSupabase.from).toHaveBeenCalledTimes(2)
   })
 

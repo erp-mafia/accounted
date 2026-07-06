@@ -1,8 +1,8 @@
 /**
- * /llms-full.txt — full docs concatenated for LLM ingestion.
+ * /llms-full.txt: full docs concatenated for LLM ingestion.
  *
  * Sibling to /llms.txt (which is the concise discovery index). This is the
- * "ingest the whole thing in one HTTP call" surface — agents that need
+ * "ingest the whole thing in one HTTP call" surface: agents that need
  * deep context can fetch this once and parse instead of crawling every
  * /docs/api/*.md page individually.
  *

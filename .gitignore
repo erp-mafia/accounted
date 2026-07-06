@@ -57,29 +57,15 @@ supabase/.temp/
 .compliance-reports/
 
 # generated service worker (built from public/sw.template.js by
-# scripts/inject-public-branding.mjs — runs via predev/prebuild)
+# scripts/inject-public-branding.mjs: runs via predev/prebuild)
 /public/sw.js
 
-# dev docs (internal reference, not published) — EXCEPT the iXBRL taxonomy
+# dev docs (internal reference, not published): EXCEPT the iXBRL taxonomy
 # sources and the official Bolagsverket example, which CI needs: the committed
 # lib/bokslut/ixbrl/taxonomy/generated/ registry is regenerated from them by
 # `npm run taxonomy:check` (core-build.yml) and the golden test pins against
 # the example document.
 /dev_docs/*
-!/dev_docs/bokslut/
-/dev_docs/bokslut/*
-!/dev_docs/bokslut/taxonomi/
-/dev_docs/bokslut/taxonomi/*
-!/dev_docs/bokslut/taxonomi/taxonomi-paket-2024-09-12_rev20250312.zip
-!/dev_docs/bokslut/taxonomi/dokumentation/
-/dev_docs/bokslut/taxonomi/dokumentation/*
-!/dev_docs/bokslut/taxonomi/dokumentation/k2-ab-arsredovisning-elementlista-2024-09-12_rev20250312_sv.xlsx
-!/dev_docs/bokslut/taxonomi/dokumentation/tuple-innehallsmodell-arsredovisning-k2-2024-09-12.xlsx
-!/dev_docs/bokslut/exempel/
-/dev_docs/bokslut/exempel/*
-!/dev_docs/bokslut/exempel/k2/
-/dev_docs/bokslut/exempel/k2/*
-!/dev_docs/bokslut/exempel/k2/faststalld-arsredovisning-exempel-1-rev20240214.xhtml
 
 # Extension registry (auto-generated but defaults are committed)
 # Run `npm run setup:extensions` to regenerate after changing extensions.config.json
@@ -87,23 +73,24 @@ supabase/.temp/
 # out of the box without running the generator.
 supabase/.branches/
 
-# Local-only SIE test fixtures — may contain real/scrubbed company data, never commit
+# Local-only SIE test fixtures: may contain real/scrubbed company data, never commit
 tests/fixtures/sie/
 
-# Local-only DESTRUCTIVE duplicate-cleanup tooling — one-off, run by hand against
+# Local-only DESTRUCTIVE duplicate-cleanup tooling: one-off, run by hand against
 # real räkenskapsinformation. Deliberately NOT committed so it can never run in
 # CI/cron and so its logic isn't mistaken for a supported product feature.
 scripts/delete-duplicate-transactions.ts
 
 # Diagnostic/cleanup tooling under /scripts is tracked, but the DATA those
 # scripts read or emit (ledger dumps, reconciliation exports) is real customer
-# räkenskapsinformation — never commit it. Keep the .ts/.sql tooling, ignore the data.
+# räkenskapsinformation: never commit it. Keep the .ts/.sql tooling, ignore the data.
 scripts/*.csv
 
-# Local-only DESTRUCTIVE support tool — reopens a closed räkenskapsår by deleting
+# Local-only DESTRUCTIVE support tool: reopens a closed räkenskapsår by deleting
 # only its bokslut layer (dispositioner + closing entry + next-year IB). Run by
 # hand against real räkenskapsinformation; bypasses BFL immutability triggers, so
 # it must never live in the repo / CI / cron.
 scripts/reopen-bokslut.sql
 
 .claude/plans/write-up-a-plan-streamed-fiddle.md
+/ingaende-balanser-test.csv

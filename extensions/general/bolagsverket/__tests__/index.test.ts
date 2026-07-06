@@ -76,7 +76,7 @@ afterEach(() => {
   else process.env.BOLAGSVERKET_ENV = ORIGINAL_BV_ENV
 })
 
-describe('POST /submissions — write-role enforcement', () => {
+describe('POST /submissions: write-role enforcement', () => {
   it('rejects viewer members with 403 BOLAGSVERKET_FORBIDDEN', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { role: 'viewer' }, error: null }) // company_members
@@ -108,7 +108,7 @@ describe('POST /submissions — write-role enforcement', () => {
   })
 })
 
-describe('POST /submissions — environment validation + ceiling', () => {
+describe('POST /submissions: environment validation + ceiling', () => {
   it('rejects an invalid environment setting with 400 BOLAGSVERKET_INVALID_ENVIRONMENT', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { role: 'member' }, error: null }) // company_members
@@ -156,7 +156,7 @@ describe('POST /submissions — environment validation + ceiling', () => {
   })
 })
 
-describe('POST /submissions — config + error mapping', () => {
+describe('POST /submissions: config + error mapping', () => {
   it('fails fast with 503 BOLAGSVERKET_CONFIG_MISSING when NEXT_PUBLIC_APP_URL is unset', async () => {
     delete process.env.NEXT_PUBLIC_APP_URL
     const { supabase, enqueue } = createQueuedMockSupabase()

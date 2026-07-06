@@ -157,12 +157,12 @@ describe('formatRedovisare', () => {
   })
 
   it('formats enskild firma personnummer with 19 prefix for older', () => {
-    // Person born in 1985 — 85 > 26 (current year), so prefix 19
+    // Person born in 1985: 85 > 26 (current year), so prefix 19
     expect(formatRedovisare('8501011234', 'enskild_firma')).toBe('198501011234')
   })
 
   it('formats enskild firma personnummer with 20 prefix for younger', () => {
-    // Person born in 2005 — 05 < 26 (current year), so prefix 20
+    // Person born in 2005: 05 < 26 (current year), so prefix 20
     expect(formatRedovisare('0501011234', 'enskild_firma')).toBe('200501011234')
   })
 

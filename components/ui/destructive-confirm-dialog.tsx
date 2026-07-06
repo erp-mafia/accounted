@@ -117,7 +117,7 @@ interface UseDestructiveConfirmReturn {
 
 /**
  * Hook that returns a `confirm()` function as a drop-in replacement for `window.confirm()`.
- * Returns `Promise<boolean>` — true if user confirms, false if they cancel.
+ * Returns `Promise<boolean>`: true if user confirms, false if they cancel.
  *
  * Usage:
  * ```

@@ -18,7 +18,7 @@
  *   }
  *
  * The first three fields exist on the legacy `getStructuredError` output.
- * `recovery_hint`, `docs_url`, `valid_alternatives` are additive — derived from
+ * `recovery_hint`, `docs_url`, `valid_alternatives` are additive: derived from
  * the registry's `remediation` block (when present) plus a per-code doc-URL
  * derivation rule.
  */
@@ -85,7 +85,7 @@ async function rewriteEnvelope(
     | null
 
   if (!body?.error) {
-    // Should never happen — legacyErrorResponse always returns the envelope.
+    // Should never happen: legacyErrorResponse always returns the envelope.
     const fallback: V1ErrorBody = {
       error: {
         code: 'INTERNAL_ERROR',

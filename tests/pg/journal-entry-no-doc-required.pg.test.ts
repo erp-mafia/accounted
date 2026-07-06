@@ -109,12 +109,12 @@ describe('journal_entry_no_doc_required.pg', () => {
   })
 
   it('RLS hides exemptions from users in other companies', async () => {
-    // Company A — owner u1, with one exempted entry
+    // Company A: owner u1, with one exempted entry
     const { userId: u1, companyId: c1, fiscalPeriodId: fp1 } = await seedCompany()
     const entryA = await insertDraftJournalEntry({ userId: u1, companyId: c1, fiscalPeriodId: fp1 })
     await insertExemption(getPool(), { journalEntryId: entryA, companyId: c1, userId: u1 })
 
-    // Company B — owner u2, no overlap with c1
+    // Company B: owner u2, no overlap with c1
     const u2 = await insertAuthUser()
     const { companyId: c2 } = await seedCompany()
     await insertCompanyMember({ companyId: c2, userId: u2, role: 'owner' })

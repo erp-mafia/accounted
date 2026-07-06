@@ -138,7 +138,7 @@ describe('POST /api/company/[id]/delete', () => {
   it('rejects the stale companies.name when a settings name exists (only the displayed name is accepted)', async () => {
     // Security: the UI only ever shows company_settings.company_name when set, so
     // the server must not accept the stale companies.name as an alternative
-    // confirmation — that would be a delete path the user was never shown.
+    // confirmation: that would be a delete path the user was never shown.
     mockAuth('user-1')
     mockService({
       companies: [{ data: { id: 'c1', name: 'Gammalt namn', archived_at: null }, error: null }],

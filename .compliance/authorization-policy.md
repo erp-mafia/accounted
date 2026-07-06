@@ -90,7 +90,7 @@ Although authorization is by `company_id`, the audit trail is by `user_id`:
 
 ## Specific decisions
 
-### bank_connections — managed at company scope
+### bank_connections: managed at company scope
 
 **Decision.** Any active `company_members` row for a company can manage
 any `bank_connection` belonging to that company. This covers `POST /connect`,
@@ -107,13 +107,13 @@ mode that exceeds the cross-tenant access risk of the broader model.
 a structured event persisted to `event_log` with both `user_id` and
 `company_id`:
 
-- `bank_connection.consent_granted` — PSD2 callback completed, account
+- `bank_connection.consent_granted`: PSD2 callback completed, account
   metadata stored, status `pending_selection`. Emitted from
   `app/api/extensions/enable-banking/callback/route.ts`.
-- `bank_connection.account_selection_changed` — user chose which accounts
+- `bank_connection.account_selection_changed`: user chose which accounts
   to sync; status may transition `pending_selection → active`. Emitted
   from `PATCH /accounts` in `extensions/general/enable-banking/index.ts`.
-- `bank_connection.revoked` — user disconnected the bank; PSD2 session is
+- `bank_connection.revoked`: user disconnected the bank; PSD2 session is
   revoked at Enable Banking; status set to `revoked`. Emitted from
   `DELETE /disconnect`.
 
@@ -123,15 +123,15 @@ The `event_log` row carries: `connectionId`, `bankName`, `previousStatus`,
 PSD2 consent decision to a specific user under that company.
 
 **Cross-references.**
-- ASVS V8.2.1 — authorization checks at trust boundary
-- ASVS V16 — audit logging of security-relevant events
-- ISO 27001:2022 A.5.1, A.8.3, A.8.5 — access control and information
+- ASVS V8.2.1: authorization checks at trust boundary
+- ASVS V16: audit logging of security-relevant events
+- ISO 27001:2022 A.5.1, A.8.3, A.8.5: access control and information
   access restriction
-- SOC 2 CC6.1, CC7.2 — logical access controls and detection of
+- SOC 2 CC6.1, CC7.2: logical access controls and detection of
   unauthorized changes
-- GDPR Art.30 — records of processing activities (PSD2 consent
+- GDPR Art.30: records of processing activities (PSD2 consent
   decisions)
-- BFL 7 kap. — 7-year retention of audit trail
+- BFL 7 kap.: 7-year retention of audit trail
 
 ---
 

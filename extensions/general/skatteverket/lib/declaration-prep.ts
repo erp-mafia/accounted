@@ -90,7 +90,7 @@ export async function buildMomsuppgift(
  * alongside the formatted arbetsgivare/period strings used downstream by the
  * granskningsunderlag and kvittenser calls.
  *
- * Body lifted verbatim from the former loadAGIXml — including the salary-run
+ * Body lifted verbatim from the former loadAGIXml: including the salary-run
  * status guard (per BFL 5 kap and SFL 26 kap, AGI must reflect finalised
  * payroll data; submitting from a draft/cancelled run would emit incorrect
  * figures and require a costly rättelse).
@@ -121,7 +121,7 @@ export async function buildAgiUnderlag(
 
   const arbetsgivare = await resolveRedovisare(supabase, companyId)
 
-  // Use the most recent agi_declarations row for this salary run — covers
+  // Use the most recent agi_declarations row for this salary run: covers
   // both new declarations and corrections (which overwrite xml_content
   // in place per the existing /api/salary/runs/[id]/agi/xml route).
   const { data: declaration, error: declarationError } = await supabase

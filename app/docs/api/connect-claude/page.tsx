@@ -6,7 +6,7 @@ import { CONNECT_CLAUDE_MD } from '@/lib/docs/content/connect-claude'
 export const metadata: Metadata = {
   title: 'Connect with Claude · accounted API',
   description:
-    'Connect Accounted to Claude (claude.ai, Claude Desktop, Claude Code) via the MCP server — OAuth 2.1 connector or the npx gnubok-mcp stdio bridge.',
+    'Connect Accounted to Claude (claude.ai, Claude Desktop, Claude Code) via the MCP server: OAuth 2.1 connector or the npx gnubok-mcp stdio bridge.',
 }
 
 export default function DocsApiConnectClaudePage() {

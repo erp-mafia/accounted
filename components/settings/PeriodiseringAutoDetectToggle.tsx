@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label'
  * `company_settings.periodisering_autodetect_enabled boolean` column and
  * the wizard's auto-detect step will read either source.
  *
- * Default: enabled. The wizard's auto-detect step renders regardless — the
+ * Default: enabled. The wizard's auto-detect step renders regardless: the
  * toggle merely controls whether the GET response includes `autoDetected`
  * on subsequent fetches. (Today the API always returns it; the wizard step
  * can early-out based on this setting locally.)
@@ -34,7 +34,7 @@ function readStored(): boolean {
 }
 
 /** Subscribe to localStorage changes from OTHER tabs. Same-tab updates are
- *  picked up via the explicit re-render after `setItem` — see
+ *  picked up via the explicit re-render after `setItem`: see
  *  `notifyChange` below. */
 function subscribe(callback: () => void): () => void {
   if (typeof window === 'undefined') return () => {}

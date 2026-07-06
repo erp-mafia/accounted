@@ -25,7 +25,7 @@ const baseData = {
   actionUrl: 'https://example.com/invoice-action/abc',
 }
 
-describe('reminder email templates — surcharges', () => {
+describe('reminder email templates: surcharges', () => {
   it('renders dröjsmålsränta + påminnelseavgift in HTML when set', () => {
     const html = generateReminderEmailHtml({
       ...baseData,

@@ -65,7 +65,7 @@ export function compute20Rule(input: Compute20RuleInput): {
 
 /**
  * Pick the rule that gives the lowest restvärde (highest allowed deduction)
- * per IL 18 kap 13–17 §§ — företaget får välja den fördelaktigaste regeln
+ * per IL 18 kap 13-17 §§: företaget får välja den fördelaktigaste regeln
  * varje år.
  */
 export function pickLowerResidual(
@@ -84,10 +84,10 @@ export function pickLowerResidual(
  * account so the verifikation stays balanced and flows into the right INK2R
  * field via the SRU mapping.
  *
- *   - 8853 / 2153 — maskiner & inventarier (IL 18 kap, dominant K2 case)
- *   - 8852 / 2152 — byggnader (IL 19 kap, rare in SME)
- *   - 8851 / 2151 — immateriella tillgångar (IL 16 kap, even rarer)
- *   - 8850 / 2150 — samlingskonto för grupp
+ *   - 8853 / 2153: maskiner & inventarier (IL 18 kap, dominant K2 case)
+ *   - 8852 / 2152: byggnader (IL 19 kap, rare in SME)
+ *   - 8851 / 2151: immateriella tillgångar (IL 16 kap, even rarer)
+ *   - 8850 / 2150: samlingskonto för grupp
  */
 export const OVERAVSKRIVNING_ACCOUNTS = {
   machinery_equipment: { expense: '8853', accumulated: '2153' },
@@ -102,8 +102,7 @@ export interface OveravskrivningarInput {
   /** Föreslagen ökning av ackumulerade överavskrivningar. Positivt belopp
    *  ökar ackumulerade-kontot (debet 88xx), negativt minskar (kredit 88xx). */
   additionalAmount: number
-  /** Account pair to use. Defaults to maskiner & inventarier (8853 / 2153) —
-   *  the only category where överavskrivningar is common in K2 SME. Override
+  /** Account pair to use. Defaults to maskiner & inventarier (8853 / 2153):    *  the only category where överavskrivningar is common in K2 SME. Override
    *  for buildings or immateriella tillgångar when relevant. */
   category?: OveravskrivningCategory
   /** Visa beräkningens bakgrund i UI:t. Helt fritt format. */

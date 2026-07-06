@@ -1,5 +1,5 @@
 /**
- * Shift-premium engine — pure functions that turn worked-day shifts plus
+ * Shift-premium engine: pure functions that turn worked-day shifts plus
  * configured premium rules into salary line items.
  *
  * Boundary rules:
@@ -231,7 +231,7 @@ export function computePremiumLines(args: ComputePremiumLinesArgs): ShiftPremium
     if (shift.hours <= 0) continue
     const shiftSegments = resolveShiftSegments(shift)
     // Holiday status drives ob_holiday gating. A rule with item_type === 'ob_holiday'
-    // only fires when the worked day is a Swedish public holiday — day_of_week alone
+    // only fires when the worked day is a Swedish public holiday: day_of_week alone
     // is not enough (a regular Sunday is not a helgdag, Midsommarafton on a Tuesday is).
     const isHoliday = isSwedishHolidayISO(shift.work_date)
 

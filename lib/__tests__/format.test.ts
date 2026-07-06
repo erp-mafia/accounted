@@ -3,7 +3,7 @@ import { formatAmount, formatWholeKr, formatDateTime, formatDate, isSaneDateStri
 
 // Intl sv-SE groups thousands with a non-breaking / narrow space (U+00A0 or
 // U+202F depending on ICU version) and may render negatives with U+2212. Both
-// vary across Node builds, so normalize them to plain ASCII before asserting —
+// vary across Node builds, so normalize them to plain ASCII before asserting:
 // the test cares about format shape, not the exact whitespace codepoint.
 const norm = (s: string) => s.replace(/\s/g, ' ').replace(/−/g, '-')
 
@@ -52,8 +52,8 @@ describe('formatDate', () => {
     // an Invalid Date; date-fns format() throws on that and used to crash the
     // whole transactions route via the error boundary. It must degrade, not throw.
     expect(() => formatDate('202403-02-05')).not.toThrow()
-    expect(formatDate('202403-02-05')).toBe('—')
-    expect(formatDate('not-a-date')).toBe('—')
+    expect(formatDate('202403-02-05')).toBe('-')
+    expect(formatDate('not-a-date')).toBe('-')
   })
 })
 

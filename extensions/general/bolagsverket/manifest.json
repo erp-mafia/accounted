@@ -13,11 +13,11 @@
   ],
   "npmDependencies": [],
   "definition": {
-    "name": "Bolagsverket — digital årsredovisning",
+    "name": "Bolagsverket: digital årsredovisning",
     "category": "operations",
     "icon": "Landmark",
     "dataPattern": "core",
     "description": "Lämna in årsredovisningen digitalt till Bolagsverket (iXBRL).",
-    "longDescription": "Ladda upp årsredovisningen som iXBRL till Bolagsverkets eget utrymme, låt undertecknaren signera fastställelseintyget med e-legitimation hos Bolagsverket, och följ ärendet i appen via händelseaviseringar. Kräver avtal med Bolagsverket och organisationscertifikat för acceptans- och produktionsmiljön; testmiljön kan användas utan certifikat. Certifikatet läses enbart från miljövariablerna BOLAGSVERKET_CLIENT_CERT/BOLAGSVERKET_CLIENT_KEY (aldrig från inställningar), och BOLAGSVERKET_ENV sätter taket (test < accept < prod) för vilken miljö ett företag kan välja i inställningarna — utan miljövariabeln gäller endast testmiljön."
+    "longDescription": "Ladda upp årsredovisningen som iXBRL till Bolagsverkets eget utrymme, låt undertecknaren signera fastställelseintyget med e-legitimation hos Bolagsverket, och följ ärendet i appen via händelseaviseringar. Kräver avtal med Bolagsverket och organisationscertifikat för acceptans- och produktionsmiljön; testmiljön kan användas utan certifikat. Certifikatet läses enbart från miljövariablerna BOLAGSVERKET_CLIENT_CERT/BOLAGSVERKET_CLIENT_KEY (aldrig från inställningar), och BOLAGSVERKET_ENV sätter taket (test < accept < prod) för vilken miljö ett företag kan välja i inställningarna: utan miljövariabeln gäller endast testmiljön."
   }
 }

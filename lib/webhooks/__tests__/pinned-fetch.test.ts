@@ -33,7 +33,7 @@ function makeStubRequest(args: {
     }) as ClientRequest['write']
     req.end = (() => {
       // Dispatch the response (or error) asynchronously to mimic real
-      // network timing — pinned-fetch attaches handlers BEFORE end().
+      // network timing: pinned-fetch attaches handlers BEFORE end().
       queueMicrotask(() => {
         if (args.emitError) {
           req.emit('error', args.emitError)
@@ -50,10 +50,10 @@ function makeStubRequest(args: {
         // IncomingMessage stubs need stream-shaped methods that pinned-fetch
         // calls (resume on redirect-drain, destroy on size truncation).
         ;(res as unknown as { resume: () => unknown }).resume = () => {
-          /* no-op — body is already buffered in args.body */
+          /* no-op: body is already buffered in args.body */
         }
         ;(res as unknown as { destroy: () => unknown }).destroy = () => {
-          // Truncation path — emit `close` so finalize() runs.
+          // Truncation path: emit `close` so finalize() runs.
           queueMicrotask(() => res.emit('close'))
         }
         callback(res)
@@ -113,7 +113,7 @@ describe('pinnedHttpsFetch', () => {
     expect(result.body).toBe('ok')
     expect(result.pinnedAddress).toBe('203.0.113.42')
 
-    // Socket goes to the IP — DNS does not re-resolve.
+    // Socket goes to the IP: DNS does not re-resolve.
     expect(captured.options?.host).toBe('203.0.113.42')
     // SNI carries the hostname so the receiver's TLS cert validates.
     expect(captured.options?.servername).toBe('example.com')
@@ -163,7 +163,7 @@ describe('pinnedHttpsFetch', () => {
       expect(result.reason).toBe('private_address')
       expect(result.pinnedAddress).toBeNull()
     }
-    // Critically — we never opened a socket.
+    // Critically: we never opened a socket.
     expect(spyRequest).not.toHaveBeenCalled()
   })
 

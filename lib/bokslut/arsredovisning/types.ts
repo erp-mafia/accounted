@@ -15,7 +15,7 @@ export interface FlerarsoversiktRow {
 
 export interface EgenKapitalRow {
   label: string
-  /** Single SEK number — positive = credit balance (typical for equity). */
+  /** Single SEK number: positive = credit balance (typical for equity). */
   amount: number
 }
 
@@ -24,24 +24,30 @@ export interface NoteEntry {
   number: number
   /** Short Swedish title. */
   title: string
-  /** Note body — supports newlines. Generated from data when possible
+  /** Note body: supports newlines. Generated from data when possible
    *  (avskrivningstider from asset register, medelantal from salary),
    *  manual otherwise. */
   body: string
 }
 
-export interface IncomeStatementLine {
+/**
+ * One presentation row of the RR/BR in ÅRL uppställningsform. Post-level
+ * only — labels must never contain BAS account numbers (Bolagsverket
+ * rejects balans-/resultaträkningar med kontonummer). Rows are derived
+ * from the K2 risbs mapping in lib/bokslut/arsredovisning/statement-rows.ts.
+ */
+export interface StatementRow {
   label: string
-  amount: number
-  /** True for total / subtotal lines. */
+  /** Whole-SEK amount for the current year; null on heading rows. */
+  current: number | null
+  /** Previous-year amount (jämförelseår, ÅRL 3:5 §); null on heading rows
+   *  and when the company has no previous fiscal year. */
+  previous: number | null
+  /** Subtotal/total rows render bold with a top border. */
   is_total?: boolean
-}
-
-export interface BalanceSheetLine {
-  label: string
-  amount: number
-  is_total?: boolean
-  /** Indent depth for nested grouping (0 = top, 1 = subgroup). */
+  /** Section headings carry no amounts. */
+  is_heading?: boolean
+  /** Indent depth (0 = section, 1 = subsection, 2 = post under subsection). */
   indent?: number
 }
 
@@ -59,6 +65,14 @@ export interface ArsredovisningData {
     period_start: string
     period_end: string
   }
+  /** Previous fiscal period backing the jämförelseår column (ÅRL 3:5 §).
+   *  Null for the company's first fiscal year, or when the previous year's
+   *  trial balance could not be generated (a warning is emitted then). */
+  previous_period: {
+    name: string
+    period_start: string
+    period_end: string
+  } | null
   /** Which BFNAR framework the document was generated under. Drives PDF
    *  rendering branching (K3 has an additional kassaflöde + equity-changes
    *  page and a richer note set) and lets the UI label the document
@@ -78,15 +92,18 @@ export interface ArsredovisningData {
     resultatdisposition: string
     /** ISO date of the årsstämma where the årsredovisning was adopted.
      *  Populates the fastställelseintyg date blank. Null means "not yet
-     *  recorded" — PDF then leaves the blank. */
+     *  recorded": PDF then leaves the blank. */
     agm_date: string | null
   }
-  resultatrakning: IncomeStatementLine[]
+  resultatrakning: StatementRow[]
   balansrakning: {
-    assets: BalanceSheetLine[]
+    assets: StatementRow[]
     total_assets: number
-    equity_liabilities: BalanceSheetLine[]
+    /** Jämförelseår total; null when previous_period is null. */
+    total_assets_previous: number | null
+    equity_liabilities: StatementRow[]
     total_equity_liabilities: number
+    total_equity_liabilities_previous: number | null
   }
   noter: NoteEntry[]
   /** K3-only: full kassaflödesanalys (indirect method) rendered as its own
@@ -100,7 +117,7 @@ export interface ArsredovisningData {
     rows: EgenKapitalRow[]
     closing_total: number
   }
-  /** Underskrifter — names of board members + VD. Filled by signature flow. */
+  /** Underskrifter: names of board members + VD. Filled by signature flow. */
   signatures: {
     role: string
     name: string
@@ -108,7 +125,7 @@ export interface ArsredovisningData {
   }[]
   /** Pre-download blockers / warnings the UI surfaces so the user knows the
    *  PDF is not yet Bolagsverket-fileable as-is. Examples: aktiekapital
-   *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error — the
+   *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error: the
    *  user can still download to iterate. */
   warnings: string[]
   /** Manual disclosure overrides persisted on arsredovisning_narratives.

@@ -23,7 +23,7 @@ export interface ReconciliationResult {
  * which matches what was originally posted to 2440. This means the report will
  * diverge from the GL once partial payments settle at a different rate (the
  * delta is correctly booked as valutakursvinst/-förlust to 3960/7960 per
- * ML 8 kap 21–23 §). A subledger-derived total would reconcile through that
+ * ML 8 kap 21-23 §). A subledger-derived total would reconcile through that
  * difference; deferred to a follow-up.
  */
 export async function generateReconciliation(
@@ -56,7 +56,7 @@ export async function generateReconciliation(
     .reduce((sum, inv) => {
       const isFx = inv.currency && inv.currency !== 'SEK'
       const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      // Skip unconvertible FX rows from the sum — adding raw foreign amounts
+      // Skip unconvertible FX rows from the sum: adding raw foreign amounts
       // to a SEK total is arithmetically unsound. Counted instead.
       if (isFx && !hasRate) {
         unconvertedFxCount += 1
@@ -72,7 +72,7 @@ export async function generateReconciliation(
     }, 0)
 
   // Get account 2440 balance from the ledger in this period. We count posted
-  // AND reversed entries together — the SAME inclusion rule the trial balance /
+  // AND reversed entries together: the SAME inclusion rule the trial balance /
   // balance sheet use. A corrected supplier invoice flips its original
   // registration to status='reversed' (storno-service.ts); that reversed credit
   // on 2440 is cancelled by the posted storno's debit, so BOTH legs must be
@@ -123,7 +123,7 @@ export async function generateReconciliation(
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is
     // incomplete by construction and we cannot honestly stamp the period
-    // Avstämd — the user must fix the underlying data first.
+    // Avstämd: the user must fix the underlying data first.
     is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
     unconverted_fx_count: unconvertedFxCount,
   }

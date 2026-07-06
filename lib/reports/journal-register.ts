@@ -30,13 +30,13 @@ export interface JournalRegisterReport {
 
 /**
  * Generate journal register (grundbok) for a fiscal period.
- * BFL 5 kap. 1 § — registreringsordning: all vouchers in chronological registration order.
+ * BFL 5 kap. 1 §: registreringsordning: all vouchers in chronological registration order.
  *
  * Uses a joined query with pagination to handle any number of entries.
  * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
  *
  * Unlike the general ledger and trial balance, the grundbok includes ALL
- * entries — the opening_balance_entry is NOT excluded, because it is a
+ * entries: the opening_balance_entry is NOT excluded, because it is a
  * real voucher that should appear in registration order.
  */
 export async function generateJournalRegister(
@@ -57,7 +57,7 @@ export async function generateJournalRegister(
     return { entries: [], total_entries: 0, total_debit: 0, total_credit: 0, period: { start: '', end: '' } }
   }
 
-  // Fetch all lines with joined entry data — single paginated query,
+  // Fetch all lines with joined entry data: single paginated query,
   // no entry ID array, no truncation at 1000 rows
   // Supabase types !inner joins as arrays; for many-to-one (line → entry)
   // it returns a single object at runtime. Cast via `as any` on the query.
@@ -83,7 +83,7 @@ export async function generateJournalRegister(
       .eq('journal_entries.company_id', companyId)
       .eq('journal_entries.fiscal_period_id', periodId)
       .in('journal_entries.status', ['posted', 'reversed'])
-      // Stable total order on the line PK — without it, rows duplicate/skip
+      // Stable total order on the line PK: without it, rows duplicate/skip
       // across pages and entries appear twice or go missing (see fetch-all.ts).
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .order('id', { ascending: true }).range(from, to) as any

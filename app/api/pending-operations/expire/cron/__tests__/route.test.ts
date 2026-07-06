@@ -47,7 +47,7 @@ vi.mock('@/lib/supabase/server', () => ({
         capture.filters.push({ method: 'select', args })
         return chain
       })
-      // Thenable — awaiting the builder resolves the queued result.
+      // Thenable: awaiting the builder resolves the queued result.
       chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
       return chain
     }),
@@ -91,7 +91,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
     // The update payload: terminal rejected status + the exact result_data
     // shape the commit dispatcher uses for its own auto-rejects, with the
     // strict 'expired' reason the UI badge keys on. rejection_category and
-    // rejection_reason must NOT be set — those carry user-feedback semantics.
+    // rejection_reason must NOT be set: those carry user-feedback semantics.
     expect(call.payload).toBeTruthy()
     expect(call.payload!.status).toBe('rejected')
     expect(Number.isNaN(new Date(call.payload!.resolved_at as string).getTime())).toBe(false)
@@ -106,7 +106,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
     const lt = call.filters.find((f) => f.method === 'lt')!
     expect(lt.args[0]).toBe('created_at')
     expect(daysAgo(lt.args[1] as string)).toBeCloseTo(30, 0)
-    // .select() must be chained — without it PostgREST returns no rows and
+    // .select() must be chained: without it PostgREST returns no rows and
     // the endpoint would permanently report expired: 0.
     expect(call.filters.some((f) => f.method === 'select')).toBe(true)
   })

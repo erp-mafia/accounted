@@ -45,7 +45,7 @@ export interface ExtensionDefinition {
   readsCoreTables?: string[]
   hasOwnData?: boolean
   quickAction?: QuickActionDefinition
-  /** Notice shown when enabling — e.g. external subscription requirement */
+  /** Notice shown when enabling: e.g. external subscription requirement */
   subscriptionNotice?: string
 }
 
@@ -71,7 +71,7 @@ export interface RouteDefinition {
 /**
  * An API route exposed by an extension.
  *
- * Auth/context modes (mutually exclusive — combining throws at dispatch time):
+ * Auth/context modes (mutually exclusive: combining throws at dispatch time):
  *   - default: requires auth AND a resolved company; ctx is passed to the handler
  *   - `skipAuth: true`: no auth, no ctx (e.g. OAuth callbacks)
  *   - `skipCompanyContext: true`: auth required, no ctx (pre-onboarding routes)
@@ -83,12 +83,12 @@ export interface ApiRouteDefinition {
   skipAuth?: boolean
   /**
    * Require auth but NOT a resolved company context. Use for routes that
-   * legitimately run during onboarding (before the user has a company) —
+   * legitimately run during onboarding (before the user has a company):
    * e.g. TIC /lookup used by Step2CompanyDetails to fetch company info
    * while the user types their org number. Handler is called without a
    * ctx argument; handlers that opt in must tolerate a missing context.
    *
-   * Must NOT be combined with `skipAuth: true` — the dispatcher treats
+   * Must NOT be combined with `skipAuth: true`: the dispatcher treats
    * that as a misconfiguration and returns 500.
    */
   skipCompanyContext?: boolean
@@ -193,7 +193,7 @@ export interface ExtensionContext {
   companyId: string
   extensionId: string
   /**
-   * Stable id for the inbound HTTP request — `req_<uuid>`.
+   * Stable id for the inbound HTTP request: `req_<uuid>`.
    * Included in the response envelope and in the `X-Request-Id` header so
    * support staff can grep stdout logs by it.
    */
@@ -207,7 +207,7 @@ export interface ExtensionContext {
 }
 
 /**
- * Extension interface — the contract for all add-ons.
+ * Extension interface: the contract for all add-ons.
  *
  * Extensions declare what they provide (routes, event handlers, sidebar items, etc.)
  * and the registry wires them into the system.

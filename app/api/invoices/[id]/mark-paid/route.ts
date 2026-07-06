@@ -62,7 +62,7 @@ export const POST = withRouteContext(
       const text = await request.text()
       if (text) rawBody = JSON.parse(text)
     } catch {
-      // Empty / invalid body — fall through to defaults.
+      // Empty / invalid body: fall through to defaults.
     }
 
     if (rawBody) {
@@ -144,14 +144,14 @@ export const POST = withRouteContext(
 
     // Drive the JE shape from the invoice's actual booking state, not from
     // the current accounting_method setting. If the invoice was booked at
-    // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510 —
+    // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510:
     // otherwise the receivable orphans and 30xx + VAT double-count. Only
     // when there is no prior JE (pure kontantmetoden) do we recognise
     // revenue + VAT here.
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
-    // Ledger math + overpayment guard via the shared planInvoicePayment helper —
+    // Ledger math + overpayment guard via the shared planInvoicePayment helper:
     // the same single source of truth the match-invoice flow uses, so the three
     // mark-paid surfaces (this route, the v1 API, and the agent commit path)
     // cannot drift again. Runs BEFORE any journal entry is created so a doomed
@@ -239,7 +239,7 @@ export const POST = withRouteContext(
 
       // Fail closed: a real invoice must produce a payment voucher. If a helper
       // returned null without throwing (e.g. a closed/locked fiscal period),
-      // refuse to mark the invoice paid — flipping status with no journal entry
+      // refuse to mark the invoice paid: flipping status with no journal entry
       // orphans the receivable and diverges the GL from the sub-ledger.
       if (!journalEntryId) {
         opLog.error('mark-paid produced no journal entry; refusing to mark paid', undefined, {
@@ -283,7 +283,7 @@ export const POST = withRouteContext(
     }
 
     if (!updateResult || updateResult.length === 0) {
-      // Status changed between read and write (concurrent settle) — cancel the
+      // Status changed between read and write (concurrent settle): cancel the
       // orphaned payment voucher and document the voucher gap before reporting.
       if (journalEntryId) {
         await cancelOrphanedPaymentEntry(
@@ -297,7 +297,7 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_RACE', opLog, { requestId })
     }
 
-    // Notify subscribers — invoice.paid fans out to registered webhooks
+    // Notify subscribers: invoice.paid fans out to registered webhooks
     // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
     // so an emit failure must not fail the request. Mirrors the v1 route.
     try {

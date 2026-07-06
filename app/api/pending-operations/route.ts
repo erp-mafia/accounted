@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   const { status, limit, offset } = result.data
 
   // Terminal tabs (Godkända/Avvisade) order by when the op was RESOLVED, not
-  // created — auto-expired ops are ≥30 days old by construction, so a
+  // created: auto-expired ops are ≥30 days old by construction, so a
   // created_at ordering would bury a fresh expiry sweep below a month of
   // newer rejections and the "Utgick automatiskt" context would never be seen.
   const orderColumn = status === 'pending' ? 'created_at' : 'resolved_at'

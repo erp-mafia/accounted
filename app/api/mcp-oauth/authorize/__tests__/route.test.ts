@@ -47,7 +47,7 @@ function buildSupabase(user: { id: string } | null, companyName = 'Test AB') {
   }
 }
 
-describe('GET /api/mcp-oauth/authorize — CSP', () => {
+describe('GET /api/mcp-oauth/authorize: CSP', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
@@ -96,7 +96,7 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
 
     const csp = response.headers.get('Content-Security-Policy') ?? ''
     expect(csp).toContain('https://claude.com')
-    // Origin only — no path, no query string in the source expression.
+    // Origin only: no path, no query string in the source expression.
     expect(csp).not.toContain('/api/oauth/callback')
     expect(csp).not.toContain('env=prod')
   })
@@ -104,7 +104,7 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
     // Claude's connector sends scope=mcp today. The consent UI must render
     // every scope group so the user can opt into write/approval rows if they
-    // want — but each write/approve row MUST start unchecked. Affirmative
+    // want, but each write/approve row MUST start unchecked. Affirmative
     // opt-in is the access-control gate (GDPR Art. 25(2), ISO 27001:2022
     // A.5.18 / A.8.2, SOC 2 CC6.3, ASVS V10.2.2 / V2.3.1).
     const request = new Request(

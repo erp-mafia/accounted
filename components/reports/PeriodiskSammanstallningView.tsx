@@ -25,7 +25,7 @@ import type {
 } from '@/lib/reports/periodisk-sammanstallning'
 
 function formatAmount(amount: number): string {
-  // Hela kronor — SKV 5740 har inga öre.
+  // Hela kronor: SKV 5740 har inga öre.
   return amount.toLocaleString('sv-SE', { maximumFractionDigits: 0 })
 }
 
@@ -34,7 +34,7 @@ function typeBadge(row: { services: number; goods: number; triangulation: number
   if (row.services !== 0) types.push('Tjänster')
   if (row.goods !== 0) types.push('Varor')
   if (row.triangulation !== 0) types.push('Trepart')
-  return types.join(' + ') || '—'
+  return types.join(' + ') || '-'
 }
 
 function deadlineLabel(end: string): string {
@@ -187,7 +187,7 @@ export function PeriodiskSammanstallningView() {
             <CardHeader>
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <CardTitle>
-                  Periodisk sammanställning — {data.period.label}
+                  Periodisk sammanställning: {data.period.label}
                 </CardTitle>
                 {data.totals.rowCount > 0 && (
                   <Badge variant={hasBlockingErrors ? 'destructive' : 'secondary'}>
@@ -230,7 +230,7 @@ export function PeriodiskSammanstallningView() {
                     </span>
                   ) : (
                     <span className="text-destructive">
-                      ⚠ Avviker från momsdeklarationen — kontrollera bokföringen.
+                      ⚠ Avviker från momsdeklarationen: kontrollera bokföringen.
                       {' '}Ruta 39: {formatAmount(data.reconciliation.ruta39 ?? 0)} kr,
                       {' '}Ruta 35: {formatAmount(data.reconciliation.ruta35 ?? 0)} kr,
                       {' '}Ruta 38: {formatAmount(data.reconciliation.ruta38 ?? 0)} kr.
@@ -322,19 +322,19 @@ export function PeriodiskSammanstallningView() {
                         <TableCell className="tabular-nums font-mono text-xs">{row.country}</TableCell>
                         <TableCell className="tabular-nums font-mono text-xs">{row.vatNumber}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {row.services !== 0 ? formatAmount(row.services) : '—'}
+                          {row.services !== 0 ? formatAmount(row.services) : '-'}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {row.goods !== 0 ? formatAmount(row.goods) : '—'}
+                          {row.goods !== 0 ? formatAmount(row.goods) : '-'}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {row.triangulation !== 0 ? formatAmount(row.triangulation) : '—'}
+                          {row.triangulation !== 0 ? formatAmount(row.triangulation) : '-'}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{typeBadge(row)}</TableCell>
                         <TableCell className="text-xs">
                           {row.customerId
-                            ? <Link href={`/customers/${row.customerId}`} className="underline-offset-4 hover:underline">{row.customerName ?? '—'}</Link>
-                            : <span className="text-muted-foreground">—</span>
+                            ? <Link href={`/customers/${row.customerId}`} className="underline-offset-4 hover:underline">{row.customerName ?? '-'}</Link>
+                            : <span className="text-muted-foreground">-</span>
                           }
                         </TableCell>
                       </TableRow>

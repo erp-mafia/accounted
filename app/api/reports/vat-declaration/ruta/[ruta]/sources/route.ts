@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   ACCOUNT_RUTA,
   calculatePeriodDates,
@@ -57,7 +58,7 @@ export async function GET(
     )
   }
 
-  // Resolve the period — either by fiscal_period_id or periodType/year/period.
+  // Resolve the period: either by fiscal_period_id or periodType/year/period.
   let start: string | null = null
   let end: string | null = null
   const fiscalPeriodId = searchParams.get('fiscal_period_id')
@@ -93,66 +94,94 @@ export async function GET(
     end = dates.end
   }
 
-  let query = supabase
-    .from('journal_entry_lines')
-    .select(`
-      account_number,
-      debit_amount,
-      credit_amount,
-      journal_entries!inner(
-        id,
-        voucher_number,
-        voucher_series,
-        entry_date,
-        description,
-        status,
-        company_id
-      )
-    `)
-    .in('account_number', accountsForRuta)
-    .eq('journal_entries.company_id', companyId)
-    .in('journal_entries.status', ['posted', 'reversed'])
-    .gte('journal_entries.entry_date', start)
-    .lte('journal_entries.entry_date', end)
-    .order('entry_date', { foreignTable: 'journal_entries', ascending: true })
-    .order('voucher_number', { foreignTable: 'journal_entries', ascending: true })
-    .limit(PAGE_LIMIT + 1)
-
+  // Parse the optional cursor up front (format: <iso-date>|<voucher_number>).
+  // Pagination is applied in JS after a full, deterministically-ordered fetch.
+  let cursorDate: string | null = null
+  let cursorVoucherNum = 0
   if (cursor) {
-    const [cursorDate, cursorVoucher] = cursor.split('|')
-    const cursorVoucherNum = parseInt(cursorVoucher, 10)
-    if (!cursorDate || isNaN(cursorVoucherNum)) {
+    const [cd, cv] = cursor.split('|')
+    cursorVoucherNum = parseInt(cv, 10)
+    // The cursor is applied in JS (string compare); structurally validating the
+    // date component here is defense-in-depth against malformed/injection cursors.
+    if (!cd || !/^\d{4}-\d{2}-\d{2}$/.test(cd) || isNaN(cursorVoucherNum)) {
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 })
     }
-    query = query.or(
-      `entry_date.gt.${cursorDate},and(entry_date.eq.${cursorDate},voucher_number.gt.${cursorVoucherNum})`,
-      { foreignTable: 'journal_entries' }
-    )
+    cursorDate = cd
   }
 
-  const { data, error } = await query
+  // Pull ALL contributing lines, then sort + paginate in JS.
+  //
+  // Why not order/limit in SQL: `.order(col, { foreignTable })` in PostgREST
+  // sorts the *embedded* resource's rows, not the parent result set, so it
+  // cannot give us a chronological parent order. Without a stable parent order
+  // a raw `.limit()` returns an arbitrary subset that varies between identical
+  // requests, making the drill-down show "different rows on every reload". We
+  // page on the line PK (`id`) for a stable total order (see fetch-all.ts) and
+  // do the chronological sort here, mirroring `generateGeneralLedger` and the
+  // trial-balance sources route.
+  const rows = await fetchAllRows<{
+    id: string
+    debit_amount: number
+    credit_amount: number
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    journal_entries: any
+  }>(({ from, to }) =>
+    supabase
+      .from('journal_entry_lines')
+      .select(`
+        id,
+        account_number,
+        debit_amount,
+        credit_amount,
+        journal_entries!inner(
+          id,
+          voucher_number,
+          voucher_series,
+          entry_date,
+          description,
+          status,
+          company_id
+        )
+      `)
+      .in('account_number', accountsForRuta)
+      .eq('journal_entries.company_id', companyId)
+      .in('journal_entries.status', ['posted', 'reversed'])
+      .gte('journal_entries.entry_date', start)
+      .lte('journal_entries.entry_date', end)
+      .order('id', { ascending: true })
+      .range(from, to), { dedupeBy: (r) => r.id })
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+  // Map then sort in JS (date ASC, voucher_number ASC, journal_entry_id ASC as
+  // a final deterministic tiebreak).
+  const allMapped: ReportSourceLine[] = rows.map((row) => ({
+    journal_entry_id: row.journal_entries.id,
+    voucher_number: row.journal_entries.voucher_number,
+    voucher_series: row.journal_entries.voucher_series || 'A',
+    date: row.journal_entries.entry_date,
+    description: row.journal_entries.description || '',
+    debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
+    credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
+  }))
+  allMapped.sort((a, b) => {
+    const dateComp = a.date.localeCompare(b.date)
+    if (dateComp !== 0) return dateComp
+    if (a.voucher_number !== b.voucher_number) return a.voucher_number - b.voucher_number
+    return a.journal_entry_id.localeCompare(b.journal_entry_id)
+  })
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows = (data || []) as any[]
+  // Apply the cursor in JS: keep rows strictly after (date, voucher_number).
+  const afterCursor = cursorDate
+    ? allMapped.filter(
+        (l) =>
+          l.date > cursorDate! ||
+          (l.date === cursorDate! && l.voucher_number > cursorVoucherNum)
+      )
+    : allMapped
 
-  const lines: ReportSourceLine[] = rows
-    .slice(0, PAGE_LIMIT)
-    .map((row) => ({
-      journal_entry_id: row.journal_entries.id,
-      voucher_number: row.journal_entries.voucher_number,
-      voucher_series: row.journal_entries.voucher_series || 'A',
-      date: row.journal_entries.entry_date,
-      description: row.journal_entries.description || '',
-      debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
-      credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
-    }))
+  const lines = afterCursor.slice(0, PAGE_LIMIT)
 
   let next_cursor: string | null = null
-  if (rows.length > PAGE_LIMIT && lines.length > 0) {
+  if (afterCursor.length > PAGE_LIMIT && lines.length > 0) {
     const last = lines[lines.length - 1]
     next_cursor = `${last.date}|${last.voucher_number}`
   }

@@ -153,7 +153,7 @@ export function FiscalPeriodEditor() {
       setPeriod(body.data as FiscalPeriod)
       toast({
         title: t('fp_updated_title'),
-        description: `${formatSwedishDate(body.data.period_start)} – ${formatSwedishDate(body.data.period_end)}`,
+        description: `${formatSwedishDate(body.data.period_start)}: ${formatSwedishDate(body.data.period_end)}`,
       })
     } catch (err) {
       toast({

@@ -56,7 +56,7 @@ async function identityFetch<T>(
     }
 
     if (response.status === 410) {
-      // Session failed/expired — return the error body
+      // Session failed/expired: return the error body
       const data = await response.json()
       return data as T
     }

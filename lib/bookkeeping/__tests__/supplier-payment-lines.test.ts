@@ -13,7 +13,7 @@ function line(lines: Array<{ account_number: string }>, acct: string) {
 }
 
 describe('buildSupplierPaymentClearingLines', () => {
-  it('books the öre residual to 3740 (credit) when the bank paid a sub-krona LESS — the reported 11 231,25 / 11 231,00 case', () => {
+  it('books the öre residual to 3740 (credit) when the bank paid a sub-krona LESS: the reported 11 231,25 / 11 231,00 case', () => {
     const { lines, oreDiffSek } = buildSupplierPaymentClearingLines({
       apSek: 11231.25,
       bankSek: 11231,
@@ -55,7 +55,7 @@ describe('buildSupplierPaymentClearingLines', () => {
     expect(line(lines, '1930')?.credit_amount).toBe(2390)
   })
 
-  it('treats a ≥1 kr shortfall as a genuine partial — clamps to the bank amount, no 3740', () => {
+  it('treats a ≥1 kr shortfall as a genuine partial: clamps to the bank amount, no 3740', () => {
     const { lines, oreDiffSek } = buildSupplierPaymentClearingLines({
       apSek: 11231.25,
       bankSek: 5000,
@@ -64,7 +64,7 @@ describe('buildSupplierPaymentClearingLines', () => {
     expect(oreDiffSek).toBe(0)
     expect(lines).toHaveLength(2)
     expect(line(lines, '3740')).toBeUndefined()
-    // Only what actually moved clears 2440 — the remainder stays a partial.
+    // Only what actually moved clears 2440: the remainder stays a partial.
     expect(line(lines, '2440')?.debit_amount).toBe(5000)
     expect(line(lines, '1930')?.credit_amount).toBe(5000)
   })

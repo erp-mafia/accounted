@@ -7,15 +7,15 @@ When scanning legacy repositories or evaluating SoAs that still reference 2013-e
 | Aspect | 2013 | 2022 |
 |---|---|---|
 | Control count | 114 | 93 |
-| Domains/themes | 14 domains (A.5–A.18) | 4 themes (A.5–A.8) |
+| Domains/themes | 14 domains (A.5-A.18) | 4 themes (A.5-A.8) |
 | Attribute system | None | 5 attribute dimensions per control |
-| Merged controls | — | 57 → 24 |
-| New controls | — | 11 net-new |
-| Retained (renamed/renumbered) | — | 58 |
+| Merged controls | N/A | 57 → 24 |
+| New controls | N/A | 11 net-new |
+| Retained (renamed/renumbered) | N/A | 58 |
 
 ## Common translation patterns
 
-The 2013 controls A.5–A.18 do not map cleanly to A.5–A.8. The new themes are reorganized around governance level, not topical similarity to the old domains.
+The 2013 controls A.5-A.18 do not map cleanly to A.5-A.8. The new themes are reorganized around governance level, not topical similarity to the old domains.
 
 | 2013 ID | 2013 Title | 2022 ID | 2022 Title | Notes |
 |---|---|---|---|---|
@@ -28,7 +28,7 @@ The 2013 controls A.5–A.18 do not map cleanly to A.5–A.8. The new themes are
 | A.7 | Human resource security (entire domain) | A.6 | People (entire theme) | Restructured. |
 | A.8.1.1 | Inventory of assets | A.5.9 | Inventory of information and other associated assets | Renamed, broader. |
 | A.8.2 | Information classification | A.5.12, A.5.13 | Classification of information / Labelling | Split into two. |
-| A.9 | Access control (entire domain) | A.5.15–A.5.18, A.8.2–A.8.5 | Distributed across themes | Major restructure. |
+| A.9 | Access control (entire domain) | A.5.15-A.5.18, A.8.2-A.8.5 | Distributed across themes | Major restructure. |
 | A.9.1.1 | Access control policy | A.5.15 | Access control | Merged. |
 | A.9.2.1 | User registration and de-registration | A.5.16 | Identity management | Renamed. |
 | A.9.2.3 | Management of privileged access rights | A.8.2 | Privileged access rights | Renamed. |
@@ -61,8 +61,8 @@ The 2013 controls A.5–A.18 do not map cleanly to A.5–A.8. The new themes are
 | A.14.2.7 | Outsourced development | A.8.30 | Outsourced development | Renumbered. |
 | A.14.2.8 | System security testing | A.8.29 | Security testing in development and acceptance | Renamed. |
 | A.14.3.1 | Protection of test data | A.8.33 | Test information | Renamed. |
-| A.15 | Supplier relationships | A.5.19–A.5.22 | Supplier-related controls | Restructured into Organizational. |
-| A.16 | Information security incident management | A.5.24–A.5.28 | Incident-related controls | Restructured. |
+| A.15 | Supplier relationships | A.5.19-A.5.22 | Supplier-related controls | Restructured into Organizational. |
+| A.16 | Information security incident management | A.5.24-A.5.28 | Incident-related controls | Restructured. |
 | A.17 | Information security aspects of business continuity | A.5.29, A.5.30, A.8.13, A.8.14 | Distributed | Restructured. |
 | A.18.1 | Compliance with legal and contractual requirements | A.5.31 | Legal, statutory, regulatory and contractual requirements | Compressed. |
 | A.18.1.3 | Protection of records | A.5.33 | Protection of records | Renumbered. |
@@ -77,6 +77,6 @@ When parsing a SoA that uses 2013 identifiers:
 2. Apply the translation table above.
 3. Generate a warning: "SoA references 2013-era identifiers. Translation applied. Recommend updating SoA to 2022 identifiers."
 4. Run all checks against translated 2022 controls.
-5. Verify the 11 net-new controls (see `new-controls-2022.md`) are now addressed in the SoA — they will not have legacy equivalents.
+5. Verify the 11 net-new controls (see `new-controls-2022.md`) are now addressed in the SoA: they will not have legacy equivalents.
 
 The translation is one-way and lossy. Several 2013 controls map to multiple 2022 controls (splits) and several 2022 controls absorb multiple 2013 controls (merges). When in doubt, apply the most restrictive interpretation.

@@ -29,8 +29,8 @@ export const vatTreatmentsResource: McpResource = {
       treatments: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'],
       by_customer_type: matrix,
       notes: {
-        eu_business_validated: 'Reverse charge applies — invoice 0%, customer self-accounts via moms ruta 39.',
-        non_eu_business: 'Export — invoice 0%, no Swedish VAT, moms ruta 40.',
+        eu_business_validated: 'Reverse charge applies: invoice 0%, customer self-accounts via moms ruta 39.',
+        non_eu_business: 'Export: invoice 0%, no Swedish VAT, moms ruta 40.',
         mixed_rate: 'Invoice line items can have individual VAT rates; the engine generates per-rate lines.',
       },
     }

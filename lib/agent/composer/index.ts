@@ -67,7 +67,7 @@ export async function composeAgentProfile(
       const bodies = (rows ?? [])
         .map((r: { body: string | null }) => r.body ?? '')
         .filter((b: string) => b.length > 0)
-      // Intentionally not awaited — pre-warm must not block the response.
+      // Intentionally not awaited: pre-warm must not block the response.
       void preWarmAtomCache({ atomBodies: bodies })
     }
   }

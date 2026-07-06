@@ -50,7 +50,7 @@ export async function findMissingActiveAccounts(
  *    resurrects a deliberate deactivation).
  *
  * An account that is simply absent from the chart but exists in BAS is NOT
- * returned — createDraftEntry seeds it automatically, so pre-validation in a
+ * returned: createDraftEntry seeds it automatically, so pre-validation in a
  * route must not 400 on it. Read-only on purpose: dry-run/preview paths use
  * the same check without side effects. Preserves first-seen order.
  */

@@ -65,4 +65,6 @@ export interface OpeningBalanceExecuteResult {
   total_debit: number
   total_credit: number
   error?: string
+  /** Set when this was a correction: the stornoed previous IB entry id. */
+  reversed_entry_id?: string | null
 }

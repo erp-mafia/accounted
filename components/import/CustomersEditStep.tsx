@@ -165,10 +165,10 @@ export default function CustomersEditStep({
                     </Select>
                   </td>
                   <td className="px-3 py-1.5 text-muted-foreground tabular-nums">
-                    {row.org_number || '—'}
+                    {row.org_number || '-'}
                   </td>
                   <td className="px-3 py-1.5 text-muted-foreground truncate max-w-xs">
-                    {row.email || '—'}
+                    {row.email || '-'}
                   </td>
                   <td className="px-3 py-1.5">
                     <div className="flex items-center gap-1.5">

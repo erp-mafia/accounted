@@ -13,14 +13,14 @@
  * `errorResponseFromCode`; v1 uses `v1ErrorResponseFromCode`).
  *
  * Strict-mode: the function aborts at the FIRST per-employee failure. There
- * is no partial-state recovery — either every employee succeeds and the run
+ * is no partial-state recovery: either every employee succeeds and the run
  * gets its aggregated totals + updated row, or the caller receives an error
  * and the run remains in `draft`. This matches the dashboard's behaviour and
  * is required for BFL 5 kap: a half-calculated run that later advances to
  * `review` would post a wrong verifikation when `:book` runs.
  *
  * The function does NOT advance the salary_runs status. That's the route's
- * responsibility — the dashboard leaves the run in `draft` (an explicit
+ * responsibility: the dashboard leaves the run in `draft` (an explicit
  * `/review` verb does the freeze), while v1 collapses calculate+review into
  * a single verb. Routes layer the status transition on top of this result.
  */
@@ -143,7 +143,7 @@ export async function runSalaryCalculation(
   // 2. Load year config.
   const config = await loadPayrollConfig(supabase, paymentYear)
 
-  // 3. Load roster — `salary_run_employees` joined with employees + line items.
+  // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
   // foreign key. RLS already constrains the table per-company, but per
   // CLAUDE.md every query carries the company_id filter explicitly so a
@@ -157,13 +157,13 @@ export async function runSalaryCalculation(
   if (empError) {
     return { ok: false, code: 'DATABASE_ERROR', details: empError }
   }
-  // An empty roster is valid — a registered employer must still file a
+  // An empty roster is valid: a registered employer must still file a
   // nolldeklaration (HU-only AGI) for months without payroll. Calculation
   // then yields all-zero totals plus a frozen calculation_params snapshot,
   // and every downstream loop simply iterates zero times.
   const runEmployees = runEmployeesData ?? []
 
-  // 4. Pre-calculation validation — ensure every employee has the data the
+  // 4. Pre-calculation validation: ensure every employee has the data the
   //    engine needs. We accumulate ALL errors so the caller sees a complete
   //    list rather than fixing one and discovering the next on the retry.
   const validationErrors: string[] = []
@@ -261,7 +261,7 @@ export async function runSalaryCalculation(
     ytdByEmployee.set(prior.employee_id, current)
   }
 
-  // 7. Pay period bounds — used to load per-day absence + worked-day records.
+  // 7. Pay period bounds: used to load per-day absence + worked-day records.
   const periodYear = run.period_year as number
   const periodMonth = run.period_month as number
   const periodStart = `${periodYear}-${String(periodMonth).padStart(2, '0')}-01`
@@ -269,7 +269,7 @@ export async function runSalaryCalculation(
   const periodEnd = periodEndDate.toISOString().slice(0, 10)
 
   // 7b. Load active shift_premium_rules once per run. Filtered by company.
-  // Inactive rules excluded — the engine also re-checks, but this saves
+  // Inactive rules excluded: the engine also re-checks, but this saves
   // network bytes for companies with many archived rules.
   const { data: premiumRulesRaw, error: rulesError } = await supabase
     .from('shift_premium_rules')
@@ -289,7 +289,7 @@ export async function runSalaryCalculation(
   let totalVacationAccrual = 0
   let totalEmployerCost = 0
 
-  // Surfaced as warnings — UI / agent shows alongside the successful
+  // Surfaced as warnings: UI / agent shows alongside the successful
   // calculation, not an error.
   const lakarintygEmployees: string[] = []
   const fkReportingEmployees: string[] = []
@@ -372,7 +372,7 @@ export async function runSalaryCalculation(
     // Refresh the monthly 'Grundlön' line so the displayed Lönerader table
     // matches the per-run monthly salary the engine actually uses. The engine
     // recomputes baseSalary from sre.monthly_salary (not from this line item),
-    // so this update is display-only — it keeps the row consistent after the
+    // so this update is display-only: it keeps the row consistent after the
     // user edits this month's salary on the draft.
     if (emp.salary_type === 'monthly') {
       const baseAmount =
@@ -767,15 +767,15 @@ export async function runSalaryCalculation(
     return { ok: false, code: 'DATABASE_ERROR', details: updateError }
   }
 
-  // 10. Warnings — non-blocking annotations the caller should surface.
+  // 10. Warnings: non-blocking annotations the caller should surface.
   const warnings: string[] = []
   if (taxTableSource === 'fallback') {
     warnings.push(
-      `Skatteverkets skattetabell-API är inte nåbart — beräkningen använder lokal reservdata för ${paymentYear}. Kontrollera att Skatteverket inte publicerat ändringar innan lönekörningen bokförs.`,
+      `Skatteverkets skattetabell-API är inte nåbart: beräkningen använder lokal reservdata för ${paymentYear}. Kontrollera att Skatteverket inte publicerat ändringar innan lönekörningen bokförs.`,
     )
   } else if (taxTableSource === 'mixed') {
     warnings.push(
-      `Skatteverkets skattetabell-API svarade bara delvis — vissa skattetabeller kommer från lokal reservdata för ${paymentYear}. Kontrollera att Skatteverket inte publicerat ändringar innan lönekörningen bokförs.`,
+      `Skatteverkets skattetabell-API svarade bara delvis: vissa skattetabeller kommer från lokal reservdata för ${paymentYear}. Kontrollera att Skatteverket inte publicerat ändringar innan lönekörningen bokförs.`,
     )
   }
   if (lakarintygEmployees.length > 0) {

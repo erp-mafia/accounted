@@ -7,11 +7,11 @@
  * importer's encoding detector sampled only the first 4 KB of each file. When
  * Swedish characters appeared only deeper in the file, the detector defaulted
  * to UTF-8. Decoding a Windows-1252 byte like 0xD6 (Ö) as UTF-8 produces the
- * replacement character U+FFFD — silently, because TextDecoder defaults to
+ * replacement character U+FFFD: silently, because TextDecoder defaults to
  * `fatal: false`. The mangled strings ended up in customers, suppliers,
  * journal_entries, etc.
  *
- * Recovery is not deterministic — the original byte is lost. This script does
+ * Recovery is not deterministic: the original byte is lost. This script does
  * heuristic substitution against a small Swedish-word dictionary:
  *
  *   1. Find rows where any text column contains U+FFFD.
@@ -66,9 +66,9 @@ interface ColumnSpec {
   tenantColumn: 'company_id' | 'user_id' | null
   /** Free-text columns to scan for U+FFFD. */
   columns: readonly string[]
-  /** Optional row filter — used to skip immutable/posted rows. */
+  /** Optional row filter: used to skip immutable/posted rows. */
   filter?: (row: Record<string, unknown>) => boolean
-  /** Extra SELECTs needed by the filter — pulled but not scanned for U+FFFD. */
+  /** Extra SELECTs needed by the filter: pulled but not scanned for U+FFFD. */
   extraSelect?: readonly string[]
 }
 
@@ -98,7 +98,7 @@ const TARGETS: readonly ColumnSpec[] = [
     tenantColumn: 'company_id',
     columns: ['description'],
     extraSelect: ['status'],
-    // Skip posted entries — they're legally immutable per BFL.
+    // Skip posted entries: they're legally immutable per BFL.
     filter: (row) => row.status !== 'posted',
   },
   // Note: journal_entry_lines.line_description is intentionally NOT scanned.
@@ -164,7 +164,7 @@ const TARGETS: readonly ColumnSpec[] = [
   },
   {
     table: 'companies',
-    tenantColumn: null, // top-level — filter directly on id when --company-id is given
+    tenantColumn: null, // top-level: filter directly on id when --company-id is given
     columns: ['name', 'address_line1', 'address_line2', 'city'],
   },
 ]
@@ -269,7 +269,7 @@ async function scanTable(spec: ColumnSpec): Promise<Report> {
     if (ambiguousFields.length > 0) {
       ambiguous++
       console.log(
-        `\n  · ${spec.table}.${id}${tenantId ? ` (${spec.tenantColumn}=${tenantId})` : ''} — AMBIGUOUS (manual review):`
+        `\n  · ${spec.table}.${id}${tenantId ? ` (${spec.tenantColumn}=${tenantId})` : ''}: AMBIGUOUS (manual review):`
       )
       for (const { field, value } of ambiguousFields) {
         console.log(`      ${field}: ${JSON.stringify(value)}`)
@@ -339,7 +339,7 @@ async function main() {
     console.log(`Applied                     : ${totals.applied}`)
     console.log(`Failed                      : ${totals.failed}`)
   } else {
-    console.log('\nDry run — no changes written. Re-run with --commit to apply.')
+    console.log('\nDry run: no changes written. Re-run with --commit to apply.')
     console.log(
       'Ambiguous rows are NOT touched: review them by hand and update manually if needed.'
     )

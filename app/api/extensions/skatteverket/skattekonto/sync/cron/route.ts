@@ -9,6 +9,7 @@ import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/ge
 import { computeSkattekontoDrift, maybeAlertDrift } from '@/extensions/general/skatteverket/lib/skattekonto-drift'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { SkatteverketSkattekontoError } from '@/extensions/general/skatteverket/lib/skattekonto-client'
+import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 
 ensureInitialized()
 
@@ -17,7 +18,7 @@ export const maxDuration = 60
 /**
  * GET /api/extensions/skatteverket/skattekonto/sync/cron
  *
- * Daily skattekonto sync (cron 0 4 * * * — 04:00 UTC, 06:00 Swedish time).
+ * Daily skattekonto sync (cron 0 4 * * *: 04:00 UTC, 06:00 Swedish time).
  * Pulls saldo + transactions for every company that has a connected
  * Skatteverket token, and persists the results to skattekonto_transactions.
  *
@@ -26,7 +27,7 @@ export const maxDuration = 60
  *
  * Time budget: 50s (Vercel default 60s function timeout, 10s margin).
  *
- * Per-company errors are logged but do not abort the run — one expired
+ * Per-company errors are logged but do not abort the run: one expired
  * token shouldn't block 49 other working syncs.
  */
 export async function GET(request: Request) {
@@ -47,11 +48,16 @@ export async function GET(request: Request) {
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-  // Find all companies with a connected token. The token row is keyed by
-  // user_id but carries company_id (added in the multi-tenant refactor).
+  // Find all companies with a connected, believed-working token. The token
+  // row is keyed by user_id but carries company_id (multi-tenant refactor).
+  // Rows flagged needs_reconsent are excluded: SKV's per-flow refresh tokens
+  // live 65 minutes, so a connection that failed with a terminal auth error
+  // can never heal on its own — retrying it every night only produced a
+  // per-company error log until the user re-consents (which resets status).
   const { data: tokens, error: tokensError } = await supabase
     .from('skatteverket_tokens')
     .select('user_id, company_id, expires_at, refresh_count')
+    .eq('status', 'active')
     .order('expires_at', { ascending: true })
     .limit(50)
 
@@ -91,13 +97,13 @@ export async function GET(request: Request) {
     const companyId = token.company_id as string | null
 
     if (!companyId) {
-      // Pre-multi-tenant tokens may lack company_id. Skip — cannot scope.
+      // Pre-multi-tenant tokens may lack company_id. Skip: cannot scope.
       results.push({ userId, companyId: '(missing)', status: 'error', error: 'No company_id on token' })
       continue
     }
 
     if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) {
-      console.info('[skattekonto-sync-cron] skip — capability not entitled', { companyId })
+      console.info('[skattekonto-sync-cron] skip: capability not entitled', { companyId })
       continue
     }
 
@@ -146,12 +152,21 @@ export async function GET(request: Request) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
 
-      // Expired token / refresh exhausted is a known outcome — surface it
-      // distinctly so ops can dashboard "X companies need to reconnect".
+      // Terminal auth states are a known outcome: surface them distinctly
+      // so ops can dashboard "X companies need to reconnect", persist the
+      // health flag so this cron stops retrying the row, and let the UI
+      // prompt for re-consent proactively.
       if (
         err instanceof SkatteverketAuthError &&
-        (err.code === 'REFRESH_EXHAUSTED' || err.code === 'SESSION_EXPIRED' || err.code === 'TOKEN_CORRUPTED')
+        (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
       ) {
+        await markNeedsReconsent(supabase, userId, err.code)
+        results.push({ userId, companyId, status: 'expired', error: err.code })
+        continue
+      }
+      // TOKEN_REVOKED auto-deletes the row inside skvRequest — treat it as
+      // the same quiet "reconnect needed" outcome, not a runtime error.
+      if (err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
         results.push({ userId, companyId, status: 'expired', error: err.code })
         continue
       }

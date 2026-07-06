@@ -2,7 +2,7 @@
  * Integration tests for the v1 salary-run lifecycle verbs (Phase 5 PR-2).
  *
  * Covers :calculate, :approve, :mark-paid, :book, :generate-agi. Each suite
- * focuses on the verb's contract — auth/scope, state-machine enforcement,
+ * focuses on the verb's contract: auth/scope, state-machine enforcement,
  * strict-mode (engine throws abort before state flip), period-lock pre-
  * check, audit block on :book, AGI gate, etc. The underlying lib helpers
  * (`runSalaryCalculation`, `createSalaryRunEntries`, `generateAgiDeclaration`)

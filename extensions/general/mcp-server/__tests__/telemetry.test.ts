@@ -23,13 +23,13 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     validateApiKey: vi.fn().mockResolvedValue({
       userId: 'user-1',
       companyId: 'company-1',
-      // Only reports:read — enough to call gnubok_get_trial_balance, NOT enough
+      // Only reports:read: enough to call gnubok_get_trial_balance, NOT enough
       // to call gnubok_create_invoice (invoices:write). Drives the scope-denied test.
       scopes: ['reports:read'],
       apiKeyId: 'key-1',
       apiKeyName: 'Test Key',
     }),
-    // Minimal supabase mock — agent_atom_registry resolves to empty so
+    // Minimal supabase mock: agent_atom_registry resolves to empty so
     // gnubok_list_skills happy-path doesn't crash on its registry query.
     // company_settings + employees are also handled so the applicability
     // filter has data to work against.
@@ -193,7 +193,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.userId).toBe('user-1')
     expect(event.companyId).toBe('company-1')
     expect(event.requestId).toBe(1)
-    // Real wall-clock — non-negative number
+    // Real wall-clock: non-negative number
     expect(typeof event.latencyMs).toBe('number')
     expect(event.latencyMs).toBeGreaterThanOrEqual(0)
   })
@@ -237,7 +237,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.isError).toBe(true)
     expect(event.errorKind).toBe('unknown_tool')
     expect(event.errorCode).toBe('UNKNOWN_TOOL')
-    // Short deterministic message — NOT the full available-tools list the
+    // Short deterministic message: NOT the full available-tools list the
     // client response carries (that would blow the truncation budget).
     expect(event.errorMessage).toBe('Unknown tool: "gnubok_does_not_exist"')
     expect(event.latencyMs).toBe(0)
@@ -246,7 +246,7 @@ describe('mcp.tool_called telemetry', () => {
   it('emits errorKind=execution when the tool throws inside execute()', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
-    // gnubok_load_skill throws on unknown slug — clean way to force an
+    // gnubok_load_skill throws on unknown slug: clean way to force an
     // execution error without mocking Supabase.
     await handleMcpRequest(
       mcpRequest('tools/call', {
@@ -262,7 +262,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.errorKind).toBe('execution')
     expect(event.errorCode).toBeTruthy()
     // The structured error's human message is captured and bounded at 500
-    // chars — the raw material for clustering execution failures into gotchas.
+    // chars: the raw material for clustering execution failures into gotchas.
     expect(typeof event.errorMessage).toBe('string')
     expect((event.errorMessage as string).length).toBeGreaterThan(0)
     expect((event.errorMessage as string).length).toBeLessThanOrEqual(500)
@@ -270,7 +270,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.latencyMs).toBeGreaterThanOrEqual(0)
   })
 
-  it('does NOT block the JSON-RPC response on telemetry — even if a handler throws', async () => {
+  it('does NOT block the JSON-RPC response on telemetry: even if a handler throws', async () => {
     // Register a handler that throws synchronously. The bus already isolates
     // failures via Promise.allSettled, so the response should still arrive.
     eventBus.on('mcp.tool_called', () => {
@@ -386,7 +386,7 @@ describe('mcp.tools_list_called telemetry', () => {
     await handleMcpRequest(mcpRequest('tools/list'))
 
     const event = await eventPromise
-    // Caller has only reports:read — tools requiring other scopes are filtered out,
+    // Caller has only reports:read: tools requiring other scopes are filtered out,
     // but unscoped tools (search_tools, list_skills, load_skill) and reports:read
     // tools are present. Just sanity-check the count is positive and bounded.
     expect(event.toolCount).toBeGreaterThan(0)
@@ -469,7 +469,7 @@ describe('mcp.skill_loaded telemetry', () => {
     eventBus.clear()
   })
 
-  it('emits on every successful load — alongside mcp.workflow_started for workflow tier', async () => {
+  it('emits on every successful load: alongside mcp.workflow_started for workflow tier', async () => {
     const skillLoadedPromise = new Promise<Record<string, unknown>>((resolve) => {
       const off = eventBus.on('mcp.skill_loaded', (payload) => {
         off()
@@ -515,7 +515,7 @@ describe('mcp.skill_loaded telemetry', () => {
         arguments: { slug: 'nope-not-real' },
       })
     )
-    // Flush microtasks — emission is fire-and-forget.
+    // Flush microtasks: emission is fire-and-forget.
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(seen).toHaveLength(0)
@@ -524,7 +524,7 @@ describe('mcp.skill_loaded telemetry', () => {
 
 describe('event_log persistence registration', () => {
   it('includes all MCP telemetry events in the persisted event types', async () => {
-    // Read the file as text — the constant is module-private. This is a
+    // Read the file as text: the constant is module-private. This is a
     // deliberate string-level guard so a future refactor that drops one
     // of the events from the list trips the test.
     const fs = await import('node:fs/promises')

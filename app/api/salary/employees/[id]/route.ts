@@ -89,7 +89,7 @@ export async function PATCH(
 
   // Only when the caller is changing employment_type: block setting an EF's
   // owner/board on payroll (mirrors the enforce_ef_no_owner_employee trigger,
-  // which fires on UPDATE OF employment_type — so unrelated edits to any
+  // which fires on UPDATE OF employment_type: so unrelated edits to any
   // grandfathered row aren't blocked). #782
   if (body.employment_type !== undefined) {
     const entityType = await getCompanyEntityType(supabase, companyId)
@@ -148,7 +148,7 @@ export async function DELETE(
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // Soft delete only — BFL 7 kap retention
+  // Soft delete only, BFL 7 kap retention
   const { data, error } = await supabase
     .from('employees')
     .update({ is_active: false })

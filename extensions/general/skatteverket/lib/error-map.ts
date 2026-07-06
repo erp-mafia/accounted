@@ -13,8 +13,8 @@ export interface StructuredSkvError {
  * and the MCP tools (extensions/general/mcp-server/server.ts) so connection
  * failures surface one consistent reconnect remediation everywhere.
  *
- * Every auth code is recoverable in the commit sense — the op is fine, the
- * connection/scope/quota isn't — so callers reconnect (or wait) and retry the
+ * Every auth code is recoverable in the commit sense (the op is fine, the
+ * connection/scope/quota isn't), so callers reconnect (or wait) and retry the
  * same operation. The three buckets collapse the nine raw SKV codes onto the
  * remediation that actually differs: reconnect with BankID, fix authorisation
  * at SKV, or back off.

@@ -1,20 +1,10 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.journal_entry.chain',
+  async (_request, { supabase, companyId }, { params }) => {
   const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   // Fetch the requested entry with lines
   const { data: entry, error } = await supabase
@@ -127,4 +117,5 @@ export async function GET(
   }
 
   return NextResponse.json({ data: { entry, chain, is_last_in_series: isLastInSeries } })
-}
+  },
+)
