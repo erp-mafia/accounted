@@ -19,6 +19,7 @@ import { parseExpand } from '@/lib/api/v1/expand'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 
 // Allowed PATCH fields for a draft invoice. Excludes items (separate
@@ -58,17 +59,14 @@ const InvoiceDetail = z.object({
 
 const ALLOWED_EXPAND = ['items', 'payments'] as const
 
-// Explicit projections. Detail endpoint is more verbose than list: includes
-// VAT treatment, conversion, FX, and notes, but still drops user_id and
-// company_id (internal scoping).
-const INVOICE_DETAIL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
+// Explicit projections, shared with the create route so create/detail/patch
+// responses never drift.
+const INVOICE_DETAIL_COLUMNS = INVOICE_FULL_COLUMNS
 
 const CUSTOMER_DETAIL_COLUMNS =
   'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
-const INVOICE_ITEM_COLUMNS =
-  'id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, created_at'
+const INVOICE_ITEM_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 
 // Payment projection: drops invoice_id (redundant on the parent), user_id,
 // company_id (internal scoping).
@@ -219,8 +217,7 @@ registerEndpoint({
   response: { success: dataEnvelope(InvoiceDetail) },
 })
 
-const INVOICE_PATCH_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+const INVOICE_PATCH_RESPONSE_COLUMNS = INVOICE_FULL_COLUMNS
 
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'invoices.update',

@@ -27,6 +27,7 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
+import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { eventBus } from '@/lib/events'
 import type { Customer, Invoice, InvoiceDocumentType } from '@/types'
@@ -294,13 +295,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 // POST: create draft invoice (or proforma / delivery_note)
 // ──────────────────────────────────────────────────────────────────
 
-// Response projection on create: same shape as the detail endpoint.
-// Drop user_id, company_id (internal scoping).
-const INVOICE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
-
-const INVOICE_ITEMS_RESPONSE_COLUMNS =
-  'id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, created_at'
+// Response projection on create: same shape as the detail endpoint
+// (shared module so create/detail/patch never drift).
+const INVOICE_RESPONSE_COLUMNS = INVOICE_FULL_COLUMNS
+const INVOICE_ITEMS_RESPONSE_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 
 // Loose response schema: invoices have many fields; pinning every one in
 // the registry is overkill until we have a real schema-drift test.
@@ -415,11 +413,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const input = parsed.data
     const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
-    // Customer fetch (scoped to company). Determines VAT rules and the set
-    // of allowed per-item rates.
+    // Customer fetch (scoped to company). The builder only reads
+    // customer_type + vat_number_validated (VAT rules / allowed rates);
+    // select exactly those instead of '*' to keep PII out of this path.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('*')
+      .select('id, customer_type, vat_number_validated')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -443,7 +442,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const build = await buildInvoiceWriteData({
       supabase: ctx.supabase,
       companyId: ctx.companyId!,
-      customer: customer as Customer,
+      // Narrow projection above; the builder only touches these two fields.
+      customer: customer as unknown as Customer,
       documentType,
       input,
     })
