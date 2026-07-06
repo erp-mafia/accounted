@@ -105,11 +105,20 @@ async function fetchPotentialMatches(
   const [invoiceResult, supplierInvoiceResult] = await Promise.all([
     potentialInvoiceIds.length > 0
       ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
     potentialSupplierInvoiceIds.length > 0
       ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
   ])
+
+  // Non-fatal: the transaction list still renders without match hints, but
+  // log so a DB failure isn't mistaken for "no potential match".
+  if (invoiceResult.error) {
+    console.error('[fetchPotentialMatches] invoices query failed', invoiceResult.error)
+  }
+  if (supplierInvoiceResult.error) {
+    console.error('[fetchPotentialMatches] supplier_invoices query failed', supplierInvoiceResult.error)
+  }
 
   return {
     invoiceMap: buildInvoiceMap(invoiceResult.data),
