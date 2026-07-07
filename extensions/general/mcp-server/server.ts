@@ -31,6 +31,7 @@ import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
+import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import type { SkillTier } from './skills'
@@ -2298,6 +2299,33 @@ export const tools: McpTool[] = [
           },
           required: ['enabled', 'dimensions'],
         },
+        ledger_context: {
+          type: 'object',
+          additionalProperties: false,
+          description: 'Digest of how this company books things. Top-5 counterparty patterns only; read the Accounted://ledger/context resource for the full picture (account usage, explicit rules, VAT profile, conventions). OMITTED if the digest cannot be computed.',
+          properties: {
+            resource_uri: { type: 'string', description: 'URI of the full ledger-context resource.' },
+            window_from: { type: 'string', description: 'Start of the rolling stats window (ISO date).' },
+            posted_entries_window: { type: 'number', description: 'Posted journal entries inside the window. Low numbers mean thin evidence: treat patterns as weak.' },
+            top_counterparty_patterns: {
+              type: 'array',
+              description: 'Most frequent booked counterparties with their dominant booking. share is the fraction of bookings agreeing with the dominant; patterns below 0.7 are excluded as noise.',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  counterparty: { type: 'string' },
+                  occurrences_12m: { type: 'number' },
+                  dominant_category: { type: 'string' },
+                  dominant_account_number: { type: ['string', 'null'] },
+                  share: { type: 'number' },
+                },
+                required: ['counterparty', 'occurrences_12m', 'dominant_category', 'dominant_account_number', 'share'],
+              },
+            },
+          },
+          required: ['resource_uri', 'window_from', 'posted_entries_window', 'top_counterparty_patterns'],
+        },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory'],
     },
@@ -2323,6 +2351,29 @@ export const tools: McpTool[] = [
             .order('sie_dim_no', { ascending: true })
         } catch {
           return { data: null, error: new Error('dimensions read failed') }
+        }
+      })()
+
+      // Ledger-context digest is best-effort: a stats failure (e.g. RPC not
+      // yet applied on a self-hosted install) omits the block, never blocks
+      // the briefing.
+      const safeLedgerDigest = (async () => {
+        try {
+          const ctx = await buildLedgerContext(supabase, companyId)
+          return {
+            resource_uri: 'Accounted://ledger/context',
+            window_from: ctx.meta.window.from,
+            posted_entries_window: ctx.meta.coverage.posted_entries_window,
+            top_counterparty_patterns: ctx.counterparty_patterns.slice(0, 5).map((p) => ({
+              counterparty: p.counterparty,
+              occurrences_12m: p.occurrences_12m,
+              dominant_category: p.dominant.category,
+              dominant_account_number: p.dominant.account_number,
+              share: p.dominant.share,
+            })),
+          }
+        } catch {
+          return null
         }
       })()
 
@@ -2517,6 +2568,8 @@ export const tools: McpTool[] = [
         }))
       }
 
+      const ledgerDigest = await safeLedgerDigest
+
       return {
         company,
         user_name: userName,
@@ -2530,6 +2583,7 @@ export const tools: McpTool[] = [
           relevance_score: m.relevance_score,
         })),
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
+        ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
       }
     },
   },

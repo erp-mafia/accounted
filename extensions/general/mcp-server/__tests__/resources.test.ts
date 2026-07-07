@@ -3,13 +3,14 @@ import { dataResources, findResource, parseResourceQuery } from '../resources'
 
 describe('mcp resource registry', () => {
   it('exposes all data resources with required fields', () => {
-    expect(dataResources).toHaveLength(7)
+    expect(dataResources).toHaveLength(8)
     const uris = dataResources.map((r) => r.uri).sort()
     expect(uris).toEqual([
       'Accounted://attention',
       'Accounted://capabilities',
       'Accounted://chart-of-accounts',
       'Accounted://company/current',
+      'Accounted://ledger/context',
       'Accounted://period/active',
       'Accounted://recent-activity',
       'Accounted://settings/vat-treatments',
