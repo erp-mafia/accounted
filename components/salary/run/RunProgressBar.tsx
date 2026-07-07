@@ -135,18 +135,21 @@ export function RunProgressBar(props: RunProgressBarProps) {
   // download alternative right next to it stays free.
   const payslipActions = payslipsAvailable && canWrite && (
     <>
-      <Button
-        size="sm"
-        variant={deliveries && deliveries.sent > 0 ? 'outline' : 'default'}
-        onClick={props.onSendPayslips}
-        disabled={busy || !hasEmailSend}
-        title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}
-      >
-        {spinnerOr(<Send className="mr-2 h-4 w-4" />, 'payslips-send')}
-        {deliveries && deliveries.sent > 0
-          ? t('action_send_payslips_again')
-          : t('action_send_payslips')}
-      </Button>
+      {/* The span carries the tooltip: browsers suppress `title` on
+          disabled elements, and hover events don't fire on them. */}
+      <span title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}>
+        <Button
+          size="sm"
+          variant={deliveries && deliveries.sent > 0 ? 'outline' : 'default'}
+          onClick={props.onSendPayslips}
+          disabled={busy || !hasEmailSend}
+        >
+          {spinnerOr(<Send className="mr-2 h-4 w-4" />, 'payslips-send')}
+          {deliveries && deliveries.sent > 0
+            ? t('action_send_payslips_again')
+            : t('action_send_payslips')}
+        </Button>
+      </span>
       <Button variant="ghost" size="sm" onClick={props.onDownloadPayslips} disabled={busy}>
         {spinnerOr(<FileDown className="mr-2 h-4 w-4" />, 'bulk_payslip')}
         {t('action_download_payslips')}

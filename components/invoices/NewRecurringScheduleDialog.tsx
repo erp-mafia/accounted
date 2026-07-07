@@ -395,8 +395,7 @@ function NewRecurringScheduleForm({
                 )}
                 {!hasEmailSend && (
                   <UpgradeNote className="mt-2">
-                    Automatiskt utskick kräver ett abonnemang. Fakturorna skapas
-                    ändå som utkast varje period.
+                    {t('auto_send_requires_subscription')}
                   </UpgradeNote>
                 )}
               </div>

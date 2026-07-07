@@ -308,14 +308,13 @@ export default function SkattekontoPage() {
     <div className="space-y-6">
       <PageHeading
         right={
-          <Button
-            onClick={syncNow}
-            disabled={syncing || !hasSkvCapability}
-            title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
-          </Button>
+          // The span carries the tooltip: `title` is suppressed on disabled elements.
+          <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+            <Button onClick={syncNow} disabled={syncing || !hasSkvCapability}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+            </Button>
+          </span>
         }
       />
 

@@ -162,6 +162,10 @@ export default function AgentChat({
     const hasResumeState = !!initialConversationId
     if (hasResumeState) return
 
+    // Paywall: never auto-fire the first invoke without the ai capability;
+    // the composer is already replaced by the upgrade note.
+    if (!hasAi) return
+
     // Seed-message path: render the user's pre-baked starter in the timeline
     // and send it as the first turn's user_message (skips intent.capture +
     // promptTemplate). Empty seed runs the normal capture-driven flow.
@@ -343,6 +347,7 @@ export default function AgentChat({
   }
 
   function handleRegenerate() {
+    if (!hasAi) return
     // Re-run the last user message and let the agent produce a fresh
     // response. UI truncates back to the last user message; DB rows are
     // append-only, so the previous assistant turn stays in agent_messages
@@ -365,6 +370,7 @@ export default function AgentChat({
   // user turn so the agent re-proposes inline: no synthetic user bubble (we
   // don't add a user row, and the turn is persisted hidden).
   function handleCorrection(correctionMessage: string) {
+    if (!hasAi) return
     void startTurn({ conversationId, userMessage: correctionMessage, hidden: true })
   }
 
@@ -553,6 +559,7 @@ export default function AgentChat({
               streamingTail={streaming && i === messages.length - 1}
               showRegenerate={
                 !streaming &&
+                hasAi &&
                 i === lastAssistantIdx &&
                 m.role === 'assistant' &&
                 m.text.length > 0

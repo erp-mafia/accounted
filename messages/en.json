@@ -2754,6 +2754,7 @@
     "validation_min_one_row": "At least one row required",
     "send_hour_label": "Send at",
     "send_hour_hint": "Swedish time",
+    "auto_send_requires_subscription": "Automatic sending requires a subscription. Invoices are still created as drafts each period.",
     "auto_send_missing_email": "The customer has no email address. Add one to the customer to enable automatic sending."
   },
   "invoice_send_dialog": {
