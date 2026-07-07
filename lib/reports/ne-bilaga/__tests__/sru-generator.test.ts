@@ -106,8 +106,11 @@ describe('NE-bilaga SRU generator', () => {
 
     it('does not use the old (wrong) 73xx field codes', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      expect(blanketterSru).not.toContain('7310')
-      expect(blanketterSru).not.toContain('7350')
+      // Match the full #UPPGIFT prefix, not a bare substring: the #SKAPAD
+      // HHMMSS timestamp contains "7310"/"7350" when the clock reads
+      // 07:31:0x / 07:35:0x, which made this assertion time-of-day flaky.
+      expect(blanketterSru).not.toContain('#UPPGIFT 7310')
+      expect(blanketterSru).not.toContain('#UPPGIFT 7350')
       expect(blanketterSru).not.toContain('#UPPGIFT 7000')
     })
 
