@@ -1353,18 +1353,8 @@ function OnboardingCard({
         </div>
         <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
           Underlagen samlas här (från mail eller filuppladdning) och kan
-          matchas mot bankhändelser eller bokföras direkt.
-        </p>
-        <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
-          Gratis under beta för Open-användare. Ingår senare i Pro-planen.{' '}
-          <a
-            href="https://www.gnubok.se/priser"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            Se priser →
-          </a>
+          matchas mot bankhändelser eller bokföras direkt. Inkorgen är alltid
+          gratis; AI-tolkning av underlag ingår i abonnemanget.
         </p>
       </div>
 

@@ -25,7 +25,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Customer, Currency, RecurringInvoiceSchedule } from '@/types'
 import { formatCurrency } from '@/lib/utils'
@@ -215,15 +217,18 @@ function NewRecurringScheduleForm({
   const watchCustomerId = watch('customer_id')
   const selectedCustomer = customers.find((c) => c.id === watchCustomerId)
   const customerMissingEmail = !!selectedCustomer && !selectedCustomer.email
+  const hasEmailSend = useCapability(CAPABILITY.email_send)
+  const autoSendBlocked = customerMissingEmail || !hasEmailSend
 
   // The onValueChange guard on the customer select only fires on a manual
   // change. In edit mode a schedule can load with auto_send=true against a
   // customer who has since lost their email (customers load async, after the
   // form's defaultValues). Force auto_send off whenever the effective customer
-  // has no email so a disabled-but-checked box can't PATCH auto_send=true.
+  // has no email (or email sending isn't entitled) so a disabled-but-checked
+  // box can't PATCH auto_send=true.
   useEffect(() => {
-    if (customerMissingEmail) setValue('auto_send', false)
-  }, [customerMissingEmail, setValue])
+    if (autoSendBlocked) setValue('auto_send', false)
+  }, [autoSendBlocked, setValue])
   const subtotalRaw = items.reduce(
     (sum, it) => sum + (it.quantity || 0) * (it.unit_price || 0),
     0,
@@ -371,7 +376,7 @@ function NewRecurringScheduleForm({
                     id="auto_send"
                     checked={field.value}
                     onChange={(e) => field.onChange(e.target.checked)}
-                    disabled={customerMissingEmail}
+                    disabled={autoSendBlocked}
                     className="mt-1 h-4 w-4"
                   />
                 )}
@@ -387,6 +392,12 @@ function NewRecurringScheduleForm({
                   <p className="text-sm text-warning-foreground mt-1">
                     {t('auto_send_missing_email')}
                   </p>
+                )}
+                {!hasEmailSend && (
+                  <UpgradeNote className="mt-2">
+                    Automatiskt utskick kräver ett abonnemang. Fakturorna skapas
+                    ändå som utkast varje period.
+                  </UpgradeNote>
                 )}
               </div>
             </div>

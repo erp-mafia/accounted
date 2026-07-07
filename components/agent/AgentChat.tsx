@@ -15,6 +15,9 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
 
 // Reusable chat surface: used both inside the right-hand AgentSheet and on
@@ -123,6 +126,7 @@ export default function AgentChat({
   const firstTurnFiredRef = useRef(false)
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
+  const hasAi = useCapability(CAPABILITY.ai)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -566,6 +570,14 @@ export default function AgentChat({
         )}
       </div>
 
+      {/* Paywall: /api/agent/invoke 403s without the ai capability. Replace
+          the composer with an upsell so an already-open conversation (or a
+          deep link to /chat/*) never offers an input that can't send. */}
+      {!hasAi ? (
+        <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+          <UpgradeNote>AI-assistenten kräver ett abonnemang.</UpgradeNote>
+        </div>
+      ) : (
       <form
         // padding-bottom = base 1rem + safe-area-inset-bottom on phones so
         // the iOS home indicator / Android gesture bar doesn't overlap the
@@ -619,6 +631,7 @@ export default function AgentChat({
           Enter att skicka · Shift+Enter för ny rad
         </p>
       </form>
+      )}
     </div>
   )
 }

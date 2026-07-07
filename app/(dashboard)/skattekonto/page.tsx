@@ -27,6 +27,8 @@ import {
   Link2,
   RefreshCw,
 } from 'lucide-react'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import type {
   SkatteverketSaldoResponse,
   SkattekontoTransactionWithSuggestion,
@@ -60,6 +62,7 @@ interface MatchCandidate {
 
 export default function SkattekontoPage() {
   const { toast } = useToast()
+  const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -305,7 +308,11 @@ export default function SkattekontoPage() {
     <div className="space-y-6">
       <PageHeading
         right={
-          <Button onClick={syncNow} disabled={syncing}>
+          <Button
+            onClick={syncNow}
+            disabled={syncing || !hasSkvCapability}
+            title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}
+          >
             <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
           </Button>

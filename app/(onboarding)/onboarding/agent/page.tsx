@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import AgentOnboarding from '@/components/onboarding/agent/AgentOnboarding'
 
@@ -20,6 +22,13 @@ export default async function AgentOnboardingPage() {
 
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
+
+  // Paywall: the build flow drives the gated composer stream (ai capability).
+  // Send non-payers to billing where the assistant is pitched, instead of a
+  // build sequence that 403s mid-stream.
+  if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) {
+    redirect('/settings/billing')
+  }
 
   // Everything that doesn't depend on the TIC snapshot loads in one batch:
   // the settings row (carrying the is_sandbox gate + the onboarding-form

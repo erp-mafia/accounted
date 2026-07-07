@@ -4546,6 +4546,7 @@
     "action_continue": "Fortsätt",
     "action_book": "Bokför",
     "action_send_payslips": "Skicka lönebesked",
+    "payslips_send_requires_subscription": "Utskick av lönebesked via e-post kräver ett abonnemang. Ladda ner PDF:erna gratis.",
     "action_send_payslips_again": "Skicka igen",
     "action_download_payslips": "Ladda ner alla",
     "action_download_agi": "Ladda ner AGI-fil (XML)",
