@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/badge'
 import { cn, formatCurrency } from '@/lib/utils'
 import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
 import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import {
@@ -51,6 +53,7 @@ interface DashboardContentProps {
 
 export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
   const t = useTranslations('dashboard')
+  const hasAi = useCapability(CAPABILITY.ai)
 
   // The setup gate exists to nudge brand-new users into a data-import step
   // before they hit the dashboard. Once the assistant is built we treat the
@@ -121,7 +124,9 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
           has a single CTA surface instead of two that point at the same work. */}
       {!agentBuilt && (
         <section>
-          <Link href="/onboarding/agent" className="block group">
+          {/* Non-payers keep seeing the hero (conversion surface) but it
+              routes to billing instead of a build flow that would 403. */}
+          <Link href={hasAi ? '/onboarding/agent' : '/settings/billing'} className="block group">
             <Card className="transition-colors hover:border-primary/50">
               <CardContent className="p-6 flex items-center gap-4">
                 <div className="flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center bg-foreground text-background">
@@ -133,11 +138,13 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
                     <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.
+                    {hasAi
+                      ? 'Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.'
+                      : 'Ingår i abonnemanget: en assistent som föreslår bokföring åt dig.'}
                   </p>
                 </div>
                 <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                  <span>Kom igång</span>
+                  <span>{hasAi ? 'Kom igång' : 'Uppgradera'}</span>
                   <ArrowRight className="h-4 w-4" />
                 </div>
               </CardContent>

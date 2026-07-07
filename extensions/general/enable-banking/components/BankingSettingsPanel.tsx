@@ -9,7 +9,9 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { AlertTriangle, Loader2, Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
 import { AccountPickerDialog } from './AccountPickerDialog'
@@ -26,6 +28,7 @@ export default function BankingSettingsPanel() {
 
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { company } = useCompany()
+  const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
   const [bankConnections, setBankConnections] = useState<BankConnection[]>([])
   const [syncingConnectionId, setSyncingConnectionId] = useState<string | null>(null)
@@ -464,7 +467,9 @@ export default function BankingSettingsPanel() {
         </Card>
       )}
 
-      {/* Connect new bank */}
+      {/* Connect new bank. Non-payers keep seeing the card (conversion
+          surface) but the bank list is replaced by an upgrade note: the
+          server gate would 403 the connect anyway. */}
       <Card>
         <CardHeader>
           <CardTitle>Anslut ny bank</CardTitle>
@@ -472,6 +477,14 @@ export default function BankingSettingsPanel() {
             Välj din bank nedan för att koppla ditt konto via PSD2.
           </CardDescription>
         </CardHeader>
+        {!hasBankSync ? (
+          <CardContent>
+            <UpgradeNote>
+              Automatisk banksynk kräver ett abonnemang. Du kan fortfarande importera
+              transaktioner manuellt via bankfiler på importsidan.
+            </UpgradeNote>
+          </CardContent>
+        ) : (
         <CardContent className="space-y-4">
           {/* Account type selector */}
           <div className="flex items-center gap-3">
@@ -515,6 +528,7 @@ export default function BankingSettingsPanel() {
             connectingBankName={connectingBankName}
           />
         </CardContent>
+        )}
       </Card>
 
       {/* Info about PSD2 */}

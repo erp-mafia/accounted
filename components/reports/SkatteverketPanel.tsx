@@ -29,6 +29,9 @@ import {
 } from '@/lib/reports/vat-declaration-checks'
 import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { formatDate } from '@/lib/utils'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 
 interface SkatteverketStatus {
   connected: boolean
@@ -88,6 +91,7 @@ export function SkatteverketPanel(props: SkatteverketPanelProps) {
 }
 
 function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: SkatteverketPanelProps) {
+  const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -512,6 +516,33 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         <CardContent className="p-6 flex items-center gap-2 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Kontrollerar Skatteverket-anslutning...
+        </CardContent>
+      </Card>
+    )
+  }
+
+  // Paywall: direct API submission is the paid convenience; manual filing at
+  // skatteverket.se stays free and is described in the card above this panel.
+  // Rendered BEFORE the connected check so a company that connected during
+  // trial sees the upsell instead of action buttons that would 403.
+  if (!hasSkvCapability) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <FileCheck className="h-5 w-5" />
+            Skicka direkt till Skatteverket (valfritt)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Deklarationen är redan klar att lämnas in manuellt hos Skatteverket
+            (se ovan). Med ett abonnemang kan du ansluta med BankID och skicka
+            den direkt härifrån, samt validera, spara utkast och signera.
+          </p>
+          <UpgradeNote>
+            Direktinlämning till Skatteverket kräver ett abonnemang.
+          </UpgradeNote>
         </CardContent>
       </Card>
     )

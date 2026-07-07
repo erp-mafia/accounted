@@ -5002,6 +5002,7 @@
     "back_to_choices": "Tillbaka till val",
     "psd2_title": "Koppla bank",
     "psd2_recommended": "Rekommenderat",
+    "psd2_requires_subscription": "Kräver abonnemang",
     "psd2_description": "Anslut ditt bankkonto direkt och synka transaktioner automatiskt via PSD2.",
     "migration_title": "Hämta från annat system",
     "migration_description": "Inget ändras i ditt befintliga system.",

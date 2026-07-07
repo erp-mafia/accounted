@@ -5002,6 +5002,7 @@
     "back_to_choices": "Back to choices",
     "psd2_title": "Connect bank",
     "psd2_recommended": "Recommended",
+    "psd2_requires_subscription": "Requires subscription",
     "psd2_description": "Connect your bank account directly and sync transactions automatically via PSD2.",
     "migration_title": "Import from another system",
     "migration_description": "Nothing changes in your existing system.",

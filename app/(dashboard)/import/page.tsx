@@ -12,7 +12,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { BankSelector, type Bank } from '@/extensions/general/enable-banking/components/BankSelector'
 import { BankConnectionStatus } from '@/extensions/general/enable-banking/components/BankConnectionStatus'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -1910,6 +1912,7 @@ function PSD2ConnectWizard() {
   const supabase = createClient()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { company } = useCompany()
+  const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
   const [bankConnections, setBankConnections] = useState<BankConnection[]>([])
   const [syncingConnectionId, setSyncingConnectionId] = useState<string | null>(null)
@@ -2069,7 +2072,8 @@ function PSD2ConnectWizard() {
         </Card>
       )}
 
-      {/* Connect new bank */}
+      {/* Connect new bank. Non-payers see the card but the bank list is
+          replaced by an upgrade note: the server gate would 403 the connect. */}
       <Card>
         <CardHeader>
           <CardTitle>Anslut din bank</CardTitle>
@@ -2078,11 +2082,18 @@ function PSD2ConnectWizard() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <BankSelector
-            onConnect={handleConnectBank}
-            isConnecting={isConnecting}
-            connectingBankName={connectingBankName}
-          />
+          {!hasBankSync ? (
+            <UpgradeNote>
+              Automatisk banksynk kräver ett abonnemang. Du kan fortfarande importera
+              transaktioner manuellt via bankfiler nedan.
+            </UpgradeNote>
+          ) : (
+            <BankSelector
+              onConnect={handleConnectBank}
+              isConnecting={isConnecting}
+              connectingBankName={connectingBankName}
+            />
+          )}
         </CardContent>
       </Card>
     </div>
@@ -2106,6 +2117,7 @@ export default function ImportPage() {
   const t = useTranslations('import')
   const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
+  const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
   // Fetch authenticated user ID and sandbox status
   useEffect(() => {
@@ -2225,9 +2237,15 @@ export default function ImportPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2.5">
                     <h3 className="text-[15px] font-semibold leading-tight">{t('psd2_title')}</h3>
-                    <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-full leading-none">
-                      {t('psd2_recommended')}
-                    </span>
+                    {hasBankSync ? (
+                      <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-full leading-none">
+                        {t('psd2_recommended')}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-medium text-muted-foreground bg-secondary px-2 py-0.5 rounded-full leading-none">
+                        {t('psd2_requires_subscription')}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
                     {t('psd2_description')}

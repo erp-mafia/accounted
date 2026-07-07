@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getBranding } from '@/lib/branding/service'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 const branding = getBranding()
 
@@ -46,6 +48,7 @@ export default function NewUserChecklist({
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket')
+  const hasAi = useCapability(CAPABILITY.ai)
 
   return (
     <div className={cn('min-h-[75vh] flex flex-col items-center justify-center px-4 sm:px-0 stagger-enter', className)}>
@@ -304,7 +307,7 @@ export default function NewUserChecklist({
               </div>
             ) : (
               <Link
-                href="/onboarding/agent"
+                href={hasAi ? '/onboarding/agent' : '/settings/billing'}
                 className="group block p-4 sm:p-6 rounded-lg border border-border hover:border-primary/40 hover:bg-primary/[0.02] transition-colors duration-150"
               >
                 <div className="flex items-start gap-3 sm:gap-4">
@@ -316,10 +319,14 @@ export default function NewUserChecklist({
                       <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
                         Bygg din bokföringsassistent
                       </p>
-                      <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
+                      <Badge variant="secondary" className="uppercase tracking-wider">
+                        {hasAi ? 'Beta' : 'Abonnemang'}
+                      </Badge>
                     </div>
                     <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-2 leading-relaxed">
-                      Några frågor om din verksamhet kalibrerar tonalitet, signatur och vad assistenten kan. Ju mer du delar, desto bättre förstår den dig.
+                      {hasAi
+                        ? 'Några frågor om din verksamhet kalibrerar tonalitet, signatur och vad assistenten kan. Ju mer du delar, desto bättre förstår den dig.'
+                        : 'Ingår i abonnemanget: en assistent som föreslår bokföring åt dig. Uppgradera för att komma igång.'}
                     </p>
                   </div>
                   <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary/60 mt-1 flex-shrink-0 transition-colors" />

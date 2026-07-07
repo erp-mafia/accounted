@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
 
 type Environment = 'test' | 'prod'
@@ -118,18 +119,17 @@ export function SkatteverketConnectPanel() {
           <p className="text-sm text-muted-foreground">
             {t('connect_intro')}
           </p>
-          <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-            {t.rich('skahmst_note', {
-              code: (chunks) => <span className="font-mono">{chunks}</span>,
-            })}
-          </div>
-          {!hasSkatteverket && (
-            <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground">
-              Anslutning till Skatteverket kräver ett abonnemang.{' '}
-              <a href="/settings/billing" className="underline underline-offset-2">
-                Uppgradera
-              </a>
+          {/* The skahmst consent-page note only matters when the user can
+              actually reach that page: hidden while the feature is gated. */}
+          {hasSkatteverket && (
+            <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+              {t.rich('skahmst_note', {
+                code: (chunks) => <span className="font-mono">{chunks}</span>,
+              })}
             </div>
+          )}
+          {!hasSkatteverket && (
+            <UpgradeNote>Anslutning till Skatteverket kräver ett abonnemang.</UpgradeNote>
           )}
           <Button
             onClick={startConnect}
