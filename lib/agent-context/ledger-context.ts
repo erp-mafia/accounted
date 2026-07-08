@@ -195,6 +195,23 @@ export async function buildLedgerContext(
   if (statsRes.error) {
     throw new Error(`ledger usage stats failed: ${statsRes.error.message}`)
   }
+  // Secondary reads also fail loud: silently mapping a failed read to [] would
+  // make "explicit_rules: []" claim the company has no rules when the truth is
+  // "read failed". The briefing digest wraps this call in try/catch and omits
+  // the stanza; the resource surfaces the error instead of lying.
+  const secondary: Array<[string, { error: { message: string } | null }]> = [
+    ['company_settings', settingsRes],
+    ['mapping_rules', rulesRes],
+    ['categorization_templates', templatesRes],
+    ['journal_entries count', entryCountRes],
+    ['voucher_sequences', voucherSeriesRes],
+    ['salary_runs count', salaryRes],
+  ]
+  for (const [label, res] of secondary) {
+    if (res.error) {
+      throw new Error(`ledger context read failed (${label}): ${res.error.message}`)
+    }
+  }
   const stats = (statsRes.data ?? {
     account_usage: [],
     counterparty_patterns: [],

@@ -265,6 +265,15 @@ describe('get_ledger_usage_stats', () => {
       { account: '1930', debit: 300, credit: 0 },
       { account: '4010', debit: 0, credit: 300 },
     ])
+    // Legacy shape: a transaction still linked to the storno entry (predates
+    // reverseEntry() unlinking). Must not create a counterparty pattern.
+    await insertBookedTransaction({
+      companyId, userId,
+      journalEntryId: stornoId,
+      merchantName: 'STORNO VENDOR',
+      category: 'expense_other',
+      date: '2026-06-15',
+    })
 
     // Draft entry: must not appear in account_usage.
     const draftId = await insertDraftJournalEntry({
@@ -356,6 +365,12 @@ describe('get_ledger_usage_stats', () => {
     // Out-of-window merchant absent.
     expect(
       stats.counterparty_patterns.find((p) => p.counterparty === 'OLD VENDOR'),
+    ).toBeUndefined()
+
+    // A transaction still linked to a storno entry (legacy rows predating the
+    // reverseEntry unlink) must not surface as a pattern.
+    expect(
+      stats.counterparty_patterns.find((p) => p.counterparty === 'STORNO VENDOR'),
     ).toBeUndefined()
   })
 

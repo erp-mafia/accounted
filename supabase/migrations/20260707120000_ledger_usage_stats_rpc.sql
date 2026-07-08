@@ -26,16 +26,14 @@
 -- get_account_usage_counts, which includes drafts because it answers a
 -- deletion-safety question.)
 --
--- Storno handling differs per section, and deliberately so:
---   - account_usage excludes source_type = 'storno': the storno's swapped
---     lines repeat the exact accounts of the entry they annul, so counting
---     them inflates the account a human corrected AWAY from (the reversed
---     original is already excluded by status). Corrections stay: their lines
---     carry the corrected truth.
---   - counterparty_patterns has NO source_type filter: correctEntry() relinks
---     transactions.journal_entry_id to the correction entry (the live
---     representation) and reverseEntry() unlinks it, so the transaction join
---     self-heals. Excluding 'correction' here would drop exactly the booking
+-- Storno handling, deliberately asymmetric:
+--   - Stornos are excluded everywhere (account_usage by their swapped lines
+--     re-inflating the account a human corrected AWAY from; the counterparty
+--     CTE defensively, for legacy rows linked before reverseEntry() started
+--     unlinking transactions).
+--   - Corrections are excluded NOWHERE: correctEntry() relinks
+--     transactions.journal_entry_id to the correction entry, making it the
+--     live booking. Excluding 'correction' would drop exactly the booking
 --     the human fixed.
 --
 -- Counterparties are keyed on normalize_counterparty_key(), the SQL mirror of
@@ -185,6 +183,11 @@ AS $$
         WHERE t.company_id = p_company_id
           AND t.journal_entry_id IS NOT NULL
           AND je.status = 'posted'
+          -- Defensive: no code path should link a transaction to a storno
+          -- (correctEntry relinks to the correction, reverseEntry unlinks),
+          -- but legacy rows may predate the unlink behavior. Corrections are
+          -- deliberately NOT excluded: they are the live booking.
+          AND je.source_type <> 'storno'
           AND t.merchant_name IS NOT NULL
           AND trim(t.merchant_name) <> ''
           AND t.date >= p_from_date

@@ -191,6 +191,21 @@ describe('buildLedgerContext', () => {
     ).rejects.toThrow('ledger usage stats failed: boom')
   })
 
+  it('throws when a secondary read fails instead of reporting empty data', async () => {
+    mock.enqueueMany([
+      { data: emptyStats() },
+      { data: null },
+      { error: { message: 'rls denied' } },
+      { data: [] },
+      { count: 0 },
+      { data: [] },
+      { count: 0 },
+    ])
+    await expect(
+      buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW),
+    ).rejects.toThrow('ledger context read failed (mapping_rules): rls denied')
+  })
+
   it('stays under the 12 KB payload budget on a dense fixture', async () => {
     enqueueAll(mock, {
       stats: {
