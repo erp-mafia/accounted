@@ -13,9 +13,12 @@ const DOMINANT_SHARE_FLOOR = 0.7
 const WINDOW_MONTHS = 12
 
 // Hard caps keeping the serialized payload under its 12 KB budget even on
-// dense tenants (the RPC returns up to 20/25; these trim further).
-const MAX_COUNTERPARTY_PATTERNS = 20
-const MAX_EXPLICIT_RULES = 20
+// dense tenants (the RPC returns up to 20/25/15; these trim further). Sized
+// together: the evidence objects and the supplier section made the previous
+// 20/20 caps overflow the budget on a dense fixture.
+const MAX_COUNTERPARTY_PATTERNS = 15
+const MAX_SUPPLIER_PATTERNS = 10
+const MAX_EXPLICIT_RULES = 15
 
 export interface AccountUsage {
   account_number: string
@@ -24,17 +27,38 @@ export interface AccountUsage {
   last_used: string
 }
 
+/**
+ * Count-grounded evidence for a dominant pattern: "seen 47, agree 45" plus
+ * recency. Agents over-trust bare printed ratios (they read 0.96 as safety,
+ * not frequency), so the raw counts ride along and the digest description
+ * frames this as historical frequency, never as "safe to auto-post".
+ */
+export interface PatternEvidence {
+  seen_12m: number
+  agree: number
+  share: number
+  last_booked: string
+}
+
 export interface CounterpartyPattern {
   counterparty: string
-  occurrences_12m: number
   dominant: {
     category: string
     account_number: string | null
     vat_treatment: string | null
-    share: number
   }
+  evidence: PatternEvidence
   source: 'history' | 'template'
-  last_booked: string
+}
+
+export interface SupplierPattern {
+  supplier: string
+  dominant: {
+    account_number: string
+    vat_treatment: string | null
+  }
+  evidence: PatternEvidence
+  source: 'supplier_invoices'
 }
 
 export interface ExplicitRule {
@@ -53,6 +77,7 @@ export interface LedgerContext {
   }
   account_usage: AccountUsage[]
   counterparty_patterns: CounterpartyPattern[]
+  supplier_patterns: SupplierPattern[]
   explicit_rules: ExplicitRule[]
   vat_profile: {
     registered: boolean
@@ -76,11 +101,20 @@ interface UsageStatsRow {
   }>
   counterparty_patterns: Array<{
     counterparty: string
+    counterparty_key: string
     occurrences: number
     last_booked: string
     dominant_category: string | null
     dominant_category_count: number
     dominant_account_number: string | null
+  }>
+  supplier_patterns: Array<{
+    supplier: string
+    invoices: number
+    last_invoice: string
+    vat_treatment: string | null
+    dominant_account_number: string | null
+    dominant_account_count: number
   }>
   vat_treatments_used: string[]
   median_booking_lag_days: number | null
@@ -90,6 +124,10 @@ function windowFrom(now: Date): string {
   const from = new Date(now)
   from.setUTCMonth(from.getUTCMonth() - WINDOW_MONTHS)
   return from.toISOString().slice(0, 10)
+}
+
+function share(agree: number, seen: number): number {
+  return seen > 0 ? Math.round((agree / seen) * 100) / 100 : 0
 }
 
 export async function buildLedgerContext(
@@ -158,34 +196,63 @@ export async function buildLedgerContext(
   const stats = (statsRes.data ?? {
     account_usage: [],
     counterparty_patterns: [],
+    supplier_patterns: [],
     vat_treatments_used: [],
     median_booking_lag_days: null,
   }) as UsageStatsRow
 
   const settings = settingsRes.data
 
+  // categorization_templates.counterparty_name is stored normalized through
+  // normalizeCounterpartyName(); the RPC returns the identical key (its SQL
+  // mirror, normalize_counterparty_key), so this join is exact.
   const templateByKey = new Map(
-    (templatesRes.data ?? []).map((t) => [t.counterparty_name.toLowerCase().trim(), t]),
+    (templatesRes.data ?? []).map((t) => [t.counterparty_name, t]),
   )
 
   const counterpartyPatterns: CounterpartyPattern[] = []
   for (const p of stats.counterparty_patterns ?? []) {
     if (counterpartyPatterns.length >= MAX_COUNTERPARTY_PATTERNS) break
     if (!p.dominant_category) continue
-    const share = p.occurrences > 0 ? p.dominant_category_count / p.occurrences : 0
-    if (share < DOMINANT_SHARE_FLOOR) continue
-    const template = templateByKey.get(p.counterparty.toLowerCase().trim())
+    const patternShare = share(p.dominant_category_count, p.occurrences)
+    if (patternShare < DOMINANT_SHARE_FLOOR) continue
+    const template = templateByKey.get(p.counterparty_key)
     counterpartyPatterns.push({
       counterparty: p.counterparty,
-      occurrences_12m: p.occurrences,
       dominant: {
         category: p.dominant_category,
         account_number: template?.debit_account ?? p.dominant_account_number,
         vat_treatment: template?.vat_treatment ?? null,
-        share: Math.round(share * 100) / 100,
+      },
+      evidence: {
+        seen_12m: p.occurrences,
+        agree: p.dominant_category_count,
+        share: patternShare,
+        last_booked: p.last_booked,
       },
       source: template ? 'template' : 'history',
-      last_booked: p.last_booked,
+    })
+  }
+
+  const supplierPatterns: SupplierPattern[] = []
+  for (const s of stats.supplier_patterns ?? []) {
+    if (supplierPatterns.length >= MAX_SUPPLIER_PATTERNS) break
+    if (!s.dominant_account_number) continue
+    const patternShare = share(s.dominant_account_count, s.invoices)
+    if (patternShare < DOMINANT_SHARE_FLOOR) continue
+    supplierPatterns.push({
+      supplier: s.supplier,
+      dominant: {
+        account_number: s.dominant_account_number,
+        vat_treatment: s.vat_treatment,
+      },
+      evidence: {
+        seen_12m: s.invoices,
+        agree: s.dominant_account_count,
+        share: patternShare,
+        last_booked: s.last_invoice,
+      },
+      source: 'supplier_invoices',
     })
   }
 
@@ -217,6 +284,7 @@ export async function buildLedgerContext(
       last_used: a.last_used,
     })),
     counterparty_patterns: counterpartyPatterns,
+    supplier_patterns: supplierPatterns,
     explicit_rules: explicitRules,
     vat_profile: {
       registered: settings?.vat_registered ?? false,

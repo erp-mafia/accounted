@@ -36,6 +36,7 @@ function emptyStats() {
   return {
     account_usage: [],
     counterparty_patterns: [],
+    supplier_patterns: [],
     vat_treatments_used: [],
     median_booking_lag_days: null,
   }
@@ -79,9 +80,9 @@ describe('buildLedgerContext', () => {
       stats: {
         ...emptyStats(),
         counterparty_patterns: [
-          { counterparty: 'KLARNA AB', occurrences: 10, last_booked: '2026-07-01', dominant_category: 'expense_bank_fees', dominant_category_count: 9, dominant_account_number: '6570' },
-          { counterparty: 'MIXED AB', occurrences: 10, last_booked: '2026-07-01', dominant_category: 'expense_other', dominant_category_count: 5, dominant_account_number: '4010' },
-          { counterparty: 'NOCAT AB', occurrences: 4, last_booked: '2026-07-01', dominant_category: null, dominant_category_count: 0, dominant_account_number: '4010' },
+          { counterparty: 'KLARNA AB', counterparty_key: 'klarna', occurrences: 10, last_booked: '2026-07-01', dominant_category: 'expense_bank_fees', dominant_category_count: 9, dominant_account_number: '6570' },
+          { counterparty: 'MIXED AB', counterparty_key: 'mixed', occurrences: 10, last_booked: '2026-07-01', dominant_category: 'expense_other', dominant_category_count: 5, dominant_account_number: '4010' },
+          { counterparty: 'NOCAT AB', counterparty_key: 'nocat', occurrences: 4, last_booked: '2026-07-01', dominant_category: null, dominant_category_count: 0, dominant_account_number: '4010' },
         ],
       },
     })
@@ -90,9 +91,9 @@ describe('buildLedgerContext', () => {
     expect(ctx.counterparty_patterns).toHaveLength(1)
     expect(ctx.counterparty_patterns[0]).toMatchObject({
       counterparty: 'KLARNA AB',
-      occurrences_12m: 10,
       source: 'history',
-      dominant: { category: 'expense_bank_fees', account_number: '6570', vat_treatment: null, share: 0.9 },
+      dominant: { category: 'expense_bank_fees', account_number: '6570', vat_treatment: null },
+      evidence: { seen_12m: 10, agree: 9, share: 0.9, last_booked: '2026-07-01' },
     })
   })
 
@@ -101,11 +102,13 @@ describe('buildLedgerContext', () => {
       stats: {
         ...emptyStats(),
         counterparty_patterns: [
-          { counterparty: 'KLARNA AB', occurrences: 10, last_booked: '2026-07-01', dominant_category: 'expense_bank_fees', dominant_category_count: 10, dominant_account_number: '6570' },
+          { counterparty: 'KLARNA AB', counterparty_key: 'klarna', occurrences: 10, last_booked: '2026-07-01', dominant_category: 'expense_bank_fees', dominant_category_count: 10, dominant_account_number: '6570' },
         ],
       },
       templates: [
-        { counterparty_name: 'klarna ab', debit_account: '6580', vat_treatment: 'standard_25', occurrence_count: 8, confidence: 0.9, last_seen_date: '2026-07-01' },
+        // counterparty_name is stored through normalizeCounterpartyName(),
+        // i.e. legal suffix stripped: matches counterparty_key exactly.
+        { counterparty_name: 'klarna', debit_account: '6580', vat_treatment: 'standard_25', occurrence_count: 8, confidence: 0.9, last_seen_date: '2026-07-01' },
       ],
     })
     const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
@@ -113,6 +116,28 @@ describe('buildLedgerContext', () => {
     expect(ctx.counterparty_patterns[0].source).toBe('template')
     expect(ctx.counterparty_patterns[0].dominant.account_number).toBe('6580')
     expect(ctx.counterparty_patterns[0].dominant.vat_treatment).toBe('standard_25')
+  })
+
+  it('maps supplier patterns with the same evidence shape and share floor', async () => {
+    enqueueAll(mock, {
+      stats: {
+        ...emptyStats(),
+        supplier_patterns: [
+          { supplier: 'Telia Sverige AB', invoices: 12, last_invoice: '2026-06-28', vat_treatment: 'standard_25', dominant_account_number: '6212', dominant_account_count: 12 },
+          { supplier: 'Blandat AB', invoices: 10, last_invoice: '2026-06-01', vat_treatment: 'standard_25', dominant_account_number: '4010', dominant_account_count: 5 },
+          { supplier: 'Inga Rader AB', invoices: 3, last_invoice: '2026-05-01', vat_treatment: null, dominant_account_number: null, dominant_account_count: 0 },
+        ],
+      },
+    })
+    const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+    expect(ctx.supplier_patterns).toHaveLength(1)
+    expect(ctx.supplier_patterns[0]).toEqual({
+      supplier: 'Telia Sverige AB',
+      dominant: { account_number: '6212', vat_treatment: 'standard_25' },
+      evidence: { seen_12m: 12, agree: 12, share: 1, last_booked: '2026-06-28' },
+      source: 'supplier_invoices',
+    })
   })
 
   it('lists explicit mapping rules separately, skipping matchless rules', async () => {
@@ -177,11 +202,20 @@ describe('buildLedgerContext', () => {
         })),
         counterparty_patterns: Array.from({ length: 25 }, (_, i) => ({
           counterparty: `Leverantör Aktiebolag med långt namn nr ${i}`,
+          counterparty_key: `leverantör aktiebolag med långt namn nr ${i}`,
           occurrences: 100 - i,
           last_booked: '2026-07-01',
           dominant_category: 'expense_office_supplies',
           dominant_category_count: 100 - i,
           dominant_account_number: '4010',
+        })),
+        supplier_patterns: Array.from({ length: 15 }, (_, i) => ({
+          supplier: `Leverantörsfaktura Aktiebolag med långt namn nr ${i}`,
+          invoices: 50 - i,
+          last_invoice: '2026-07-01',
+          vat_treatment: 'standard_25',
+          dominant_account_number: '6212',
+          dominant_account_count: 50 - i,
         })),
         vat_treatments_used: ['standard_25', 'standard_12', 'standard_6', 'reverse_charge_eu'],
         median_booking_lag_days: 2,
@@ -207,6 +241,8 @@ describe('buildLedgerContext', () => {
     })
     const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
 
+    expect(ctx.counterparty_patterns).toHaveLength(15)
+    expect(ctx.supplier_patterns).toHaveLength(10)
     const bytes = Buffer.byteLength(JSON.stringify(ctx), 'utf8')
     expect(bytes).toBeLessThan(12 * 1024)
   })
