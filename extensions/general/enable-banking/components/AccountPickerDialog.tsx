@@ -99,6 +99,11 @@ export function AccountPickerDialog({
 
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressState, setProgressState] = useState<SyncProgressState>({ kind: 'syncing' })
+  // Bumped on each new backfill so the progress dialog is keyed per attempt and
+  // remounts fresh: the dialog stays mounted across attempts, so without this a
+  // second sync would inherit the previous run's elapsed timer for a frame and
+  // briefly compute overGrace/blockClose from stale state.
+  const [syncAttempt, setSyncAttempt] = useState(0)
 
   useEffect(() => {
     if (open) {
@@ -292,6 +297,7 @@ export function AccountPickerDialog({
     // user has visible feedback during the 30-60s backfill. Selection edits
     // (no backfill) keep the existing toast-only feedback.
     if (isInitialSelection) {
+      setSyncAttempt((n) => n + 1)
       setProgressState({ kind: 'syncing' })
       setProgressOpen(true)
       onOpenChange(false)
@@ -397,6 +403,7 @@ export function AccountPickerDialog({
   return (
     <>
     <BankSyncProgressDialog
+      key={syncAttempt}
       open={progressOpen}
       onOpenChange={(next) => {
         setProgressOpen(next)
