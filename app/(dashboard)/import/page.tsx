@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
@@ -14,11 +14,8 @@ import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { BankSelector, type Bank } from '@/extensions/general/enable-banking/components/BankSelector'
-import { BankConnectionStatus } from '@/extensions/general/enable-banking/components/BankConnectionStatus'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import type { BankConnection } from '@/types'
+import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 
 // Bank file import components
 import BankFileUploadStep from '@/components/import/BankFileUploadStep'
@@ -1904,201 +1901,14 @@ function CSVDataImportWizard() {
 }
 
 // ============================================================
-// PSD2 Bank Connection (inline, from Enable Banking extension)
+// Banking (PSD2) connect UI
 // ============================================================
-
-function PSD2ConnectWizard() {
-  const { toast } = useToast()
-  const supabase = createClient()
-  const { dialogProps, confirm } = useDestructiveConfirm()
-  const { company } = useCompany()
-  const hasBankSync = useCapability(CAPABILITY.bank_sync)
-
-  const [bankConnections, setBankConnections] = useState<BankConnection[]>([])
-  const [syncingConnectionId, setSyncingConnectionId] = useState<string | null>(null)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [connectingBankName, setConnectingBankName] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-
-  useEffect(() => {
-    fetchConnections()
-  }, [])
-
-  async function fetchConnections() {
-    setIsLoading(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    if (!company) return
-
-    const { data: connections } = await supabase
-      .from('bank_connections')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('created_at', { ascending: false })
-
-    setBankConnections(connections || [])
-    setIsLoading(false)
-  }
-
-  async function handleConnectBank(bank: Bank) {
-    setIsConnecting(true)
-    setConnectingBankName(bank.name)
-
-    try {
-      const response = await fetch('/api/extensions/ext/enable-banking/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aspsp_name: bank.name, aspsp_country: bank.country }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error)
-      }
-
-      window.location.href = data.authorization_url
-    } catch (error) {
-      toast({
-        title: 'Kunde inte ansluta bank',
-        description: error instanceof Error ? error.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-      setIsConnecting(false)
-      setConnectingBankName(null)
-    }
-  }
-
-  async function handleSyncTransactions(connectionId: string) {
-    setSyncingConnectionId(connectionId)
-
-    try {
-      const response = await fetch('/api/extensions/ext/enable-banking/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connectionId }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error)
-      }
-
-      toast({
-        title: 'Synkronisering klar',
-        description: `${data.imported} nya transaktioner importerade`,
-      })
-
-      fetchConnections()
-    } catch (error) {
-      toast({
-        title: 'Synkronisering misslyckades',
-        description: error instanceof Error ? error.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-    }
-
-    setSyncingConnectionId(null)
-  }
-
-  async function handleDisconnectBank(connectionId: string) {
-    const ok = await confirm({
-      title: 'Koppla bort bank?',
-      description: 'PSD2-samtycket kommer återkallas. Befintliga transaktioner påverkas inte.',
-      confirmLabel: 'Koppla bort',
-      variant: 'warning',
-    })
-    if (!ok) return
-
-    try {
-      const response = await fetch('/api/extensions/ext/enable-banking/disconnect', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connectionId }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Disconnect failed')
-      }
-
-      toast({
-        title: 'Bank bortkopplad',
-        description: 'Bankanslutningen och PSD2-samtycket har återkallats',
-      })
-      fetchConnections()
-    } catch (error) {
-      toast({
-        title: 'Kunde inte koppla bort bank',
-        description: error instanceof Error ? error.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-    }
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  const activeConnections = bankConnections.filter((c) => c.status === 'active')
-
-  return (
-    <div className="space-y-6">
-      <DestructiveConfirmDialog {...dialogProps} />
-
-      {/* Connected banks */}
-      {activeConnections.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Anslutna banker</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {activeConnections.map((connection) => (
-              <BankConnectionStatus
-                key={connection.id}
-                connection={connection}
-                onSync={handleSyncTransactions}
-                onDisconnect={handleDisconnectBank}
-                isSyncing={syncingConnectionId === connection.id}
-              />
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Connect new bank. Non-payers see the card but the bank list is
-          replaced by an upgrade note: the server gate would 403 the connect. */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Anslut din bank</CardTitle>
-          <CardDescription>
-            Välj din bank nedan för att koppla ditt konto via PSD2. Transaktioner synkas automatiskt varje dag.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {!hasBankSync ? (
-            <UpgradeNote>
-              Automatisk banksynk kräver ett abonnemang. Du kan fortfarande importera
-              transaktioner manuellt via bankfiler nedan.
-            </UpgradeNote>
-          ) : (
-            <BankSelector
-              onConnect={handleConnectBank}
-              isConnecting={isConnecting}
-              connectingBankName={connectingBankName}
-            />
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
+// Provided by the enable-banking extension and loaded through the settings
+// panel registry (dynamic import), so this core page never imports from
+// @/extensions directly. The shared panel renders every connection state
+// (pending account selection, active, expiring, and expired/error with the
+// reconnect entry point), which the old inline wizard here did not.
+const BankingPanel = getSettingsPanel('enable-banking')
 
 // ============================================================
 // Import Page with Selection Cards
@@ -2475,7 +2285,25 @@ export default function ImportPage() {
         </Button>
       )}
 
-      {mode === 'psd2' && <PSD2ConnectWizard />}
+      {mode === 'psd2' && (
+        hasBankingExtension && BankingPanel ? (
+          <BankingPanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <Landmark className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">Bankintegration (PSD2) är inte aktiverad</p>
+              <p className="mb-4 max-w-md text-sm text-muted-foreground">
+                Aktivera tillägget Enable Banking för att koppla ditt bankkonto, eller importera
+                transaktioner manuellt via bankfil.
+              </p>
+              <Button variant="outline" onClick={() => setMode('bank')}>
+                Importera bankfil istället
+              </Button>
+            </CardContent>
+          </Card>
+        )
+      )}
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}

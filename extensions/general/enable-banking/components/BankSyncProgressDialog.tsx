@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   Dialog,
@@ -39,6 +40,16 @@ interface BankSyncProgressDialogProps {
   state: SyncProgressState
 }
 
+// Past this point the sync has run longer than the promised "up to a minute".
+// We stop hard-locking the modal so the user isn't trapped: the request keeps
+// running server-side (idempotent) and completion still resolves the state.
+const GRACE_SEC = 75
+
+function formatElapsed(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`
+}
+
 export function BankSyncProgressDialog({
   open,
   onOpenChange,
@@ -46,27 +57,47 @@ export function BankSyncProgressDialog({
   accounts,
   state,
 }: BankSyncProgressDialogProps) {
-  // Close-prevention while sync is in flight is handled inline below via the
-  // onOpenChange guard + onPointerDownOutside + onEscapeKeyDown handlers.
-
   const enabledAccounts = accounts.filter((a) => a.enabled !== false)
+
+  // Tick a visible elapsed counter while syncing so a slow bank doesn't look
+  // frozen, and so we know when to release the close-lock (GRACE_SEC). State is
+  // only ever set from the timer callbacks (never synchronously in the effect
+  // body), and elapsed is never computed from Date.now() during render, so this
+  // stays clear of the react-hooks purity rules.
+  const [elapsedSec, setElapsedSec] = useState(0)
+  useEffect(() => {
+    if (!open || state.kind !== 'syncing') return
+    const started = Date.now()
+    const tick = () => setElapsedSec(Math.max(0, Math.floor((Date.now() - started) / 1000)))
+    // Reset to ~0 on the next tick (async, so not a synchronous effect setState).
+    const reset = setTimeout(tick, 0)
+    const id = setInterval(tick, 1000)
+    return () => {
+      clearTimeout(reset)
+      clearInterval(id)
+    }
+  }, [open, state.kind])
+
+  const overGrace = state.kind === 'syncing' && elapsedSec >= GRACE_SEC
+  // Only hard-block the close affordances during the expected window; after the
+  // grace period the user may background the (still-running) sync.
+  const blockClose = state.kind === 'syncing' && !overGrace
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        // Block manual close mid-sync
-        if (!next && state.kind === 'syncing') return
+        if (!next && blockClose) return
         onOpenChange(next)
       }}
     >
       <DialogContent
         className="max-w-md"
         onPointerDownOutside={(e) => {
-          if (state.kind === 'syncing') e.preventDefault()
+          if (blockClose) e.preventDefault()
         }}
         onEscapeKeyDown={(e) => {
-          if (state.kind === 'syncing') e.preventDefault()
+          if (blockClose) e.preventDefault()
         }}
       >
         <DialogHeader>
@@ -77,10 +108,17 @@ export function BankSyncProgressDialog({
           </DialogTitle>
           <DialogDescription>
             {state.kind === 'syncing' && (
-              <>
-                Vi hämtar transaktioner från {enabledAccounts.length}{' '}
-                {enabledAccounts.length === 1 ? 'konto' : 'konton'}. Detta kan ta upp till en minut. Stäng inte fönstret.
-              </>
+              overGrace ? (
+                <>
+                  Det tar längre tid än vanligt. Vi fortsätter i bakgrunden: du kan
+                  stänga rutan och komma tillbaka senare.
+                </>
+              ) : (
+                <>
+                  Vi hämtar transaktioner från {enabledAccounts.length}{' '}
+                  {enabledAccounts.length === 1 ? 'konto' : 'konton'}. Detta kan ta upp till en minut. Stäng inte fönstret.
+                </>
+              )
             )}
             {state.kind === 'done' && (
               <>
@@ -96,8 +134,11 @@ export function BankSyncProgressDialog({
 
         {state.kind === 'syncing' && (
           <div className="space-y-3 py-2">
-            <div className="flex items-center justify-center py-6">
+            <div className="flex flex-col items-center justify-center gap-2 py-6">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <span className="text-xs text-muted-foreground tabular-nums" aria-live="polite">
+                {formatElapsed(elapsedSec)}
+              </span>
             </div>
             <ul className="rounded-lg border border-border divide-y divide-border text-sm">
               {enabledAccounts.map((a) => (
@@ -124,9 +165,11 @@ export function BankSyncProgressDialog({
           <Button
             type="button"
             onClick={() => onOpenChange(false)}
-            disabled={state.kind === 'syncing'}
+            disabled={blockClose}
           >
-            {state.kind === 'syncing' ? 'Hämtar…' : 'Klar'}
+            {state.kind === 'syncing'
+              ? (overGrace ? 'Fortsätt i bakgrunden' : 'Hämtar…')
+              : 'Klar'}
           </Button>
         </DialogFooter>
       </DialogContent>

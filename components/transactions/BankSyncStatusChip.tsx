@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { onBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
   Tooltip,
@@ -72,17 +73,31 @@ export default function BankSyncStatusChip() {
 
   useEffect(() => {
     if (!company?.id) return
+    const companyId = company.id
     let cancelled = false
     const supabase = createClient()
-    supabase
-      .from('bank_connections')
-      .select('id, status, last_synced_at')
-      .eq('company_id', company.id)
-      .then(({ data }) => {
-        if (!cancelled) setRows(data ?? [])
-      })
+
+    const load = () => {
+      supabase
+        .from('bank_connections')
+        .select('id, status, last_synced_at')
+        .eq('company_id', companyId)
+        .then(({ data, error }) => {
+          if (cancelled) return
+          // On error keep the chip hidden (empty rows) rather than rendering a
+          // false "healthy" state from stale data.
+          setRows(error ? [] : (data ?? []))
+        })
+    }
+
+    load()
+    // Refetch when a manual "Sync now" / reconnect elsewhere on the page
+    // changes the connections, so the chip doesn't keep showing "synced 2d ago".
+    const unsubscribe = onBankSyncUpdated(load)
+
     return () => {
       cancelled = true
+      unsubscribe()
     }
   }, [company?.id])
 

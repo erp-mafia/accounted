@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
+import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
@@ -129,6 +130,9 @@ export default function BankSyncNowButton() {
           ? t('bank_sync_new_since_last_visit_one')
           : t('bank_sync_new_since_last_visit_many', { count: data.imported ?? 0 }),
       })
+      // Tell the neighbouring status chip to refetch so it doesn't keep showing
+      // the pre-sync "synced Nd ago" until a hard reload.
+      notifyBankSyncUpdated()
       router.refresh()
     } catch (error) {
       toast({

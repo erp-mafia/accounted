@@ -9,6 +9,7 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { AlertTriangle, Loader2, Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
+import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
@@ -37,6 +38,8 @@ export default function BankingSettingsPanel() {
   const connectingRef = useRef(false)
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const hasLoadedRef = useRef(false)
   const [showCsvFallback, setShowCsvFallback] = useState(false)
   const [psuType, setPsuType] = useState<'personal' | 'business'>('business')
   const [pickerConnectionId, setPickerConnectionId] = useState<string | null>(null)
@@ -80,35 +83,55 @@ export default function BankingSettingsPanel() {
   }
 
   async function fetchConnections() {
-    setIsLoading(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-    if (!company) return
-
-    const { data: connections } = await supabase
-      .from('bank_connections')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('created_at', { ascending: false })
-
-    setBankConnections(connections || [])
-
-    // If a pending connection exists from a recent attempt (e.g. user bounced back from
-    // the bank's auth page), keep the connect button disabled until the server-side lock expires.
-    const freshPending = (connections || []).find((c) => c.status === 'pending')
-    if (freshPending) {
-      const age = Date.now() - new Date(freshPending.created_at).getTime()
-      const remaining = PENDING_LOCK_MS - age
-      if (remaining > 0) {
-        connectingRef.current = true
-        setIsConnecting(true)
-        setConnectingBankName(freshPending.bank_name)
-        if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current)
-        releaseTimerRef.current = setTimeout(releaseConnectingLock, remaining)
+    // Only the first load blanks the panel to a spinner. Later refetches (after
+    // a sync, disconnect, or account save) refresh in the background so the
+    // panel doesn't flash back to a full-height spinner and lose scroll
+    // position on every action.
+    if (!hasLoadedRef.current) setIsLoading(true)
+    setLoadError(false)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !company) {
+        setBankConnections([])
+        return
       }
-    }
 
-    setIsLoading(false)
+      const { data: connections, error } = await supabase
+        .from('bank_connections')
+        .select('*')
+        .eq('company_id', company.id)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        // Surface the failure instead of rendering an empty panel: an empty
+        // panel reads as "your bank got disconnected" when it's really a
+        // transient fetch/RLS error.
+        setLoadError(true)
+        return
+      }
+
+      setBankConnections(connections || [])
+
+      // If a pending connection exists from a recent attempt (e.g. user bounced back from
+      // the bank's auth page), keep the connect button disabled until the server-side lock expires.
+      const freshPending = (connections || []).find((c) => c.status === 'pending')
+      if (freshPending) {
+        const age = Date.now() - new Date(freshPending.created_at).getTime()
+        const remaining = PENDING_LOCK_MS - age
+        if (remaining > 0) {
+          connectingRef.current = true
+          setIsConnecting(true)
+          setConnectingBankName(freshPending.bank_name)
+          if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current)
+          releaseTimerRef.current = setTimeout(releaseConnectingLock, remaining)
+        }
+      }
+    } finally {
+      // Always clear the spinner, even on the early `!user || !company` return,
+      // so an expired session can't leave the panel spinning forever.
+      hasLoadedRef.current = true
+      setIsLoading(false)
+    }
   }
 
   async function handleConnectBank(bank: Bank, psuTypeOverride?: 'personal' | 'business') {
@@ -220,6 +243,13 @@ export default function BankingSettingsPanel() {
   async function handleSyncTransactions(connectionId: string) {
     setSyncingConnectionId(connectionId)
 
+    // A slow bank can hold the request open up to the route's 300s budget.
+    // Cap the client wait so the spinner can't hang indefinitely; the sync is
+    // idempotent (imports dedup), so a background completion or manual retry is
+    // safe.
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 180_000)
+
     try {
       console.log('[enable-banking] Starting sync', { connectionId })
 
@@ -227,6 +257,7 @@ export default function BankingSettingsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ connection_id: connectionId }),
+        signal: controller.signal,
       })
 
       const data = await response.json()
@@ -253,25 +284,35 @@ export default function BankingSettingsPanel() {
       })
 
       setShowCsvFallback(false)
+      notifyBankSyncUpdated()
       fetchConnections()
     } catch (error) {
-      console.error('[enable-banking] Sync flow failed', {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        connectionId,
-      })
-      toast({
-        title: 'Fel',
-        description: error instanceof Error ? error.message : 'Synkronisering misslyckades',
-        variant: 'destructive',
-      })
-      setShowCsvFallback(true)
-      // Refresh so a now-expired connection (e.g. closed PSD2 session) moves
-      // into "Åtgärd krävs" and surfaces the "Förnya anslutning" button.
-      fetchConnections()
+      if (controller.signal.aborted) {
+        toast({
+          title: 'Synkronisering tar längre tid än vanligt',
+          description: 'Transaktionerna hämtas i bakgrunden. Uppdatera sidan om en stund.',
+        })
+        fetchConnections()
+      } else {
+        console.error('[enable-banking] Sync flow failed', {
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          connectionId,
+        })
+        toast({
+          title: 'Fel',
+          description: error instanceof Error ? error.message : 'Synkronisering misslyckades',
+          variant: 'destructive',
+        })
+        setShowCsvFallback(true)
+        // Refresh so a now-expired connection (e.g. closed PSD2 session) moves
+        // into "Åtgärd krävs" and surfaces the "Förnya anslutning" button.
+        fetchConnections()
+      }
+    } finally {
+      clearTimeout(timeout)
+      setSyncingConnectionId(null)
     }
-
-    setSyncingConnectionId(null)
   }
 
   async function handleDisconnectBank(connectionId: string) {
@@ -328,6 +369,31 @@ export default function BankingSettingsPanel() {
       <div className="flex items-center justify-center h-32">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
+    )
+  }
+
+  // First-load failure: show a recoverable error instead of an empty panel (a
+  // blank panel misreads as "no banks connected"). A background-refetch failure
+  // keeps the already-loaded connections visible instead of wiping them.
+  if (loadError && bankConnections.length === 0) {
+    return (
+      <Card className="border-destructive/30">
+        <CardHeader>
+          <CardTitle>Kunde inte ladda bankanslutningar</CardTitle>
+          <CardDescription>
+            Något gick fel när dina bankanslutningar skulle hämtas. Dina anslutningar
+            och transaktioner är oförändrade.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" size="sm" onClick={() => fetchConnections()}>
+            Försök igen
+          </Button>
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/import?mode=bank">Importera bankfil istället</Link>
+          </Button>
+        </CardContent>
+      </Card>
     )
   }
 

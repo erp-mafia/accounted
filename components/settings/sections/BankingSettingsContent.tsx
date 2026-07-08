@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslations } from 'next-intl'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -23,92 +23,32 @@ export function BankingSettingsContent() {
   const [failedBankName, setFailedBankName] = useState<string | null>(null)
   const [isAccessDenied, setIsAccessDenied] = useState(false)
   const [showHbPoaHint, setShowHbPoaHint] = useState(false)
-  const syncInitiatedRef = useRef(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
-  const unmountedRef = useRef(false)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
 
+  // Surface a bank connection/authorization failure that the OAuth callback
+  // bounced back as `?bank_error=...`. The success path is handled by the
+  // callback redirecting to `?select_accounts=<id>`, which the banking panel
+  // picks up to open account selection: there is no `bank_connected` param.
   useEffect(() => {
-    return () => {
-      unmountedRef.current = true
-      if (abortControllerRef.current) abortControllerRef.current.abort()
-    }
-  }, [])
-
-  useEffect(() => {
-    const bankConnected = searchParams.get('bank_connected')
     const bankError = searchParams.get('bank_error')
+    if (!bankError) return
 
-    if (bankConnected === 'true' && !syncInitiatedRef.current) {
-      syncInitiatedRef.current = true
-      const connectionId = searchParams.get('connection_id')
-      router.replace('/settings/banking')
-
-      if (connectionId) {
-        toast({
-          title: t('sync_start_title'),
-          description: t('sync_start_description'),
-        })
-        const controller = new AbortController()
-        abortControllerRef.current = controller
-        const syncTimeout = setTimeout(() => controller.abort(), 120_000)
-
-        ;(async () => {
-          try {
-            const res = await fetch('/api/extensions/ext/enable-banking/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ connection_id: connectionId, days_back: 120 }),
-              signal: controller.signal,
-            })
-            clearTimeout(syncTimeout)
-            const data = await res.json()
-            if (res.ok) {
-              if (!unmountedRef.current) {
-                toast({
-                  title: t('sync_success_title'),
-                  description: t('sync_success_description', { count: data.imported ?? 0 }),
-                })
-              }
-            } else {
-              throw new Error(data.error || 'Sync failed')
-            }
-          } catch (err) {
-            clearTimeout(syncTimeout)
-            if (unmountedRef.current) return
-            if (controller.signal.aborted) {
-              toast({
-                title: t('sync_timeout_title'),
-                description: t('sync_timeout_description'),
-              })
-            } else {
-              toast({
-                title: t('sync_failed_title'),
-                description: err instanceof Error ? err.message : t('sync_failed_default'),
-                variant: 'destructive',
-              })
-            }
-          }
-        })()
-      } else {
-        toast({
-          title: t('sync_success_title'),
-          description: t('sync_success_no_id_description'),
-        })
-      }
+    let errorMsg: string
+    try { errorMsg = decodeURIComponent(bankError) } catch { errorMsg = bankError }
+    const bankName = searchParams.get('bank_name')
+    const errorCode = searchParams.get('bank_error_code')
+    const psuType = searchParams.get('psu_type')
+    // The bank often returns a bare "server_error" with no description: show a
+    // human message instead of the raw OAuth error code.
+    if (errorCode === 'server_error' && errorMsg === 'server_error') {
+      errorMsg = t('bank_server_error')
     }
 
-    if (bankError) {
-      let errorMsg: string
-      try { errorMsg = decodeURIComponent(bankError) } catch { errorMsg = bankError }
-      const bankName = searchParams.get('bank_name')
-      const errorCode = searchParams.get('bank_error_code')
-      const psuType = searchParams.get('psu_type')
-      // The bank often returns a bare "server_error" with no description —
-      // show a human message instead of the raw OAuth error code.
-      if (errorCode === 'server_error' && errorMsg === 'server_error') {
-        errorMsg = t('bank_server_error')
-      }
+    // Consume the one-shot ?bank_error= param off the render path: a microtask
+    // defers these updates out of the effect body (react-hooks/set-state-in-
+    // effect) without a user-visible delay, since the param appears at most
+    // once per OAuth bounce-back.
+    queueMicrotask(() => {
       toast({
         title: t('connect_failed_title'),
         description: errorMsg,
@@ -119,12 +59,12 @@ export function BankingSettingsContent() {
       if (errorCode === 'access_denied') setIsAccessDenied(true)
       // Handelsbanken rejects business connects with server_error when the
       // company hasn't registered the open banking fullmakt ("Internet
-      // Företag – tilläggstjänst API Företag") — surface the fix steps.
+      // Företag – tilläggstjänst API Företag"): surface the fix steps.
       if (bankName === 'Handelsbanken' && psuType === 'business' && errorCode === 'server_error') {
         setShowHbPoaHint(true)
       }
       router.replace('/settings/banking')
-    }
+    })
   }, [searchParams, router, toast, t])
 
   return (

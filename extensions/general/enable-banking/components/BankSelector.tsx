@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface Bank {
@@ -49,7 +50,7 @@ function BankCard({ bank, isConnecting, connectingBankName, onConnect }: {
     >
       <div className="flex-shrink-0 w-12 h-12 rounded-lg border border-border bg-white dark:bg-gray-300 flex items-center justify-center overflow-hidden">
         {connecting ? (
-          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
         ) : bank.logo ? (
           <img
             src={bank.logo}
@@ -106,6 +107,14 @@ export function BankSelector({
     async function fetchBanks() {
       try {
         const res = await fetch('/api/extensions/ext/enable-banking/banks')
+        if (!res.ok) {
+          // A non-OK response (500, or the 403 capability gate) has no `banks`
+          // array; without this guard it falls through to the "no banks
+          // available" empty state, which misreads as a successful-but-empty
+          // load rather than a failure.
+          setError('Kunde inte ladda banker')
+          return
+        }
         const data = await res.json()
         if (data.banks) {
           setBanks(data.banks as Bank[])
@@ -166,7 +175,7 @@ export function BankSelector({
       {/* Loading state */}
       {isLoading && (
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       )}
 
@@ -221,7 +230,7 @@ export function BankSelector({
       {/* Connecting overlay */}
       {isConnecting && connectingBankName && (
         <div className="flex items-center justify-center gap-2 p-3 rounded-lg bg-primary/10 border border-primary/30">
-          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary" />
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />
           <span className="text-sm font-medium text-foreground">Ansluter till {connectingBankName}...</span>
         </div>
       )}
