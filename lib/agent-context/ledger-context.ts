@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -126,8 +127,9 @@ function windowFrom(now: Date): string {
   return from.toISOString().slice(0, 10)
 }
 
+// Not money, but roundOre is the repo's canonical 2dp rounding helper.
 function share(agree: number, seen: number): number {
-  return seen > 0 ? Math.round((agree / seen) * 100) / 100 : 0
+  return seen > 0 ? roundOre(agree / seen) : 0
 }
 
 export async function buildLedgerContext(
