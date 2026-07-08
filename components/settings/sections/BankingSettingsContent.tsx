@@ -47,8 +47,12 @@ export function BankingSettingsContent() {
     // Consume the one-shot ?bank_error= param off the render path: a microtask
     // defers these updates out of the effect body (react-hooks/set-state-in-
     // effect) without a user-visible delay, since the param appears at most
-    // once per OAuth bounce-back.
+    // once per OAuth bounce-back. The cancellation flag drops the deferred work
+    // if the effect re-runs or the component unmounts before it flushes (also
+    // suppresses a duplicate toast under StrictMode's dev double-invoke).
+    let cancelled = false
     queueMicrotask(() => {
+      if (cancelled) return
       toast({
         title: t('connect_failed_title'),
         description: errorMsg,
@@ -65,6 +69,7 @@ export function BankingSettingsContent() {
       }
       router.replace('/settings/banking')
     })
+    return () => { cancelled = true }
   }, [searchParams, router, toast, t])
 
   return (
