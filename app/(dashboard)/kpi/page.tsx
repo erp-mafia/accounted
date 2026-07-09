@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
+import { PageHeader } from '@/components/ui/page-header'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import dynamic from 'next/dynamic'
 import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
@@ -95,16 +96,16 @@ export default function KpiPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
-        <div className="flex gap-2">
+      <PageHeader
+        title={t('title')}
+        action={
           <KPISettingsDialog
             preferences={preferences}
             onSave={handleSavePreferences}
             saving={isSavingPrefs}
           />
-        </div>
-      </div>
+        }
+      />
 
       <FiscalYearSelector
         value={selectedPeriod || null}
@@ -143,7 +144,7 @@ function LoadingSkeleton() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[1, 2, 3, 4].map((i) => (
           <Card key={i}>
-            <CardContent className="p-6 space-y-2">
+            <CardContent className="p-4 space-y-2">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="h-7 w-28" />
               <Skeleton className="h-3 w-16" />

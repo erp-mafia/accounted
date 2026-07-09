@@ -630,8 +630,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
           </div>
         )}
         {success && !error && (
-          <div className="flex items-start gap-2 text-sm text-success bg-success/5 rounded-lg p-3">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+          <div className="flex items-start gap-2 text-sm rounded-lg border border-border bg-muted/30 p-3">
+            <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0 text-success" />
             <span>{success}</span>
           </div>
         )}
@@ -650,13 +650,13 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                 className={`flex items-start gap-2 text-sm rounded-lg p-3 ${
                   c.status === 'ERROR'
                     ? 'bg-destructive/5 text-destructive'
-                    : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
+                    : 'border border-border bg-muted/30'
                 }`}
               >
                 {c.status === 'ERROR' ? (
                   <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
                 ) : (
-                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-warning" />
                 )}
                 <div>
                   <span className="font-mono text-xs mr-1.5">{c.code}</span>
@@ -802,13 +802,13 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                 className={`flex items-start gap-2 text-sm rounded-lg p-3 ${
                   k.status === 'ERROR'
                     ? 'bg-destructive/5 text-destructive'
-                    : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
+                    : 'border border-border bg-muted/30'
                 }`}
               >
                 {k.status === 'ERROR' ? (
                   <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
                 ) : (
-                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-warning" />
                 )}
                 <div>
                   <span className="font-mono text-xs mr-1.5">{k.kod}</span>
@@ -841,7 +841,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
         {/* Signing link */}
         {signeringslank && (
-          <div className="rounded-lg border border-success/30 bg-success/5 p-3 space-y-2">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
             <p className="text-sm font-medium">Utkastet är låst och redo att signeras</p>
             <p className="text-xs text-muted-foreground">
               Öppna länken nedan och signera med BankID på Skatteverkets sida.

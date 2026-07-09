@@ -117,8 +117,10 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
   if (loading) {
     return (
       <Card>
-        <CardContent className="p-8 text-center text-muted-foreground">
-          Laddar saldobalans...
+        <CardContent className="p-6 space-y-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
         </CardContent>
       </Card>
     )
@@ -451,8 +453,10 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
   if (loading) {
     return (
       <Card>
-        <CardContent className="p-8 text-center text-muted-foreground">
-          Laddar resultaträkning...
+        <CardContent className="p-6 space-y-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
         </CardContent>
       </Card>
     )
@@ -717,8 +721,10 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
   if (loading) {
     return (
       <Card>
-        <CardContent className="p-8 text-center text-muted-foreground">
-          Laddar resultatrapport...
+        <CardContent className="p-6 space-y-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
         </CardContent>
       </Card>
     )

@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { PageHeader } from '@/components/ui/page-header'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -74,8 +73,6 @@ export function SalarySettingsContent() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title={t('title')} />
-
       <SettingsFormWrapper onSave={handleSave} className="space-y-8">
         {/* Payment */}
         <section className="space-y-4">

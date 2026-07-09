@@ -129,7 +129,7 @@ export function BookingTemplatesPanel() {
       <CardHeader>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>{t('title')}</CardTitle>
+            <CardTitle className="text-base">{t('title')}</CardTitle>
             <CardDescription>
               {t('description')}
             </CardDescription>

@@ -185,7 +185,7 @@ export function BackupDownloadForm() {
     <div className="space-y-8">
       <Card>
         <CardHeader>
-          <CardTitle>{t('create_backup_title')}</CardTitle>
+          <CardTitle className="text-base">{t('create_backup_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">

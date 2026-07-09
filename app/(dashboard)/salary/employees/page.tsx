@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
+import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Plus, ArrowLeft, UserCircle } from 'lucide-react'
@@ -54,22 +55,24 @@ export default function EmployeesPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link href="/salary" aria-label={t('back_to_payroll')}><ArrowLeft className="h-4 w-4" /></Link>
-          </Button>
-          <div>
-            <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
-            <p className="text-sm text-muted-foreground mt-1">{t('registered_count', { count: employees.length })}</p>
-          </div>
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" asChild>
+          <Link href="/salary" aria-label={t('back_to_payroll')}><ArrowLeft className="h-4 w-4" /></Link>
+        </Button>
+        <div className="flex-1">
+          <PageHeader
+            title={t('title')}
+            description={t('registered_count', { count: employees.length })}
+            action={
+              canWrite ? (
+                <Button onClick={openNewEmployee}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  {t('new_employee')}
+                </Button>
+              ) : undefined
+            }
+          />
         </div>
-        {canWrite && (
-          <Button onClick={openNewEmployee}>
-            <Plus className="mr-2 h-4 w-4" />
-            {t('new_employee')}
-          </Button>
-        )}
       </div>
 
       {loading ? (

@@ -6,7 +6,8 @@ import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { DataList, DataListEmpty } from '@/components/ui/data-list'
+import { Card, CardContent } from '@/components/ui/card'
+import { DataListEmpty } from '@/components/ui/data-list'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Plus, FileInput, Lock } from 'lucide-react'
@@ -14,12 +15,8 @@ import Link from 'next/link'
 import { PageHeader } from '@/components/ui/page-header'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import type { SupplierInvoice } from '@/types'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   registered: 'secondary',
@@ -134,7 +131,8 @@ export default function SupplierInvoicesPage() {
         </TabsList>
 
         <TabsContent value={activeTab}>
-          <DataList>
+          <Card>
+            <CardContent className="p-0">
             {isLoading ? (
               <div>
                 <div className="p-3 border-b border-border">
@@ -184,7 +182,7 @@ export default function SupplierInvoicesPage() {
                 <TableBody>
                   {filteredInvoices.map((inv) => (
                     <TableRow key={inv.id}>
-                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
+                      <TableCell className="tabular-nums">{inv.arrival_number}</TableCell>
                       <TableCell>
                         <Link href={`/suppliers/${inv.supplier_id}`} className="hover:underline">
                           {inv.supplier?.name || '-'}
@@ -197,8 +195,8 @@ export default function SupplierInvoicesPage() {
                       </TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(inv.total)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(inv.total, inv.currency)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(inv.remaining_amount, inv.currency)}</TableCell>
                       <TableCell>
                         <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
                           {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
@@ -209,7 +207,8 @@ export default function SupplierInvoicesPage() {
                 </TableBody>
               </Table>
             )}
-          </DataList>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

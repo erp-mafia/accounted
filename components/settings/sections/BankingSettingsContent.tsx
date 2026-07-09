@@ -6,6 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { AlertTriangle, CreditCard, ExternalLink } from 'lucide-react'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
@@ -75,7 +76,7 @@ export function BankingSettingsContent() {
   return (
     <div className="space-y-8">
       {bankConnectionError && (
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
+        <div className="flex items-start gap-3 rounded-lg border border-destructive p-4">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
           <div className="flex-1">
             <p className="text-sm font-medium text-destructive">{bankConnectionError}</p>
@@ -123,18 +124,19 @@ export function BankingSettingsContent() {
         </>
       ) : (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-            <CreditCard className="h-10 w-10 text-muted-foreground/40 mb-4" />
-            <p className="font-medium mb-1">{t('not_enabled_title')}</p>
-            <p className="text-sm text-muted-foreground mb-4 max-w-md">
-              {t('not_enabled_description')}
-            </p>
-            <Button variant="outline" asChild>
-              <Link href="/extensions">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                {t('go_to_extensions')}
-              </Link>
-            </Button>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={CreditCard}
+              title={t('not_enabled_title')}
+              description={t('not_enabled_description')}
+            >
+              <Button variant="outline" asChild>
+                <Link href="/extensions">
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  {t('go_to_extensions')}
+                </Link>
+              </Button>
+            </EmptyState>
           </CardContent>
         </Card>
       )}

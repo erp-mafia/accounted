@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -219,53 +218,47 @@ export function AccountSettingsContent() {
       )}
 
       {/* Logout */}
-      <section className="border-t border-border pt-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>{tCommon('account_settings')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between p-4 border rounded-lg">
-              <div>
-                <p className="font-medium">{tCommon('logout')}</p>
-                <p className="text-sm text-muted-foreground">{tCommon('logout_description')}</p>
-              </div>
-              <Button variant="outline" onClick={handleLogout}>
-                <LogOut className="mr-2 h-4 w-4" />
-                {tCommon('logout')}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      <section className="space-y-4 border-t border-border pt-8">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {tCommon('account_settings')}
+        </h2>
+        <div className="flex items-center justify-between p-4 border rounded-lg">
+          <div>
+            <p className="font-medium">{tCommon('logout')}</p>
+            <p className="text-sm text-muted-foreground">{tCommon('logout_description')}</p>
+          </div>
+          <Button variant="outline" onClick={handleLogout}>
+            <LogOut className="mr-2 h-4 w-4" />
+            {tCommon('logout')}
+          </Button>
+        </div>
       </section>
 
       {/* Privacy & agreements: surface the otherwise-unlinked DPA + privacy policy */}
-      <section className="border-t border-border pt-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>{tSettings('legal_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Link
-              href="/privacy"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-secondary/60"
-            >
-              <span className="font-medium">{tSettings('legal_privacy')}</span>
-              <ExternalLink className="h-4 w-4 text-muted-foreground" />
-            </Link>
-            <Link
-              href="/dpa"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-secondary/60"
-            >
-              <span className="font-medium">{tSettings('legal_dpa')}</span>
-              <ExternalLink className="h-4 w-4 text-muted-foreground" />
-            </Link>
-          </CardContent>
-        </Card>
+      <section className="space-y-4 border-t border-border pt-8">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {tSettings('legal_title')}
+        </h2>
+        <div className="space-y-2">
+          <Link
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-secondary/60"
+          >
+            <span className="font-medium">{tSettings('legal_privacy')}</span>
+            <ExternalLink className="h-4 w-4 text-muted-foreground" />
+          </Link>
+          <Link
+            href="/dpa"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-secondary/60"
+          >
+            <span className="font-medium">{tSettings('legal_dpa')}</span>
+            <ExternalLink className="h-4 w-4 text-muted-foreground" />
+          </Link>
+        </div>
       </section>
 
       {/* Delete account: only for non-sandbox */}

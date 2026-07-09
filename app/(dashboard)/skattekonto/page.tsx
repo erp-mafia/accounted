@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { PageHeader } from '@/components/ui/page-header'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
@@ -16,7 +18,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency } from '@/lib/utils'
+import {
+  formatCurrency,
+  formatDate,
+  formatDateLong,
+  formatDateTime,
+} from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   AlertCircle,
@@ -263,19 +270,19 @@ export default function SkattekontoPage() {
       <div className="space-y-6">
         <PageHeading />
         <Card>
-          <CardContent className="flex flex-col items-center py-12 text-center">
-            <Landmark className="mb-4 h-10 w-10 text-muted-foreground/40" />
-            <p className="mb-1 font-medium">Skatteverket är inte anslutet</p>
-            <p className="mb-4 max-w-md text-sm text-muted-foreground">
-              För att se saldo och transaktioner på skattekontot behöver du
-              ansluta med BankID i inställningarna.
-            </p>
-            <Button asChild>
-              <Link href="/settings/tax">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                Anslut Skatteverket
-              </Link>
-            </Button>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={Landmark}
+              title="Skatteverket är inte anslutet"
+              description="För att se saldo och transaktioner på skattekontot behöver du ansluta med BankID i inställningarna."
+            >
+              <Button asChild>
+                <Link href="/settings/tax">
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Anslut Skatteverket
+                </Link>
+              </Button>
+            </EmptyState>
           </CardContent>
         </Card>
       </div>
@@ -287,17 +294,17 @@ export default function SkattekontoPage() {
       <div className="space-y-6">
         <PageHeading />
         <Card>
-          <CardContent className="flex flex-col items-center py-12 text-center">
-            <AlertCircle className="mb-4 h-10 w-10 text-muted-foreground/40" />
-            <p className="mb-1 font-medium">Kunde inte hämta skattekontot</p>
-            <p className="mb-4 max-w-md text-sm text-muted-foreground">
-              Något gick fel när saldo och transaktioner skulle hämtas. Försök
-              igen om en stund.
-            </p>
-            <Button variant="outline" onClick={() => void reload()}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Försök igen
-            </Button>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={AlertCircle}
+              title="Kunde inte hämta skattekontot"
+              description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
+            >
+              <Button variant="outline" onClick={() => void reload()}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Försök igen
+              </Button>
+            </EmptyState>
           </CardContent>
         </Card>
       </div>
@@ -401,17 +408,7 @@ export default function SkattekontoPage() {
 }
 
 function PageHeading({ right }: { right?: React.ReactNode }) {
-  return (
-    <div className="flex items-end justify-between gap-4">
-      <div>
-        <h1 className="font-serif text-3xl">Skattekonto</h1>
-        <p className="text-sm text-muted-foreground">
-          Saldo och transaktioner från Skatteverket
-        </p>
-      </div>
-      {right}
-    </div>
-  )
+  return <PageHeader title="Skattekonto" action={right} />
 }
 
 function BalanceHero({
@@ -456,7 +453,7 @@ function BalanceHero({
               Skatteverket
             </p>
             <p
-              className={`font-serif text-4xl tabular-nums ${
+              className={`font-display text-2xl tabular-nums ${
                 skvNegative ? 'text-destructive' : 'text-foreground'
               }`}
             >
@@ -473,7 +470,7 @@ function BalanceHero({
               Kronofogden
             </p>
             <p
-              className={`font-serif text-4xl tabular-nums ${
+              className={`font-display text-2xl tabular-nums ${
                 kfmNegative ? 'text-destructive' : 'text-foreground'
               }`}
             >
@@ -514,7 +511,7 @@ function BalanceHero({
               Saldo per
             </p>
             <p className="font-medium tabular-nums">
-              {new Date(data.senastUppdaterad).toLocaleString('sv-SE')}
+              {formatDateLong(data.senastUppdaterad)}
             </p>
           </div>
         </div>
@@ -523,7 +520,7 @@ function BalanceHero({
           <p className="text-xs text-muted-foreground">
             Synkas automatiskt varje natt. Senast synkad{' '}
             <span className="tabular-nums">
-              {new Date(saldo.lastSyncedAt).toLocaleString('sv-SE')}
+              {formatDateTime(saldo.lastSyncedAt)}
             </span>
             . Skatteverket uppdaterar saldot periodvis: datumet ovan ändras
             inte varje gång du synkroniserar.
@@ -584,9 +581,11 @@ function TransactionTable({
           const isBooked = !!row.journal_entry_id
           return (
             <TableRow key={row.id}>
-              <TableCell className="tabular-nums">{row.transaktionsdatum}</TableCell>
+              <TableCell className="tabular-nums">{formatDate(row.transaktionsdatum)}</TableCell>
               {showForfallodatum && (
-                <TableCell className="tabular-nums">{row.forfallodatum ?? '-'}</TableCell>
+                <TableCell className="tabular-nums">
+                  {row.forfallodatum ? formatDate(row.forfallodatum) : '-'}
+                </TableCell>
               )}
               <TableCell>
                 {row.transaktionstext}
@@ -599,7 +598,7 @@ function TransactionTable({
                           voucher_number: row.match_suggestion.voucher_number,
                         })
                       : 'utkast'}{' '}
-                    ({row.match_suggestion.entry_date})
+                    ({formatDate(row.match_suggestion.entry_date)})
                   </p>
                 )}
               </TableCell>
@@ -681,7 +680,7 @@ function MatchDialog({
           <DialogDescription>
             {row && (
               <>
-                {row.transaktionsdatum} • {row.transaktionstext} •{' '}
+                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
                 <span className="tabular-nums">
                   {formatCurrency(Number(row.belopp_skatteverket))}
                 </span>
@@ -723,7 +722,7 @@ function MatchDialog({
               <TableBody>
                 {candidates.map(c => (
                   <TableRow key={c.journal_entry_id}>
-                    <TableCell className="tabular-nums">{c.entry_date}</TableCell>
+                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>

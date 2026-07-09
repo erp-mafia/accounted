@@ -137,7 +137,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
 
         return (
           <Card key={def.id}>
-            <CardContent className="p-6">
+            <CardContent className="p-4">
               <InfoTooltip
                 content={tooltipContent}
                 side="top"

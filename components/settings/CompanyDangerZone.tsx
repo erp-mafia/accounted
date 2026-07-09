@@ -82,7 +82,7 @@ export function CompanyDangerZone() {
   return (
     <>
       <section className="space-y-4 border-t border-border pt-8">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-destructive/80">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-destructive">
           {t('danger_heading')}
         </h2>
 

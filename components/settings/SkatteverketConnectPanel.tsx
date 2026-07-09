@@ -105,7 +105,7 @@ export function SkatteverketConnectPanel() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>{t('title')}</CardTitle>
+            <CardTitle className="text-base">{t('title')}</CardTitle>
             <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
           </div>
         </CardHeader>
@@ -154,7 +154,7 @@ export function SkatteverketConnectPanel() {
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
             {t('title')}
             {status.expired ? (
               <Badge variant="destructive">{t('expired')}</Badge>

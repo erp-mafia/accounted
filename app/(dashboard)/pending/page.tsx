@@ -384,11 +384,11 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
       )}
       <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Netto</span>
-        <span className="font-mono tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
         <span className="text-muted-foreground">Moms</span>
-        <span className="font-mono tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
         <span className="font-medium">Totalt</span>
-        <span className="font-mono tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
       </div>
     </div>
   )
@@ -944,7 +944,7 @@ export default function PendingOperationsPage() {
   const showFilterDot = sourceFilter !== 'all'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title={t('title')}
         description={t('subtitle')}

@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Trash2, Users, ChevronDown } from 'lucide-react'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
@@ -94,7 +95,7 @@ export function CounterpartyTemplatesPanel() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>{t('title')}</CardTitle>
+          <CardTitle className="text-base">{t('title')}</CardTitle>
           <CardDescription>
             {t('description')}
           </CardDescription>
@@ -105,13 +106,11 @@ export function CounterpartyTemplatesPanel() {
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : templates.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <Users className="h-8 w-8 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">{t('empty_title')}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('empty_help')}
-              </p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title={t('empty_title')}
+              description={t('empty_help')}
+            />
           ) : (
             <div className="space-y-1">
               {templates.map((tt) => {

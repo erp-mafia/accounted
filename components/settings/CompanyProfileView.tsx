@@ -68,9 +68,9 @@ function cleanSignatory(raw: string): string[] {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
-      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">
+      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">
         {title}
-      </h3>
+      </h2>
       {children}
     </section>
   )

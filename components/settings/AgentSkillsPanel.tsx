@@ -50,7 +50,7 @@ const PROSE =
   'prose-table:my-2 prose-table:text-xs [&_table]:w-full ' +
   '[&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium ' +
   '[&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] ' +
-  '[&_td]:border-b [&_td]:border-border/60 [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
+  '[&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
 // The API returns errors either as a plain string (legacy/validation) or as
 // the canonical { code, message } envelope — extract something renderable.

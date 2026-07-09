@@ -266,7 +266,7 @@ function ExpansionContent({
         </thead>
         <tbody>
           {lines.map((line) => (
-            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t border-border/40">
+            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t border-border">
               <td className="py-1.5">
                 {line.journal_entry_id ? (
                   <Link

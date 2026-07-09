@@ -76,7 +76,7 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating }: Run
                 </thead>
                 <tbody>
                   {entry.lines.map((line, li) => (
-                    <tr key={li} className="border-t border-border/30">
+                    <tr key={li} className="border-t border-border">
                       <td className="py-1.5 tabular-nums font-mono">{line.account_number}</td>
                       <td className="py-1.5 text-muted-foreground">{line.line_description}</td>
                       <td className="py-1.5 text-right tabular-nums">

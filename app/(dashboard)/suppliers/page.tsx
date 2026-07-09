@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/ui/page-header'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Building2, Lock } from 'lucide-react'
@@ -113,44 +114,44 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <ReportExportMenu
-            size="default"
-            items={[
-              { format: 'xlsx', href: '/api/export/suppliers' },
-              { format: 'csv', href: '/api/export/suppliers?format=csv' },
-            ]}
-          />
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
-                ) : (
-                  <Lock className="mr-2 h-4 w-4" />
-                )}
-                {t('new_supplier')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_supplier')}</DialogTitle>
-              </DialogHeader>
-              <SupplierForm
-                onSubmit={handleCreateSupplier}
-                isLoading={isCreating}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
+      <PageHeader
+        title={t('title')}
+        action={
+          <div className="flex items-center gap-2">
+            <ReportExportMenu
+              size="default"
+              items={[
+                { format: 'xlsx', href: '/api/export/suppliers' },
+                { format: 'csv', href: '/api/export/suppliers?format=csv' },
+              ]}
+            />
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  disabled={!canWrite}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                >
+                  {canWrite ? (
+                    <Plus className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Lock className="mr-2 h-4 w-4" />
+                  )}
+                  {t('new_supplier')}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>{t('add_supplier')}</DialogTitle>
+                </DialogHeader>
+                <SupplierForm
+                  onSubmit={handleCreateSupplier}
+                  isLoading={isCreating}
+                />
+              </DialogContent>
+            </Dialog>
+          </div>
+        }
+      />
 
       {/* Search */}
       <div className="relative">

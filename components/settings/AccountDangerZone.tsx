@@ -103,7 +103,7 @@ export function AccountDangerZone() {
   return (
     <>
       <section className="space-y-4 border-t border-border pt-8">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-destructive/80">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-destructive">
           {t('heading')}
         </h2>
 
