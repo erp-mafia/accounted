@@ -29,6 +29,10 @@ COPY docker/extensions.${EXTENSIONS_PRESET}.json ./extensions.config.json
 # These get replaced at runtime by docker-entrypoint.sh so the image
 # is generic and reusable across different Supabase projects.
 ENV NEXT_PUBLIC_SUPABASE_URL=__NEXT_PUBLIC_SUPABASE_URL__
+# Realtime WebSocket origin for the CSP. Must be its own sentinel: the CSP is
+# baked into the build output, so the entrypoint cannot derive wss:// from the
+# already-substituted https URL after the fact (issue #893).
+ENV NEXT_PUBLIC_SUPABASE_WS_URL=__NEXT_PUBLIC_SUPABASE_WS_URL__
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=__NEXT_PUBLIC_SUPABASE_ANON_KEY__
 ENV NEXT_PUBLIC_APP_URL=__NEXT_PUBLIC_APP_URL__
 ENV NEXT_PUBLIC_VAPID_PUBLIC_KEY=__NEXT_PUBLIC_VAPID_PUBLIC_KEY__

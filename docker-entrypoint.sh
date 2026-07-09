@@ -75,7 +75,18 @@ if [ -n "$SUBST_PATHS" ]; then
     v=${v//|/\\|}
     printf %s "$v"
   }
+  # Realtime WebSocket origin for the CSP (issue #893): derive from the
+  # Supabase URL unless explicitly overridden. https:// becomes wss://;
+  # http:// becomes ws:// for plain-HTTP local installs. Without this token
+  # in connect-src, Supabase Realtime's WebSocket is CSP-blocked on
+  # self-hosted installs and WebKit crashes the dashboard.
+  if [ -z "${NEXT_PUBLIC_SUPABASE_WS_URL:-}" ]; then
+    NEXT_PUBLIC_SUPABASE_WS_URL=$(printf %s "$NEXT_PUBLIC_SUPABASE_URL" \
+      | sed -e 's|^https://|wss://|' -e 's|^http://|ws://|')
+  fi
+
   E_SUPABASE_URL=$(sed_esc "$NEXT_PUBLIC_SUPABASE_URL")
+  E_SUPABASE_WS_URL=$(sed_esc "$NEXT_PUBLIC_SUPABASE_WS_URL")
   E_SUPABASE_ANON_KEY=$(sed_esc "$NEXT_PUBLIC_SUPABASE_ANON_KEY")
   E_APP_URL=$(sed_esc "$NEXT_PUBLIC_APP_URL")
   E_VAPID_PUBLIC_KEY=$(sed_esc "${NEXT_PUBLIC_VAPID_PUBLIC_KEY:-}")
@@ -96,6 +107,7 @@ if [ -n "$SUBST_PATHS" ]; then
     | tr '\n' '\0' \
     | xargs -0 -r sed -i \
         -e "s|__NEXT_PUBLIC_SUPABASE_URL__|${E_SUPABASE_URL}|g" \
+        -e "s|__NEXT_PUBLIC_SUPABASE_WS_URL__|${E_SUPABASE_WS_URL}|g" \
         -e "s|__NEXT_PUBLIC_SUPABASE_ANON_KEY__|${E_SUPABASE_ANON_KEY}|g" \
         -e "s|__NEXT_PUBLIC_APP_URL__|${E_APP_URL}|g" \
         -e "s|__NEXT_PUBLIC_VAPID_PUBLIC_KEY__|${E_VAPID_PUBLIC_KEY}|g" \
