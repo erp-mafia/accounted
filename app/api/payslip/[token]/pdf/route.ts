@@ -4,6 +4,7 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken, isValidPayslipTokenFormat } from '@/lib/salary/payslips/links'
 import { buildPayslipData, payslipFileName } from '@/lib/salary/payslips/build-payslip-data'
 import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
+import { contentDisposition } from '@/lib/api/content-disposition'
 
 // In-memory rate limiting per token (pattern from /api/calendar/feed).
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -118,7 +119,10 @@ export async function GET(
   return new Response(buffer as unknown as BodyInit, {
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      // RFC 5987 dual form: employee names with non-Latin-1 characters
+      // (e.g. NFD combining marks) would otherwise make undici reject
+      // the header value and crash the response.
+      'Content-Disposition': contentDisposition('attachment', fileName),
       'Cache-Control': 'no-store',
     },
   })

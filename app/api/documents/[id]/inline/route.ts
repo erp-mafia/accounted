@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
+import { contentDisposition } from '@/lib/api/content-disposition'
 
 /**
  * GET /api/documents/:id/inline
@@ -87,13 +88,14 @@ export async function GET(
     )
   }
 
-  const safeFileName = doc.file_name.replace(/[\r\n"]/g, '_')
-
   return new NextResponse(blob, {
     status: 200,
     headers: {
       'Content-Type': resolveContentType(doc.file_name, doc.mime_type),
-      'Content-Disposition': `inline; filename="${safeFileName}"`,
+      // RFC 5987 dual form: NFD filenames from macOS/iOS uploads contain
+      // combining marks (> 0xFF), which undici Headers reject as non-
+      // ByteString values; splicing the raw name here 500ed the route.
+      'Content-Disposition': contentDisposition('inline', doc.file_name),
       'Cache-Control': 'private, max-age=300',
       // Block MIME sniffing: Content-Type is derived from DB metadata
       // (with extension fallback for legacy rows), never from response

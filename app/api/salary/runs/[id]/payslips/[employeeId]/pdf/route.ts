@@ -5,6 +5,7 @@ import { getCompanyDisplayName } from '@/lib/company/context'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import { buildPayslipData, payslipFileName } from '@/lib/salary/payslips/build-payslip-data'
+import { contentDisposition } from '@/lib/api/content-disposition'
 
 ensureInitialized()
 
@@ -81,7 +82,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
     return new Response(buffer as unknown as BodyInit, {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `inline; filename="${fileName}"`,
+        // RFC 5987 dual form: employee names with non-Latin-1 characters
+        // (e.g. NFD combining marks) would otherwise make undici reject
+        // the header value and crash the response.
+        'Content-Disposition': contentDisposition('inline', fileName),
       },
     })
   },
