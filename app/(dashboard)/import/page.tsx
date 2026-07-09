@@ -1028,7 +1028,7 @@ function OpeningBalanceFlow() {
           error={obError}
           errorAction={
             obBankFormatHint
-              ? { label: 'Gå till Banktransaktioner', onClick: () => router.push('/import?mode=bank') }
+              ? { label: 'Importera banktransaktioner', onClick: () => router.push('/import?mode=bank') }
               : undefined
           }
         />
