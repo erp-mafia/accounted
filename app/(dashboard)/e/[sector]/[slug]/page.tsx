@@ -1,15 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
-import Link from 'next/link'
 import { getExtensionDefinition } from '@/lib/extensions/sectors'
 import ExtensionWorkspaceLoader from '@/components/extensions/ExtensionWorkspaceLoader'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
-import { resolveIcon } from '@/lib/extensions/icon-resolver'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Button } from '@/components/ui/button'
+import { ExtensionUpsellState } from '@/components/extensions/ExtensionUpsellState'
 
 export default async function ExtensionWorkspacePage({
   params,
@@ -38,17 +35,16 @@ export default async function ExtensionWorkspacePage({
       : false
     if (!allowed) {
       const t = await getTranslations('extensions')
-      const Icon = resolveIcon(definition.icon)
+      // Only plain strings cross into the client component here: passing a
+      // resolved icon component would crash RSC serialization (500 page).
       return (
-        <EmptyState
-          icon={Icon}
+        <ExtensionUpsellState
+          iconName={definition.icon}
           title={t('upsell_title', { name: definition.name })}
           description={t('upsell_description')}
-        >
-          <Link href="/settings/billing">
-            <Button>{t('upsell_cta')}</Button>
-          </Link>
-        </EmptyState>
+          ctaLabel={t('upsell_cta')}
+          ctaHref="/settings/billing"
+        />
       )
     }
   }
