@@ -1144,9 +1144,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-muted-foreground mb-2">
-                  {t('credited_description')}
-                </p>
                 <Link href={`/invoices/${creditNote.id}`}>
                   <Button variant="outline" size="sm" className="w-full">
                     <ExternalLink className="mr-2 h-4 w-4" />

@@ -252,7 +252,7 @@ export default function TransactionBookingDialog({
       <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             {t('description')}
           </DialogDescription>
         </DialogHeader>

@@ -179,9 +179,6 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       <Card>
         <CardHeader>
           <CardTitle>{t('original_card_title')}</CardTitle>
-          <CardDescription>
-            {t('original_card_description')}
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4 text-sm">

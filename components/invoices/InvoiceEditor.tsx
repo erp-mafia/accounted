@@ -1292,7 +1292,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Card>
             <CardHeader>
               <CardTitle>{isSelfBilled ? <>{ts('customer_label')}<RequiredMark /></> : <>{t('customer_card_title')}<RequiredMark /></>}</CardTitle>
-              <CardDescription>{isSelfBilled ? ts('issuer_card_description') : t('customer_card_description')}</CardDescription>
+              {isSelfBilled && <CardDescription>{ts('issuer_card_description')}</CardDescription>}
             </CardHeader>
             <CardContent>
               <Controller
@@ -1960,7 +1960,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Card>
               <CardHeader>
                 <CardTitle>{t('notes_card_title')}</CardTitle>
-              <CardDescription>{t('notes_card_description')}</CardDescription>
             </CardHeader>
               <CardContent>
                 <Textarea
