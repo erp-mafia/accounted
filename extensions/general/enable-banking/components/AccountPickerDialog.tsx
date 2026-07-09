@@ -25,10 +25,13 @@ import { Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
-  getCurrentFiscalYearStart,
   getPreviousFiscalYearStart,
   daysBetween,
 } from '@/lib/company/fiscal-year'
+import {
+  resolveBookedCoverage,
+  resolveFiscalYearStart,
+} from '../lib/date-suggestions'
 import type { CompanySettings } from '@/types'
 import type { StoredAccount } from '../types'
 import {
@@ -79,8 +82,8 @@ export function AccountPickerDialog({
 }: AccountPickerDialogProps) {
   const { toast } = useToast()
   // Memoise so the client has a stable reference across re-renders. Without this,
-  // listing `supabase` in the SIE-fetch effect's deps would re-fire that query on
-  // every checkbox tick or parent re-render.
+  // listing `supabase` in the data-fetch effects' deps would re-fire those queries
+  // on every checkbox tick or parent re-render.
   const supabase = useMemo(() => createClient(), [])
   const { company } = useCompany()
 
@@ -90,11 +93,12 @@ export function AccountPickerDialog({
   // the dialog: a rejected save persisted nothing and started no sync, so the
   // user must see why and be able to correct the picks.
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [sieLastDate, setSieLastDate] = useState<string | null>(null)
+  const [lastBookedDate, setLastBookedDate] = useState<string | null>(null)
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [chartError, setChartError] = useState(false)
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
   const [companySettings, setCompanySettings] = useState<Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null>(null)
+  const [currentPeriodStart, setCurrentPeriodStart] = useState<string | null>(null)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
 
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
@@ -143,43 +147,61 @@ export function AccountPickerDialog({
   }, [open, accounts])
 
   // Load fiscal_year_start_month + entity_type so "Sedan räkenskapsårets början"
-  // resolves to the right date for non-calendar fiscal years.
+  // resolves to the right date for non-calendar fiscal years, plus the actual
+  // fiscal_periods row containing today: the recurring setting cannot represent
+  // an extended or shortened first year, so the period row wins when it exists.
   useEffect(() => {
     if (!open || !company?.id) return
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('company_settings')
-        .select('fiscal_year_start_month, entity_type')
-        .eq('company_id', company.id)
-        .maybeSingle()
+      const today = new Date().toISOString().split('T')[0]
+      const [settingsRes, periodRes] = await Promise.all([
+        supabase
+          .from('company_settings')
+          .select('fiscal_year_start_month, entity_type')
+          .eq('company_id', company.id)
+          .maybeSingle(),
+        supabase
+          .from('fiscal_periods')
+          .select('period_start')
+          .eq('company_id', company.id)
+          .lte('period_start', today)
+          .gte('period_end', today)
+          .order('period_start', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ])
       if (cancelled) return
-      setCompanySettings((data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
+      setCompanySettings((settingsRes.data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
+      setCurrentPeriodStart((periodRes.data as { period_start?: string } | null)?.period_start || null)
       setSettingsLoaded(true)
     })()
     return () => { cancelled = true }
   }, [open, company?.id, supabase])
 
-  // Fetch the latest SIE import end date so we can offer "day after last SIE entry"
-  // as a one-click escape from the default fiscal-year start. Only matters on the
-  // initial activation flow: selection edits don't re-run sync.
+  // Fetch the latest posted verifikat date so we can offer "day after the last
+  // booked entry" as a one-click escape from the default fiscal-year start.
+  // Deliberately NOT sie_imports.fiscal_year_end (issue #917): that is the
+  // fiscal period's end, which can lie months past the last actually booked
+  // transaction and would make the user skip everything unbooked in between.
+  // Only matters on the initial activation flow: selection edits don't re-run sync.
   useEffect(() => {
     if (!open || !isInitialSelection || !company?.id) {
-      setSieLastDate(null)
+      setLastBookedDate(null)
       return
     }
     let cancelled = false
     ;(async () => {
       const { data } = await supabase
-        .from('sie_imports')
-        .select('fiscal_year_end')
+        .from('journal_entries')
+        .select('entry_date')
         .eq('company_id', company.id)
-        .eq('status', 'completed')
-        .order('fiscal_year_end', { ascending: false })
+        .eq('status', 'posted')
+        .order('entry_date', { ascending: false })
         .limit(1)
         .maybeSingle()
       if (cancelled) return
-      setSieLastDate((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
+      setLastBookedDate((data as { entry_date?: string } | null)?.entry_date || null)
     })()
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, supabase])
@@ -384,16 +406,14 @@ export function AccountPickerDialog({
     }
   }
 
-  const dayAfterSie = useMemo(() => {
-    if (!sieLastDate) return null
-    const d = new Date(sieLastDate)
-    d.setDate(d.getDate() + 1)
-    return d.toISOString().split('T')[0]
-  }, [sieLastDate])
+  const bookedCoverage = useMemo(
+    () => resolveBookedCoverage(lastBookedDate),
+    [lastBookedDate],
+  )
 
   const fiscalYearStart = useMemo(
-    () => getCurrentFiscalYearStart(companySettings),
-    [companySettings],
+    () => resolveFiscalYearStart(currentPeriodStart, companySettings),
+    [currentPeriodStart, companySettings],
   )
 
   const previousFiscalYearStart = useMemo(
@@ -468,13 +488,13 @@ export function AccountPickerDialog({
               </p>
             </div>
 
-            {sieLastDate && dayAfterSie && (
+            {bookedCoverage && (
               <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background/60 p-3">
                 <p className="text-xs text-muted-foreground">
-                  Senaste SIE-importen täcker till{' '}
-                  <span className="font-medium tabular-nums text-foreground">{sieLastDate}</span>.
+                  Ditt senaste bokförda verifikat är daterat{' '}
+                  <span className="font-medium tabular-nums text-foreground">{bookedCoverage.lastBookedDate}</span>.
                   Vi föreslår{' '}
-                  <span className="font-medium tabular-nums text-foreground">{dayAfterSie}</span>{' '}
+                  <span className="font-medium tabular-nums text-foreground">{bookedCoverage.suggestedStartDate}</span>{' '}
                   som startdatum så inget överlappar din bokföring.
                 </p>
                 <button
@@ -483,7 +503,7 @@ export function AccountPickerDialog({
                   onClick={() => {
                     setLookbackMode('custom')
                     setCustomSubMode('date')
-                    setCustomDate(dayAfterSie)
+                    setCustomDate(bookedCoverage.suggestedStartDate)
                   }}
                   disabled={isSaving}
                 >
