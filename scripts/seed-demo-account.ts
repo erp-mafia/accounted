@@ -22,6 +22,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { config as dotenv } from 'dotenv'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
@@ -1890,19 +1891,36 @@ async function seedInboxAndUncategorized(
 ): Promise<void> {
   console.log('[6] inbox AWS PDF + 5 uncategorized + voucher gaps')
 
-  // Synthetic AWS PDF storage row (no actual file upload: storage path
-  // exists for demo, file content can be uploaded later via UI)
-  const fakeHash = 'demo' + Math.random().toString(36).slice(2, 18).padEnd(60, '0')
+  // Synthetic AWS invoice PDF: upload a tiny but valid PDF so the nightly
+  // integrity-verify cron can download the object and match its real
+  // SHA-256, instead of failing forever on a fabricated hash with no file.
+  const awsPdfBuffer = Buffer.from(
+    [
+      '%PDF-1.4',
+      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >> endobj',
+      'trailer << /Root 1 0 R >>',
+      '%%EOF',
+    ].join('\n'),
+    'utf8'
+  )
+  const awsPdfPath = `${ctx.userId}/${ctx.companyId}/inbox/aws-2026-05-05.pdf`
+  const { error: uploadErr } = await sb.storage
+    .from('documents')
+    .upload(awsPdfPath, awsPdfBuffer, { contentType: 'application/pdf', upsert: true })
+  if (uploadErr) throw new Error(`storage upload AWS PDF: ${uploadErr.message}`)
+  const awsPdfHash = createHash('sha256').update(awsPdfBuffer).digest('hex')
   const { data: doc, error: docErr } = await sb
     .from('document_attachments')
     .insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,
-      storage_path: `${ctx.userId}/${ctx.companyId}/inbox/aws-2026-05-05.pdf`,
+      storage_path: awsPdfPath,
       file_name: 'aws-2026-05-05.pdf',
-      file_size_bytes: 124567,
+      file_size_bytes: awsPdfBuffer.length,
       mime_type: 'application/pdf',
-      sha256_hash: fakeHash,
+      sha256_hash: awsPdfHash,
       version: 1,
       is_current_version: true,
       uploaded_by: ctx.userId,
