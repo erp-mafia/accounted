@@ -814,10 +814,12 @@ const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
 function OpeningBalanceFlow() {
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
+  const router = useRouter()
 
   const [obStep, setObStep] = useState<OpeningBalanceStep>('upload')
   const [obIsLoading, setObIsLoading] = useState(false)
   const [obError, setObError] = useState<string | null>(null)
+  const [obBankFormatHint, setObBankFormatHint] = useState<string | null>(null)
   const [obFile, setObFile] = useState<File | null>(null)
   const [parseResult, setParseResult] = useState<OpeningBalanceParseResult | null>(null)
   const [editedRows, setEditedRows] = useState<{
@@ -836,6 +838,7 @@ function OpeningBalanceFlow() {
 
   const handleFileSelect = useCallback(async (file: File) => {
     setObError(null)
+    setObBankFormatHint(null)
     setObIsLoading(true)
     setObFile(file)
 
@@ -859,7 +862,13 @@ function OpeningBalanceFlow() {
       setParseResult(result)
 
       if (result.rows.length === 0) {
-        setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+        if (result.detected_bank_format) {
+          // The file is a bank statement uploaded to the wrong importer (#918)
+          setObBankFormatHint(result.detected_bank_format)
+          setObError(`Filen ser ut som ett kontoutdrag från ${result.detected_bank_format}, inte ingående balanser. Kontoutdrag importeras under "Banktransaktioner".`)
+        } else {
+          setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+        }
         return
       }
 
@@ -981,6 +990,7 @@ function OpeningBalanceFlow() {
     setEditedRows([])
     setExecuteResult(null)
     setObError(null)
+    setObBankFormatHint(null)
   }
 
   return (
@@ -1016,6 +1026,11 @@ function OpeningBalanceFlow() {
           onFileSelect={handleFileSelect}
           isLoading={obIsLoading}
           error={obError}
+          errorAction={
+            obBankFormatHint
+              ? { label: 'Gå till Banktransaktioner', onClick: () => router.push('/import?mode=bank') }
+              : undefined
+          }
         />
       )}
 

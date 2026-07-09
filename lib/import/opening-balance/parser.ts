@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx'
 import { detectColumns } from './column-detector'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { detectFileFormat } from '../bank-file/parser'
+import { decodeFileContent } from '../shared/encoding'
 import { readWorkbookFromBuffer } from '../shared/workbook-reader'
 import type {
   DetectedColumns,
@@ -29,6 +31,25 @@ export function parseAmount(value: unknown): number {
   const num = parseFloat(cleaned)
   if (isNaN(num)) return 0
   return Math.round(num * 100) / 100
+}
+
+/**
+ * When an opening-balance parse yields no rows, check whether the uploaded
+ * file is actually a bank statement (issue #918: users upload bank CSV
+ * exports here and only get a generic "no accounts found" error). Only CSV
+ * files can match: the bank-file detectors operate on decoded text, and the
+ * generic CSV fallback never auto-detects, so any match is a real bank format.
+ */
+function detectBankStatementFormat(buffer: ArrayBuffer, filename: string): string | null {
+  const ext = filename.toLowerCase().split('.').pop() ?? ''
+  if (ext !== 'csv') return null
+  try {
+    const content = decodeFileContent(buffer)
+    return detectFileFormat(content, filename)?.name ?? null
+  } catch {
+    // Detection is a best-effort hint: never let it break the parse result
+    return null
+  }
 }
 
 /**
@@ -87,6 +108,7 @@ export function parseOpeningBalanceFile(
       total_credit: 0,
       is_balanced: true,
       warnings: ['Filen innehåller för få rader.'],
+      detected_bank_format: detectBankStatementFormat(buffer, filename),
     }
   }
 
@@ -242,5 +264,7 @@ export function parseOpeningBalanceFile(
     total_credit: totalCredit,
     is_balanced: isBalanced,
     warnings,
+    detected_bank_format:
+      mergedRows.length === 0 ? detectBankStatementFormat(buffer, filename) : null,
   }
 }

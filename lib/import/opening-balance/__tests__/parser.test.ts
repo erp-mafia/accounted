@@ -255,3 +255,68 @@ describe('parseOpeningBalanceFile', () => {
     expect(result.total_credit).toBe(40000)
   })
 })
+
+describe('bank statement detection (issue #918)', () => {
+  const toBuffer = (csv: string): ArrayBuffer =>
+    new TextEncoder().encode(csv).buffer as ArrayBuffer
+
+  it('flags a Swedbank bank statement CSV that yields no account rows', async () => {
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const csv = [
+      'Radnr,Clnr,Kontonr,Produkt,Valuta,Bokfdag,Transdag,Valutadag,Referens,Text,Belopp,Saldo',
+      '1,8385-9,9350000000,Företagskonto,SEK,2026-05-02,2026-05-02,2026-05-02,Hyra maj,Bg-bet. via internet,-12000.00,54321.00',
+      '2,8385-9,9350000000,Företagskonto,SEK,2026-05-03,2026-05-03,2026-05-03,Kundbetalning,Insättning,25000.00,79321.00',
+    ].join('\n')
+
+    const result = parseOpeningBalanceFile(toBuffer(csv), 'kontoutdrag.csv')
+
+    expect(result.rows.length).toBe(0)
+    expect(result.detected_bank_format).toBe('Swedbank')
+  })
+
+  it('flags an SEB bank statement CSV that yields no account rows', async () => {
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const csv = [
+      'Bokföringsdatum;Valutadatum;Verifikationsnummer;Text;Belopp;Saldo',
+      '2026-05-02;2026-05-02;5501234567;Hyra maj;-12000,00;54321,00',
+      '2026-05-03;2026-05-03;5501234568;Kundbetalning;25000,00;79321,00',
+    ].join('\n')
+
+    const result = parseOpeningBalanceFile(toBuffer(csv), 'export.csv')
+
+    expect(result.rows.length).toBe(0)
+    expect(result.detected_bank_format).toBe('SEB')
+  })
+
+  it('does not flag a CSV that yields no rows but matches no bank format', async () => {
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const csv = [
+      'Namn,Stad,Antal',
+      'Alfa,Göteborg,3',
+      'Beta,Malmö,7',
+    ].join('\n')
+
+    const result = parseOpeningBalanceFile(toBuffer(csv), 'annat.csv')
+
+    expect(result.rows.length).toBe(0)
+    expect(result.detected_bank_format).toBeNull()
+  })
+
+  it('does not flag a valid opening balance file', async () => {
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const csv = [
+      'Kontonr,Kontonamn,Debet,Kredit',
+      '1930,Företagskonto,50000,0',
+      '2099,Årets resultat,0,50000',
+    ].join('\n')
+
+    const result = parseOpeningBalanceFile(toBuffer(csv), 'ib.csv')
+
+    expect(result.rows.length).toBe(2)
+    expect(result.detected_bank_format).toBeNull()
+  })
+})

@@ -44,6 +44,12 @@ export interface OpeningBalanceParseResult {
   total_credit: number
   is_balanced: boolean
   warnings: string[]
+  /**
+   * Bank-file format name (e.g. "Swedbank") when the file produced no account
+   * rows but matches a known bank statement format: the user most likely
+   * uploaded a bank statement to the wrong importer. Null otherwise.
+   */
+  detected_bank_format: string | null
 }
 
 /** Input for executing the opening balance import */

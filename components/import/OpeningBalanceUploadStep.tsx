@@ -10,12 +10,15 @@ interface OpeningBalanceUploadStepProps {
   onFileSelect: (file: File) => void
   isLoading: boolean
   error: string | null
+  /** Optional action rendered under the error text (e.g. route to the bank importer) */
+  errorAction?: { label: string; onClick: () => void }
 }
 
 export default function OpeningBalanceUploadStep({
   onFileSelect,
   isLoading,
   error,
+  errorAction,
 }: OpeningBalanceUploadStepProps) {
   const [isDragging, setIsDragging] = useState(false)
 
@@ -108,7 +111,14 @@ export default function OpeningBalanceUploadStep({
         {error && (
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
             <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-            <p className="text-sm text-destructive">{error}</p>
+            <div className="space-y-2">
+              <p className="text-sm text-destructive">{error}</p>
+              {errorAction && (
+                <Button variant="outline" size="sm" onClick={errorAction.onClick}>
+                  {errorAction.label}
+                </Button>
+              )}
+            </div>
           </div>
         )}
 
