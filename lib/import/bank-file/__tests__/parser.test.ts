@@ -199,6 +199,15 @@ const LUNAR_CSV = [
   '2024-01-13,LÖNEUTBETALNING,"25.000,00","12.877,17"',
 ].join('\n')
 
+// Real Lunar export as of 2026: Time and Transaction ID columns, "Title"
+// instead of "Text", SPACE thousands separator, UTF-8 BOM (issue #915).
+const LUNAR_CSV_2026 = '\uFEFF' + [
+  'Date,Time,Title,Amount,Balance,Transaction ID',
+  '2026-06-30,12:11,Incoming payment,"12 345,00","98 764,94",7f0a4c9e-1111-2222-3333-444455556666',
+  '2026-06-12,05:47,Fee,"-1,49","86 419,94",7f0a4c9e-1111-2222-3333-444455557777',
+  '2026-05-12,05:47,Card purchase,"-2 500,00","86 421,43",7f0a4c9e-1111-2222-3333-444455558888',
+].join('\n')
+
 // Northmill exports include a 5-line metadata preamble (Kontonummer, Saldo,
 // Kontohavare, Org. Nr, Period) plus blank lines before the actual transaction
 // header. Negative amounts use Unicode minus (U+2212), not ASCII hyphen.
@@ -400,6 +409,12 @@ describe('detectFileFormat', () => {
 
   it('detects Lunar CSV from English headers (date, text, amount, balance)', () => {
     const format = detectFileFormat(LUNAR_CSV, 'lunar.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('lunar')
+  })
+
+  it('detects the 2026 Lunar CSV header (Title column, BOM) as lunar', () => {
+    const format = detectFileFormat(LUNAR_CSV_2026, 'lunar.csv')
     expect(format).not.toBeNull()
     expect(format!.id).toBe('lunar')
   })
@@ -1155,6 +1170,58 @@ describe('parseBankFile: Lunar format', () => {
 
     expect(nordeaResult!.id).toBe('nordea')
     expect(lunarResult!.id).toBe('lunar')
+  })
+
+  // Regression tests for issue #915: the real 2026 Lunar export uses a SPACE
+  // thousands separator ("12 345,00") and a "Title" column instead of "Text".
+  it('parses 2026 Lunar amounts with space thousands separator without truncation', () => {
+    const result = parseBankFile(LUNAR_CSV_2026, 'lunar.csv')
+
+    expect(result.format).toBe('lunar')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues).toHaveLength(0)
+
+    expect(result.transactions[0].amount).toBe(12345)
+    expect(result.transactions[1].amount).toBe(-1.49)
+    expect(result.transactions[2].amount).toBe(-2500)
+  })
+
+  it('parses 2026 Lunar balance with space thousands separator', () => {
+    const result = parseBankFile(LUNAR_CSV_2026, 'lunar.csv')
+
+    expect(result.transactions[0].balance).toBe(98764.94)
+    expect(result.transactions[1].balance).toBe(86419.94)
+    expect(result.transactions[2].balance).toBe(86421.43)
+  })
+
+  it('takes the description from the Title column in the 2026 format', () => {
+    const result = parseBankFile(LUNAR_CSV_2026, 'lunar.csv')
+
+    expect(result.transactions[0].description).toBe('Incoming payment')
+    expect(result.transactions[1].description).toBe('Fee')
+    expect(result.transactions[2].description).toBe('Card purchase')
+  })
+
+  it('calculates 2026 format stats and date range correctly', () => {
+    const result = parseBankFile(LUNAR_CSV_2026, 'lunar.csv')
+
+    expect(result.stats.total_income).toBe(12345)
+    expect(result.stats.total_expenses).toBe(-2501.49)
+    expect(result.stats.parsed_rows).toBe(3)
+    expect(result.date_from).toBe('2026-05-12')
+    expect(result.date_to).toBe('2026-06-30')
+  })
+
+  it('still parses the legacy Lunar period thousands separator ("1.234,56")', () => {
+    const legacy = [
+      'Date,Text,Amount,Balance',
+      '2024-01-15,PAYMENT,"1.234,56","10.000,00"',
+    ].join('\n')
+    const result = parseBankFile(legacy, 'lunar.csv')
+
+    expect(result.format).toBe('lunar')
+    expect(result.transactions[0].amount).toBe(1234.56)
+    expect(result.transactions[0].balance).toBe(10000)
   })
 })
 
