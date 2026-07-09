@@ -26,7 +26,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
-import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
+import DuplicateBookingDialog, { type DuplicateMatchTransaction } from '@/components/transactions/DuplicateBookingDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useSubmitWithAccountActivation,
@@ -82,6 +82,13 @@ interface Props {
   editEntryId?: string
   /** Fired after a successful draft edit (editEntryId path). */
   onUpdated?: () => void
+  /** The bank transaction being booked (set by TransactionBookingDialog).
+   *  Enables the duplicate guard's "Matcha mot verifikatet" action for
+   *  ledger-only voucher candidates. */
+  duplicateMatchTransaction?: DuplicateMatchTransaction
+  /** Fired after the duplicate guard's match action links the transaction to
+   *  the existing voucher (no new entry was created). */
+  onDuplicateMatched?: (journalEntryId: string) => void
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -101,6 +108,8 @@ export default function JournalEntryForm({
   bare,
   editEntryId,
   onUpdated,
+  duplicateMatchTransaction,
+  onDuplicateMatched,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -1939,6 +1948,15 @@ export default function JournalEntryForm({
         processing={isSubmitting}
         onCancel={() => setDuplicateCandidate(null)}
         onBookAnyway={handleBookAnyway}
+        matchTransaction={duplicateMatchTransaction ?? null}
+        onMatched={
+          onDuplicateMatched
+            ? (_transactionId, journalEntryId) => {
+                setDuplicateCandidate(null)
+                onDuplicateMatched(journalEntryId)
+              }
+            : undefined
+        }
       />
     </div>
   )

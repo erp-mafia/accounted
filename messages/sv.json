@@ -3872,6 +3872,8 @@
     "dialog_duplicate_voucher_label": "Verifikat {label}",
     "dialog_duplicate_voucher_generic": "Befintlig verifikation",
     "dialog_duplicate_view_voucher": "Visa verifikatet",
+    "dialog_duplicate_match": "Matcha mot verifikatet",
+    "dialog_duplicate_match_failed": "Kunde inte matcha",
     "dialog_duplicate_book_anyway": "Bokför ändå",
     "dialog_duplicate_cancel": "Avbryt",
     "load_failed_title": "Kunde inte ladda transaktioner",

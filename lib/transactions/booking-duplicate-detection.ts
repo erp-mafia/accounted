@@ -46,6 +46,14 @@ export interface BookedDuplicateCandidate {
   entry_date: string
   description: string | null
   amount: number
+  /**
+   * The 19xx settlement account of the voucher leg that matched, set for
+   * ledger-only candidates so the match action can link on the exact account
+   * the voucher was booked to (a legacy transaction without cash_account_id
+   * would otherwise resolve by currency and can pick the wrong 19xx). Null for
+   * sibling-transaction candidates, whose legs are not fetched.
+   */
+  account_number: string | null
 }
 
 /** Minimal shape of the transaction about to be booked. */
@@ -162,6 +170,7 @@ export async function detectBookedDuplicateTransaction(
     entry_date: entryDate,
     description: best.description,
     amount: roundOre(Number(best.amount)),
+    account_number: null,
   }
 }
 
@@ -327,6 +336,7 @@ export async function detectLedgerDuplicateVoucher(
     entry_date: best.journal_entry.entry_date,
     description: best.journal_entry.description,
     amount: roundOre(Number(inbound ? best.debit_amount : best.credit_amount)),
+    account_number: best.account_number,
   }
 }
 

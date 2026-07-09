@@ -28,6 +28,9 @@ interface TransactionBookingDialogProps {
     transactionId: string,
     journalEntryId: string,
     attachedDocumentId?: string | null,
+    /** True when the transaction was LINKED to an existing voucher via the
+     *  duplicate guard's match action: no new verifikat was created. */
+    matched?: boolean,
   ) => void
   preselectedTemplate?: BookingTemplateLibrary | null
 }
@@ -154,7 +157,7 @@ export default function TransactionBookingDialog({
 
   const isIncome = transaction.amount > 0
 
-  const handleBooked = async (transactionId: string, journalEntryId: string) => {
+  const handleBooked = async (transactionId: string, journalEntryId: string, matched = false) => {
     // Link any attached documents to the new journal entry: freshly uploaded
     // files, and existing inbox documents picked via InboxDocumentPicker. For
     // picked docs, inbox_item_id stamps the inbox item as consumed so it drops
@@ -221,7 +224,7 @@ export default function TransactionBookingDialog({
 
     setUploadedFiles([])
     setPickedInboxDocs([])
-    onBooked(transactionId, journalEntryId, pinnedDocId)
+    onBooked(transactionId, journalEntryId, pinnedDocId, matched)
   }
 
   // The receipt to show beside the form. A transaction may arrive with a
@@ -377,6 +380,15 @@ export default function TransactionBookingDialog({
                 sourceType="bank_transaction"
                 sourceId={transaction.id}
                 onEntryCreated={(entryId) => handleBooked(transaction.id, entryId)}
+                duplicateMatchTransaction={{
+                  id: transaction.id,
+                  cash_account_id: transaction.cash_account_id ?? null,
+                  currency: transaction.currency ?? 'SEK',
+                }}
+                // Duplicate guard match: the bank line was linked to an existing
+                // voucher (no new entry). Reuse the booked flow so attached
+                // documents land on that verifikat and the row leaves the list.
+                onDuplicateMatched={(journalEntryId) => handleBooked(transaction.id, journalEntryId, true)}
               />
             )}
           </div>

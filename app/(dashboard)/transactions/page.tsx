@@ -45,6 +45,7 @@ import TransactionAttachDocumentDialog from '@/components/transactions/Transacti
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 import EditTransactionTitleDialog from '@/components/transactions/EditTransactionTitleDialog'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
@@ -244,14 +245,7 @@ export default function TransactionsPage() {
   const [duplicateWarning, setDuplicateWarning] = useState<{
     transactionId: string
     retry: () => Promise<string | null>
-    candidate: {
-      transaction_id: string | null
-      journal_entry_id: string
-      voucher_label: string
-      entry_date: string
-      description: string | null
-      amount: number
-    }
+    candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
 
@@ -889,14 +883,7 @@ export default function TransactionsPage() {
           // merely says "book anyway" with no way to do so: open a dialog with
           // the already-booked sibling and let the user confirm. "Bokför ändå"
           // re-runs with force bound to this candidate (server re-detects it).
-          const candidate = result.error.details.candidate as {
-            transaction_id: string | null
-            journal_entry_id: string
-            voucher_label: string
-            entry_date: string
-            description: string | null
-            amount: number
-          }
+          const candidate = result.error.details.candidate as BookedDuplicateCandidate
           setDuplicateWarning({
             transactionId: id,
             retry: () =>
@@ -1657,6 +1644,9 @@ export default function TransactionsPage() {
     transactionId: string,
     journalEntryId: string,
     attachedDocumentId?: string | null,
+    // True when the duplicate guard's match action LINKED the transaction to
+    // an existing voucher instead of creating a new one.
+    matched?: boolean,
   ) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
     setTimeout(() => {
@@ -1683,7 +1673,11 @@ export default function TransactionsPage() {
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
-    toast({ title: 'Bokförd' })
+    if (matched) {
+      toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
+    } else {
+      toast({ title: 'Bokförd' })
+    }
   }
 
   function openAttachDocumentDialog(transaction: TransactionWithInvoice) {
@@ -2675,6 +2669,21 @@ export default function TransactionsPage() {
         candidate={duplicateWarning?.candidate ?? null}
         processing={duplicateProcessing}
         onCancel={() => setDuplicateWarning(null)}
+        // Ledger-only candidate (transaction_id null, e.g. a verifikat from an
+        // SIE import): the primary action links the bank line to the existing
+        // voucher instead of double-booking it. Success refreshes the same
+        // state a MatchVoucherDialog link does.
+        matchTransaction={
+          duplicateWarning
+            ? transactions.find((tx) => tx.id === duplicateWarning.transactionId) ?? {
+                id: duplicateWarning.transactionId,
+              }
+            : null
+        }
+        onMatched={(transactionId, journalEntryId, voucherLabel) => {
+          setDuplicateWarning(null)
+          handleVoucherLinked(transactionId, journalEntryId, voucherLabel)
+        }}
         onBookAnyway={async () => {
           const retry = duplicateWarning?.retry
           setDuplicateProcessing(true)

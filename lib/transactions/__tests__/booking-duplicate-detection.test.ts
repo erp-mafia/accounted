@@ -76,6 +76,7 @@ describe('detectBookedDuplicateTransaction', () => {
       entry_date: '2025-12-19',
       description: 'TELENOR SVERIGE AB',
       amount: -1616,
+      account_number: null,
     })
   })
 
@@ -251,6 +252,9 @@ describe('detectLedgerDuplicateVoucher', () => {
       entry_date: '2026-03-30',
       description: 'Inbetalning kundfaktura 2026001',
       amount: 98565,
+      // The matched leg's account rides along so the dialog's match action
+      // links on the exact 19xx the voucher was booked to (issue #919).
+      account_number: '1930',
     })
   })
 
@@ -270,6 +274,7 @@ describe('detectLedgerDuplicateVoucher', () => {
     expect(result?.journal_entry_id).toBe('je-3')
     expect(result?.transaction_id).toBeNull()
     expect(result?.amount).toBe(16609)
+    expect(result?.account_number).toBe('1930')
   })
 
   it('does NOT flag an inbound receipt against a credit-only voucher (wrong direction)', async () => {

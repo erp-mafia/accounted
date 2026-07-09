@@ -3872,6 +3872,8 @@
     "dialog_duplicate_voucher_label": "Voucher {label}",
     "dialog_duplicate_voucher_generic": "Existing voucher",
     "dialog_duplicate_view_voucher": "View the voucher",
+    "dialog_duplicate_match": "Match to the voucher",
+    "dialog_duplicate_match_failed": "Could not match",
     "dialog_duplicate_book_anyway": "Book anyway",
     "dialog_duplicate_cancel": "Cancel",
     "load_failed_title": "Could not load transactions",
