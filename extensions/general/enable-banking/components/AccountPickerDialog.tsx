@@ -172,6 +172,13 @@ export function AccountPickerDialog({
           .maybeSingle(),
       ])
       if (cancelled) return
+      if (settingsRes.error || periodRes.error) {
+        // A failed fetch must not present the calendar-year fallback as the
+        // authoritative fiscal-year start (issue #917). Leave settingsLoaded
+        // false so the date stays masked; if the user proceeds anyway the
+        // request falls back to the recurring-setting derivation.
+        return
+      }
       setCompanySettings((settingsRes.data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
       setCurrentPeriodStart((periodRes.data as { period_start?: string } | null)?.period_start || null)
       setSettingsLoaded(true)
