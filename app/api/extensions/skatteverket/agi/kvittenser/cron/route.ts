@@ -78,7 +78,7 @@ export async function GET(request: Request) {
     declarationId: string
     companyId: string
     period: string
-    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'error'
+    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'apigw_config' | 'error'
     error?: string
   }
   const results: Result[] = []
@@ -238,6 +238,22 @@ export async function GET(request: Request) {
         results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
         continue
       }
+      if (err instanceof SkatteverketAuthError && err.code === 'ACCESS_DENIED') {
+        // Skatteverkets API gateway rejected our client credentials before
+        // the user's bearer was ever evaluated: the APIGW client
+        // (SKATTEVERKET_APIGW_CLIENT_ID) lacks an Utvecklarportalen
+        // subscription for the AGI hantera API. Retrying every run cannot
+        // heal this and the user reconnecting via BankID does not help, so
+        // log at warn level instead of error to keep the 2h cron from
+        // producing error-noise for a known configuration gap. The distinct
+        // status keeps the gap visible in the run summary until fixed.
+        console.warn(
+          '[agi-kvittenser-cron] APIGW client lacks Utvecklarportalen subscription for the AGI hantera API; check SKATTEVERKET_APIGW_CLIENT_ID subscriptions. Skipping declaration until the subscription is added.',
+          { declarationId, companyId, period, message },
+        )
+        results.push({ declarationId, companyId, period, status: 'apigw_config', error: err.code })
+        continue
+      }
 
       console.error('[agi-kvittenser-cron] Reconciliation failed', { declarationId, companyId, period, message })
       results.push({ declarationId, companyId, period, status: 'error', error: message })
@@ -247,10 +263,11 @@ export async function GET(request: Request) {
   const signed = results.filter(r => r.status === 'signed').length
   const stillPending = results.filter(r => r.status === 'still_pending').length
   const expired = results.filter(r => r.status === 'expired_token').length
+  const apigwConfig = results.filter(r => r.status === 'apigw_config').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${errors} errors`,
+    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${apigwConfig} apigw config gaps, ${errors} errors`,
   )
 
   return NextResponse.json({
@@ -258,6 +275,7 @@ export async function GET(request: Request) {
     signed,
     stillPending,
     expired,
+    apigwConfig,
     errors,
     results,
   })
