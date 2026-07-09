@@ -910,7 +910,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               </div>
             </div>
           )}
-          {items.length === 0 ? (
+          {!hasAnyItem ? (
             // On desktop the preview pane is always visible alongside this
             // column, so showing the onboarding card here would duplicate it.
             // Below xl the panes stack into one feed, so the sibling preview
@@ -972,7 +972,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         <main
           className={cn(
             'xl:overflow-hidden bg-muted/10 relative xl:block min-h-[55vh] xl:min-h-0',
-            items.length === 0 && 'hidden xl:block'
+            !hasAnyItem && 'hidden xl:block'
           )}
         >
           {selected ? (
@@ -1011,7 +1011,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         <aside
           className={cn(
             'border-t xl:border-t-0 xl:border-l xl:overflow-y-auto pt-4 xl:block pb-4',
-            items.length === 0 && 'hidden xl:block'
+            !hasAnyItem && 'hidden xl:block'
           )}
         >
           {selected ? (
