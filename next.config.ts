@@ -37,6 +37,13 @@ const cspDirectives = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Build id inlined into the client bundle so a running tab can tell when a
+  // newer deploy is live (see components/system/DeployReloadPrompt). On Vercel
+  // this is the commit SHA; empty elsewhere (dev / self-hosted), which disables
+  // the check. The /api/version route reads the same var at runtime to compare.
+  env: {
+    NEXT_PUBLIC_BUILD_ID: process.env.VERCEL_GIT_COMMIT_SHA ?? '',
+  },
   // Multiple lockfiles exist above this project (e.g. a parent yarn.lock),
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.
   turbopack: {

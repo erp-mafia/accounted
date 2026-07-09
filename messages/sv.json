@@ -1,5 +1,7 @@
 {
   "common": {
+    "update_available": "En ny version finns tillgänglig.",
+    "reload": "Ladda om",
     "save": "Spara",
     "saving": "Sparar...",
     "cancel": "Avbryt",

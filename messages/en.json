@@ -1,5 +1,7 @@
 {
   "common": {
+    "update_available": "A new version is available.",
+    "reload": "Reload",
     "save": "Save",
     "saving": "Saving...",
     "cancel": "Cancel",
