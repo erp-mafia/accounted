@@ -129,8 +129,32 @@ function stripMetaFields(payload: Record<string, unknown>): Record<string, unkno
   return data
 }
 
+/** Delay before the single retry of a network-class insert failure. */
+const RETRY_DELAY_MS = 250
+
+/**
+ * Network-class failure: supabase-js (undici) surfaces a dead connection as
+ * "TypeError: fetch failed", typically when the insert races Vercel function
+ * suspension. Only this class is retried; Postgres errors (constraint
+ * violations, RLS, bad columns) would fail identically on a retry.
+ */
+function isTransientNetworkError(message: string): boolean {
+  return message.includes('fetch failed')
+}
+
+/**
+ * Telemetry events (mcp.*, agent.*) are best-effort metrics: a lost row is
+ * not actionable, so their final persistence failure logs at warn. Business
+ * events (journal_entry.*, invoice.*, etc.) feed webhook delivery and stay
+ * at error level.
+ */
+function isTelemetryEvent(eventType: string): boolean {
+  return eventType.startsWith('mcp.') || eventType.startsWith('agent.')
+}
+
 /**
  * Persist a single event to the event_log table.
+ * Retries once on network-class failures ("fetch failed") after a short delay.
  */
 async function persistEvent(
   eventType: string,
@@ -140,19 +164,27 @@ async function persistEvent(
   data: Record<string, unknown>
 ): Promise<void> {
   const supabase = createServiceClientNoCookies()
+  const row = {
+    user_id: userId,
+    company_id: companyId,
+    event_type: eventType,
+    entity_id: entityId,
+    data,
+  }
 
-  const { error } = await supabase
-    .from('event_log')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      event_type: eventType,
-      entity_id: entityId,
-      data,
-    })
+  let { error } = await supabase.from('event_log').insert(row)
+
+  if (error && isTransientNetworkError(error.message)) {
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+    ;({ error } = await supabase.from('event_log').insert(row))
+  }
 
   if (error) {
-    log.error(`Failed to persist event ${eventType}:`, error.message)
+    if (isTelemetryEvent(eventType)) {
+      log.warn(`Failed to persist event ${eventType}:`, error.message)
+    } else {
+      log.error(`Failed to persist event ${eventType}:`, error.message)
+    }
   }
 }
 

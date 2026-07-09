@@ -12,6 +12,22 @@ vi.mock('@/lib/auth/api-keys', () => ({
   }),
 }))
 
+// Mock the logger so warn-vs-error level can be asserted (the real logger
+// suppresses warn in the test environment). Hoisted: bus.ts calls
+// createLogger at import time, before top-level consts initialize.
+const { logWarn, logError } = vi.hoisted(() => ({
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}))
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: logWarn,
+    error: logError,
+    child: vi.fn(),
+  }),
+}))
+
 // Import after mocks
 import { registerEventLogHandler } from '../event-log-handler'
 
@@ -136,6 +152,86 @@ describe('event-log-handler', () => {
     })
 
     expect(mockInsert).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries once when the insert fails with a network-class "fetch failed" error, then succeeds', async () => {
+    vi.useFakeTimers()
+    try {
+      mockInsert
+        .mockResolvedValueOnce({ error: { message: 'TypeError: fetch failed' } })
+        .mockResolvedValueOnce({ error: null })
+
+      const emitPromise = eventBus.emit({
+        type: 'customer.created',
+        payload: { customer: makeCustomer({ id: 'cust-retry' }), userId: 'user-1', companyId: 'company-1' },
+      })
+      await vi.advanceTimersByTimeAsync(250)
+      await emitPromise
+
+      expect(mockInsert).toHaveBeenCalledTimes(2)
+      expect(mockInsert.mock.calls[1][0]).toMatchObject({
+        event_type: 'customer.created',
+        entity_id: 'cust-retry',
+      })
+      expect(logWarn).not.toHaveBeenCalled()
+      expect(logError).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not retry non-network insert errors', async () => {
+    mockInsert.mockResolvedValue({
+      error: { message: 'duplicate key value violates unique constraint "event_log_pkey"' },
+    })
+
+    await eventBus.emit({
+      type: 'customer.created',
+      payload: { customer: makeCustomer(), userId: 'user-1', companyId: 'company-1' },
+    })
+
+    expect(mockInsert).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs telemetry (mcp.*) persistence failure at warn level after the retry also fails', async () => {
+    vi.useFakeTimers()
+    try {
+      mockInsert.mockResolvedValue({ error: { message: 'TypeError: fetch failed' } })
+
+      const emitPromise = eventBus.emit({
+        type: 'mcp.tool_called',
+        payload: { tool: 'gnubok_list_accounts', userId: 'user-1', companyId: 'company-1' } as never,
+      })
+      await vi.advanceTimersByTimeAsync(250)
+      await emitPromise
+
+      expect(mockInsert).toHaveBeenCalledTimes(2)
+      expect(logWarn).toHaveBeenCalledTimes(1)
+      expect(logError).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps business event persistence failure at error level after the retry also fails', async () => {
+    vi.useFakeTimers()
+    try {
+      mockInsert.mockResolvedValue({ error: { message: 'TypeError: fetch failed' } })
+
+      const emitPromise = eventBus.emit({
+        type: 'invoice.created',
+        payload: { invoice: makeInvoice({ id: 'inv-err' }), userId: 'user-1', companyId: 'company-1' },
+      })
+      await vi.advanceTimersByTimeAsync(250)
+      await emitPromise
+
+      expect(mockInsert).toHaveBeenCalledTimes(2)
+      expect(logError).toHaveBeenCalledTimes(1)
+      expect(logWarn).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('persists period.locked with period entity_id', async () => {

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import {
   extractBearerToken,
   validateApiKey,
@@ -2155,7 +2155,7 @@ export const tools: McpTool[] = [
       }
       feedbackRateLimit.set(rateKey, now)
 
-      void eventBus
+      emitAfterResponse(() => eventBus
         .emit({
           type: 'agent.feedback',
           payload: {
@@ -2172,7 +2172,7 @@ export const tools: McpTool[] = [
             companyId,
           },
         })
-        .catch((err) => console.error('[mcp] agent.feedback emit failed:', err))
+        .catch((err) => console.error('[mcp] agent.feedback emit failed:', err)))
 
       return {
         recorded: true,
@@ -11674,6 +11674,21 @@ function jsonRpcError(
 }
 
 /**
+ * Schedule a fire-and-forget telemetry emit so it cannot race Vercel function
+ * suspension: `after()` keeps the function alive past the JSON-RPC response
+ * until the emit settles, which is why event_log inserts used to die with
+ * "TypeError: fetch failed". Falls back to a plain fire-and-forget emit when
+ * no Next request scope exists (direct handler invocation in tests).
+ */
+function emitAfterResponse(emit: () => Promise<void>): void {
+  try {
+    after(emit)
+  } catch {
+    void emit()
+  }
+}
+
+/**
  * Emit `mcp.tool_called` telemetry to the event bus. Fire-and-forget: the
  * dispatcher must never block the JSON-RPC response on telemetry, and a failing
  * handler must never surface to the client. The event bus already isolates
@@ -11693,7 +11708,7 @@ function emitToolCallTelemetry(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tool_called',
       payload: {
@@ -11722,7 +11737,7 @@ function emitToolCallTelemetry(payload: {
       // Last-resort guard. EventBus.emit already swallows handler failures,
       // but if the bus itself is in a bad state we still don't want to break tools.
       console.error('[mcp] tool_called telemetry emit failed:', err)
-    })
+    }))
 }
 
 /** Fire-and-forget telemetry for a tools/list call. */
@@ -11734,7 +11749,7 @@ function emitToolsListTelemetry(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tools_list_called',
       payload: {
@@ -11752,7 +11767,7 @@ function emitToolsListTelemetry(payload: {
     })
     .catch((err) => {
       console.error('[mcp] tools_list_called telemetry emit failed:', err)
-    })
+    }))
 }
 
 /** Fire-and-forget telemetry for a resources/read call. */
@@ -11767,7 +11782,7 @@ function emitResourceReadTelemetry(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.resource_read',
       payload: {
@@ -11788,7 +11803,7 @@ function emitResourceReadTelemetry(payload: {
     })
     .catch((err) => {
       console.error('[mcp] resource_read telemetry emit failed:', err)
-    })
+    }))
 }
 
 /**
@@ -11836,7 +11851,7 @@ function checkAndEmitNextHintFollowed(
   // Consume the hint so we don't double-count if the agent calls the same
   // tool twice in a row (idempotent retries shouldn't inflate the metric).
   lastResponseHintBySession.delete(sessionId)
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.next_hint_followed',
       payload: {
@@ -11850,7 +11865,7 @@ function checkAndEmitNextHintFollowed(
         companyId,
       },
     })
-    .catch((err) => console.error('[mcp] next_hint_followed emit failed:', err))
+    .catch((err) => console.error('[mcp] next_hint_followed emit failed:', err)))
 }
 
 /**
@@ -11866,7 +11881,7 @@ function emitSkillLoaded(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.skill_loaded',
       payload: {
@@ -11880,7 +11895,7 @@ function emitSkillLoaded(payload: {
         companyId: payload.companyId,
       },
     })
-    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
+    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err)))
 }
 
 /** Fire-and-forget telemetry for workflow lifecycle. */
@@ -11890,7 +11905,7 @@ function emitWorkflowStarted(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.workflow_started',
       payload: {
@@ -11903,7 +11918,7 @@ function emitWorkflowStarted(payload: {
         companyId: payload.companyId,
       },
     })
-    .catch((err) => console.error('[mcp] workflow_started emit failed:', err))
+    .catch((err) => console.error('[mcp] workflow_started emit failed:', err)))
 }
 
 /**
