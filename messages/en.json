@@ -1330,7 +1330,13 @@
     "plusgiro_error": "Invalid plusgiro number",
     "swish_label": "Swish",
     "swish_placeholder": "123 XXX XX XX or 07X XXX XX XX",
-    "swish_error": "Invalid Swish number (business number 123XXXXXXX or mobile number 07XXXXXXXX)"
+    "swish_error": "Invalid Swish number (business number 123XXXXXXX or mobile number 07XXXXXXXX)",
+    "iban_label": "IBAN",
+    "iban_error": "Invalid IBAN (SE followed by 22 digits)",
+    "iban_hint": "Required for the payment file (ISO 20022) when paying salaries",
+    "bic_label": "BIC/SWIFT",
+    "bic_placeholder": "Filled in automatically",
+    "bic_error": "Invalid BIC/SWIFT (8 or 11 characters)"
   },
   "settings_invoice_form": {
     "default_our_reference_label": "Default \"Our reference\"",

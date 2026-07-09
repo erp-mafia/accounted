@@ -43,6 +43,8 @@ export function InvoicingSettingsContent() {
         ? formatPlusgiroNumber((formData.get('plusgiro') as string).trim())
         : null,
       swish: normaliseSwish(formData.get('swish') as string) || null,
+      iban: (formData.get('iban') as string || '').replace(/\s/g, '').toUpperCase() || null,
+      bic: (formData.get('bic') as string || '').replace(/\s/g, '').toUpperCase() || null,
       invoice_prefix: (formData.get('invoice_prefix') as string) || null,
       next_invoice_number: parseInt(formData.get('next_invoice_number') as string) || 1,
       next_arrival_number: parseInt(formData.get('next_arrival_number') as string) || 1,

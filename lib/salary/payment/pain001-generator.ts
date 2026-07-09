@@ -10,8 +10,8 @@
 export interface Pain001CompanyData {
   name: string
   orgNumber: string       // NNNNNN-NNNN
-  iban: string            // SE + 22 digits
-  bic: string             // SWIFT/BIC code
+  iban: string            // SE + 22 digits (the company's own account)
+  bic: string             // debtor bank SWIFT/BIC
 }
 
 export interface Pain001Employee {
@@ -87,6 +87,9 @@ export function generatePain001(
   lines.push('      </Dbtr>')
   lines.push('      <DbtrAcct>')
   lines.push('        <Id>')
+  // The company (debtor) is identified by its own IBAN: the canonical form every
+  // Swedish bank accepts for the payer. Employees (creditors) stay on domestic
+  // clearing+account below, which is what Swedish payroll actually collects.
   lines.push(`          <IBAN>${escapeXml(company.iban)}</IBAN>`)
   lines.push('        </Id>')
   lines.push('        <Ccy>SEK</Ccy>')

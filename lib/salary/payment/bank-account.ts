@@ -130,18 +130,18 @@ export function validateEmployeeBankAccount(
  * Ranges are matched on the leading 4 digits, so a 5-digit Swedbank clearing
  * (8xxxx) maps via its 8xxx prefix.
  */
-const BANK_CLEARING_RANGES: ReadonlyArray<{ min: number; max: number; bank: string }> = [
-  { min: 1100, max: 1199, bank: 'Nordea' },
-  { min: 1200, max: 1399, bank: 'Danske Bank' },
-  { min: 1400, max: 2099, bank: 'Nordea' },
-  { min: 2400, max: 2499, bank: 'Danske Bank' },
-  { min: 3000, max: 3399, bank: 'Nordea' },
-  { min: 5000, max: 5999, bank: 'SEB' },
-  { min: 6000, max: 6999, bank: 'Handelsbanken' },
-  { min: 7000, max: 7999, bank: 'Swedbank' },
-  { min: 8000, max: 8999, bank: 'Swedbank/Sparbanken' },
-  { min: 9500, max: 9549, bank: 'Nordea (Plusgirot)' },
-  { min: 9960, max: 9969, bank: 'Nordea (Plusgirot)' },
+const BANK_CLEARING_RANGES: ReadonlyArray<{ min: number; max: number; bank: string; bic: string }> = [
+  { min: 1100, max: 1199, bank: 'Nordea', bic: 'NDEASESS' },
+  { min: 1200, max: 1399, bank: 'Danske Bank', bic: 'DABASESX' },
+  { min: 1400, max: 2099, bank: 'Nordea', bic: 'NDEASESS' },
+  { min: 2400, max: 2499, bank: 'Danske Bank', bic: 'DABASESX' },
+  { min: 3000, max: 3399, bank: 'Nordea', bic: 'NDEASESS' },
+  { min: 5000, max: 5999, bank: 'SEB', bic: 'ESSESESS' },
+  { min: 6000, max: 6999, bank: 'Handelsbanken', bic: 'HANDSESS' },
+  { min: 7000, max: 7999, bank: 'Swedbank', bic: 'SWEDSESS' },
+  { min: 8000, max: 8999, bank: 'Swedbank/Sparbanken', bic: 'SWEDSESS' },
+  { min: 9500, max: 9549, bank: 'Nordea (Plusgirot)', bic: 'NDEASESS' },
+  { min: 9960, max: 9969, bank: 'Nordea (Plusgirot)', bic: 'NDEASESS' },
 ]
 
 /** Bank name for a (partial) clearing number, or null when not confidently known. */
@@ -152,4 +152,48 @@ export function lookupBankByClearing(clearingRaw: string | null | undefined): st
   if (Number.isNaN(first4)) return null
   const hit = BANK_CLEARING_RANGES.find((r) => first4 >= r.min && first4 <= r.max)
   return hit ? hit.bank : null
+}
+
+/**
+ * Bank BIC (SWIFT) for a clearing number, or null when the clearing is not in
+ * the table above. Used to fill the debtor agent (DbtrAgt) in the pain.001
+ * salary payment file without asking the company to type its BIC by hand: the
+ * clearing number it already entered for the debtor account deterministically
+ * identifies the bank. Only confidently-known, long-stable ranges are covered;
+ * an unknown clearing returns null so the caller can fall back or fail loudly
+ * rather than emit a guessed BIC into a real payment instruction.
+ */
+export function lookupBicByClearing(clearingRaw: string | null | undefined): string | null {
+  const clearing = normalizeBankNumber(clearingRaw)
+  if (clearing.length < 4) return null
+  const first4 = Number.parseInt(clearing.slice(0, 4), 10)
+  if (Number.isNaN(first4)) return null
+  const hit = BANK_CLEARING_RANGES.find((r) => first4 >= r.min && first4 <= r.max)
+  return hit ? hit.bic : null
+}
+
+/**
+ * Fallback BIC lookup by the free-text bank name saved in company settings, for
+ * the (rare) banks not covered by the clearing ranges above (e.g.
+ * Länsförsäkringar, Skandiabanken). Matched on a normalized substring so
+ * "Danske Bank Sverige" still resolves. Only BICs we are confident about are
+ * listed; anything else returns null. Never guess a BIC for a real payment.
+ */
+const BANK_NAME_BIC: ReadonlyArray<{ match: string; bic: string }> = [
+  { match: 'handelsbanken', bic: 'HANDSESS' },
+  { match: 'länsförsäkringar', bic: 'ELLFSESS' },
+  { match: 'lansforsakringar', bic: 'ELLFSESS' },
+  { match: 'skandia', bic: 'SKIASESS' },
+  { match: 'swedbank', bic: 'SWEDSESS' },
+  { match: 'sparbank', bic: 'SWEDSESS' },
+  { match: 'danske', bic: 'DABASESX' },
+  { match: 'nordea', bic: 'NDEASESS' },
+  { match: 'seb', bic: 'ESSESESS' },
+]
+
+export function lookupBicByBankName(nameRaw: string | null | undefined): string | null {
+  const name = (nameRaw ?? '').trim().toLowerCase()
+  if (!name) return null
+  const hit = BANK_NAME_BIC.find((b) => name.includes(b.match))
+  return hit ? hit.bic : null
 }

@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generatePain001 } from '@/lib/salary/payment/pain001-generator'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
+import { normalizeBankNumber, lookupBicByClearing, lookupBicByBankName } from '@/lib/salary/payment/bank-account'
 import { getBranding } from '@/lib/branding/service'
 import type { Pain001CompanyData, Pain001Employee } from '@/lib/salary/payment/pain001-generator'
 
@@ -47,7 +48,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('company_name, iban, bic')
+      .select('company_name, iban, bic, clearing_number, bank_name')
       .eq('company_id', companyId)
       .single()
 
@@ -55,8 +56,31 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Företag hittades inte' }, { status: 404 })
     }
 
-    if (!settings?.iban || !settings?.bic) {
-      return NextResponse.json({ error: 'IBAN och BIC krävs i företagsinställningar för betalfil' }, { status: 400 })
+    if (!settings) {
+      return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 400 })
+    }
+
+    // Debtor (company) account: the company's own IBAN, the canonical payer form
+    // every Swedish bank accepts. Set under Inställningar → Fakturering.
+    const senderIban = (settings.iban ?? '').replace(/\s/g, '').toUpperCase()
+    if (!senderIban) {
+      return NextResponse.json(
+        { error: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).' },
+        { status: 400 },
+      )
+    }
+
+    // Debtor bank BIC: use the saved BIC, otherwise derive it from the clearing
+    // number (or bank name) the company already entered, so most users only need
+    // to fill in the IBAN. Required by the receiving bank.
+    const senderBic = settings.bic?.trim()
+      || lookupBicByClearing(normalizeBankNumber(settings.clearing_number))
+      || lookupBicByBankName(settings.bank_name)
+    if (!senderBic) {
+      return NextResponse.json(
+        { error: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfil.' },
+        { status: 400 },
+      )
     }
 
     // Load employees
@@ -89,8 +113,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       // not the frozen onboarding companies.name.
       name: settings.company_name || company.name,
       orgNumber: company.org_number || '',
-      iban: settings.iban,
-      bic: settings.bic,
+      iban: senderIban,
+      bic: senderBic,
     }
 
     const employees: Pain001Employee[] = runEmployees

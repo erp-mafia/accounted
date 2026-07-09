@@ -5,6 +5,8 @@ import {
   isValidAccount,
   validateEmployeeBankAccount,
   lookupBankByClearing,
+  lookupBicByClearing,
+  lookupBicByBankName,
 } from '@/lib/salary/payment/bank-account'
 
 describe('normalizeBankNumber', () => {
@@ -98,5 +100,39 @@ describe('lookupBankByClearing', () => {
     expect(lookupBankByClearing('9999')).toBeNull()
     expect(lookupBankByClearing('123')).toBeNull()
     expect(lookupBankByClearing('')).toBeNull()
+  })
+})
+
+describe('lookupBicByClearing', () => {
+  it('maps clearing numbers to the bank BIC', () => {
+    expect(lookupBicByClearing('5000')).toBe('ESSESESS')  // SEB
+    expect(lookupBicByClearing('6789')).toBe('HANDSESS')  // Handelsbanken
+    expect(lookupBicByClearing('7123')).toBe('SWEDSESS')  // Swedbank
+    expect(lookupBicByClearing('3000')).toBe('NDEASESS')  // Nordea
+    expect(lookupBicByClearing('1234')).toBe('DABASESX')  // Danske Bank
+  })
+  it('maps a 5-digit Swedbank clearing via its 8xxx prefix', () => {
+    expect(lookupBicByClearing('83279')).toBe('SWEDSESS')
+  })
+  it('returns null for unknown ranges rather than guessing a BIC', () => {
+    expect(lookupBicByClearing('9999')).toBeNull()
+    expect(lookupBicByClearing('123')).toBeNull()
+    expect(lookupBicByClearing('')).toBeNull()
+  })
+})
+
+describe('lookupBicByBankName', () => {
+  it('resolves banks outside the clearing table by name', () => {
+    expect(lookupBicByBankName('Länsförsäkringar')).toBe('ELLFSESS')
+    expect(lookupBicByBankName('Skandiabanken')).toBe('SKIASESS')
+  })
+  it('matches on a normalized substring', () => {
+    expect(lookupBicByBankName('Danske Bank Sverige')).toBe('DABASESX')
+    expect(lookupBicByBankName('  SEB  ')).toBe('ESSESESS')
+  })
+  it('returns null for unknown or empty names', () => {
+    expect(lookupBicByBankName('Min Lokala Bank')).toBeNull()
+    expect(lookupBicByBankName('')).toBeNull()
+    expect(lookupBicByBankName(null)).toBeNull()
   })
 })

@@ -147,6 +147,38 @@ describe('getErrorMessage: accumulated validation details', () => {
   })
 })
 
+describe('getErrorMessage: payment-file route messages surface (issue #945)', () => {
+  // These specific { error: '...' } strings previously collapsed to the generic
+  // HTTP-400 message because isSwedishUserMessage did not recognize "krävs" /
+  // "saknar", so the user learned nothing about why the betalfil failed.
+  it('surfaces a "saknar bankkontouppgifter" message instead of the generic 400', () => {
+    const msg = getErrorMessage(
+      { error: '2 anställd(a) saknar bankkontouppgifter' },
+      { context: 'salary', statusCode: 400 },
+    )
+    expect(msg).toBe('2 anställd(a) saknar bankkontouppgifter')
+    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+  })
+
+  it('surfaces a "... krävs ..." message instead of the generic 400', () => {
+    const msg = getErrorMessage(
+      { error: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 11 kap. 8§)' },
+      { context: 'settings', statusCode: 400 },
+    )
+    expect(msg).toContain('krävs')
+    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+  })
+
+  it('surfaces the missing company bank-account message', () => {
+    const msg = getErrorMessage(
+      { error: 'Företagets bankkonto (clearingnummer och kontonummer) saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil.' },
+      { context: 'salary', statusCode: 400 },
+    )
+    expect(msg).toContain('Företagets bankkonto')
+    expect(msg).not.toBe('Förfrågan innehåller ogiltiga uppgifter.')
+  })
+})
+
 describe('getErrorMessage: existing patterns still work', () => {
   it('regex match for "Entry date ... outside fiscal period" on plain string', () => {
     const msg = getErrorMessage('Entry date 2024-06-15 is outside fiscal period "FY 2025"')

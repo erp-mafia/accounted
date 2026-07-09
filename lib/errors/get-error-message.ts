@@ -166,6 +166,8 @@ function isSwedishUserMessage(message: string): boolean {
     /försök igen/i,
     /ogiltigt?/i,
     /saknas/i,
+    /saknar/i,
+    /krävs/i,
     /måste/i,
     /redan finns/i,
     /gick fel/i,

@@ -40,8 +40,16 @@ describe('generatePain001', () => {
     const xml = generatePain001(company, employees, options)
 
     expect(xml).toContain('<Nm>Test AB</Nm>')
-    expect(xml).toContain('SE1234567890123456789012')
     expect(xml).toContain('ESSESESS')
+  })
+
+  it('identifies the debtor (company) by its own IBAN', () => {
+    const xml = generatePain001(company, employees, options)
+
+    // The payer is the company's IBAN, inside DbtrAcct.
+    expect(xml).toContain('<IBAN>SE1234567890123456789012</IBAN>')
+    // Employees are still domestic BBAN (clearing+account), never IBAN.
+    expect(xml).toContain('<Othr><Id>56781234567890</Id></Othr>')
   })
 
   it('includes SALA category purpose for salary', () => {

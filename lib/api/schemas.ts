@@ -1363,8 +1363,8 @@ export const UpdateSettingsSchema = z.object({
     )
     .nullable()
     .optional(),
-  iban: z.string().optional(),
-  bic: z.string().optional(),
+  iban: z.string().regex(/^SE\d{22}$/, 'Ogiltigt IBAN (SE följt av 22 siffror)').nullable().optional().or(z.literal('')),
+  bic: z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT (8 eller 11 tecken)').nullable().optional().or(z.literal('')),
   accounting_method: AccountingMethodSchema.optional(),
   invoice_prefix: z.string().nullable().optional(),
   next_invoice_number: z.number().int().positive().optional(),
