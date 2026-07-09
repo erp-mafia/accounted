@@ -165,8 +165,8 @@ function WorkspaceSkeleton() {
           </div>
           <Skeleton className="h-8 w-28 shrink-0" />
         </header>
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
-          <aside className="border-r overflow-hidden bg-muted/20 pt-3">
+        <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
+          <aside className="border-b xl:border-b-0 xl:border-r overflow-hidden bg-muted/20 pt-3">
             <div className="px-3 pb-3 space-y-2 border-b">
               <Skeleton className="h-8 w-full" />
               <div className="flex flex-wrap gap-1">
@@ -191,8 +191,8 @@ function WorkspaceSkeleton() {
               ))}
             </ul>
           </aside>
-          <main className="overflow-hidden bg-muted/10 hidden md:block" />
-          <aside className="border-l overflow-hidden hidden md:block" />
+          <main className="overflow-hidden bg-muted/10 hidden xl:block" />
+          <aside className="border-l overflow-hidden hidden xl:block" />
         </div>
       </div>
     </div>
@@ -913,10 +913,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {items.length === 0 ? (
             // On desktop the preview pane is always visible alongside this
             // column, so showing the onboarding card here would duplicate it.
-            // On mobile the layout is a master-detail toggle and the user is
-            // stuck on the list view until they pick a row: without a card
-            // here they'd have no way to reach the explainer at all. So:
-            // compact card on mobile only, quiet empty state on desktop.
+            // Below xl the panes stack into one feed, so the sibling preview
+            // and fields panes are hidden when the inbox is empty (see their
+            // classNames): this list is the only onboarding surface there.
+            // So: compact card on mobile only, quiet empty state on desktop.
             showOnboarding ? (
               <>
                 <div className="xl:hidden">
@@ -965,9 +965,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         </aside>
 
-        {/* Document preview (hero) */}
+        {/* Document preview (hero). When the inbox is empty there is nothing
+            to preview and no row can be selected, so below xl (stacked feed)
+            this pane is hidden: the list's compact onboarding card is the
+            single onboarding surface, avoiding a duplicated card. */}
         <main
-          className="xl:overflow-hidden bg-muted/10 relative xl:block min-h-[55vh] xl:min-h-0"
+          className={cn(
+            'xl:overflow-hidden bg-muted/10 relative xl:block min-h-[55vh] xl:min-h-0',
+            items.length === 0 && 'hidden xl:block'
+          )}
         >
           {selected ? (
             <DocumentPreview docUrl={docUrl} docMime={docMime} isProcessing={!!selected.isPlaceholder} />
@@ -999,9 +1005,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
         {/* Fields rail. Below xl it stacks below the preview as part of the
             single vertical feed (top border for separation). At xl+ it's the
-            third pane with a left border. */}
+            third pane with a left border. With an empty inbox no row can be
+            selected, so below xl it is hidden to keep the stacked empty state
+            to just the list column. */}
         <aside
-          className="border-t xl:border-t-0 xl:border-l xl:overflow-y-auto pt-4 xl:block pb-4"
+          className={cn(
+            'border-t xl:border-t-0 xl:border-l xl:overflow-y-auto pt-4 xl:block pb-4',
+            items.length === 0 && 'hidden xl:block'
+          )}
         >
           {selected ? (
             <FieldsRail

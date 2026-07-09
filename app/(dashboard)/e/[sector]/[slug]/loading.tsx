@@ -114,8 +114,8 @@ function FullScreenWorkspaceSkeleton() {
           </div>
           <Skeleton className="h-8 w-28 shrink-0" />
         </header>
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
-          <aside className="border-r overflow-hidden bg-muted/20 pt-3">
+        <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
+          <aside className="border-b xl:border-b-0 xl:border-r overflow-hidden bg-muted/20 pt-3">
             <div className="px-3 pb-3 space-y-2 border-b">
               <Skeleton className="h-8 w-full" />
               <div className="flex flex-wrap gap-1">
@@ -140,8 +140,8 @@ function FullScreenWorkspaceSkeleton() {
               ))}
             </ul>
           </aside>
-          <main className="overflow-hidden bg-muted/10 hidden md:block" />
-          <aside className="border-l overflow-hidden hidden md:block" />
+          <main className="overflow-hidden bg-muted/10 hidden xl:block" />
+          <aside className="border-l overflow-hidden hidden xl:block" />
         </div>
       </div>
     </div>
