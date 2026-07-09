@@ -23,6 +23,7 @@ interface BillingView {
   configured: boolean
   trialEndsAt: string | null
   daysLeft: number | null
+  isDemo: boolean
 }
 
 /**
@@ -37,16 +38,16 @@ export function BillingSettingsContent() {
     let active = true
     fetch('/api/billing/status')
       .then((r) => r.json())
-      .then((d: { isPaying: boolean; configured: boolean; trialEndsAt: string | null }) => {
+      .then((d: { isPaying: boolean; configured: boolean; trialEndsAt: string | null; isDemo?: boolean }) => {
         if (!active) return
         // Compute days-left here (effect), not during render, to keep render pure.
         const daysLeft = d.trialEndsAt
           ? Math.max(0, Math.ceil((new Date(d.trialEndsAt).getTime() - Date.now()) / 86_400_000))
           : null
-        setView({ ...d, daysLeft })
+        setView({ ...d, daysLeft, isDemo: d.isDemo ?? false })
       })
       .catch(() => {
-        if (active) setView({ isPaying: false, configured: false, trialEndsAt: null, daysLeft: null })
+        if (active) setView({ isPaying: false, configured: false, trialEndsAt: null, daysLeft: null, isDemo: false })
       })
     return () => { active = false }
   }, [])
@@ -57,6 +58,32 @@ export function BillingSettingsContent() {
         <Skeleton className="h-12 w-full" />
         <Skeleton className="h-64 w-full" />
       </div>
+    )
+  }
+
+  // Demo / sandbox account → can't check out. Show the value prop but point
+  // them to creating a real account instead of a pay button that would 403.
+  if (view.isDemo) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Abonnemang</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Du provkör Accounted i en demo. Skapa ett riktigt konto för att aktivera
+            abonnemang, AI-assistent, bankkoppling och inlämning till Skatteverket.
+          </p>
+          <ul className="space-y-2">
+            {INCLUDED.map((item) => (
+              <li key={item} className="flex items-start gap-2 text-sm">
+                <Check className="h-4 w-4 mt-1 shrink-0 text-foreground" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
     )
   }
 

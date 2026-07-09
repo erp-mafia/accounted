@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireCompanyId } from '@/lib/company/context'
 import { isStripeConfigured } from '@/lib/stripe/client'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 
 /**
  * Billing status for the client-rendered billing section (which lives inside the
@@ -18,6 +19,13 @@ export async function GET() {
     companyId = await requireCompanyId(supabase, user.id)
   } catch {
     companyId = null
+  }
+
+  // Demo accounts (anonymous user or sandbox company) can't check out, so the
+  // client hides the upgrade CTA rather than showing a button that only errors.
+  let isDemo = user.is_anonymous === true
+  if (companyId && !isDemo) {
+    isDemo = await isSandboxCompany(supabase, companyId)
   }
 
   let isPaying = false
@@ -44,5 +52,5 @@ export async function GET() {
     trialEndsAt = (trial as { expires_at: string | null } | null)?.expires_at ?? null
   }
 
-  return NextResponse.json({ isPaying, configured: isStripeConfigured(), trialEndsAt })
+  return NextResponse.json({ isPaying, configured: isStripeConfigured(), trialEndsAt, isDemo })
 }

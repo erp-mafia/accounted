@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe } from '@/lib/stripe/client'
+import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 
 /**
  * Create a Stripe Billing Customer Portal session so the user can manage,
@@ -13,7 +14,14 @@ import { getStripe } from '@/lib/stripe/client'
  * by the membership-validated companyId.
  */
 export const POST = withRouteContext('billing.portal', async (_request, ctx) => {
-  const { companyId } = ctx
+  const { user, supabase, companyId } = ctx
+
+  // Demo accounts must never reach Stripe (see billing/checkout for the full
+  // rationale). Defense in depth: a demo tenant should never own a portal
+  // session even if a stray customer row exists.
+  if (user.is_anonymous) return sandboxBlockedResponse()
+  const blocked = await guardSandbox(supabase, companyId)
+  if (blocked) return blocked
 
   const service = createServiceClient()
   const { data: sub } = await service

@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
+import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 
 const CheckoutSchema = z.object({
   plan: z.enum(['monthly', 'yearly']).default('monthly'),
@@ -19,7 +20,16 @@ const CheckoutSchema = z.object({
  * still filters by the membership-validated companyId.
  */
 export const POST = withRouteContext('billing.checkout', async (request, ctx) => {
-  const { user, companyId, log } = ctx
+  const { user, supabase, companyId, log } = ctx
+
+  // Demo accounts must never reach Stripe. An anonymous user has no real
+  // identity to bill, and a sandbox company must never charge a token (same
+  // doctrine as lib/sandbox/guard.ts: no real external side effects). Both
+  // checks run before any Stripe call: this is the gap that let an anonymous
+  // demo user create a live Stripe customer.
+  if (user.is_anonymous) return sandboxBlockedResponse()
+  const blocked = await guardSandbox(supabase, companyId)
+  if (blocked) return blocked
 
   const validation = await validateBody(request, CheckoutSchema, {
     log,

@@ -21,6 +21,13 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => serviceSupabase,
 }))
 
+// Keep sandboxBlockedResponse real; stub only the DB-backed guardSandbox.
+const guardSandboxMock = vi.fn()
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/sandbox/guard')>()
+  return { ...actual, guardSandbox: (...args: unknown[]) => guardSandboxMock(...args) }
+})
+
 const portalCreate = vi.fn()
 vi.mock('@/lib/stripe/client', () => ({
   getStripe: () => ({
@@ -35,7 +42,8 @@ const routeParams = { params: Promise.resolve({}) }
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: {}, error: null })
+  guardSandboxMock.mockResolvedValue(null)
+  requireAuthMock.mockResolvedValue({ user: { id: 'user-1', is_anonymous: false }, supabase: {}, error: null })
 })
 
 describe('POST /api/billing/portal', () => {
@@ -49,6 +57,39 @@ describe('POST /api/billing/portal', () => {
     const req = createMockRequest('/api/billing/portal', { method: 'POST', body: {} })
     const res = await POST(req, routeParams)
     expect(res.status).toBe(401)
+  })
+
+  it('blocks an anonymous (demo) user with 403 and never touches Stripe', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'anon-1', is_anonymous: true },
+      supabase: {},
+      error: null,
+    })
+
+    const req = createMockRequest('/api/billing/portal', { method: 'POST', body: {} })
+    const { status, body } = await parseJsonResponse<{ sandbox_blocked?: boolean }>(
+      await POST(req, routeParams),
+    )
+
+    expect(status).toBe(403)
+    expect(body.sandbox_blocked).toBe(true)
+    expect(portalCreate).not.toHaveBeenCalled()
+    expect(guardSandboxMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks a sandbox company with 403 and never touches Stripe', async () => {
+    const { sandboxBlockedResponse } = await import('@/lib/sandbox/guard')
+    guardSandboxMock.mockResolvedValue(sandboxBlockedResponse())
+
+    const req = createMockRequest('/api/billing/portal', { method: 'POST', body: {} })
+    const { status, body } = await parseJsonResponse<{ sandbox_blocked?: boolean }>(
+      await POST(req, routeParams),
+    )
+
+    expect(status).toBe(403)
+    expect(body.sandbox_blocked).toBe(true)
+    expect(guardSandboxMock).toHaveBeenCalledWith(expect.anything(), 'company-1')
+    expect(portalCreate).not.toHaveBeenCalled()
   })
 
   it('returns 400 with NO_SUBSCRIPTION when the company has no Stripe customer', async () => {
