@@ -601,6 +601,14 @@ export const MarkInvoicePaidSchema = z.object({
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
+  // Kundnummer shown on invoices. Free text, not unique in v1. Empty string
+  // and null both clear the value (routes normalize '' to null).
+  customer_number: z
+    .string()
+    .trim()
+    .max(32, 'Customer number must be 32 characters or fewer')
+    .nullable()
+    .optional(),
   email: z.string().email('Invalid email address').optional(),
   phone: z.string().optional(),
   address_line1: z.string().optional(),

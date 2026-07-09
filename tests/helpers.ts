@@ -400,6 +400,7 @@ export function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     company_id: 'company-1',
     name: 'Test AB',
     customer_type: 'swedish_business',
+    customer_number: null,
     email: 'kontakt@test.se',
     phone: null,
     address_line1: 'Storgatan 1',

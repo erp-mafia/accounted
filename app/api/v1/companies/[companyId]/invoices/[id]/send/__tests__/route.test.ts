@@ -101,6 +101,9 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
+  // Records every .select() projection string per table so tests can assert
+  // which columns the route actually fetches.
+  const selects: Record<string, string[]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -111,12 +114,17 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          if (prop === 'select' && typeof args[0] === 'string') {
+            ;(selects[table] ??= []).push(args[0])
+          }
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return { from: vi.fn((table: string) => buildChain(table)), selects }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -414,6 +422,30 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     const finalRenderArgs = calls[calls.length - 1][0]
     expect(finalRenderArgs.invoice.status).toBe('sent')
     expect(finalRenderArgs.invoice.invoice_number).toBe('2026-0043')
+  })
+
+  it('fetches customer_number in the customer join so the emailed PDF matches the downloaded one', async () => {
+    // The pdf route selects customers(*); this route uses an explicit
+    // projection. If customer_number is dropped here, the emailed PDF
+    // silently omits the kundnummer that the downloaded PDF shows.
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null },
+        { data: { invoice_number: '2026-0042' }, error: null },
+      ],
+      company_settings: { data: COMPANY_SETTINGS, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+    expect(res.status).toBe(200)
+
+    const invoiceFetchProjection = supabaseMock.selects['invoices']?.[0] ?? ''
+    expect(invoiceFetchProjection).toMatch(/customer:customers\([^)]*\bcustomer_number\b[^)]*\)/)
   })
 
   it('test-mode key forces dry-run: returns a preview, no email, no number burned', async () => {

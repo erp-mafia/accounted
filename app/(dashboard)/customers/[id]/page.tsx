@@ -281,6 +281,12 @@ export default function CustomerDetailPage({
             <CardTitle className="text-base">{t('section_business')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {customer.customer_number && (
+              <div className="text-sm">
+                <span className="text-muted-foreground">{t('label_customer_number')} </span>
+                {customer.customer_number}
+              </div>
+            )}
             {customer.org_number && (
               <div className="text-sm">
                 <span className="text-muted-foreground">{t('label_org_number')} </span>
@@ -300,7 +306,7 @@ export default function CustomerDetailPage({
               <span className="text-muted-foreground">{t('label_payment_terms')} </span>
               {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
             </div>
-            {!customer.org_number && !customer.vat_number && (
+            {!customer.customer_number && !customer.org_number && !customer.vat_number && (
               <p className="text-sm text-muted-foreground">{t('no_business_info')}</p>
             )}
           </CardContent>
@@ -393,6 +399,7 @@ export default function CustomerDetailPage({
             initialData={{
               name: customer.name,
               customer_type: customer.customer_type,
+              customer_number: customer.customer_number || undefined,
               email: customer.email || undefined,
               phone: customer.phone || undefined,
               address_line1: customer.address_line1 || undefined,

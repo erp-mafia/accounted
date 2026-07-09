@@ -44,6 +44,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, { su
       company_id: 'preview-company',
       name: 'Exempel AB',
       customer_type: 'swedish_business',
+      customer_number: null,
       email: 'kund@exempel.se',
       phone: null,
       address_line1: 'Storgatan 1',

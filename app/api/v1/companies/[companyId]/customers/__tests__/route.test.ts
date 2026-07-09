@@ -51,6 +51,13 @@ const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
+  // Records insert/update payloads and .select() projection strings so
+  // tests can assert what the route writes and which columns it fetches.
+  const captured: {
+    insert: unknown[]
+    update: unknown[]
+    selects: Record<string, string[]>
+  } = { insert: [], update: [], selects: {} }
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -58,12 +65,19 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
           return (resolve: (v: unknown) => void) =>
             resolve(byTable[table] ?? { data: null, error: null })
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          if (prop === 'insert') captured.insert.push(args[0])
+          if (prop === 'update') captured.update.push(args[0])
+          if (prop === 'select' && typeof args[0] === 'string') {
+            ;(captured.selects[table] ??= []).push(args[0])
+          }
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return { from: vi.fn((table: string) => buildChain(table)), captured }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
@@ -589,6 +603,55 @@ describe('POST /api/v1/companies/:companyId/customers', () => {
     const body = await res.json()
     expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
   })
+
+  it('round-trips customer_number: persisted in the insert and selected back in the response', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_number: '1001' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Acme AB',
+        customer_type: 'swedish_business',
+        customer_number: '1001',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.customer_number).toBe('1001')
+    // The insert payload carries the field (not silently dropped) …
+    const insertPayload = supabaseMock.captured.insert[0] as { customer_number?: string | null }
+    expect(insertPayload.customer_number).toBe('1001')
+    // … and the response projection selects it back.
+    expect(supabaseMock.captured.selects['customers']?.[0]).toContain('customer_number')
+  })
+
+  it('normalizes an empty customer_number to null on create', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_number: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Acme AB',
+        customer_type: 'swedish_business',
+        customer_number: '',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const insertPayload = supabaseMock.captured.insert[0] as { customer_number?: string | null }
+    expect(insertPayload.customer_number).toBeNull()
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────
@@ -720,6 +783,49 @@ describe('PATCH /api/v1/companies/:companyId/customers/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.archived_at).toBeNull()
+  })
+
+  it('round-trips customer_number: persisted in the update and selected back in the response', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_number: 'K-42' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        customer_number: 'K-42',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.customer_number).toBe('K-42')
+    const updatePayload = supabaseMock.captured.update[0] as { customer_number?: string | null }
+    expect(updatePayload.customer_number).toBe('K-42')
+    expect(supabaseMock.captured.selects['customers']?.[0]).toContain('customer_number')
+  })
+
+  it('clears customer_number when an empty string is sent', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_number: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        customer_number: '',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const updatePayload = supabaseMock.captured.update[0] as { customer_number?: string | null }
+    expect(updatePayload.customer_number).toBeNull()
   })
 
   it('rejects an archived_at value that is not null', async () => {

@@ -557,6 +557,10 @@ export interface Customer {
   name: string
   customer_type: CustomerType
 
+  // User-assigned customer number (kundnummer) shown on invoices.
+  // Free text, no uniqueness enforced in v1.
+  customer_number: string | null
+
   // Contact
   email: string | null
   phone: string | null
@@ -1129,6 +1133,7 @@ export interface TaxRate {
 export interface CreateCustomerInput {
   name: string
   customer_type: CustomerType
+  customer_number?: string | null
   email?: string
   phone?: string
   address_line1?: string
