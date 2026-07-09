@@ -7,13 +7,15 @@ vi.mock('../lib/sync', () => ({
 
 // Mock the cash-accounts service (dynamically imported by the route) so the
 // mirror + allocation passes are deterministic and observable.
-const { mockUpsertFromPsd2, mockAllocate } = vi.hoisted(() => ({
+const { mockUpsertFromPsd2, mockAllocate, mockGetRevokedConnectionIds } = vi.hoisted(() => ({
   mockUpsertFromPsd2: vi.fn(),
   mockAllocate: vi.fn(),
+  mockGetRevokedConnectionIds: vi.fn(),
 }))
 vi.mock('@/lib/cash-accounts/service', () => ({
   upsertFromPsd2: (...args: unknown[]) => mockUpsertFromPsd2(...args),
   allocatePsd2LedgerAccount: (...args: unknown[]) => mockAllocate(...args),
+  getRevokedConnectionIds: (...args: unknown[]) => mockGetRevokedConnectionIds(...args),
 }))
 
 import { enableBankingExtension } from '../index'
@@ -157,6 +159,9 @@ describe('PATCH /accounts (enable-banking)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUpsertFromPsd2.mockResolvedValue(undefined)
+    // Default: no revoked connections; individual tests override to exercise
+    // the self-heal path.
+    mockGetRevokedConnectionIds.mockResolvedValue(new Set<string>())
     // Allocator stand-in mirroring the real behavior: currency default first,
     // then the next free 1931–1959 slot (skipping other currency defaults).
     mockAllocate.mockImplementation(
@@ -914,6 +919,57 @@ describe('PATCH /accounts (enable-banking)', () => {
       const body = await res.json()
       expect(body.error).toMatch(/annan bankanslutning/i)
       expect(body.conflicting_accounts).toEqual(['1935'])
+    })
+
+    it('allows a mapping onto a ledger held only by a REVOKED connection (self-heal after disconnect)', async () => {
+      // Issue #916: rows orphaned by a disconnect that predates the ledger
+      // claim release still point at the revoked connection. They must not
+      // count as foreign claims: the save goes through and upsertFromPsd2
+      // promotes the orphaned row in place.
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockGetRevokedConnectionIds.mockResolvedValue(new Set(['conn-REVOKED']))
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930'],
+        cashAccountRows: [
+          { external_uid: 'old-acc', bank_connection_id: 'conn-REVOKED', ledger_account: '1930' },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '1930' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      // The revoked-status lookup was scoped to the foreign connection ids.
+      expect(mockGetRevokedConnectionIds).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        ['conn-REVOKED']
+      )
+      // The mirror received the user's pick, not an overflow slot.
+      expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        expect.objectContaining({
+          bank_connection_id: 'conn-1',
+          external_uid: 'acc-1',
+          ledger_account: '1930',
+        })
+      )
     })
 
     it('allocates distinct ledgers for legacy accounts with no mapping at all', async () => {

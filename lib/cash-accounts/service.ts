@@ -132,6 +132,41 @@ export async function findByIban(
 }
 
 /**
+ * Of the given bank_connection ids, return the subset whose connection row has
+ * status 'revoked'. A revoked connection no longer holds a live claim on its
+ * cash_accounts rows: the allocator, the picker-save collision guard, and
+ * upsertFromPsd2's promote-in-place path all treat those rows like manual
+ * holders so a reconnect can land back on its original ledger account.
+ *
+ * On lookup failure this returns an empty set (treat every connection as
+ * active): the conservative pre-fix behavior.
+ */
+export async function getRevokedConnectionIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  connectionIds: readonly string[],
+): Promise<Set<string>> {
+  if (connectionIds.length === 0) return new Set()
+
+  const { data, error } = await supabase
+    .from('bank_connections')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', [...connectionIds])
+
+  if (error) {
+    log.warn('getRevokedConnectionIds lookup failed', { companyId, error: error.message })
+    return new Set()
+  }
+
+  return new Set(
+    ((data ?? []) as Array<{ id: string; status: string }>)
+      .filter(c => c.status === 'revoked')
+      .map(c => c.id),
+  )
+}
+
+/**
  * Find a free BAS class-19 slot for a new PSD2 cash account, respecting the
  * UNIQUE (company_id, ledger_account) constraint. A bank returning N
  * same-currency accounts must not map them all to the currency default —
@@ -141,6 +176,9 @@ export async function findByIban(
  *   - The currency default (1930/1932/1933/1934) is available when no
  *     PSD2-backed row holds it. A manual holder (the seeded 1930 row) does
  *     not block it — upsertFromPsd2 promotes that row in place.
+ *     Rows held by a REVOKED connection count as manual too: disconnecting a
+ *     bank releases its ledger claims, so reconnecting the same bank gets its
+ *     original slot back instead of overflowing to 1939.
  *   - Overflow walks the free-use 1931–1959 sub-account slots, skipping the
  *     four currency defaults (reserved as suggestions for their currencies)
  *     and any slot held by ANY existing row — promoting an unrelated manual
@@ -169,11 +207,20 @@ export async function findFreeLedgerAccount(
     return null
   }
 
+  const typedRows = (rows ?? []) as Array<{ ledger_account: string; bank_connection_id: string | null }>
+  const revokedConnectionIds = await getRevokedConnectionIds(
+    supabase,
+    companyId,
+    [...new Set(typedRows.map(r => r.bank_connection_id).filter((id): id is string => id !== null))],
+  )
+
   const anyTaken = new Set<string>()
   const connectedTaken = new Set<string>()
-  for (const row of (rows ?? []) as Array<{ ledger_account: string; bank_connection_id: string | null }>) {
+  for (const row of typedRows) {
     anyTaken.add(row.ledger_account)
-    if (row.bank_connection_id !== null) connectedTaken.add(row.ledger_account)
+    if (row.bank_connection_id !== null && !revokedConnectionIds.has(row.bank_connection_id)) {
+      connectedTaken.add(row.ledger_account)
+    }
   }
 
   if (!exclude.has(preferred) && !connectedTaken.has(preferred)) return preferred
@@ -265,30 +312,127 @@ export async function upsertFromPsd2(
 
   // create_company_with_owner and the seed_default_cash_account migration plant
   // a manual (bank_connection_id IS NULL) row on the same ledger_account so
-  // reconciliation routes work before any PSD2 connection exists. The first
-  // PSD2 sync for that BAS slot has to promote that row in place: a plain
-  // upsert on (company_id, bank_connection_id, external_uid) wouldn't match it
-  // (NULL ≠ NULL) and the INSERT path then trips the (company_id,
-  // ledger_account) UNIQUE constraint.
-  const { data: seedRow, error: seedLookupError } = await supabase
+  // reconciliation routes work before any PSD2 connection exists, and the
+  // disconnect handler demotes a revoked connection's rows to manual the same
+  // way. Rows still pointing at a REVOKED connection (orphans from before the
+  // disconnect handler released claims) no longer hold a live claim either.
+  // In all three cases the PSD2 sync claiming that BAS slot has to promote the
+  // holder row in place: a plain upsert on (company_id, bank_connection_id,
+  // external_uid) wouldn't match it and the INSERT path then trips the
+  // (company_id, ledger_account) UNIQUE constraint. Promoting (instead of
+  // inserting) keeps the row id stable so transactions.cash_account_id links
+  // and the ledger's history stay attached.
+  const { data: holderRow, error: holderLookupError } = await supabase
     .from('cash_accounts')
-    .select('id')
+    .select('id, bank_connection_id')
     .eq('company_id', companyId)
     .eq('ledger_account', input.ledger_account)
-    .is('bank_connection_id', null)
     .maybeSingle()
 
-  if (seedLookupError) {
-    log.error('upsertFromPsd2 seed lookup failed', {
+  if (holderLookupError) {
+    log.error('upsertFromPsd2 holder lookup failed', {
       companyId,
       bankConnectionId: input.bank_connection_id,
       externalUid: input.external_uid,
-      error: seedLookupError.message,
+      error: holderLookupError.message,
     })
-    throw new Error(`cash_accounts upsert failed: ${seedLookupError.message}`)
+    throw new Error(`cash_accounts upsert failed: ${holderLookupError.message}`)
   }
 
-  if (seedRow) {
+  const typedHolder = holderRow as { id: string; bank_connection_id: string | null } | null
+  let promotableRowId: string | null = null
+  if (typedHolder) {
+    if (typedHolder.bank_connection_id === null) {
+      promotableRowId = typedHolder.id
+    } else if (typedHolder.bank_connection_id !== input.bank_connection_id) {
+      const revoked = await getRevokedConnectionIds(supabase, companyId, [
+        typedHolder.bank_connection_id,
+      ])
+      if (revoked.has(typedHolder.bank_connection_id)) {
+        promotableRowId = typedHolder.id
+      }
+    }
+    // Holder owned by the input connection itself (or by another ACTIVE
+    // connection): fall through to the plain upsert. For the former the upsert
+    // matches on (company_id, bank_connection_id, external_uid) and updates in
+    // place; for the latter the UNIQUE constraint rejects the write and the
+    // error surfaces to the caller (the picker-save collision guard should
+    // have caught it earlier).
+  }
+
+  if (promotableRowId) {
+    // Promoting the holder makes it THE row for this (bank_connection_id,
+    // external_uid). If this connection + uid already has a row on another
+    // ledger (the reconnect callback mirrored it onto an overflow slot while
+    // the target slot was still wrongly blocked by a revoked connection), that
+    // duplicate must be resolved first or the promote trips the UNIQUE
+    // (company_id, bank_connection_id, external_uid) constraint.
+    const { data: ownRow, error: ownLookupError } = await supabase
+      .from('cash_accounts')
+      .select('id, is_primary')
+      .eq('company_id', companyId)
+      .eq('bank_connection_id', input.bank_connection_id)
+      .eq('external_uid', input.external_uid)
+      .neq('id', promotableRowId)
+      .maybeSingle()
+
+    if (ownLookupError) {
+      log.error('upsertFromPsd2 duplicate lookup failed', {
+        companyId,
+        bankConnectionId: input.bank_connection_id,
+        externalUid: input.external_uid,
+        error: ownLookupError.message,
+      })
+      throw new Error(`cash_accounts upsert failed: ${ownLookupError.message}`)
+    }
+
+    const typedOwn = ownRow as { id: string; is_primary: boolean } | null
+    let transferPrimary = false
+    if (typedOwn) {
+      // With linked transactions the duplicate is demoted to a plain manual
+      // row (deleting it would SET NULL those transactions' cash_account_id
+      // links). Without any, it is a leftover mirror from the broken reconnect
+      // and is deleted outright so its overflow slot frees up.
+      const { data: linkedTx, error: linkedTxError } = await supabase
+        .from('transactions')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('cash_account_id', typedOwn.id)
+        .limit(1)
+
+      if (linkedTxError) {
+        log.error('upsertFromPsd2 duplicate transaction check failed', {
+          companyId,
+          bankConnectionId: input.bank_connection_id,
+          externalUid: input.external_uid,
+          error: linkedTxError.message,
+        })
+        throw new Error(`cash_accounts upsert failed: ${linkedTxError.message}`)
+      }
+
+      if ((linkedTx ?? []).length > 0) {
+        const { error: demoteError } = await supabase
+          .from('cash_accounts')
+          .update({ bank_connection_id: null, external_uid: null })
+          .eq('id', typedOwn.id)
+        if (demoteError) {
+          throw new Error(`cash_accounts upsert failed: ${demoteError.message}`)
+        }
+      } else {
+        const { error: deleteError } = await supabase
+          .from('cash_accounts')
+          .delete()
+          .eq('id', typedOwn.id)
+        if (deleteError) {
+          throw new Error(`cash_accounts upsert failed: ${deleteError.message}`)
+        }
+      }
+      // A primary duplicate must hand the flag to the promoted row either way:
+      // deleted, it would leave the __PRIMARY_SEK__ sentinel unresolvable;
+      // demoted, the sentinel would keep resolving to the stale manual row.
+      transferPrimary = typedOwn.is_primary
+    }
+
     // .select() so we can detect a 0-row UPDATE: Supabase's update().eq() returns
     // { error: null, data: [] } if the row was deleted between the SELECT above
     // and this UPDATE (rare but theoretically possible under concurrent ops).
@@ -297,10 +441,10 @@ export async function upsertFromPsd2(
     const { data: promoted, error: promoteError } = await supabase
       .from('cash_accounts')
       .update(payload)
-      .eq('id', seedRow.id)
+      .eq('id', promotableRowId)
       .select('id')
     if (promoteError) {
-      log.error('upsertFromPsd2 promote-seed failed', {
+      log.error('upsertFromPsd2 promote-holder failed', {
         companyId,
         bankConnectionId: input.bank_connection_id,
         externalUid: input.external_uid,
@@ -309,9 +453,22 @@ export async function upsertFromPsd2(
       throw new Error(`cash_accounts upsert failed: ${promoteError.message}`)
     }
     if (promoted && promoted.length > 0) {
+      if (transferPrimary) {
+        try {
+          await setPrimary(supabase, companyId, promotableRowId)
+        } catch (primaryError) {
+          // The promote itself succeeded; losing the primary flag is
+          // recoverable via the AccountPicker, so log instead of unwinding.
+          log.error('upsertFromPsd2 primary transfer failed', {
+            companyId,
+            cashAccountId: promotableRowId,
+            error: primaryError instanceof Error ? primaryError.message : String(primaryError),
+          })
+        }
+      }
       return
     }
-    // Seed row vanished between SELECT and UPDATE: fall through to upsert.
+    // Holder row vanished between SELECT and UPDATE: fall through to upsert.
   }
 
   const { error } = await supabase

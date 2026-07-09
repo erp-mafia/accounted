@@ -86,6 +86,10 @@ export function AccountPickerDialog({
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [isSaving, setIsSaving] = useState(false)
+  // Server-side save rejection (validation / ledger conflict). Shown inline in
+  // the dialog: a rejected save persisted nothing and started no sync, so the
+  // user must see why and be able to correct the picks.
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [sieLastDate, setSieLastDate] = useState<string | null>(null)
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [chartError, setChartError] = useState(false)
@@ -114,6 +118,7 @@ export function AccountPickerDialog({
         accounts.filter(a => a.enabled !== false).map(a => a.uid)
       )
       setSelected(initial)
+      setSaveError(null)
       setLookbackMode('fiscal-year')
       setCustomSubMode('date')
       setCustomDate('')
@@ -285,6 +290,7 @@ export function AccountPickerDialog({
     }
 
     setIsSaving(true)
+    setSaveError(null)
 
     // Cap the client wait at the route's 300s budget so a hung backfill can't
     // leave the progress modal in 'syncing' forever. The save+backfill is one
@@ -295,12 +301,15 @@ export function AccountPickerDialog({
 
     // For the initial-selection path, open the progress modal up-front so the
     // user has visible feedback during the 30-60s backfill. Selection edits
-    // (no backfill) keep the existing toast-only feedback.
+    // (no backfill) keep the existing toast-only feedback. Do NOT signal the
+    // parent to close here (issue #916): the parent unmounts this component on
+    // close, which would tear down the progress modal too and swallow every
+    // outcome, including a rejected save. The picker Dialog hides itself while
+    // progressOpen is true and comes back if the save is rejected.
     if (isInitialSelection) {
       setSyncAttempt((n) => n + 1)
       setProgressState({ kind: 'syncing' })
       setProgressOpen(true)
-      onOpenChange(false)
     }
 
     try {
@@ -326,7 +335,17 @@ export function AccountPickerDialog({
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Kunde inte spara kontoval')
+        // Rejected save (400 conflicting_accounts / duplicate_accounts / other
+        // validation): nothing was persisted and no sync started. Surface the
+        // server's message inside the still-open picker; the progress modal's
+        // failed state would wrongly claim "we retry in the background".
+        setSaveError(
+          typeof data?.error === 'string' && data.error
+            ? data.error
+            : 'Kunde inte spara kontoval'
+        )
+        if (isInitialSelection) setProgressOpen(false)
+        return
       }
 
       if (isInitialSelection && data.initial_sync) {
@@ -407,16 +426,27 @@ export function AccountPickerDialog({
       open={progressOpen}
       onOpenChange={(next) => {
         setProgressOpen(next)
-        // When the user closes the summary, propagate the saved/refresh
-        // signal to the parent (it would have been emitted on success earlier;
-        // this just guards the failure case where we still want a refresh).
-        if (!next) onSaved()
+        // When the user dismisses the progress modal the initial-selection
+        // flow is over: propagate the saved/refresh signal and close the
+        // picker. The parent unmounts this whole component on close, which is
+        // exactly why the picker must stay open until this point: closing it
+        // earlier would unmount the progress modal mid-flight and swallow the
+        // sync summary or error. (onSaved was already emitted on success;
+        // repeating it just guards the failure case where we still refresh.)
+        if (!next) {
+          onSaved()
+          onOpenChange(false)
+        }
       }}
       bankName={bankName}
       accounts={accounts.filter((a) => selected.has(a.uid))}
       state={progressState}
     />
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    {/* Visually yield to the progress modal while it is up, but WITHOUT
+        signaling the parent (open stays true): the parent unmounts the
+        component on close, and a rejected save must return to a live picker
+        with the user's picks intact. */}
+    <Dialog open={open && !progressOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Välj konton att synka: {bankName}</DialogTitle>
@@ -593,6 +623,15 @@ export function AccountPickerDialog({
         {chartError && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
             Kunde inte ladda bokföringskonton (19xx). Ladda om sidan och försök igen innan du sparar kontoval.
+          </div>
+        )}
+
+        {saveError && (
+          <div
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+          >
+            Kontovalet sparades inte: {saveError}
           </div>
         )}
 

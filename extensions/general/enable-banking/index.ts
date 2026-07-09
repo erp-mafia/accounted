@@ -837,7 +837,7 @@ export const enableBankingExtension: Extension = {
         // cash_accounts, whose UNIQUE (company_id, ledger_account) constraint
         // would otherwise fail per-account and get swallowed, leaving accounts
         // silently unmirrored.
-        const { allocatePsd2LedgerAccount, upsertFromPsd2 } = await import(
+        const { allocatePsd2LedgerAccount, upsertFromPsd2, getRevokedConnectionIds } = await import(
           '@/lib/cash-accounts/service'
         )
 
@@ -857,10 +857,32 @@ export const enableBankingExtension: Extension = {
         )
         // Slots held by OTHER connections' PSD2 accounts — an explicit mapping
         // onto one of those would violate the unique constraint. Manual rows
-        // are not foreign: upsertFromPsd2 promotes them in place.
+        // are not foreign: upsertFromPsd2 promotes them in place. Rows held by
+        // a REVOKED connection are not foreign either: those are orphaned
+        // leftovers (disconnect predating the claim release, or a lost demote)
+        // and upsertFromPsd2 promotes them in place too. Excluding them here
+        // is the self-heal path for companies whose bank was disconnected
+        // before disconnect started releasing ledger claims.
+        const foreignConnectionIds = [
+          ...new Set(
+            cashRows
+              .filter(r => r.bank_connection_id !== null && r.bank_connection_id !== connection.id)
+              .map(r => r.bank_connection_id as string)
+          ),
+        ]
+        const revokedConnectionIds = await getRevokedConnectionIds(
+          supabase,
+          companyId,
+          foreignConnectionIds
+        )
         const foreignConnectedLedgers = new Set(
           cashRows
-            .filter(r => r.bank_connection_id !== null && r.bank_connection_id !== connection.id)
+            .filter(
+              r =>
+                r.bank_connection_id !== null &&
+                r.bank_connection_id !== connection.id &&
+                !revokedConnectionIds.has(r.bank_connection_id)
+            )
             .map(r => r.ledger_account)
         )
 
@@ -1225,6 +1247,30 @@ export const enableBankingExtension: Extension = {
             companyId,
           })
           return NextResponse.json({ error: 'Failed to disconnect' }, { status: 500 })
+        }
+
+        // Release the connection's ledger claims by demoting its cash_accounts
+        // rows to manual (bank_connection_id = null). The rows themselves stay:
+        // transactions.cash_account_id and the ledger history reference them,
+        // and upsertFromPsd2 promotes a manual holder in place on reconnect so
+        // the same bank lands back on its original BAS account (e.g. 1930)
+        // instead of overflowing to the next free slot.
+        const { error: releaseError } = await supabase
+          .from('cash_accounts')
+          .update({ bank_connection_id: null })
+          .eq('company_id', companyId)
+          .eq('bank_connection_id', connection.id)
+
+        if (releaseError) {
+          // Don't fail the disconnect: the connection is already revoked, and
+          // the allocator / collision guard also skip revoked connections, so
+          // the orphaned rows self-heal on the next picker save.
+          log.error('[enable-banking] Failed to release cash_accounts ledger claims on disconnect', {
+            errorMessage: releaseError.message,
+            connectionId: connection.id,
+            userId: user.id,
+            companyId,
+          })
         }
 
         try {
