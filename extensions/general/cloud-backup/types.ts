@@ -11,6 +11,15 @@ export interface GoogleDriveConnection {
   root_folder_id: string | null
   /** ID of the per-company subfolder. */
   company_folder_id: string | null
+  /**
+   * Connection health. `needs_reauth` means Google rejected the refresh
+   * token permanently (400 invalid_grant): the cron skips the connection
+   * and the UI asks the user to reconnect. Absent/undefined means active
+   * (records created before this field existed).
+   */
+  status?: 'active' | 'needs_reauth'
+  /** ISO timestamp of when the dead refresh token was detected. */
+  needs_reauth_at?: string
 }
 
 /**
@@ -47,6 +56,8 @@ export interface GoogleDriveSchedule {
  */
 export interface CloudBackupStatus {
   connected: boolean
+  /** True when the stored Google refresh token is dead and the user must reconnect. */
+  needs_reauth: boolean
   account_email: string | null
   connected_at: string | null
   last_sync: GoogleDriveLastSync | null

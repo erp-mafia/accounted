@@ -2,17 +2,19 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
+import { AlertTriangle, Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
 import type { CloudBackupStatus, GoogleDriveSchedule } from '../types'
 
 const API_BASE = '/api/extensions/ext/cloud-backup'
 
 export default function CloudBackupCard() {
   const { toast } = useToast()
+  const t = useTranslations('extensions')
   const searchParams = useSearchParams()
 
   const [status, setStatus] = useState<CloudBackupStatus | null>(null)
@@ -118,6 +120,11 @@ export default function CloudBackupCard() {
               : 'Arkivet är för stort för direktsynk.'
           )
         }
+        if (body.error === 'needs_reauth') {
+          // Refresh status so the card switches to the reconnect state.
+          await loadStatus()
+          throw new Error(t('ext_cloud_backup_reauth_description'))
+        }
         throw new Error(body.error || 'Synkningen misslyckades')
       }
       const { data } = (await res.json()) as {
@@ -137,7 +144,7 @@ export default function CloudBackupCard() {
     } finally {
       setIsSyncing(false)
     }
-  }, [loadStatus, toast])
+  }, [loadStatus, t, toast])
 
   return (
     <div className="rounded-lg border border-border bg-card p-6">
@@ -161,6 +168,36 @@ export default function CloudBackupCard() {
             <p className="text-sm text-muted-foreground">Laddar…</p>
           ) : status?.connected ? (
             <>
+              {status.needs_reauth && (
+                <div className="mb-6 flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">
+                      {t('ext_cloud_backup_reauth_title')}
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                      {t('ext_cloud_backup_reauth_description')}
+                    </p>
+                    <Button
+                      onClick={handleConnect}
+                      disabled={isConnecting}
+                      className="mt-3 w-full sm:w-auto"
+                    >
+                      {isConnecting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Omdirigerar…
+                        </>
+                      ) : (
+                        <>
+                          <Cloud className="mr-2 h-4 w-4" />
+                          {t('ext_cloud_backup_reauth_action')}
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <dl className="space-y-3 text-sm">
                 <div className="flex items-baseline justify-between gap-3">
                   <dt className="shrink-0 text-muted-foreground">Konto</dt>
@@ -194,6 +231,7 @@ export default function CloudBackupCard() {
               <div className="mt-6 pt-6 border-t border-border">
                 <ScheduleSection
                   schedule={status.schedule}
+                  needsReauth={status.needs_reauth}
                   onUpdated={loadStatus}
                 />
               </div>
@@ -280,11 +318,13 @@ function formatDate(iso: string): string {
 
 interface ScheduleSectionProps {
   schedule: GoogleDriveSchedule | null
+  needsReauth: boolean
   onUpdated: () => Promise<void> | void
 }
 
-function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
+function ScheduleSection({ schedule, needsReauth, onUpdated }: ScheduleSectionProps) {
   const { toast } = useToast()
+  const t = useTranslations('extensions')
 
   // Convert stored UTC hour to the user's local hour for display.
   const initialLocalHour =
@@ -400,7 +440,11 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
           ) : schedule.last_auto_sync_status === 'error' ? (
             <span className="text-destructive">
               · misslyckades
-              {schedule.last_auto_sync_error ? ` (${schedule.last_auto_sync_error})` : ''}
+              {needsReauth
+                ? ` (${t('ext_cloud_backup_reauth_needed_short')})`
+                : schedule.last_auto_sync_error
+                  ? ` (${schedule.last_auto_sync_error})`
+                  : ''}
             </span>
           ) : null}
         </p>

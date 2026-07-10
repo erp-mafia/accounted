@@ -99,6 +99,32 @@ export interface AccessTokenResult {
   expires_in: number
 }
 
+/**
+ * Thrown when Google's token endpoint rejects a refresh attempt. Carries the
+ * HTTP status and raw response body so callers can distinguish a permanently
+ * dead refresh token (400 invalid_grant) from transient failures.
+ */
+export class GoogleTokenRefreshError extends Error {
+  readonly status: number
+  readonly body: string
+
+  constructor(status: number, body: string) {
+    super(`Google token refresh failed: ${status} ${body}`)
+    this.name = 'GoogleTokenRefreshError'
+    this.status = status
+    this.body = body
+  }
+
+  /**
+   * True when Google reports the refresh token itself is dead (revoked,
+   * expired, or the grant was invalidated). Retrying will never succeed;
+   * the user must re-consent.
+   */
+  get isInvalidGrant(): boolean {
+    return this.status === 400 && this.body.includes('invalid_grant')
+  }
+}
+
 export async function refreshAccessToken(
   env: OAuthEnv,
   refreshToken: string
@@ -120,7 +146,7 @@ export async function refreshAccessToken(
   )
   if (!res.ok) {
     const errText = await res.text()
-    throw new Error(`Google token refresh failed: ${res.status} ${errText}`)
+    throw new GoogleTokenRefreshError(res.status, errText)
   }
   return (await res.json()) as AccessTokenResult
 }

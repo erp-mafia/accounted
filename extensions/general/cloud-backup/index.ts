@@ -180,6 +180,7 @@ export const cloudBackupExtension: Extension = {
         const schedule = await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
         const status: CloudBackupStatus = {
           connected: !!connection,
+          needs_reauth: connection?.status === 'needs_reauth',
           account_email: connection?.account_email ?? null,
           connected_at: connection?.connected_at ?? null,
           last_sync: lastSync ?? null,
@@ -268,6 +269,9 @@ export const cloudBackupExtension: Extension = {
           if (!result.ok) {
             if (result.reason === 'not_connected') {
               return jsonError('not_connected', 400)
+            }
+            if (result.reason === 'needs_reauth') {
+              return jsonError('needs_reauth', 400)
             }
             if (result.reason === 'archive_too_large') {
               return NextResponse.json(

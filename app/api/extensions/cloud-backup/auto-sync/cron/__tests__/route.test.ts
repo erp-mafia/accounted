@@ -7,6 +7,7 @@ vi.mock('@supabase/supabase-js', () => ({
 
 vi.mock('@/extensions/general/cloud-backup/lib/sync', () => ({
   performSync: vi.fn(),
+  CONNECTION_KEY: 'google_drive_connection',
   SCHEDULE_KEY: 'google_drive_schedule',
   saveExtensionData: vi.fn().mockResolvedValue(undefined),
 }))
@@ -34,13 +35,44 @@ function makeRequest() {
   })
 }
 
-function makeSupabaseStub(rows: unknown[], error: unknown = null) {
-  const chain = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error }),
-  }
-  return { from: vi.fn().mockReturnValue(chain) } as any
+/**
+ * The route issues two queries against extension_data: schedules
+ * (key = google_drive_schedule) and connections (key = google_drive_connection,
+ * with an .in() filter). Route rows to the right result by the `key` eq filter.
+ */
+function makeSupabaseStub(
+  scheduleRows: unknown[],
+  options: {
+    scheduleError?: unknown
+    connectionRows?: unknown[]
+    connectionError?: unknown
+  } = {}
+) {
+  const from = vi.fn().mockImplementation(() => {
+    let key: string | null = null
+    const chain: any = {
+      select: vi.fn().mockReturnThis(),
+      in: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockImplementation((column: string, value: string) => {
+        if (column === 'key') key = value
+        return chain
+      }),
+      then: (resolve: (v: unknown) => void) => {
+        if (key === 'google_drive_connection') {
+          return resolve({
+            data: options.connectionRows ?? [],
+            error: options.connectionError ?? null,
+          })
+        }
+        return resolve({
+          data: scheduleRows,
+          error: options.scheduleError ?? null,
+        })
+      },
+    }
+    return chain
+  })
+  return { from } as any
 }
 
 describe('cloud-backup auto-sync cron', () => {
@@ -223,5 +255,125 @@ describe('cloud-backup auto-sync cron', () => {
     const [, , , , value] = mockSaveExtensionData.mock.calls[0]
     expect((value as any).last_auto_sync_status).toBe('error')
     expect((value as any).last_auto_sync_error).toContain('Drive quota exceeded')
+  })
+
+  it('skips connections flagged needs_reauth without syncing or touching the schedule', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub(
+        [
+          {
+            company_id: 'c-1',
+            user_id: 'u-1',
+            value: {
+              enabled: true,
+              hour_utc: new Date().getUTCHours(),
+              last_auto_sync_at: null,
+            },
+          },
+        ],
+        {
+          connectionRows: [
+            { company_id: 'c-1', value: { status: 'needs_reauth' } },
+          ],
+        }
+      )
+    )
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockPerformSync).not.toHaveBeenCalled()
+    expect(mockSaveExtensionData).not.toHaveBeenCalled()
+    expect(body.skipped).toBe(1)
+    expect(body.successes).toBe(0)
+    expect(body.errors).toBe(0)
+    expect(body.results).toEqual([
+      { companyId: 'c-1', status: 'skipped', error: 'needs_reauth' },
+    ])
+  })
+
+  it('only skips the flagged company when others are due', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub(
+        [
+          {
+            company_id: 'c-dead',
+            user_id: 'u-1',
+            value: {
+              enabled: true,
+              hour_utc: new Date().getUTCHours(),
+              last_auto_sync_at: null,
+            },
+          },
+          {
+            company_id: 'c-live',
+            user_id: 'u-2',
+            value: {
+              enabled: true,
+              hour_utc: new Date().getUTCHours(),
+              last_auto_sync_at: null,
+            },
+          },
+        ],
+        {
+          connectionRows: [
+            { company_id: 'c-dead', value: { status: 'needs_reauth' } },
+            { company_id: 'c-live', value: { status: 'active' } },
+          ],
+        }
+      )
+    )
+    mockPerformSync.mockResolvedValueOnce({
+      ok: true,
+      lastSync: {
+        at: '2026-07-10T03:00:00Z',
+        file_id: 'f-1',
+        file_name: 'arkiv.zip',
+        file_size_bytes: 1000,
+        folder_id: 'folder-1',
+      },
+      webViewLink: 'https://drive.google.com/file/d/f-1/view',
+    })
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockPerformSync).toHaveBeenCalledTimes(1)
+    expect(mockPerformSync).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'c-live' })
+    )
+    expect(body.skipped).toBe(1)
+    expect(body.successes).toBe(1)
+  })
+
+  it('fails open and attempts the sync when the connection lookup errors', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub(
+        [
+          {
+            company_id: 'c-1',
+            user_id: 'u-1',
+            value: {
+              enabled: true,
+              hour_utc: new Date().getUTCHours(),
+              last_auto_sync_at: null,
+            },
+          },
+        ],
+        { connectionError: { message: 'connection query failed' } }
+      )
+    )
+    mockPerformSync.mockResolvedValueOnce({
+      ok: false,
+      reason: 'needs_reauth',
+      message: 'Google Drive authorization expired; reconnect required',
+    })
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    // performSync is still attempted (it re-flags dead tokens itself).
+    expect(mockPerformSync).toHaveBeenCalledTimes(1)
+    expect(body.errors).toBe(1)
   })
 })

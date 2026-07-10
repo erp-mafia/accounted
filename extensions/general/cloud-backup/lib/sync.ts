@@ -6,6 +6,7 @@ import {
 import {
   getOAuthEnv,
   refreshAccessToken,
+  GoogleTokenRefreshError,
 } from './google-oauth'
 import { ensureFolder, uploadFile } from './google-drive'
 import { decryptToken } from './crypto'
@@ -19,6 +20,7 @@ export const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
 
 export type SyncFailureReason =
   | 'not_connected'
+  | 'needs_reauth'
   | 'archive_too_large'
   | 'upload_failed'
   | 'internal'
@@ -81,7 +83,30 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
 
   const env = getOAuthEnv(origin)
   const refreshToken = decryptToken(connection.refresh_token_encrypted)
-  const { access_token: accessToken } = await refreshAccessToken(env, refreshToken)
+  let accessToken: string
+  try {
+    const refreshed = await refreshAccessToken(env, refreshToken)
+    accessToken = refreshed.access_token
+  } catch (err) {
+    if (err instanceof GoogleTokenRefreshError && err.isInvalidGrant) {
+      // The refresh token is permanently dead (revoked or expired). Flag the
+      // connection so the cron stops retrying it and the UI can ask the user
+      // to reconnect. Other failures (network, 5xx) stay throwing: they are
+      // transient and worth retrying.
+      const flagged: GoogleDriveConnection = {
+        ...connection,
+        status: 'needs_reauth',
+        needs_reauth_at: new Date().toISOString(),
+      }
+      await saveExtensionData(supabase, companyId, userId, CONNECTION_KEY, flagged)
+      return {
+        ok: false,
+        reason: 'needs_reauth',
+        message: 'Google Drive authorization expired; reconnect required',
+      }
+    }
+    throw err
+  }
 
   let rootFolderId = connection.root_folder_id
   let companyFolderId = connection.company_folder_id
@@ -96,12 +121,16 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
   }
   if (
     rootFolderId !== connection.root_folder_id ||
-    companyFolderId !== connection.company_folder_id
+    companyFolderId !== connection.company_folder_id ||
+    connection.status === 'needs_reauth'
   ) {
+    // A successful refresh also clears a stale needs_reauth flag.
     await saveExtensionData(supabase, companyId, userId, CONNECTION_KEY, {
       ...connection,
       root_folder_id: rootFolderId,
       company_folder_id: companyFolderId,
+      status: 'active',
+      needs_reauth_at: undefined,
     })
   }
 

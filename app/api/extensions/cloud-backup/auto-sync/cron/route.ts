@@ -4,10 +4,14 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   performSync,
+  CONNECTION_KEY,
   SCHEDULE_KEY,
   saveExtensionData,
 } from '@/extensions/general/cloud-backup/lib/sync'
-import type { GoogleDriveSchedule } from '@/extensions/general/cloud-backup/types'
+import type {
+  GoogleDriveConnection,
+  GoogleDriveSchedule,
+} from '@/extensions/general/cloud-backup/types'
 
 /**
  * GET /api/extensions/cloud-backup/auto-sync/cron
@@ -73,6 +77,35 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
     })
   }
 
+  // Connections flagged needs_reauth carry a permanently dead refresh token
+  // (Google returned 400 invalid_grant): skip them instead of retrying every
+  // night. They stay visible in the UI until the user reconnects.
+  const { data: connectionRows, error: connectionError } = await supabase
+    .from('extension_data')
+    .select('company_id, value')
+    .eq('extension_id', 'cloud-backup')
+    .eq('key', CONNECTION_KEY)
+    .in(
+      'company_id',
+      candidates.map((r) => r.company_id as string)
+    )
+
+  if (connectionError) {
+    // Fail open: without connection data we cannot tell who needs reauth,
+    // so fall back to attempting everyone (performSync re-flags dead tokens).
+    ctx.log.warn('failed to fetch connections for reauth check', {
+      message: connectionError.message,
+    })
+  }
+
+  const needsReauthCompanyIds = new Set(
+    (connectionRows ?? [])
+      .filter(
+        (r) => (r.value as GoogleDriveConnection | null)?.status === 'needs_reauth'
+      )
+      .map((r) => r.company_id as string)
+  )
+
   const startTime = Date.now()
   const TIME_BUDGET_MS = 250_000 // 4m10s: leaves 50s margin below Vercel's 300s Pro limit
 
@@ -94,6 +127,13 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
     const companyId = row.company_id as string
     const userId = row.user_id as string
     const schedule = row.value as GoogleDriveSchedule
+
+    if (needsReauthCompanyIds.has(companyId)) {
+      // Do not touch last_auto_sync_* here: the schedule keeps showing the
+      // failure from the night the dead token was detected.
+      results.push({ companyId, status: 'skipped', error: 'needs_reauth' })
+      continue
+    }
 
     try {
       const syncResult = await performSync({
@@ -141,11 +181,13 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
 
   const successCount = results.filter((r) => r.status === 'success').length
   const errorCount = results.filter((r) => r.status === 'error').length
+  const skippedCount = results.filter((r) => r.status === 'skipped').length
 
   ctx.log.info('cloud backup cron summary', {
     processed: results.length,
     succeeded: successCount,
     failed: errorCount,
+    skipped: skippedCount,
   })
 
   return NextResponse.json({
@@ -154,6 +196,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
     processed: results.length,
     successes: successCount,
     errors: errorCount,
+    skipped: skippedCount,
     results,
   })
 })

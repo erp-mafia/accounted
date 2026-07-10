@@ -4,6 +4,7 @@ import {
   exchangeCodeForTokens,
   refreshAccessToken,
   getOAuthEnv,
+  GoogleTokenRefreshError,
 } from '../google-oauth'
 
 beforeEach(() => {
@@ -99,5 +100,34 @@ describe('refreshAccessToken', () => {
     const env = getOAuthEnv('http://localhost:3000')
     const result = await refreshAccessToken(env, 'old-refresh')
     expect(result.access_token).toBe('new-at')
+  })
+
+  it('throws GoogleTokenRefreshError carrying status and body on non-OK response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"error":"invalid_grant"}', { status: 400 })
+    )
+    const env = getOAuthEnv('http://localhost:3000')
+    const err = await refreshAccessToken(env, 'dead-refresh').catch((e) => e)
+    expect(err).toBeInstanceOf(GoogleTokenRefreshError)
+    expect(err.status).toBe(400)
+    expect(err.body).toContain('invalid_grant')
+    expect(err.message).toContain('400')
+  })
+})
+
+describe('GoogleTokenRefreshError.isInvalidGrant', () => {
+  it('is true only for a 400 whose body mentions invalid_grant', () => {
+    expect(
+      new GoogleTokenRefreshError(400, '{"error":"invalid_grant"}').isInvalidGrant
+    ).toBe(true)
+    expect(
+      new GoogleTokenRefreshError(400, '{"error":"invalid_request"}').isInvalidGrant
+    ).toBe(false)
+    expect(
+      new GoogleTokenRefreshError(500, '{"error":"invalid_grant"}').isInvalidGrant
+    ).toBe(false)
+    expect(new GoogleTokenRefreshError(503, 'Service Unavailable').isInvalidGrant).toBe(
+      false
+    )
   })
 })
