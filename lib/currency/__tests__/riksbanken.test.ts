@@ -128,6 +128,7 @@ describe('fetchExchangeRate', () => {
       exactHit?: CacheRow | null
       latestHit?: CacheRow | null
       onUpsert?: (row: Record<string, unknown>) => void
+      upsertError?: { code: string; message: string }
     }) {
       // .maybeSingle() terminates both the exact lookup and the latest
       // lookup. Shared across from() calls so the once-queue holds: the
@@ -147,7 +148,7 @@ describe('fetchExchangeRate', () => {
           maybeSingle,
           upsert: vi.fn((row: Record<string, unknown>) => {
             opts.onUpsert?.(row)
-            return Promise.resolve({ data: null, error: null })
+            return Promise.resolve({ data: null, error: opts.upsertError ?? null })
           }),
         })),
       } as never
@@ -180,6 +181,22 @@ describe('fetchExchangeRate', () => {
         observation_date: '2025-01-15',
         source: 'riksbanken',
       })
+    })
+
+    it('still returns the fetched rate when the cache write is rejected by RLS', async () => {
+      // Since migration 20260710100000, INSERT on exchange_rates is
+      // service-role only. supabase-js reports the RLS rejection as a
+      // resolved { error }, not a throw: the rate must come back anyway.
+      vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify([{ value: '11.42', date: '2025-01-15' }]), { status: 200 })
+      )
+      const supabase = makeSupabase({
+        upsertError: { code: '42501', message: 'permission denied for table exchange_rates' },
+      })
+
+      const result = await fetchExchangeRate('EUR', new Date('2025-01-15'), supabase)
+
+      expect(result).toEqual({ currency: 'EUR', rate: 11.42, date: '2025-01-15' })
     })
 
     it('falls back to the most recent cached observation when Riksbanken is down', async () => {

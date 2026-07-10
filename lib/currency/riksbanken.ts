@@ -52,6 +52,16 @@ async function readCachedRate(
   }
 }
 
+/**
+ * Best-effort cache write. INSERT on exchange_rates is service-role only
+ * (migration 20260710100000): the shared cache feeds money math, so a user
+ * client must not be able to poison a (currency, rate_date) pair for every
+ * tenant. When called with an authenticated client (bank file import,
+ * refresh-exchange-rate, manual bank sync) the upsert is rejected by RLS;
+ * supabase-js reports that as a resolved { error }, not a throw, and the
+ * result is deliberately not inspected: the fetched rate is returned to the
+ * caller regardless, and the service-role sync cron fills the cache instead.
+ */
 async function writeCachedRate(
   supabase: SupabaseClient,
   currency: Currency,
@@ -70,7 +80,7 @@ async function writeCachedRate(
       { onConflict: 'currency,rate_date', ignoreDuplicates: true },
     )
   } catch {
-    // best-effort
+    // best-effort: a cache write failure must never block the rate
   }
 }
 
