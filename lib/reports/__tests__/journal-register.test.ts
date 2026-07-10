@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
 // Mock: table-keyed result queues
+//
+// The report fetches lines via the two-step entry-lines helper
+// (lib/bookkeeping/entry-lines.ts): journal_entries first, then
+// journal_entry_lines by entry id, reattaching the parent entry on each line
+// under `journal_entries`. Tests queue entry rows and line rows that
+// reference them via journal_entry_id.
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown }
@@ -56,9 +62,8 @@ describe('generateJournalRegister', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       ],
-      journal_entry_lines: [
-        { data: [], error: null },
-      ],
+      // No matching entries → the line query is skipped entirely.
+      journal_entries: [{ data: [], error: null }],
     }
 
     const report = await generateJournalRegister(supabase, 'company-1', 'period-1')
@@ -78,7 +83,6 @@ describe('generateJournalRegister', () => {
       debit_amount: 0,
       credit_amount: 0,
       journal_entry_id: 'e0',
-      journal_entries: { id: 'e0', entry_date: '2024-01-02', voucher_number: 1, voucher_series: 'A', description: 'filler', source_type: 'manual', status: 'posted' },
     }))
     const rentLine = {
       id: 'rent-line-1',
@@ -86,12 +90,20 @@ describe('generateJournalRegister', () => {
       debit_amount: 4000,
       credit_amount: 0,
       journal_entry_id: 'e1',
-      journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 2, voucher_series: 'A', description: 'Lokalhyra', source_type: 'manual', status: 'posted' },
     }
 
     mockResults = {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e0', entry_date: '2024-01-02', voucher_number: 1, voucher_series: 'A', description: 'filler', source_type: 'manual', status: 'posted' },
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 2, voucher_series: 'A', description: 'Lokalhyra', source_type: 'manual', status: 'posted' },
+          ],
+          error: null,
+        },
       ],
       journal_entry_lines: [
         { data: [...filler, rentLine], error: null }, // page 1: full → triggers page 2
@@ -120,14 +132,23 @@ describe('generateJournalRegister', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale invoice', source_type: 'invoice', status: 'posted' },
+            { id: 'e2', entry_date: '2024-02-01', voucher_number: 2, voucher_series: 'A', description: 'Payment', source_type: 'transaction', status: 'posted' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
-            { account_number: '1510', debit_amount: 1250, credit_amount: 0, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale invoice', source_type: 'invoice', status: 'posted' } },
-            { account_number: '3001', debit_amount: 0, credit_amount: 1000, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale invoice', source_type: 'invoice', status: 'posted' } },
-            { account_number: '2611', debit_amount: 0, credit_amount: 250, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale invoice', source_type: 'invoice', status: 'posted' } },
-            { account_number: '1930', debit_amount: 1250, credit_amount: 0, journal_entry_id: 'e2', journal_entries: { id: 'e2', entry_date: '2024-02-01', voucher_number: 2, voucher_series: 'A', description: 'Payment', source_type: 'transaction', status: 'posted' } },
-            { account_number: '1510', debit_amount: 0, credit_amount: 1250, journal_entry_id: 'e2', journal_entries: { id: 'e2', entry_date: '2024-02-01', voucher_number: 2, voucher_series: 'A', description: 'Payment', source_type: 'transaction', status: 'posted' } },
+            { account_number: '1510', debit_amount: 1250, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 1000, journal_entry_id: 'e1' },
+            { account_number: '2611', debit_amount: 0, credit_amount: 250, journal_entry_id: 'e1' },
+            { account_number: '1930', debit_amount: 1250, credit_amount: 0, journal_entry_id: 'e2' },
+            { account_number: '1510', debit_amount: 0, credit_amount: 1250, journal_entry_id: 'e2' },
           ],
           error: null,
         },
@@ -171,13 +192,22 @@ describe('generateJournalRegister', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Original', source_type: 'manual', status: 'reversed' },
+            { id: 'e2', entry_date: '2024-01-16', voucher_number: 2, voucher_series: 'A', description: 'Reversal', source_type: 'manual', status: 'posted' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
-            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Original', source_type: 'manual', status: 'reversed' } },
-            { account_number: '5410', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Original', source_type: 'manual', status: 'reversed' } },
-            { account_number: '5410', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e2', journal_entries: { id: 'e2', entry_date: '2024-01-16', voucher_number: 2, voucher_series: 'A', description: 'Reversal', source_type: 'manual', status: 'posted' } },
-            { account_number: '1930', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e2', journal_entries: { id: 'e2', entry_date: '2024-01-16', voucher_number: 2, voucher_series: 'A', description: 'Reversal', source_type: 'manual', status: 'posted' } },
+            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '5410', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e1' },
+            { account_number: '5410', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e2' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e2' },
           ],
           error: null,
         },
@@ -199,11 +229,19 @@ describe('generateJournalRegister', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual', status: 'posted' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
-            { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual', status: 'posted' } },
-            { account_number: '9999', debit_amount: 0, credit_amount: 100, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual', status: 'posted' } },
+            { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '9999', debit_amount: 0, credit_amount: 100, journal_entry_id: 'e1' },
           ],
           error: null,
         },
@@ -233,11 +271,19 @@ describe('generateJournalRegister', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: null, description: 'No series', source_type: 'manual', status: 'posted' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
-            { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: null, description: 'No series', source_type: 'manual', status: 'posted' } },
-            { account_number: '3001', debit_amount: 0, credit_amount: 100, journal_entry_id: 'e1', journal_entries: { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: null, description: 'No series', source_type: 'manual', status: 'posted' } },
+            { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 100, journal_entry_id: 'e1' },
           ],
           error: null,
         },

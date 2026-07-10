@@ -16,7 +16,16 @@ function makeBuilder(tableName: string) {
   }
   const consume = (): MockResult => {
     const queue = mockResults[tableName]
-    if (!queue || queue.length === 0) return { data: null, error: null }
+    if (!queue || queue.length === 0) {
+      // The two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts) reads
+      // journal_entries before journal_entry_lines. Tests queue line rows
+      // directly, so default the entries step to one generic entry: the mock
+      // ignores filters and the reports under test only consume line rows.
+      if (tableName === 'journal_entries') {
+        return { data: [{ id: 'entry-1' }], error: null }
+      }
+      return { data: null, error: null }
+    }
     return queue.shift()!
   }
   b.single = vi.fn().mockImplementation(async () => consume())

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 export interface JournalRegisterLine {
   account_number: string
@@ -32,8 +33,10 @@ export interface JournalRegisterReport {
  * Generate journal register (grundbok) for a fiscal period.
  * BFL 5 kap. 1 §: registreringsordning: all vouchers in chronological registration order.
  *
- * Uses a joined query with pagination to handle any number of entries.
- * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
+ * Uses the shared two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts):
+ * entries first, then lines chunked by entry id, both paginated, so any
+ * number of entries is handled without the pathological journal_entries!inner
+ * embed plan.
  *
  * Unlike the general ledger and trial balance, the grundbok includes ALL
  * entries: the opening_balance_entry is NOT excluded, because it is a
@@ -57,11 +60,9 @@ export async function generateJournalRegister(
     return { entries: [], total_entries: 0, total_debit: 0, total_credit: 0, period: { start: '', end: '' } }
   }
 
-  // Fetch all lines with joined entry data: single paginated query,
-  // no entry ID array, no truncation at 1000 rows
-  // Supabase types !inner joins as arrays; for many-to-one (line → entry)
-  // it returns a single object at runtime. Cast via `as any` on the query.
-  const rawLines = await fetchAllRows<{
+  // Fetch entries and their lines via the two-step entry-lines fetch: both
+  // sides paginated, lines chunked by entry id, no truncation at 1000 rows.
+  const rawLines = await fetchEntryLines<{
     id: string
     account_number: string
     debit_amount: number
@@ -76,18 +77,17 @@ export async function generateJournalRegister(
       source_type: string
       status: string
     }
-  }>(({ from, to }) => {
-    return supabase
-      .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(id, entry_date, voucher_number, voucher_series, description, source_type, status, company_id, fiscal_period_id)')
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', periodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      // Stable total order on the line PK: without it, rows duplicate/skip
-      // across pages and entries appear twice or go missing (see fetch-all.ts).
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .order('id', { ascending: true }).range(from, to) as any
-  }, { dedupeBy: (r) => r.id })
+  }>({
+    supabase,
+    entryColumns:
+      'id, entry_date, voucher_number, voucher_series, description, source_type, status, company_id, fiscal_period_id',
+    lineColumns: 'id, account_number, debit_amount, credit_amount, journal_entry_id',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .in('status', ['posted', 'reversed']),
+  })
 
   if (rawLines.length === 0) {
     return { entries: [], total_entries: 0, total_debit: 0, total_credit: 0, period: { start: period.period_start, end: period.period_end } }

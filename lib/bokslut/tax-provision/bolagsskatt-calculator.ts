@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import type { ProposedDisposition } from '../types'
 
@@ -67,25 +68,32 @@ export async function sumPostedYearEndDispositions(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type)',
-    )
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-    .eq('journal_entries.status', 'posted')
-    .eq('journal_entries.source_type', 'year_end')
-  if (error) {
-    throw new Error(`Failed to read posted dispositions: ${error.message}`)
-  }
   type Row = {
     account_number: string
     debit_amount: number | string | null
     credit_amount: number | string | null
   }
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
+  let data: Row[]
+  try {
+    data = await fetchEntryLines<Row>({
+      supabase,
+      lineColumns: 'account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .eq('status', 'posted')
+          .eq('source_type', 'year_end'),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
+    throw new Error(
+      `Failed to read posted dispositions: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
   let effect = 0
-  for (const row of (data ?? []) as Row[]) {
+  for (const row of data) {
     const acc = row.account_number
     if (!(acc.startsWith('88') || acc === '7533')) continue
     effect += (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)

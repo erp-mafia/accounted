@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type {
   Asset,
   AssetCategory,
@@ -269,21 +270,26 @@ async function hasManualDepreciationPosted(
       .filter((id): id is string => id !== null),
   )
 
-  const { data: lines, error } = await supabase
-    .from('journal_entry_lines')
-    .select('journal_entry_id, journal_entries!inner(company_id, status)')
-    .eq('account_number', asset.bas_accumulated_account)
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .gt('credit_amount', 0)
-  if (error) {
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts): posted
+  // entries for the company first, then their lines on the accumulated
+  // account with a credit.
+  let lines: { journal_entry_id: string }[]
+  try {
+    lines = await fetchEntryLines<{ journal_entry_id: string }>({
+      supabase,
+      lineColumns: 'journal_entry_id',
+      filterEntries: (q: EntryLinesQuery) =>
+        q.eq('company_id', companyId).eq('status', 'posted'),
+      filterLines: (q: EntryLinesQuery) =>
+        q.eq('account_number', asset.bas_accumulated_account).gt('credit_amount', 0),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
     throw new Error(
-      `Failed to scan ledger depreciation for asset ${asset.id}: ${error.message}`,
+      `Failed to scan ledger depreciation for asset ${asset.id}: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
-  return ((lines ?? []) as { journal_entry_id: string }[]).some(
-    (line) => !siblingEngineEntries.has(line.journal_entry_id),
-  )
+  return lines.some((line) => !siblingEngineEntries.has(line.journal_entry_id))
 }
 
 export async function updateAsset(
@@ -861,24 +867,29 @@ export async function getAccumulatedDepreciationAsOf(
   }
   if (!asset) return 0
 
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'debit_amount, credit_amount, journal_entries!inner(company_id, status, entry_date)',
-    )
-    .eq('account_number', asset.bas_expense_account)
-    .eq('journal_entries.company_id', asset.company_id)
-    .eq('journal_entries.status', 'posted')
-    .lte('journal_entries.entry_date', asOfDate)
-
-  if (error) {
+  let data: Row[]
+  try {
+    data = await fetchEntryLines<Row>({
+      supabase,
+      lineColumns: 'debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', asset.company_id)
+          .eq('status', 'posted')
+          .lte('entry_date', asOfDate),
+      filterLines: (q: EntryLinesQuery) =>
+        q.eq('account_number', asset.bas_expense_account),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
     throw new Error(
-      `Failed to sum accumulated depreciation for asset ${assetId}: ${error.message}`,
+      `Failed to sum accumulated depreciation for asset ${assetId}: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
 
-  return ((data ?? []) as Row[]).reduce((sum, row) => {
+  return data.reduce((sum, row) => {
     // Expense account: normal balance is debit. Net = debit − credit so
     // any storno (reversal) is netted out.
     return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))

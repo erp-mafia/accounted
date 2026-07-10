@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { getBranding } from '@/lib/branding/service'
 import { createLogger } from '@/lib/logger'
 import { getOpeningBalances } from './opening-balances'
@@ -110,26 +111,16 @@ export async function generateSIEExport(
       .range(from, to)
   }, { dedupeBy: (r) => r.id })
 
-  // Fetch all lines for those entries, filtered server-side via an inner join
-  // so the same company/period/status (and year-end exclusion) constraints
-  // apply, then group by journal_entry_id.
-  const allLines = await fetchAllRows<JournalEntryLine & { journal_entry_id: string }>(({ from, to }) => {
-    let q = supabase
-      .from('journal_entry_lines')
-      .select('*, journal_entries!inner(company_id, fiscal_period_id, status, source_type)')
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', options.fiscal_period_id)
-      .in('journal_entries.status', ['posted', 'reversed'])
-
-    if (options.exclude_year_end_closing) {
-      q = q.neq('journal_entries.source_type', 'year_end')
-    }
-
-    // Stable total order on the line PK so paging can't duplicate/skip a line
-    // across the 1000-row boundary; dedupeBy is the defense-in-depth net.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return q.order('id', { ascending: true }).range(from, to) as any
-  }, { dedupeBy: (r) => r.id })
+  // Fetch all lines for those entries by entry id, in chunks (see
+  // lib/bookkeeping/entry-lines.ts for why the old journal_entries!inner
+  // embed filter had to go). Reusing the entry list already fetched above
+  // means the company/period/status (and year-end exclusion) constraints
+  // carry over exactly; then group by journal_entry_id.
+  const allLines = await fetchLinesByEntryIds<JournalEntryLine & { journal_entry_id: string }>(
+    supabase,
+    entries.map((e) => e.id),
+    '*'
+  )
 
   const linesByEntryId = new Map<string, JournalEntryLine[]>()
   for (const line of allLines) {

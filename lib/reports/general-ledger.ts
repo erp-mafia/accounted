@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 
 export interface GeneralLedgerLine {
@@ -35,8 +36,10 @@ export interface GeneralLedgerReport {
  * Generate general ledger (huvudbok) for a fiscal period.
  * BFL 5 kap. 1 §: systematisk ordning: all transactions grouped by account.
  *
- * Uses joined queries with pagination to handle any number of entries.
- * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
+ * Uses the shared two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts):
+ * entries first, then lines chunked by entry id, both paginated, so any
+ * number of entries is handled without the pathological journal_entries!inner
+ * embed plan.
  *
  * Opening balances use the opening_balance_entry set by year-end closing
  * when available; falls back to summing prior-period entries.
@@ -88,14 +91,12 @@ export async function generateGeneralLedger(
     }
   }
 
-  // ── Period lines via joined query (excluding OB entry) ─────────
+  // ── Period lines via the two-step entry-lines fetch (excluding OB entry) ──
   // Race condition note: if year-end closing runs concurrently and creates
   // the OB entry between the period query and this query, the entry could
   // be missed. The window is sub-second and the consequence is a single
   // stale report: acceptable.
-  // Supabase types !inner joins as arrays; for many-to-one (line → entry)
-  // it returns a single object at runtime. Cast via `as any` on the query.
-  const rawLines = await fetchAllRows<{
+  const rawLines = await fetchEntryLines<{
     id: string
     account_number: string
     debit_amount: number
@@ -109,30 +110,29 @@ export async function generateGeneralLedger(
       description: string
       source_type: string
     }
-  }>(({ from, to }) => {
-    let query = supabase
-      .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, dimensions, journal_entries!inner(entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status)')
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', periodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
+  }>({
+    supabase,
+    entryColumns:
+      'entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status',
+    lineColumns:
+      'id, account_number, debit_amount, credit_amount, journal_entry_id, dimensions',
+    filterEntries: (q: EntryLinesQuery) => {
+      let query = q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .in('status', ['posted', 'reversed'])
 
-    if (dimensionFilter) {
-      // jsonb containment (@>): served by idx_jel_dimensions_gin.
-      query = query.contains('dimensions', dimensionFilter)
-    }
+      if (obEntryId) {
+        query = query.neq('id', obEntryId)
+      }
 
-    if (obEntryId) {
-      query = query.neq('journal_entry_id', obEntryId)
-    }
-
-    // Stable total order on the line PK: paging is only correct with a
-    // deterministic order, else rows duplicate/skip across pages and balances
-    // double or accounts vanish (see fetch-all.ts ordering invariant). The
-    // report re-sorts lines per account below, so this order is invisible.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return query.order('id', { ascending: true }).range(from, to) as any
-  }, { dedupeBy: (r) => r.id })
+      return query
+    },
+    filterLines: dimensionFilter
+      ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+        (q: EntryLinesQuery) => q.contains('dimensions', dimensionFilter)
+      : undefined,
+  })
 
   if (rawLines.length === 0 && openingBalances.size === 0) {
     return { accounts: [], period: { start: period.period_start, end: period.period_end } }

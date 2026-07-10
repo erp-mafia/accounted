@@ -342,11 +342,13 @@ describe('updateAsset: acquisition-basis correction guard', () => {
 
   /**
    * Minimal Supabase mock that captures the final UPDATE payload. updateAsset's
-   * correction guard touches three tables:
+   * correction guard touches four tables:
    *   - 'assets'                 → getAsset (.maybeSingle) and the update (.single)
    *   - 'depreciation_schedules' → hasPostedDepreciation (1st call, head {count})
    *                                then hasManualDepreciationPosted (2nd call,
    *                                .select('journal_entry_id') → {data})
+   *   - 'journal_entries'        → hasManualDepreciationPosted entries step of the
+   *                                two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts)
    *   - 'journal_entry_lines'    → hasManualDepreciationPosted ledger scan → {data}
    */
   function mockForUpdate(
@@ -382,11 +384,32 @@ describe('updateAsset: acquisition-basis correction guard', () => {
             )
           return chain
         }
+        if (table === 'journal_entries') {
+          // Entries step of the two-step fetch: derive the entry ids from the
+          // line fixtures so the chunked line query has ids to ask for.
+          const entryIds = [
+            ...new Set((opts.accumulatedCredits ?? []).map((l) => l.journal_entry_id)),
+          ]
+          const chain: Record<string, unknown> = {}
+          chain.select = vi.fn(() => chain)
+          chain.eq = vi.fn(() => chain)
+          chain.order = vi.fn(() => chain)
+          chain.range = vi.fn(() => chain)
+          chain.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: entryIds.length > 0 ? entryIds.map((id) => ({ id })) : [{ id: 'entry-none' }],
+              error: null,
+            })
+          return chain
+        }
         if (table === 'journal_entry_lines') {
           const chain: Record<string, unknown> = {}
           chain.select = vi.fn(() => chain)
           chain.eq = vi.fn(() => chain)
           chain.gt = vi.fn(() => chain)
+          chain.in = vi.fn(() => chain)
+          chain.order = vi.fn(() => chain)
+          chain.range = vi.fn(() => chain)
           chain.then = (resolve: (v: unknown) => void) =>
             resolve({ data: opts.accumulatedCredits ?? [], error: null })
           return chain

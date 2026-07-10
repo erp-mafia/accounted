@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type { ProposedDisposition } from '../types'
 
 /** Särskild löneskatt på pensionskostnader (SLP). 24.26 % per SLF 1991:687. */
@@ -35,23 +36,29 @@ export async function calculateSarskildLoneskatt(
   fiscalPeriodId: string,
   options: { manualAdjustment?: number } = {},
 ): Promise<ProposedDisposition | null> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status)',
+  type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
+  let data: Row[]
+  try {
+    data = await fetchEntryLines<Row>({
+      supabase,
+      lineColumns: 'account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .eq('status', 'posted'),
+      filterLines: (q: EntryLinesQuery) =>
+        q.gte('account_number', '7410').lte('account_number', '7419'),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
+    throw new Error(
+      `Failed to fetch pension costs: ${err instanceof Error ? err.message : String(err)}`,
     )
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-    .eq('journal_entries.status', 'posted')
-    .gte('account_number', '7410')
-    .lte('account_number', '7419')
-
-  if (error) {
-    throw new Error(`Failed to fetch pension costs: ${error.message}`)
   }
 
-  type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
-  const pensionCostsBooked = ((data ?? []) as Row[]).reduce((sum, row) => {
+  const pensionCostsBooked = data.reduce((sum, row) => {
     // Cost account: normal balance is debit, so net = debit − credit.
     return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))
   }, 0)

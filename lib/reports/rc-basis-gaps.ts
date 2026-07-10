@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  fetchEntryLines,
+  fetchLinesByEntryIds,
+  type EntryLinesQuery,
+} from '@/lib/bookkeeping/entry-lines'
 import { calculatePeriodDates } from './vat-declaration'
 import type { VatPeriodType } from '@/types'
 
@@ -106,41 +110,30 @@ export async function findRcBasisGaps(
 ): Promise<RcBasisGap[]> {
   const { start, end } = calculatePeriodDates(periodType, year, period)
 
-  const rcLines = (await fetchAllRows<unknown>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select(`
-        journal_entry_id,
-        account_number,
-        debit_amount,
-        credit_amount,
-        journal_entries!inner (
-          id, voucher_number, voucher_series, entry_date, description, status, company_id
-        )
-      `)
-      .in('account_number', RC_OUTPUT_ACCOUNTS as unknown as string[])
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.status', 'posted')
-      .gte('journal_entries.entry_date', start)
-      .lte('journal_entries.entry_date', end)
-      // Stable total order for correct paging (see fetch-all.ts).
-      .order('id', { ascending: true })
-      .range(from, to),
-  )) as RcLineRow[]
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
+  const rcLines = (await fetchEntryLines<unknown>({
+    supabase,
+    entryColumns:
+      'id, voucher_number, voucher_series, entry_date, description, status, company_id',
+    lineColumns: 'journal_entry_id, account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('status', 'posted')
+        .gte('entry_date', start)
+        .lte('entry_date', end),
+    filterLines: (q: EntryLinesQuery) =>
+      q.in('account_number', RC_OUTPUT_ACCOUNTS as unknown as string[]),
+  })) as RcLineRow[]
 
   if (rcLines.length === 0) return []
 
   const entryIds = [...new Set(rcLines.map((l) => l.journal_entry_id))]
 
-  const siblingLines = await fetchAllRows<SiblingLineRow>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select('id, journal_entry_id, account_number, debit_amount, credit_amount')
-      .in('journal_entry_id', entryIds)
-      // Stable total order for correct paging (see fetch-all.ts).
-      .order('id', { ascending: true })
-      .range(from, to),
-    { dedupeBy: (r) => r.id },
+  const siblingLines = await fetchLinesByEntryIds<SiblingLineRow>(
+    supabase,
+    entryIds,
+    'id, journal_entry_id, account_number, debit_amount, credit_amount',
   )
 
   const basisByEntry = new Map<string, number>()

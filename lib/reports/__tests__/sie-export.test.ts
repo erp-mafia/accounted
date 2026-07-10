@@ -60,10 +60,12 @@ const baseOptions = {
 //   1: previous fiscal period .single() (#RAR -1)
 //   2: chart_of_accounts        (fetchAllRows)
 //   3: journal_entries          (fetchAllRows)
-//   4: journal_entry_lines      (fetchAllRows)   ← split out from the entries query
+//   4: journal_entry_lines      (fetchLinesByEntryIds; SKIPPED when slot 3
+//      returned no entries, so empty-period tests queue nothing here)
 //   5: dimensions               (registry #DIM/#UNDERDIM rows)
 //   6: dimension_values         (registry #OBJEKT rows)
-//   7: opening balances (RPC fallback or journal_entry_lines page)
+//   7: opening balances (RPC fallback, or the OB entry ownership check +
+//      its lines when opening_balance_entry_id is set: two slots)
 
 // Registry fixtures for the system dims (seeded by ensure_company_dimensions).
 const dimKostnadsstalle = { id: 'dim-1', sie_dim_no: 1, parent_sie_dim_no: null, name: 'Kostnadsställe' }
@@ -85,8 +87,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // opening balances RPC
@@ -110,8 +111,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // RPC fallback
@@ -136,8 +136,7 @@ describe('generateSIEExport', () => {
         ],
         error: null,
       },
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // RPC fallback
@@ -193,8 +192,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [dimKostnadsstalle, dimProjekt], error: null }, // dimensions
       {
         data: [
@@ -370,8 +368,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       {
         // Kostnadsbärare (2) is a sub-dimension of Kostnadsställe (1); the
         // parent has NO values of its own: it must still be declared because
@@ -513,8 +510,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // RPC fallback
@@ -538,8 +534,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // RPC fallback
@@ -556,8 +551,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // RPC fallback
@@ -577,8 +571,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [dimKostnadsstalle, dimProjekt], error: null }, // dimensions: seeded, valueless
       { data: [], error: null }, // dimension_values
       { data: [], error: null }, // RPC fallback
@@ -664,8 +657,7 @@ describe('generateSIEExport', () => {
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries (no movements this period)
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no movements -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
       // RPC fallback returns prior IBs derived from historical journal lines
@@ -689,17 +681,18 @@ describe('generateSIEExport', () => {
 
   it('reads #IB from explicit opening_balance_entry_id when set', async () => {
     // When opening_balance_entry_id is set, getOpeningBalances uses the
-    // journal_entry_lines path (fetchAllRows) instead of the RPC, so the
-    // queue here serves the line rows rather than RPC rows.
+    // two-step entry-lines path (entry ownership check, then its lines)
+    // instead of the RPC, so the queue serves those rows rather than RPC rows.
     results = [
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: 'ob-entry-1' }, error: null },
       { data: null, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
-      { data: [], error: null }, // journal_entries
-      { data: [], error: null }, // journal_entry_lines
+      { data: [], error: null }, // journal_entries (no entries -> line fetch skipped)
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
-      // fetchAllRows page 1: explicit OB entry lines
+      // getOpeningBalances step 1: the OB entry itself (ownership check)
+      { data: [{ id: 'ob-entry-1' }], error: null },
+      // getOpeningBalances step 2: the explicit OB entry lines
       {
         data: [
           { account_number: '1930', debit_amount: 12000, credit_amount: 0 },
@@ -753,10 +746,10 @@ describe('generateSIEExport', () => {
         ],
         error: null,
       },
-      // journal_entry_lines (allLines): #824 moved per-entry lines into a single
-      // paged join query; lines map back to entries by journal_entry_id (the inline
-      // entry.lines above are overwritten). The OB entry's lines (excluded from
-      // movement via obEntryId) and the real transfer's lines both flow through here.
+      // journal_entry_lines (allLines): fetched by entry id via
+      // fetchLinesByEntryIds; lines map back to entries by journal_entry_id.
+      // The OB entry's lines (excluded from movement via obEntryId) and the
+      // real transfer's lines both flow through here.
       {
         data: [
           { id: 'l1', journal_entry_id: 'ob-entry-1', account_number: '1933', debit_amount: 96466.59, credit_amount: 0, line_description: 'IB 1933', dimensions: {} },
@@ -768,7 +761,9 @@ describe('generateSIEExport', () => {
       },
       { data: [], error: null }, // dimensions
       { data: [], error: null }, // dimension_values
-      // fetchAllRows for OB entry lines (opening_balance_entry_id is set)
+      // getOpeningBalances step 1: the OB entry itself (ownership check)
+      { data: [{ id: 'ob-entry-1' }], error: null },
+      // getOpeningBalances step 2: the explicit OB entry lines
       {
         data: [
           { account_number: '1933', debit_amount: 96466.59, credit_amount: 0 },

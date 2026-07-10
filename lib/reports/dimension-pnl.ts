@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateTrialBalance } from './trial-balance'
 import type {
   DimensionPnlColumn,
@@ -99,32 +100,31 @@ export async function generateDimensionPnl(
   // Mirrors trial-balance closing semantics: the fiscal_period_id join scopes
   // to the period and toDate caps the window: both sides of the matrix
   // cover period_start..toDate, so the buckets sum to the Totalt column.
-  const taggedLines = await fetchAllRows<{
+  const taggedLines = await fetchEntryLines<{
     id: string
     account_number: string
     debit_amount: number
     credit_amount: number
     dimensions: Record<string, string>
-  }>(({ from, to }) => {
-    let query = supabase
-      .from('journal_entry_lines')
-      .select(
-        'id, account_number, debit_amount, credit_amount, dimensions, journal_entries!inner(company_id, fiscal_period_id, status, entry_date)'
-      )
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      // Key-existence via the extracted text field: dims 1/6 ride the partial
-      // expression indexes (idx_jel_dimensions_dim1/dim6).
-      .not(`dimensions->>${sieDimNo}`, 'is', null)
+  }>({
+    supabase,
+    lineColumns: 'id, account_number, debit_amount, credit_amount, dimensions',
+    filterEntries: (q: EntryLinesQuery) => {
+      let query = q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .in('status', ['posted', 'reversed'])
 
-    if (options?.toDate) {
-      query = query.lte('journal_entries.entry_date', options.toDate)
-    }
+      if (options?.toDate) {
+        query = query.lte('entry_date', options.toDate)
+      }
 
-    // Stable total order on the line PK for correct paging (see fetch-all.ts).
-    return query.order('id', { ascending: true }).range(from, to)
-  }, { dedupeBy: (r) => r.id })
+      return query
+    },
+    // Key-existence via the extracted text field: dims 1/6 ride the partial
+    // expression indexes (idx_jel_dimensions_dim1/dim6).
+    filterLines: (q: EntryLinesQuery) => q.not(`dimensions->>${sieDimNo}`, 'is', null),
+  })
 
   // Bucket raw amounts per (account, code). Only accounts present in the P&L
   // trial-balance scope count: anything else (balance accounts, 8999) is out.

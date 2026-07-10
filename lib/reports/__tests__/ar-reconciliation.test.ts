@@ -52,6 +52,8 @@ describe('generateARReconciliation', () => {
         error: null,
       },
       // 1: journal_entry_lines for account 1510
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 8000, credit_amount: 0, journal_entry_id: 'e1' },
@@ -81,6 +83,8 @@ describe('generateARReconciliation', () => {
         error: null,
       },
       // 1: journal_entry_lines: manual debit on 1510 creates mismatch
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 5000, credit_amount: 0, journal_entry_id: 'e1' },
@@ -115,6 +119,8 @@ describe('generateARReconciliation', () => {
   it('handles null invoice data gracefully', async () => {
     results = [
       { data: null, error: null },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'e1' },
@@ -134,6 +140,8 @@ describe('generateARReconciliation', () => {
   it('uses correct debit-normal balance for account 1510 (asset)', async () => {
     results = [
       { data: [], error: null },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 10000, credit_amount: 0, journal_entry_id: 'e1' },
@@ -162,6 +170,8 @@ describe('generateARReconciliation', () => {
         error: null,
       },
       // 1: 1510 balance = 3 200 SEK
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 3200, credit_amount: 0, journal_entry_id: 'e1' },
@@ -190,6 +200,8 @@ describe('generateARReconciliation', () => {
         error: null,
       },
       // 1: 1510 balance reflects only the SEK invoice
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 500, credit_amount: 0, journal_entry_id: 'e1' },
@@ -221,6 +233,8 @@ describe('generateARReconciliation', () => {
         error: null,
       },
       // 1: GL: 1 200 on 1510, 300 on 1513 → combined 1 500
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 1200, credit_amount: 0, journal_entry_id: 'e1' },
@@ -250,6 +264,8 @@ describe('generateARReconciliation', () => {
       },
       // 1: 1510 lines as returned by posted+reversed: original (reversed debit
       //    5000), storno (credit 5000), correction (debit 5000). Net = 5000.
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 5000, credit_amount: 0, journal_entry_id: 'reg-reversed' },
@@ -268,10 +284,14 @@ describe('generateARReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
 
     // Guard the actual fix: the 1510/1513 query must include reversed entries.
-    const statusFilter = calls.find(
-      (c) => c.method === 'in' && c.args[0] === 'journal_entries.status',
+    // The status filter now lives on the journal_entries query itself (the
+    // two-step entry-lines fetch), not on an embedded-side column. The open
+    // invoices query also filters .in('status', ...), so assert that ONE of
+    // the status filters is the posted+reversed ledger inclusion rule.
+    const statusFilters = calls.filter(
+      (c) => c.method === 'in' && c.args[0] === 'status',
     )
-    expect(statusFilter?.args[1]).toEqual(['posted', 'reversed'])
+    expect(statusFilters.map((c) => c.args[1])).toContainEqual(['posted', 'reversed'])
   })
 
   it('uses Math.round for monetary precision', async () => {
@@ -282,6 +302,8 @@ describe('generateARReconciliation', () => {
         ],
         error: null,
       },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 66.77, credit_amount: 0, journal_entry_id: 'e1' },

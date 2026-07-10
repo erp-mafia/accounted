@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type {
   VatDeclaration,
   VatDeclarationRutor,
@@ -265,28 +266,21 @@ export async function calculateVatDeclaration(
   )
 
   // Fetch all posted journal entry lines on VAT-relevant accounts for the period
-  const lines = await fetchAllRows<{
+  const lines = await fetchEntryLines<{
     account_number: string
     debit_amount: number
     credit_amount: number
-  }>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select(`
-        account_number,
-        debit_amount,
-        credit_amount,
-        journal_entries!inner (company_id, entry_date, status)
-      `)
-      .in('account_number', VAT_ACCOUNTS)
-      .eq('journal_entries.company_id', companyId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      .gte('journal_entries.entry_date', start)
-      .lte('journal_entries.entry_date', end)
-      // Stable total order for correct paging (see fetch-all.ts).
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
+  }>({
+    supabase,
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .in('status', ['posted', 'reversed'])
+        .gte('entry_date', start)
+        .lte('entry_date', end),
+    filterLines: (q: EntryLinesQuery) => q.in('account_number', VAT_ACCOUNTS),
+  })
 
   // Aggregate debit/credit totals per account
   const totals = new Map<string, { debit: number; credit: number }>()

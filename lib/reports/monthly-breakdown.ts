@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 export interface MonthlyBreakdownMonth {
   label: string
@@ -47,35 +47,27 @@ export async function generateMonthlyBreakdown(
     return { months: [] }
   }
 
-  // Get all posted journal entry lines for this period with their entry dates
+  // Get all posted journal entry lines for this period with their entry dates,
+  // via the two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let lines: any[]
   try {
-    lines = await fetchAllRows(({ from, to }) => {
-      let query = supabase
-        .from('journal_entry_lines')
-        .select(`
-          account_number,
-          debit_amount,
-          credit_amount,
-          journal_entry:journal_entries!inner(
-            entry_date,
-            status,
-            company_id,
-            fiscal_period_id
-          )
-        `)
-        .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-        .eq('journal_entries.company_id', companyId)
-        .eq('journal_entries.status', 'posted')
-
-      if (options?.dimensions && Object.keys(options.dimensions).length > 0) {
-        // jsonb containment (@>): served by idx_jel_dimensions_gin.
-        query = query.contains('dimensions', options.dimensions)
-      }
-
-      // Stable total order for correct paging (see fetch-all.ts).
-      return query.order('id', { ascending: true }).range(from, to)
+    lines = await fetchEntryLines({
+      supabase,
+      entryColumns: 'entry_date, status, company_id, fiscal_period_id',
+      lineColumns: 'account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .eq('company_id', companyId)
+          .eq('status', 'posted'),
+      filterLines:
+        options?.dimensions && Object.keys(options.dimensions).length > 0
+          ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+            (q: EntryLinesQuery) => q.contains('dimensions', options.dimensions)
+          : undefined,
+      // The old embed was aliased: journal_entry:journal_entries!inner(...).
+      attachEntriesAs: 'journal_entry',
     })
   } catch {
     return { months: [] }

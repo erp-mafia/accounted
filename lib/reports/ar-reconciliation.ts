@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
@@ -86,32 +87,23 @@ export async function generateARReconciliation(
   // trial balance / balance sheet use. A corrected invoice flips its original to
   // status='reversed'; that reversed leg is cancelled by the posted storno, so
   // both must be summed or a corrected invoice manufactures a phantom gap.
-  // Paginated with a stable id order (+ dedupe defense) so a period with >1000
-  // ledger lines on 1510/1513 isn't silently truncated into a phantom gap.
-  const journalLines = await fetchAllRows<{
+  // Fetched via the two-step entry-lines helper (entries first, then lines
+  // chunked by entry id, both paginated): see lib/bookkeeping/entry-lines.ts.
+  const journalLines = await fetchEntryLines<{
     id: string
     debit_amount: number | null
     credit_amount: number | null
-  }>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select(`
-        id,
-        debit_amount,
-        credit_amount,
-        journal_entry:journal_entries!inner(
-          status,
-          company_id,
-          fiscal_period_id
-        )
-      `)
-      .in('account_number', ['1510', '1513'])
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', periodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      .order('id', { ascending: true })
-      .range(from, to)
-  , { dedupeBy: (l) => l.id })
+  }>({
+    supabase,
+    lineColumns: 'id, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .in('status', ['posted', 'reversed']),
+    filterLines: (q: EntryLinesQuery) => q.in('account_number', ['1510', '1513']),
+    attachEntriesAs: null,
+  })
 
   // Both 1510 and 1513 are debit-normal assets: balance = debits - credits
   let account1510Balance = 0

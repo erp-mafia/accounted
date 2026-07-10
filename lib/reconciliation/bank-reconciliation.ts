@@ -3,6 +3,7 @@ import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 // ============================================================
 // Types
@@ -481,18 +482,20 @@ export async function getReconciliationStatus(
 
   // posted + reversed = the ledger balance, exactly as the trial balance counts
   // it. The .in() filter on the query already excludes draft/cancelled.
-  // Paginated for the same 1000-row-cap reason as the transactions above: a
-  // silently truncated GL side would corrupt gl_1930_balance and the difference.
-  const fetchedLines = await fetchAllRows<GlLineRow>(({ from, to }) => {
-    let glQuery = supabase
-      .from('journal_entry_lines')
-      .select('debit_amount, credit_amount, journal_entries!inner(id, company_id, entry_date, status, source_type)')
-      .eq('account_number', bankAccount)
-      .eq('journal_entries.company_id', companyId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-    if (dateFrom) glQuery = glQuery.gte('journal_entries.entry_date', dateFrom)
-    if (dateTo) glQuery = glQuery.lte('journal_entries.entry_date', dateTo)
-    return glQuery.order('id').range(from, to)
+  // Fetched via the two-step entry-lines helper (entries first, then lines
+  // chunked by entry id, both paginated): a silently truncated GL side would
+  // corrupt gl_1930_balance and the difference. See lib/bookkeeping/entry-lines.ts.
+  const fetchedLines = await fetchEntryLines<GlLineRow>({
+    supabase,
+    entryColumns: 'id, company_id, entry_date, status, source_type',
+    lineColumns: 'debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) => {
+      let glQuery = q.eq('company_id', companyId).in('status', ['posted', 'reversed'])
+      if (dateFrom) glQuery = glQuery.gte('entry_date', dateFrom)
+      if (dateTo) glQuery = glQuery.lte('entry_date', dateTo)
+      return glQuery
+    },
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', bankAccount),
   })
 
   // Floor the window at the most recent opening-balance date on this account

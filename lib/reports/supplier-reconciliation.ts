@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 export interface ReconciliationResult {
   supplier_ledger_total: number
@@ -80,32 +81,23 @@ export async function generateReconciliation(
   // debit balance. (This is exactly the false −41 121,25 kr "Ej avstämd" gap a
   // fully-paid, fully-corrected company hit: posted-only = −41 121,25, but
   // posted+reversed = 0, matching the leverantörsreskontra.)
-  // Paginated with a stable id order (+ dedupe defense) so a period with >1000
-  // ledger lines on 2440 isn't silently truncated into a phantom gap.
-  const journalLines = await fetchAllRows<{
+  // Fetched via the two-step entry-lines helper (entries first, then lines
+  // chunked by entry id, both paginated): see lib/bookkeeping/entry-lines.ts.
+  const journalLines = await fetchEntryLines<{
     id: string
     debit_amount: number | null
     credit_amount: number | null
-  }>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select(`
-        id,
-        debit_amount,
-        credit_amount,
-        journal_entry:journal_entries!inner(
-          status,
-          company_id,
-          fiscal_period_id
-        )
-      `)
-      .eq('account_number', '2440')
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', periodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      .order('id', { ascending: true })
-      .range(from, to)
-  , { dedupeBy: (l) => l.id })
+  }>({
+    supabase,
+    lineColumns: 'id, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .in('status', ['posted', 'reversed']),
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', '2440'),
+    attachEntriesAs: null,
+  })
 
   // Account 2440 is a liability: credit normal balance
   // Balance = credits - debits

@@ -52,6 +52,8 @@ describe('generateReconciliation', () => {
         error: null,
       },
       // 1: journal_entry_lines for account 2440
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 10000, journal_entry_id: 'e1' },
@@ -80,8 +82,10 @@ describe('generateReconciliation', () => {
     const page2 = Array.from({ length: 500 }, (_, i) => ({ id: `p2-${i}`, debit_amount: 0, credit_amount: 10 }))
     results = [
       { data: [], error: null },     // 0: supplier_invoices, none open
-      { data: page1, error: null },  // 1: 2440 lines page 1 (full → triggers next page)
-      { data: page2, error: null },  // 2: 2440 lines page 2 (partial → stop)
+      // 1: journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: page1, error: null },  // 2: 2440 lines page 1 (full → triggers next page)
+      { data: page2, error: null },  // 3: 2440 lines page 2 (partial → stop)
     ]
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
@@ -100,6 +104,8 @@ describe('generateReconciliation', () => {
         error: null,
       },
       // 1: journal_entry_lines, balance 7000
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 7000, journal_entry_id: 'e1' },
@@ -133,6 +139,8 @@ describe('generateReconciliation', () => {
   it('handles null invoice data gracefully', async () => {
     results = [
       { data: null, error: null },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 3000, journal_entry_id: 'e1' },
@@ -152,6 +160,8 @@ describe('generateReconciliation', () => {
   it('computes credit-normal balance for account 2440 (liability)', async () => {
     results = [
       { data: [], error: null },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 15000, journal_entry_id: 'e1' },
@@ -181,6 +191,8 @@ describe('generateReconciliation', () => {
         error: null,
       },
       // 1: 2440 balance = 3 475 SEK (matches converted ledger total)
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 3475, journal_entry_id: 'e1' },
@@ -212,6 +224,8 @@ describe('generateReconciliation', () => {
         error: null,
       },
       // 1: 2440 balance reflects only the SEK invoice
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 1000, journal_entry_id: 'e1' },
@@ -246,6 +260,8 @@ describe('generateReconciliation', () => {
       // 1: 2440 lines as returned by the posted+reversed query for one corrected,
       //    paid invoice of 11 231,25: registration (reversed credit), storno
       //    (debit), correction (credit), payment (debit). Net credit−debit = 0.
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 11231.25, journal_entry_id: 'reg-reversed' },
@@ -266,10 +282,14 @@ describe('generateReconciliation', () => {
 
     // Guard the actual fix: the 2440 query must include reversed entries, not
     // filter to posted-only (which excluded the reversed registration leg).
-    const statusFilter = calls.find(
-      (c) => c.method === 'in' && c.args[0] === 'journal_entries.status',
+    // The status filter now lives on the journal_entries query itself (the
+    // two-step entry-lines fetch), not on an embedded-side column. The open
+    // invoices query also filters .in('status', ...), so assert that ONE of
+    // the status filters is the posted+reversed ledger inclusion rule.
+    const statusFilters = calls.filter(
+      (c) => c.method === 'in' && c.args[0] === 'status',
     )
-    expect(statusFilter?.args[1]).toEqual(['posted', 'reversed'])
+    expect(statusFilters.map((c) => c.args[1])).toContainEqual(['posted', 'reversed'])
   })
 
   it('uses Math.round for monetary precision', async () => {
@@ -281,6 +301,8 @@ describe('generateReconciliation', () => {
         ],
         error: null,
       },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { debit_amount: 0, credit_amount: 66.67, journal_entry_id: 'e1' },

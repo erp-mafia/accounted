@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 import type { TrialBalanceRow } from '@/types'
 
@@ -25,8 +26,10 @@ import type { TrialBalanceRow } from '@/types'
  * (classes 3-8) where IB is immaterial: never for balance/statutory reports.
  * The catalog whitelist + statutory-guard test pin this.
  *
- * Uses joined queries with pagination to handle any number of entries.
- * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
+ * Uses the shared two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts):
+ * entries first, then lines chunked by entry id, both paginated, so any
+ * number of entries is handled without the pathological journal_entries!inner
+ * embed plan (see entry-lines.ts for the full story).
  */
 export async function generateTrialBalance(
   supabase: SupabaseClient,
@@ -81,37 +84,37 @@ export async function generateTrialBalance(
     period?.period_start &&
     options.fromDate > period.period_start
   ) {
-    const priorLines = await fetchAllRows<{
+    const priorLines = await fetchEntryLines<{
       id: string
       account_number: string
       debit_amount: number
       credit_amount: number
-    }>(({ from, to }) => {
-      let query = supabase
-        .from('journal_entry_lines')
-        .select('id, account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
-        .eq('journal_entries.company_id', companyId)
-        .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-        .in('journal_entries.status', ['posted', 'reversed'])
-        .gte('journal_entries.entry_date', period.period_start)
-        .lt('journal_entries.entry_date', options.fromDate)
+    }>({
+      supabase,
+      lineColumns: 'id, account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) => {
+        let query = q
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .in('status', ['posted', 'reversed'])
+          .gte('entry_date', period.period_start)
+          .lt('entry_date', options.fromDate)
 
-      if (dimensionFilter) {
-        // jsonb containment (@>): served by idx_jel_dimensions_gin.
-        query = query.contains('dimensions', dimensionFilter)
-      }
+        if (obEntryId) {
+          query = query.neq('id', obEntryId)
+        }
 
-      if (obEntryId) {
-        query = query.neq('journal_entry_id', obEntryId)
-      }
+        if (options?.excludeYearEndClosing) {
+          query = query.neq('source_type', 'year_end')
+        }
 
-      if (options?.excludeYearEndClosing) {
-        query = query.neq('journal_entries.source_type', 'year_end')
-      }
-
-      // Stable total order on the line PK for correct paging (see fetch-all.ts).
-      return query.order('id', { ascending: true }).range(from, to)
-    }, { dedupeBy: (r) => r.id })
+        return query
+      },
+      filterLines: dimensionFilter
+        ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+          (q: EntryLinesQuery) => q.contains('dimensions', dimensionFilter)
+        : undefined,
+    })
 
     for (const line of priorLines) {
       const existing = openingBalances.get(line.account_number) || { debit: 0, credit: 0 }
@@ -128,48 +131,48 @@ export async function generateTrialBalance(
   // obEntryId between the period query and this query, the OB entry could
   // be missed from both IB and period. The window is sub-second and the
   // consequence is a single stale report: acceptable.
-  const lines = await fetchAllRows<{
+  const lines = await fetchEntryLines<{
     id: string
     account_number: string
     debit_amount: number
     credit_amount: number
-  }>(({ from, to }) => {
-    let query = supabase
-      .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type, entry_date)')
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
+  }>({
+    supabase,
+    lineColumns: 'id, account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) => {
+      let query = q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .in('status', ['posted', 'reversed'])
 
-    // Date filters are only applied when the caller explicitly asks. The
-    // period itself is already enforced via the fiscal_period_id join, so
-    // adding redundant entry_date bounds for the default case would just
-    // increase query complexity (and break older mocks that don't stub gte
-    // /lte). The fiscal_period_id constraint plus a CHECK on entry_date in
-    // the engine keep activity inside the period.
-    if (options?.fromDate) {
-      query = query.gte('journal_entries.entry_date', options.fromDate)
-    }
-    if (options?.toDate) {
-      query = query.lte('journal_entries.entry_date', options.toDate)
-    }
+      // Date filters are only applied when the caller explicitly asks. The
+      // period itself is already enforced via fiscal_period_id, so adding
+      // redundant entry_date bounds for the default case would just
+      // increase query complexity (and break older mocks that don't stub gte
+      // /lte). The fiscal_period_id constraint plus a CHECK on entry_date in
+      // the engine keep activity inside the period.
+      if (options?.fromDate) {
+        query = query.gte('entry_date', options.fromDate)
+      }
+      if (options?.toDate) {
+        query = query.lte('entry_date', options.toDate)
+      }
 
-    if (dimensionFilter) {
-      // jsonb containment (@>): served by idx_jel_dimensions_gin.
-      query = query.contains('dimensions', dimensionFilter)
-    }
+      if (obEntryId) {
+        query = query.neq('id', obEntryId)
+      }
 
-    if (obEntryId) {
-      query = query.neq('journal_entry_id', obEntryId)
-    }
+      if (options?.excludeYearEndClosing) {
+        query = query.neq('source_type', 'year_end')
+      }
 
-    if (options?.excludeYearEndClosing) {
-      query = query.neq('journal_entries.source_type', 'year_end')
-    }
-
-    // Stable total order on the line PK for correct paging (see fetch-all.ts).
-    return query.order('id', { ascending: true }).range(from, to)
-  }, { dedupeBy: (r) => r.id })
+      return query
+    },
+    filterLines: dimensionFilter
+      ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+        (q: EntryLinesQuery) => q.contains('dimensions', dimensionFilter)
+      : undefined,
+  })
 
   if (lines.length === 0 && openingBalances.size === 0) {
     return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true }
