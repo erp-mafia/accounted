@@ -26,6 +26,7 @@ function mockSupabaseWithLines(lines: MockLine[]) {
   chain.range = () => terminal
   chain.lte = () => chain
   chain.gte = () => chain
+  chain.neq = () => chain
   chain.in = () => chain
   chain.eq = () => chain
   chain.select = () => chain

@@ -1081,6 +1081,10 @@ export async function computeVatReport(
       .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id)')
       .eq('journal_entries.company_id', companyId)
       .in('journal_entries.status', ['posted', 'reversed'])
+      // Momsredovisning entries (the settlement verifikat clearing 26xx to
+      // 2650/1650) would zero the rutor once booked; exclude them so this
+      // report matches lib/reports/vat-declaration.ts (fetchVatAccountTotals).
+      .neq('journal_entries.source_type', 'vat_settlement')
       .gte('journal_entries.entry_date', startDate)
       .lte('journal_entries.entry_date', endDate)
       .range(from, to)

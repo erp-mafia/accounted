@@ -30,6 +30,10 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import dynamic from 'next/dynamic'
 import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import type { VatSettlementProposal } from '@/lib/reports/vat-settlement'
 
 // Recharts is ~180KB: defer the chart components so report tables (the
 // regulated content) render without waiting for the charting bundle.
@@ -46,6 +50,12 @@ const IncomeExpenseChart = dynamic(
   () => import('@/components/reports/IncomeExpenseChart').then((m) => m.IncomeExpenseChart),
   { ssr: false, loading: chartFallback },
 )
+// The full journal entry editor is heavy (BAS catalogue, comboboxes, review
+// dialogs): defer it until the user opens the momsverifikat dialog.
+const JournalEntryForm = dynamic(() => import('@/components/bookkeeping/JournalEntryForm'), {
+  ssr: false,
+  loading: () => <Skeleton className="h-64 w-full" />,
+})
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import type {
   ReportSourceLine,
@@ -1105,6 +1115,176 @@ function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: s
   )
 }
 
+/**
+ * "Bokför momsrapport" (issue #980): builds an editable verifikat proposal
+ * from the momsrapport (clearing the period's 26xx accounts to 2650/1650,
+ * öre gap on 3740) and books it through the ordinary journal entry form, so
+ * every line can be adjusted before committing. The proposal comes from
+ * /api/reports/vat-declaration/settlement-proposal; booking goes through
+ * POST /api/bookkeeping/journal-entries with source_type 'vat_settlement',
+ * which the declaration projection excludes, so the report above keeps
+ * showing the declared figures after booking.
+ */
+function VatBookingCard({
+  periodType,
+  year,
+  period,
+  fiscalPeriodId,
+}: {
+  periodType: VatPeriodType
+  year: number
+  period: number
+  fiscalPeriodId?: string
+}) {
+  const { canWrite } = useCanWrite()
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+  // Fetch outcome tagged with the key it was requested under; proposal/failed
+  // are derived by comparing that tag with the current key, so the effect
+  // never sets state synchronously (same pattern as VatDeclarationView).
+  const [result, setResult] = useState<{
+    key: string
+    proposal?: VatSettlementProposal
+    failed?: boolean
+  } | null>(null)
+  const fetchKey = `${periodType}:${year}:${period}:${fiscalPeriodId ?? ''}:${refreshKey}`
+
+  useEffect(() => {
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (fiscalPeriodId) params.set('fiscal_period_id', fiscalPeriodId)
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration/settlement-proposal?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        if (!res.ok || !json?.data) setResult({ key: fetchKey, failed: true })
+        else setResult({ key: fetchKey, proposal: json.data })
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ key: fetchKey, failed: true })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchKey, periodType, year, period, fiscalPeriodId])
+
+  const upToDate = result !== null && result.key === fetchKey
+  const proposal = upToDate ? (result.proposal ?? null) : null
+  const failed = upToDate && !!result.failed
+
+  const booked = proposal?.existing_entries.find((e) => e.status === 'posted')
+  const draft = booked ? undefined : proposal?.existing_entries.find((e) => e.status === 'draft')
+
+  // FormLine amounts are input strings; the proposal's numbers are already
+  // öre-rounded server-side, so this is display formatting, not money math.
+  const initialLines: FormLine[] = (proposal?.lines ?? []).map((l) => ({
+    account_number: l.account_number,
+    debit_amount: l.debit_amount > 0 ? l.debit_amount.toFixed(2) : '',
+    credit_amount: l.credit_amount > 0 ? l.credit_amount.toFixed(2) : '',
+    line_description: l.line_description ?? '',
+  }))
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Bokför momsrapporten</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Skapa ett verifikat som nollställer periodens momskonton och bokför
+          momsen att betala eller få tillbaka på redovisningskontot. Du granskar
+          förslaget och kan ändra raderna innan verifikatet bokförs.
+        </p>
+
+        {booked && (
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+            <p>
+              Momsen för perioden ser redan ut att vara bokförd:{' '}
+              <Link
+                href={`/bookkeeping/${booked.id}`}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                verifikat {formatVoucher(booked)} ({formatDate(booked.entry_date)})
+              </Link>
+              . Bokför bara igen om det verifikatet har annullerats.
+            </p>
+          </div>
+        )}
+        {draft && (
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+            <p>
+              Det finns redan ett{' '}
+              <Link
+                href={`/bookkeeping/${draft.id}`}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                utkast för momsen i perioden
+              </Link>
+              .
+            </p>
+          </div>
+        )}
+
+        {failed ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-destructive">Kunde inte hämta verifikatförslaget.</p>
+            <Button variant="outline" size="sm" onClick={() => setRefreshKey((k) => k + 1)}>
+              Försök igen
+            </Button>
+          </div>
+        ) : proposal?.is_empty ? (
+          <p className="text-sm text-muted-foreground">Ingen moms att bokföra för perioden.</p>
+        ) : (
+          <Button size="sm" disabled={!proposal || !canWrite} onClick={() => setDialogOpen(true)}>
+            Skapa verifikat
+          </Button>
+        )}
+      </CardContent>
+
+      {proposal && (
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent
+            className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+            // A reviewed-but-unbooked proposal must survive an accidental
+            // backdrop click or stray Escape (same rationale as
+            // NewJournalEntryDialog): closing is explicit via the header X.
+            onEscapeKeyDown={(e) => e.preventDefault()}
+            onPointerDownOutside={(e) => e.preventDefault()}
+            onInteractOutside={(e) => e.preventDefault()}
+          >
+            <DialogHeader>
+              <DialogTitle>Bokför momsrapport</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Förslaget bygger på momsrapporten för {proposal.period_label}. Justera
+              datum, konton eller belopp vid behov och bokför sedan verifikatet.
+            </p>
+            {dialogOpen && (
+              <JournalEntryForm
+                bare
+                sourceType="vat_settlement"
+                initialDate={proposal.entry_date}
+                initialDescription={proposal.description}
+                initialLines={initialLines}
+                onCreated={() => {
+                  setDialogOpen(false)
+                  setRefreshKey((k) => k + 1)
+                }}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
+    </Card>
+  )
+}
+
 export function VatDeclarationView() {
   const currentYear = new Date().getFullYear()
   const currentMonth = new Date().getMonth() + 1
@@ -1606,6 +1786,13 @@ export function VatDeclarationView() {
               </div>
             </CardContent>
           </Card>
+
+          <VatBookingCard
+            periodType={periodType}
+            year={year}
+            period={period}
+            fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+          />
 
           <VatManualFilingCard
             xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
