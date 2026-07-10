@@ -5,7 +5,13 @@ import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
-import { isConsentExpiringSoon, getDaysUntilExpiry, SessionExpiredError } from '@/extensions/general/enable-banking/lib/api-client'
+import {
+  isConsentExpiringSoon,
+  getDaysUntilExpiry,
+  SessionExpiredError,
+  REAUTH_REQUIRED_MESSAGE,
+  SYNC_FAILED_MESSAGE,
+} from '@/extensions/general/enable-banking/lib/api-client'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateConsentExpiryEmailHtml,
@@ -278,7 +284,6 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         daysUntilExpiry: daysLeft,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error'
       ctx.log.error('sync failed for connection', error as Error, {
         connectionId: connection.id,
         userId: connection.user_id,
@@ -291,11 +296,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // condition, not a transient failure: flip it to 'expired' (same state
       // the consent-elapsed branch uses) so the UI offers a reconnect instead
       // of a retry. Other errors stay 'error'.
+      //
+      // error_message is rendered verbatim on the settings panel, so it gets
+      // the short Swedish user message in both cases: the raw Enable Banking
+      // error body (an English JSON envelope) stays in the server log above.
       const isSessionDead = error instanceof SessionExpiredError
       const failureStatus = isSessionDead ? 'expired' : 'error'
-      const failureMessage = isSessionDead
-        ? 'Bankanslutningen har löpt ut. Förnya anslutningen för att fortsätta synka.'
-        : message
+      const failureMessage = isSessionDead ? REAUTH_REQUIRED_MESSAGE : SYNC_FAILED_MESSAGE
 
       await supabase
         .from('bank_connections')
@@ -341,8 +348,8 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
  * Send consent expiry notification email.
  * Guards with last_expiry_notification_at to avoid spamming (2-day cooldown).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function sendConsentExpiryNotification(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any>,
   connection: Record<string, unknown>,
   daysLeft: number,

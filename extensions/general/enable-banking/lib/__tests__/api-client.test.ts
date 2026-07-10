@@ -86,6 +86,45 @@ describe('api-client', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(2)
     })
 
+    it('does not retry a 429 whose body signals a daily quota', async () => {
+      // PSD2 unattended consents cap balance calls per DAY (observed body:
+      // "Consent daily limit 4 is exceeded"). A retry a second later cannot
+      // succeed against a daily quota, so it must fail fast.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', { status: 429 })
+      )
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow(
+        'Failed to get account balances (429)'
+      )
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('still retries a 429 without a daily-limit body (transient rate limit)', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ balances: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+
+      const result = await getAccountBalances('acc-1')
+      expect(result).toEqual([])
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+
+      warnSpy.mockRestore()
+    })
+
     it('does not retry on 400 errors', async () => {
       const badRequest = new Response('Bad Request', { status: 400 })
       fetchSpy.mockResolvedValueOnce(badRequest)

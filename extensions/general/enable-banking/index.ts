@@ -7,6 +7,8 @@ import {
   deleteSession,
   isSandboxMode,
   SessionExpiredError,
+  REAUTH_REQUIRED_MESSAGE,
+  SYNC_FAILED_MESSAGE,
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
@@ -443,7 +445,12 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
         }
 
-        if (connection.status !== 'active') {
+        // 'error' is retryable: a transient upstream failure (e.g. ASPSP_ERROR)
+        // parks the connection in 'error' while the PSD2 session is still
+        // alive, so the UI's "Försök igen" must be allowed through; a
+        // successful sync below restores 'active'. 'expired' stays rejected:
+        // a dead consent needs re-authorization via /connect, not a retry.
+        if (connection.status !== 'active' && connection.status !== 'error') {
           return NextResponse.json({ error: 'Connection is not active' }, { status: 400 })
         }
 
@@ -556,6 +563,13 @@ export const enableBankingExtension: Extension = {
             .update({
               accounts_data: allAccounts,
               last_synced_at: syncedAt,
+              // A successful sync proves the session works again: recover an
+              // 'error' connection to 'active' (so the cron picks it up again)
+              // and clear any stale failure message from the settings panel.
+              ...(connection.status === 'error' ? { status: 'active' } : {}),
+              ...(connection.status === 'error' || connection.error_message
+                ? { error_message: null }
+                : {}),
             })
             .eq('id', connection.id)
 
@@ -601,15 +615,14 @@ export const enableBankingExtension: Extension = {
           // one-click "Förnya anslutning" instead of a dead-end error. No
           // disconnect needed: /connect reconnects this same connection in place.
           if (error instanceof SessionExpiredError) {
-            const reauthMessage = 'Bankanslutningen har löpt ut. Förnya anslutningen för att fortsätta synka.'
             await supabase
               .from('bank_connections')
-              .update({ status: 'expired', error_message: reauthMessage })
+              .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
               .eq('id', connection.id)
               .eq('company_id', companyId)
             return NextResponse.json(
               {
-                error: reauthMessage,
+                error: REAUTH_REQUIRED_MESSAGE,
                 code: 'SESSION_EXPIRED',
                 reauth_required: true,
                 connection_id: connection.id,
@@ -618,10 +631,21 @@ export const enableBankingExtension: Extension = {
             )
           }
 
-          return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Sync failed' },
-            { status: 500 }
-          )
+          // Non-session failure: the settings panel toasts this error verbatim
+          // and renders error_message on the connection card, so both must be
+          // the short Swedish message: the raw Enable Banking body (an English
+          // JSON envelope) is already in the server log above. Refresh the
+          // stored error_message on rows already in 'error' so a failed retry
+          // replaces any stale raw body persisted by older code.
+          if (connection.status === 'error') {
+            await supabase
+              .from('bank_connections')
+              .update({ error_message: SYNC_FAILED_MESSAGE })
+              .eq('id', connection.id)
+              .eq('company_id', companyId)
+          }
+
+          return NextResponse.json({ error: SYNC_FAILED_MESSAGE }, { status: 500 })
         }
       },
     },

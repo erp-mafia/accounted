@@ -27,6 +27,15 @@ export interface SyncOptions {
   strategy?: TransactionsFetchStrategy
 }
 
+/**
+ * How long a stored account balance stays fresh before a sync refreshes it.
+ * PSD2 unattended consents allow only 4 balance calls per account per day
+ * (observed: 429 "Consent daily limit 4 is exceeded"), while transaction
+ * fetches are budgeted separately. 12h keeps at most 2 balance calls per day
+ * regardless of how many manual "Synka nu" clicks or cron runs happen.
+ */
+const BALANCE_MAX_AGE_MS = 12 * 60 * 60 * 1000
+
 export interface SyncResult {
   imported: number
   duplicates: number
@@ -209,13 +218,30 @@ export async function syncAccountTransactions(
     }
   }
 
-  // Update account balance
-  try {
-    const balance = await getAccountBalance(account.uid)
-    account.balance = balance.amount
-    account.balance_updated_at = new Date().toISOString()
-  } catch {
-    // Keep previous balance, don't update timestamp
+  // Update account balance, but only when the stored one has gone stale:
+  // every skipped call preserves the account's scarce daily BALANCES quota
+  // (see BALANCE_MAX_AGE_MS). balance_updated_at is written ONLY on a
+  // successful refresh below, so a stale/missing/invalid timestamp always
+  // falls through to a refresh attempt (NaN and Infinity both fail the
+  // freshness comparison).
+  const balanceAgeMs = account.balance_updated_at
+    ? Date.now() - new Date(account.balance_updated_at).getTime()
+    : Number.POSITIVE_INFINITY
+  const balanceIsFresh = balanceAgeMs < BALANCE_MAX_AGE_MS
+  if (balanceIsFresh) {
+    console.log('[enable-banking] Skipping balance refresh (stored balance is fresh)', {
+      connectionId,
+      accountUid: account.uid,
+      balanceUpdatedAt: account.balance_updated_at,
+    })
+  } else {
+    try {
+      const balance = await getAccountBalance(account.uid)
+      account.balance = balance.amount
+      account.balance_updated_at = new Date().toISOString()
+    } catch {
+      // Keep previous balance, don't update timestamp
+    }
   }
 
   return {

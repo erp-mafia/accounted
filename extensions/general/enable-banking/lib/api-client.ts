@@ -224,6 +224,18 @@ export function isSessionExpiredResponse(status: number, body: string): boolean 
 }
 
 /**
+ * User-facing (Swedish) messages persisted to bank_connections.error_message
+ * and returned to the settings UI. error_message is a literal string in the
+ * DB, not an i18n key, matching the extension's other user-facing strings.
+ * Raw Enable Banking error bodies are English JSON envelopes and must never
+ * land here: they belong in server logs only.
+ */
+export const REAUTH_REQUIRED_MESSAGE =
+  'Bankanslutningen har löpt ut. Förnya anslutningen för att fortsätta synka.'
+export const SYNC_FAILED_MESSAGE =
+  'Banksynkningen misslyckades. Försök igen, eller förnya anslutningen om felet kvarstår.'
+
+/**
  * Thrown when a transactions fetch fails because the PSD2 session is dead
  * (closed/expired/invalid). Distinct from TransactionsFetchError so the sync
  * handler can flip the connection to 'expired' and prompt re-authorization
@@ -279,6 +291,21 @@ async function authenticatedFetchWithRetry(
     try {
       const response = await authenticatedFetch(endpoint, options)
       if (attempt < MAX_RETRIES && [429, 502, 503, 504].includes(response.status)) {
+        // A 429 caused by a DAILY quota cannot clear within the retry window:
+        // PSD2 unattended consents allow only a handful of balance calls per
+        // day (observed body: "Consent daily limit 4 is exceeded"), so
+        // retrying just burns time and duplicates the failure in logs. Read
+        // the body from a clone so the returned response stays consumable.
+        if (response.status === 429) {
+          const body = await response.clone().text().catch(() => '')
+          if (/daily limit/i.test(body)) {
+            console.warn(`[enable-banking] 429 daily quota exhausted for ${endpoint}: not retrying`, {
+              status: response.status,
+              body,
+            })
+            return response
+          }
+        }
         console.warn(`[enable-banking] Retrying ${endpoint} (attempt ${attempt + 1}/${MAX_RETRIES})`, {
           status: response.status,
           statusText: response.statusText,

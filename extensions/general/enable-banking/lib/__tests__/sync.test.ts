@@ -506,6 +506,57 @@ describe('syncAccountTransactions', () => {
     expect(ingestOptions).toMatchObject({ settlementAccount: '1932' })
   })
 
+  it('skips the balance call when the stored balance is fresher than 12 hours', async () => {
+    // PSD2 unattended consents allow only 4 BALANCES calls per account per
+    // day; a fresh stored balance must not burn the quota on every manual sync.
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+
+    const freshAt = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString()
+    const account = makeAccount({ balance: 500, balance_updated_at: freshAt })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(mockGetAccountBalance).not.toHaveBeenCalled()
+    expect(account.balance).toBe(500)
+    expect(account.balance_updated_at).toBe(freshAt)
+  })
+
+  it('refreshes the balance when the stored balance is older than 12 hours', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01' })
+
+    const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
+    const account = makeAccount({ balance: 500, balance_updated_at: staleAt })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
+    expect(account.balance).toBe(1234.56)
+    expect(account.balance_updated_at).not.toBe(staleAt)
+  })
+
+  it('attempts a balance refresh when no timestamp is stored', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+
+    const account = makeAccount() // no balance_updated_at
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    // The beforeEach default rejects the call: the sync must survive that and
+    // leave the timestamp unset (so the next sync tries again).
+    expect(mockGetAccountBalance).toHaveBeenCalledTimes(1)
+    expect(account.balance_updated_at).toBeUndefined()
+  })
+
   it('omits settlementAccount when account.ledger_account is unset (mapping engine defaults to 1930)', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-01' }],
