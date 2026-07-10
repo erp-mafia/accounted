@@ -14,6 +14,8 @@ interface MockData {
   lines?: Array<Record<string, unknown>>
   /** Existing vat_settlement entries in the period. */
   existing?: Array<Record<string, unknown>>
+  /** Error returned by the existing-settlement lookup. */
+  existingError?: { message: string }
   /** fiscal_periods row for yearly (helårsmoms) bounds. */
   fiscalPeriod?: { period_start: string; period_end: string } | null
 }
@@ -44,7 +46,13 @@ function makeClient(data: MockData) {
         // journal_entries serves two queries: the entry scope for the ledger
         // totals (select 'id') and the existing-settlement lookup (selects
         // voucher columns).
-        if (selectStr.includes('voucher_series')) return resolve({ data: data.existing ?? [], error: null })
+        if (selectStr.includes('voucher_series')) {
+          return resolve(
+            data.existingError
+              ? { data: null, error: data.existingError }
+              : { data: data.existing ?? [], error: null },
+          )
+        }
         return resolve({ data: data.entries ?? [], error: null })
       }
       return b
@@ -202,5 +210,17 @@ describe('buildVatSettlementProposal', () => {
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
 
     expect(proposal.existing_entries).toEqual(existing)
+  })
+
+  it('throws when the existing-settlement lookup fails (the UI gate depends on it)', async () => {
+    const supabase = makeClient({
+      entries: [{ id: 'e1' }],
+      lines: [vatLine('2611', 0, 100)],
+      existingError: { message: 'boom' },
+    })
+
+    await expect(
+      buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1),
+    ).rejects.toThrow('existing vat_settlement lookup failed: boom')
   })
 })

@@ -117,6 +117,15 @@ export async function buildVatSettlementProposal(
       .limit(5),
   ])
 
+  // The existing-settlement lookup gates the UI's "already booked" warning
+  // and its create button; a swallowed error here would silently re-enable
+  // booking a period that already has a settlement, so fail loud instead.
+  if (existingResult.error) {
+    throw new Error(
+      `existing vat_settlement lookup failed: ${existingResult.error.message}`
+    )
+  }
+
   const rutor = rutorFromTotals(totals)
   const { net: filedNet } = buildFiledAmounts(rutor)
 

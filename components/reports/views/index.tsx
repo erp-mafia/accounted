@@ -1204,14 +1204,14 @@ function VatBookingCard({
           <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
             <p>
-              Momsen för perioden ser redan ut att vara bokförd:{' '}
+              Momsen för perioden är redan bokförd:{' '}
               <Link
                 href={`/bookkeeping/${booked.id}`}
                 className="underline underline-offset-2 hover:text-foreground"
               >
                 verifikat {formatVoucher(booked)} ({formatDate(booked.entry_date)})
               </Link>
-              . Bokför bara igen om det verifikatet har annullerats.
+              . Annullera det verifikatet först om perioden behöver bokföras om.
             </p>
           </div>
         )}
@@ -1241,7 +1241,15 @@ function VatBookingCard({
         ) : proposal?.is_empty ? (
           <p className="text-sm text-muted-foreground">Ingen moms att bokföra för perioden.</p>
         ) : (
-          <Button size="sm" disabled={!proposal || !canWrite} onClick={() => setDialogOpen(true)}>
+          <Button
+            size="sm"
+            // A posted settlement blocks re-booking: the proposal re-clears the
+            // FULL period (it is not delta-aware), so booking twice would
+            // corrupt the 26xx balances. Annulling the verifikat restores them
+            // and re-enables the button.
+            disabled={!proposal || !canWrite || !!booked}
+            onClick={() => setDialogOpen(true)}
+          >
             Skapa verifikat
           </Button>
         )}
