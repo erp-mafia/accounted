@@ -541,6 +541,25 @@ describe('syncAccountTransactions', () => {
     expect(account.balance_updated_at).not.toBe(staleAt)
   })
 
+  it('treats a future balance_updated_at as stale and refreshes', async () => {
+    // Clock skew or bad data can store a future timestamp; its negative age
+    // must not count as fresh, or refreshes would be suppressed indefinitely.
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01' })
+
+    const futureAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    const account = makeAccount({ balance: 500, balance_updated_at: futureAt })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
+    expect(account.balance).toBe(1234.56)
+    expect(account.balance_updated_at).not.toBe(futureAt)
+  })
+
   it('attempts a balance refresh when no timestamp is stored', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
 

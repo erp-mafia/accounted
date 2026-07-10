@@ -223,11 +223,13 @@ export async function syncAccountTransactions(
   // (see BALANCE_MAX_AGE_MS). balance_updated_at is written ONLY on a
   // successful refresh below, so a stale/missing/invalid timestamp always
   // falls through to a refresh attempt (NaN and Infinity both fail the
-  // freshness comparison).
+  // freshness comparison). A FUTURE timestamp (clock skew, bad data) yields a
+  // negative age; treat it as stale too, or refreshes would be suppressed
+  // until the wall clock catches up.
   const balanceAgeMs = account.balance_updated_at
     ? Date.now() - new Date(account.balance_updated_at).getTime()
     : Number.POSITIVE_INFINITY
-  const balanceIsFresh = balanceAgeMs < BALANCE_MAX_AGE_MS
+  const balanceIsFresh = balanceAgeMs >= 0 && balanceAgeMs < BALANCE_MAX_AGE_MS
   if (balanceIsFresh) {
     console.log('[enable-banking] Skipping balance refresh (stored balance is fresh)', {
       connectionId,
