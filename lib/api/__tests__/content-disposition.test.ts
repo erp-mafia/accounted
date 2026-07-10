@@ -62,4 +62,30 @@ describe('contentDisposition', () => {
     const header = contentDisposition('inline', "a!'()*.pdf")
     expect(header).toContain(`filename*=UTF-8''a%21%27%28%29%2A.pdf`)
   })
+
+  it('sanitizes a lone high surrogate instead of throwing', () => {
+    let header = ''
+    expect(() => {
+      header = contentDisposition('attachment', '\uD800')
+    }).not.toThrow()
+    // The lone surrogate becomes U+FFFD: _ in the fallback, percent-encoded
+    // UTF-8 (%EF%BF%BD) in the extended form.
+    expect(header).toBe(`attachment; filename="_"; filename*=UTF-8''%EF%BF%BD`)
+    expect(() => new Headers({ 'Content-Disposition': header })).not.toThrow()
+  })
+
+  it('sanitizes an embedded unpaired surrogate and keeps the rest of the name', () => {
+    let header = ''
+    expect(() => {
+      header = contentDisposition('inline', 'a\uD800b')
+    }).not.toThrow()
+    expect(header).toBe(`inline; filename="a_b"; filename*=UTF-8''a%EF%BF%BDb`)
+    expect(() => new Headers({ 'Content-Disposition': header })).not.toThrow()
+  })
+
+  it('keeps a valid surrogate pair (emoji) working unchanged', () => {
+    const header = contentDisposition('inline', 'r😀.pdf')
+    expect(header).toBe(`inline; filename="r__.pdf"; filename*=UTF-8''r%F0%9F%98%80.pdf`)
+    expect(() => new Headers({ 'Content-Disposition': header })).not.toThrow()
+  })
 })

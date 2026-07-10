@@ -19,9 +19,13 @@ export function contentDisposition(
   type: 'inline' | 'attachment',
   filename: string,
 ): string {
-  // Normalize NFD (macOS/iOS) to NFC first so precomposed characters encode
+  // Lone/unpaired UTF-16 surrogates survive normalize('NFC') and make
+  // encodeURIComponent below throw a URIError, which would turn the download
+  // response into the very 500 this helper exists to prevent. Replace them
+  // with U+FFFD first so the function always returns a valid header value.
+  // Then normalize NFD (macOS/iOS) to NFC so precomposed characters encode
   // as themselves instead of base letter + combining mark.
-  const normalized = filename.normalize('NFC')
+  const normalized = filename.toWellFormed().normalize('NFC')
 
   // ASCII fallback for the quoted-string form: anything outside printable
   // ASCII, plus the quoted-string specials " and \, becomes _. This also
