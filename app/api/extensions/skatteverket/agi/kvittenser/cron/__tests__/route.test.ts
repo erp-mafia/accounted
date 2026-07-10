@@ -205,6 +205,49 @@ describe('AGI kvittenser cron', () => {
     expect(summaryLine).toContain('1 apigw config gaps')
   })
 
+  it('warns once per run on ACCESS_DENIED but records apigw_config for every declaration', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        agi_declarations: {
+          data: [
+            PENDING_DECLARATION,
+            { ...PENDING_DECLARATION, id: 'decl-2', company_id: 'comp-2' },
+            { ...PENDING_DECLARATION, id: 'decl-3', company_id: 'comp-3' },
+          ],
+        },
+        skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      }),
+    )
+    for (let i = 0; i < 3; i++) {
+      mockAgiGetKvittenser.mockRejectedValueOnce(
+        new SkatteverketAuthError('Skatteverkets API-gateway nekade anropet.', 'ACCESS_DENIED'),
+      )
+    }
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    // Every affected declaration still gets its apigw_config outcome.
+    expect(body.processed).toBe(3)
+    expect(body.apigwConfig).toBe(3)
+    expect(body.errors).toBe(0)
+    expect(body.results.map((r: { declarationId: string }) => r.declarationId)).toEqual([
+      'decl-1',
+      'decl-2',
+      'decl-3',
+    ])
+    expect(body.results.every((r: { status: string }) => r.status === 'apigw_config')).toBe(true)
+
+    // But the identical config-gap warning is logged exactly once per run.
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(String(warnSpy.mock.calls[0][0])).toContain('Utvecklarportalen')
+    expect(errorSpy).not.toHaveBeenCalled()
+
+    const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
+    expect(summaryLine).toContain('3 apigw config gaps')
+  })
+
   it('still flags reconsent codes as expired_token and marks the connection', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockAgiGetKvittenser.mockRejectedValueOnce(

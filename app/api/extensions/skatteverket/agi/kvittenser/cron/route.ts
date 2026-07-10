@@ -82,6 +82,10 @@ export async function GET(request: Request) {
     error?: string
   }
   const results: Result[] = []
+  // The APIGW subscription gap is one run-level configuration problem, not a
+  // per-declaration one: warn once per run instead of spamming an identical
+  // warning for every affected declaration.
+  let apigwAccessDeniedWarned = false
 
   for (const decl of pending) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
@@ -246,11 +250,16 @@ export async function GET(request: Request) {
         // heal this and the user reconnecting via BankID does not help, so
         // log at warn level instead of error to keep the 2h cron from
         // producing error-noise for a known configuration gap. The distinct
-        // status keeps the gap visible in the run summary until fixed.
-        console.warn(
-          '[agi-kvittenser-cron] APIGW client lacks Utvecklarportalen subscription for the AGI hantera API; check SKATTEVERKET_APIGW_CLIENT_ID subscriptions. Skipping declaration until the subscription is added.',
-          { declarationId, companyId, period, message },
-        )
+        // status keeps the gap visible in the run summary until fixed. The
+        // warn is emitted once per run (context is the first affected
+        // declaration); every affected declaration still lands in results.
+        if (!apigwAccessDeniedWarned) {
+          apigwAccessDeniedWarned = true
+          console.warn(
+            '[agi-kvittenser-cron] APIGW client lacks Utvecklarportalen subscription for the AGI hantera API; check SKATTEVERKET_APIGW_CLIENT_ID subscriptions. Skipping affected declarations until the subscription is added.',
+            { declarationId, companyId, period, message },
+          )
+        }
         results.push({ declarationId, companyId, period, status: 'apigw_config', error: err.code })
         continue
       }
