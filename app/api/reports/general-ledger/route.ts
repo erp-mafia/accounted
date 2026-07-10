@@ -29,11 +29,10 @@ export const GET = withRouteContext(
       })
       return NextResponse.json({ data })
     } catch (err) {
+      // The raw error message is logged server-side only: it can carry
+      // internal details (SQL, table names) that must not reach the client.
       log.error('general ledger generation failed', err as Error, { periodId })
-      return errorResponseFromCode('REPORT_GENERATION_FAILED', log, {
-        requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
-      })
+      return errorResponseFromCode('REPORT_GENERATION_FAILED', log, { requestId })
     }
   },
 )
