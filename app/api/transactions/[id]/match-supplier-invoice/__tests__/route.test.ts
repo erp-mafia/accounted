@@ -202,6 +202,112 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: FX residual', () =
   })
 })
 
+describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account resolution', () => {
+  // Regression for a real misbooking: a company whose last few supplier
+  // invoices were paid privately (mark-paid sets company_settings
+  // .last_supplier_payment_account = '2893') later matched a genuine bank
+  // transaction to a supplier invoice. The route used to default
+  // paymentAccount from that sticky setting, so the payment credited 2893
+  // (shareholder loan) instead of the transaction's real 1930 bank account.
+  it('credits the account this transaction is linked to, even with a stale last_supplier_payment_account on file', async () => {
+    enqueue({
+      data: {
+        id: TX_UUID,
+        company_id: 'company-1',
+        amount: -1001,
+        currency: 'SEK',
+        amount_sek: null,
+        supplier_invoice_id: null,
+        cash_account_id: 'ca-1930',
+        date: '2026-02-01',
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        status: 'registered',
+        remaining_amount: 1001,
+        paid_amount: 0,
+        supplier: { supplier_type: 'swedish_business' },
+        items: [],
+      },
+      error: null,
+    })
+    // Stale sticky setting from an earlier private-funds payment: must be
+    // ignored now that the route no longer selects it.
+    enqueue({ data: { accounting_method: 'accrual', last_supplier_payment_account: '2893' }, error: null })
+    enqueue({ data: { ledger_account: '1930' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: SI_UUID }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(1001)
+    expect(input.lines.some((l) => l.account_number === '2893')).toBe(false)
+  })
+
+  it('credits the transaction\'s own linked cash account when it is not the primary 1930', async () => {
+    enqueue({
+      data: {
+        id: TX_UUID,
+        company_id: 'company-1',
+        amount: -500,
+        currency: 'SEK',
+        amount_sek: null,
+        supplier_invoice_id: null,
+        cash_account_id: 'ca-1940',
+        date: '2026-02-01',
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        status: 'registered',
+        remaining_amount: 500,
+        paid_amount: 0,
+        supplier: { supplier_type: 'swedish_business' },
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: SI_UUID }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.find((l) => l.account_number === '1940')?.credit_amount).toBe(500)
+  })
+
+  it('defaults to 1930 when the transaction has no linked cash account', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -750, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 750 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(750)
+  })
+})
+
 describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () => {
   it('returns 200 with the expected body shape on the happy path', async () => {
     enqueueHappyPath({

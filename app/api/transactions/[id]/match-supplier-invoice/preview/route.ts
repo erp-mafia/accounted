@@ -50,7 +50,9 @@ export const GET = withRouteContext(
       // amount_sek is needed for the cash-method preview: a foreign-currency
       // settlement is translated at the payment-date rate (the SEK that left
       // the bank), mirroring the committed verifikat from the POST handler.
-      .select('id, date, amount, currency, amount_sek')
+      // cash_account_id resolves which BAS account this bank line actually
+      // settles from, mirroring the POST handler's settlement-account lookup.
+      .select('id, date, amount, currency, amount_sek, cash_account_id')
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -70,13 +72,34 @@ export const GET = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method, last_supplier_payment_account')
+      .select('accounting_method')
       .eq('company_id', companyId)
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const paymentAccount =
-      (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account || '1930'
+
+    // Same resolution as the POST handler: credit the cash account this
+    // transaction is actually linked to, never the sticky
+    // last_supplier_payment_account (that setting reflects the manual
+    // mark-paid/private-funds flow, not a real matched bank transaction).
+    let paymentAccount = '1930'
+    if (transaction.cash_account_id) {
+      const { data: txCashAccount, error: cashAccountError } = await supabase
+        .from('cash_accounts')
+        .select('ledger_account')
+        .eq('id', transaction.cash_account_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (cashAccountError) {
+        log.warn('settlement-account lookup failed; defaulting to 1930', {
+          cashAccountId: transaction.cash_account_id,
+          error: cashAccountError.message,
+        })
+      }
+      if (txCashAccount?.ledger_account) {
+        paymentAccount = txCashAccount.ledger_account as string
+      }
+    }
 
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
