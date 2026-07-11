@@ -190,10 +190,12 @@ export function buildTransactionEntryLines(
     const creditAccount = mappingResult.credit_account
 
     if (mappingResult.vat_lines.length > 0) {
-      // Has output VAT
-      const vatCredit = mappingResult.vat_lines
-        .filter(l => l.credit_amount > 0)
-        .reduce((sum, l) => sum + l.credit_amount, 0)
+      // Has output VAT. Net the credits against any debit VAT legs: a
+      // mirrored reverse-charge refund carries a credit 2645 + debit 2614
+      // pair that nets to zero, so the business line keeps the gross amount.
+      const vatCredit = Math.round(
+        mappingResult.vat_lines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0) * 100
+      ) / 100
       const netAmount = Math.round((absAmount - vatCredit) * 100) / 100
 
       // Debit bank for gross amount

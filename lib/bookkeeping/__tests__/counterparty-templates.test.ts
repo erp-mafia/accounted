@@ -16,6 +16,7 @@ import {
   insertOrUpdateTemplate,
   populateTemplatesFromSieVouchers,
 } from '../counterparty-templates'
+import { buildTransactionEntryLines } from '../transaction-entries'
 import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { LinePatternEntry } from '@/types'
 import type { SIETransactionLine } from '@/lib/import/types'
@@ -967,6 +968,35 @@ describe('learning-loop repair (issue #865)', () => {
       expect(result.vat_lines[0].debit_amount).toBe(0)
     })
 
+    it('mirrors both fiktiv-moms legs for a reverse-charge credit note, and the entry balances', () => {
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'google cloud emea',
+        debit_account: '4535',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+        vat_account: '2645',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: 5000 }) // credit note from an RC supplier
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag')
+
+      expect(result.direction_mismatch).toBe(true)
+      // Original purchase books debit 2645 / credit 2614; the mirror flips both
+      const in2645 = result.vat_lines.find((l) => l.account_number === '2645')
+      const out2614 = result.vat_lines.find((l) => l.account_number === '2614')
+      expect(in2645?.credit_amount).toBe(1250)
+      expect(out2614?.debit_amount).toBe(1250)
+
+      // End-to-end: the RC pair nets to zero, business keeps the gross amount,
+      // and the whole entry balances
+      const lines = buildTransactionEntryLines(tx, result)
+      const debits = Math.round(lines.reduce((s, l) => s + l.debit_amount, 0) * 100) / 100
+      const credits = Math.round(lines.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
+      expect(debits).toBe(credits)
+      expect(lines.find((l) => l.account_number === '4535')?.credit_amount).toBe(5000)
+    })
+
     it('mirrors an income-learned template for an outgoing repayment, without VAT lines', () => {
       const template = makeCategorizationTemplate({
         counterparty_name: 'kund ab',
@@ -1197,6 +1227,35 @@ describe('learning-loop repair (issue #865)', () => {
       const row = capturedTemplateRow(inserts)
       expect(row.vat_treatment).toBeNull()
       expect(row.vat_account).toBeNull()
+    })
+
+    it('excludes import output-VAT accounts (2615) from the ratio base like other fiktiv moms', async () => {
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Import Goods Ltd',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '4545', amount: 1000 },
+            { account: '2645', amount: 250 },
+            { account: '2615', amount: -250 }, // output VAT on imports
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] },
+        { data: null },
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const row = capturedTemplateRow(inserts)
+      expect(row.vat_treatment).toBe('reverse_charge')
+      expect(row.debit_account).toBe('4545')
+      // Simple pattern: neither fiktiv leg shrank the business ratio base
+      expect(row.line_pattern).toBeNull()
     })
 
     it('learns reverse_charge for counterparties booked with fiktiv moms', async () => {

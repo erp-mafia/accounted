@@ -159,12 +159,15 @@ const VAT_ACCOUNT_TREATMENT: Record<string, string> = {
 }
 
 /**
- * Reverse-charge VAT accounts (fiktiv in-/utgående moms). These net to zero
- * inside a voucher, so SIE pattern extraction must not count them as
+ * Reverse-charge/import VAT accounts (fiktiv in-/utgående moms). These net to
+ * zero inside a voucher, so SIE pattern extraction must not count them as
  * deductible VAT: doing so poisons the non-VAT base the business ratios are
- * computed against. 2647 = domestic RC input (ML 16 kap).
+ * computed against. 2647 = domestic RC input (ML 16 kap); 2615/2625/2635 =
+ * output VAT on imports, paired the same way in import vouchers.
  */
-const REVERSE_CHARGE_VAT_ACCOUNTS = new Set(['2614', '2624', '2634', '2645', '2647'])
+const REVERSE_CHARGE_VAT_ACCOUNTS = new Set([
+  '2614', '2624', '2634', '2615', '2625', '2635', '2645', '2647',
+])
 
 /** Legal Swedish VAT rates a learned pattern is allowed to carry. */
 const LEGAL_VAT_RATES = [0.25, 0.12, 0.06]
@@ -406,11 +409,11 @@ export function buildMappingResultFromCounterpartyTemplate(
 /**
  * Mirrored result for a sign-mismatched legacy template match (see
  * buildMappingResultFromCounterpartyTemplate). Settlement and business
- * accounts swap sides; a refund of an expense with deductible input VAT also
- * mirrors the VAT leg (credit 2641) so the moms follows the correction.
- * Reverse-charge and income-learned mismatches book gross: their VAT legs
- * do not survive mirroring through the legacy line builder, and the entry
- * is review-gated either way.
+ * accounts swap sides; a refund of an expense also mirrors the VAT legs so
+ * the moms follows the correction: deductible input VAT flips to a 2641
+ * credit, and a reverse-charge credit note flips both fiktiv legs (credit
+ * 2645 / debit 2614) so Ruta 30/48 net back to zero. Income-learned
+ * mismatches book gross; the entry is review-gated either way.
  */
 function buildLegacyMismatchResult(
   tmpl: CategorizationTemplate,
@@ -419,17 +422,28 @@ function buildLegacyMismatchResult(
   isExpense: boolean
 ): MappingResult {
   const vatLines: VatJournalLine[] = []
-  if (!isExpense && tmpl.vat_treatment && tmpl.vat_treatment !== 'reverse_charge') {
-    const vatRate = getVatRate(tmpl.vat_treatment as VatTreatment)
-    if (vatRate > 0) {
-      const vatLine = generateInputVatLine(absAmount, vatRate)
-      if (vatLine) {
+  if (!isExpense && tmpl.vat_treatment) {
+    if (tmpl.vat_treatment === 'reverse_charge') {
+      for (const rcl of generateReverseChargeLines(absAmount)) {
         vatLines.push({
-          account_number: vatLine.account_number,
-          debit_amount: 0,
-          credit_amount: vatLine.debit_amount,
-          description: vatLine.line_description || '',
+          account_number: rcl.account_number,
+          debit_amount: rcl.credit_amount,
+          credit_amount: rcl.debit_amount,
+          description: rcl.line_description || '',
         })
+      }
+    } else {
+      const vatRate = getVatRate(tmpl.vat_treatment as VatTreatment)
+      if (vatRate > 0) {
+        const vatLine = generateInputVatLine(absAmount, vatRate)
+        if (vatLine) {
+          vatLines.push({
+            account_number: vatLine.account_number,
+            debit_amount: 0,
+            credit_amount: vatLine.debit_amount,
+            description: vatLine.line_description || '',
+          })
+        }
       }
     }
   }
