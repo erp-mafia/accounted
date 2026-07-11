@@ -6,6 +6,16 @@ import {
 } from '@/tests/helpers'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
+const { mockLoggerWarn } = vi.hoisted(() => ({ mockLoggerWarn: vi.fn() }))
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: mockLoggerWarn,
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  }),
+}))
+
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -305,6 +315,51 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
     }
     expect(input.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(750)
+  })
+
+  it('falls back to 1930 and warns when the cash_accounts lookup errors', async () => {
+    enqueue({
+      data: {
+        id: TX_UUID,
+        company_id: 'company-1',
+        amount: -600,
+        currency: 'SEK',
+        amount_sek: null,
+        supplier_invoice_id: null,
+        cash_account_id: 'ca-broken',
+        date: '2026-02-01',
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        status: 'registered',
+        remaining_amount: 600,
+        paid_amount: 0,
+        supplier: { supplier_type: 'swedish_business' },
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
+    enqueue({ data: [{ id: SI_UUID }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(600)
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      'settlement-account lookup failed; defaulting to 1930',
+      expect.objectContaining({ cashAccountId: 'ca-broken', error: 'connection reset' }),
+    )
   })
 })
 

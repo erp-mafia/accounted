@@ -111,4 +111,39 @@ describe('GET /api/transactions/[id]/match-supplier-invoice/preview: settlement 
 
     expect(body.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(750)
   })
+
+  it('previews a credit to the linked cash account when it is not the primary 1930', async () => {
+    enqueue({
+      data: {
+        id: TX_UUID,
+        date: '2026-02-01',
+        amount: -500,
+        currency: 'SEK',
+        amount_sek: null,
+        cash_account_id: 'ca-1940',
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        total: 500,
+        remaining_amount: 500,
+        registration_journal_entry_id: 'je-registered',
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { body } = await parseJsonResponse<{
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }>(res)
+
+    expect(body.lines.find((l) => l.account_number === '1940')?.credit_amount).toBe(500)
+  })
 })
