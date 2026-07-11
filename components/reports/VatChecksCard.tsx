@@ -114,7 +114,11 @@ export function VatChecksCard({
   // voucher is corrected, and the remaining unfixed rows must survive the
   // declaration refetch that follows each korrigering.
   const gapsKey = `${periodType}:${year}:${period}:${fiscalPeriodId ?? ''}`
-  const [gapsResult, setGapsResult] = useState<{ key: string; gaps: RcBasisGap[] } | null>(null)
+  const [gapsResult, setGapsResult] = useState<{
+    key: string
+    gaps: RcBasisGap[]
+    failed?: boolean
+  } | null>(null)
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set())
   const [showAll, setShowAll] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -157,12 +161,16 @@ export function VatChecksCard({
     // (helårsmoms) declarations resolve against the räkenskapsår.
     if (fiscalPeriodId) params.set('fiscal_period_id', fiscalPeriodId)
     fetch(`/api/reports/vat-declaration/rc-basis-gaps?${params.toString()}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (!cancelled) setGapsResult({ key: gapsKey, gaps: j?.data?.gaps || [] })
+      .then(async (r) => {
+        const j = await r.json().catch(() => null)
+        if (cancelled) return
+        // A failed fetch must not masquerade as "no gaps found": the check
+        // above says there ARE gaps, so an empty list here would mislead.
+        if (!r.ok || j?.error) setGapsResult({ key: gapsKey, gaps: [], failed: true })
+        else setGapsResult({ key: gapsKey, gaps: j?.data?.gaps || [] })
       })
       .catch(() => {
-        if (!cancelled) setGapsResult({ key: gapsKey, gaps: [] })
+        if (!cancelled) setGapsResult({ key: gapsKey, gaps: [], failed: true })
       })
     return () => {
       cancelled = true
@@ -173,6 +181,7 @@ export function VatChecksCard({
     ? gapsResult.gaps.filter((g) => !removedIds.has(g.entryId))
     : []
   const gapsLoading = hasRcBasisGaps && !gapsFetched
+  const gapsFailed = gapsFetched && !!gapsResult.failed
   // The worklist stays mounted while unfixed rows remain, even after the
   // aggregate check has cleared: hiding them mid-session would strand the
   // user with silently understated rutor 20-24.
@@ -352,6 +361,15 @@ export function VatChecksCard({
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Söker berörda verifikationer...
+              </div>
+            ) : gapsFailed ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <p role="alert" className="text-sm text-destructive">
+                  Kunde inte hämta verifikationslistan.
+                </p>
+                <Button variant="outline" onClick={() => setGapsResult(null)}>
+                  Försök igen
+                </Button>
               </div>
             ) : gaps.length === 0 ? (
               <p className="text-sm text-muted-foreground">

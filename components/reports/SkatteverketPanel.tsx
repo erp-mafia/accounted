@@ -238,6 +238,11 @@ function SkatteverketPanelInner({
         setKontroller([])
         setSigneringslank(null)
         setSubmitted(null)
+      } else {
+        const result = await res.json().catch(() => ({}))
+        if (!applyApiError(result)) {
+          setNotice({ kind: 'error', text: `Kunde inte koppla bort (${res.status})` })
+        }
       }
     } catch {
       setNotice({ kind: 'error', text: 'Kunde inte koppla bort' })

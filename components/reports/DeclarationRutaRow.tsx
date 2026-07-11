@@ -11,12 +11,14 @@ export interface DeclarationAccountLine {
 }
 
 /**
- * Default formatter: whole kronor, matching the filed SRU values (SFL 22:1,
- * hela kronor). Callers that need öre pass their own formatter.
+ * Default formatter: whole kronor, matching the filed SRU values. Truncation,
+ * not rounding: SFL "öretal faller bort" and the NE/INK2 SRU generators drop
+ * öre with Math.trunc, so the UI must agree with the filed figures. Callers
+ * that need öre pass their own formatter.
  */
 export function formatWholeKronor(n: number): string {
-  // + 0 normalizes -0 (Math.round(-0.3) is -0, which sv-SE renders "−0").
-  return `${(Math.round(n) + 0).toLocaleString('sv-SE')} kr`
+  // + 0 normalizes -0 (Math.trunc(-0.3) is -0, which sv-SE renders "−0").
+  return `${(Math.trunc(n) + 0).toLocaleString('sv-SE')} kr`
 }
 
 /**
