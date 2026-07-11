@@ -27,6 +27,9 @@ import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { VatChecksCard } from '@/components/reports/VatChecksCard'
+import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
+import { Table, TableBody } from '@/components/ui/table'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import dynamic from 'next/dynamic'
 import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
@@ -40,10 +43,6 @@ import type { VatSettlementProposal } from '@/lib/reports/vat-settlement'
 const chartFallback = () => <Skeleton className="h-64 w-full" />
 const TrialBalanceChart = dynamic(
   () => import('@/components/reports/TrialBalanceChart').then((m) => m.TrialBalanceChart),
-  { ssr: false, loading: chartFallback },
-)
-const VatCompositionChart = dynamic(
-  () => import('@/components/reports/VatCompositionChart').then((m) => m.VatCompositionChart),
   { ssr: false, loading: chartFallback },
 )
 const IncomeExpenseChart = dynamic(
@@ -1077,33 +1076,36 @@ function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: s
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Lämna in din momsdeklaration</CardTitle>
+        <CardTitle className="text-base">Lämna in själv (utan anslutning)</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Deklarationen ovan är klar. Du behöver inte vara ansluten till
-          Skatteverket för att lämna in den.
+          Du behöver inte vara ansluten till Skatteverket för att lämna in.
         </p>
-        <p className="text-sm text-muted-foreground">
-          Enklast: ladda ner filen (XML), logga in på skatteverket.se med BankID,
-          öppna Moms- och arbetsgivardeklarationer och välj Deklarera via fil.
-          Ladda upp filen, granska och signera. Vill du hellre fylla i rutorna
-          för hand laddar du ner PDF:en och skriver av beloppen (i hela kronor).
+        <ol className="list-decimal pl-6 space-y-1 text-sm text-muted-foreground">
+          <li>Ladda ner XML-filen nedan.</li>
+          <li>Logga in på skatteverket.se med BankID.</li>
+          <li>Öppna Moms- och arbetsgivardeklarationer och välj Deklarera via fil.</li>
+          <li>Ladda upp filen, granska och signera.</li>
+        </ol>
+        <p className="text-xs text-muted-foreground">
+          Vill du hellre fylla i rutorna för hand laddar du ner PDF:en och skriver av
+          beloppen (i hela kronor).
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" asChild className="gap-2">
+          <Button variant="outline" asChild className="gap-2">
             <a href={xmlHref} target="_blank" rel="noopener noreferrer">
               <FileCode className="h-4 w-4" />
               Ladda ner fil för uppladdning (XML)
             </a>
           </Button>
-          <Button variant="outline" size="sm" asChild className="gap-2">
+          <Button variant="outline" asChild className="gap-2">
             <a href={pdfHref} target="_blank" rel="noopener noreferrer">
               <FileDown className="h-4 w-4" />
               Ladda ner momsdeklaration (PDF)
             </a>
           </Button>
-          <Button variant="outline" size="sm" asChild className="gap-2">
+          <Button variant="outline" asChild className="gap-2">
             <a href={SKATTEVERKET_MOMS_URL} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="h-4 w-4" />
               Öppna skatteverket.se
@@ -1130,11 +1132,18 @@ function VatBookingCard({
   year,
   period,
   fiscalPeriodId,
+  checksBlocked,
 }: {
   periodType: VatPeriodType
   year: number
   period: number
   fiscalPeriodId?: string
+  /**
+   * True when the local pre-flight checks found ERRORs. Booking stays
+   * possible (the RC-basis fixes only touch 44xx/45xx pairs, never the 26xx
+   * accounts the settlement clears), but the user should know before filing.
+   */
+  checksBlocked?: boolean
 }) {
   const { canWrite } = useCanWrite()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -1231,27 +1240,45 @@ function VatBookingCard({
           </div>
         )}
 
+        {checksBlocked && (
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <AlertCircle className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
+            <p>
+              Det finns fel under 1 · Kontrollera underlaget. Du kan bokföra momsen ändå,
+              men åtgärda felen innan du lämnar in.
+            </p>
+          </div>
+        )}
+
         {failed ? (
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm text-destructive">Kunde inte hämta verifikatförslaget.</p>
-            <Button variant="outline" size="sm" onClick={() => setRefreshKey((k) => k + 1)}>
+            <Button variant="outline" onClick={() => setRefreshKey((k) => k + 1)}>
               Försök igen
             </Button>
           </div>
+        ) : !upToDate ? (
+          <Skeleton className="h-10 w-40" />
         ) : proposal?.is_empty ? (
           <p className="text-sm text-muted-foreground">Ingen moms att bokföra för perioden.</p>
         ) : (
-          <Button
-            size="sm"
-            // A posted settlement blocks re-booking: the proposal re-clears the
-            // FULL period (it is not delta-aware), so booking twice would
-            // corrupt the 26xx balances. Annulling the verifikat restores them
-            // and re-enables the button.
-            disabled={!proposal || !canWrite || !!booked}
-            onClick={() => setDialogOpen(true)}
-          >
-            Skapa verifikat
-          </Button>
+          <div className="space-y-2">
+            <Button
+              // A posted settlement blocks re-booking: the proposal re-clears the
+              // FULL period (it is not delta-aware), so booking twice would
+              // corrupt the 26xx balances. Annulling the verifikat restores them
+              // and re-enables the button.
+              disabled={!proposal || !canWrite || !!booked}
+              onClick={() => setDialogOpen(true)}
+            >
+              Skapa verifikat
+            </Button>
+            {!canWrite && (
+              <p className="text-xs text-muted-foreground">
+                Du har läsbehörighet och kan inte bokföra.
+              </p>
+            )}
+          </div>
         )}
       </CardContent>
 
@@ -1449,6 +1476,12 @@ export function VatDeclarationView() {
   const error = upToDate ? (result.error ?? null) : null
   const loading = fetchKey !== null && !upToDate
 
+  // Local pre-flight checks on the calculated declaration. Computed here (not
+  // in SkatteverketPanel) so every user sees them: they gate direct submission
+  // but concern manual filers just as much.
+  const checks = data ? runVatDeclarationChecks(data.rutor) : []
+  const checksBlocked = checks.some((c) => c.status === 'ERROR')
+
   // Settings not settled yet — the picker defaults and the gate both depend
   // on them, so hold the whole view in a skeleton.
   if (settingsLoading || periodType === null) {
@@ -1491,11 +1524,11 @@ export function VatDeclarationView() {
 
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
-    <div className="space-y-4">
+    <div className="space-y-8">
+      {/* XML and PDF live in "Lämna in" below: they are filing artifacts, not
+          report exports, and one home avoids two competing download surfaces. */}
       <ReportExportMenu
         items={[
-          { format: 'xml', href: `/api/reports/vat-declaration/eskd?${vatQueryString()}` },
-          { format: 'pdf', href: `/api/reports/vat-declaration/pdf?${vatQueryString()}` },
           { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
         ]}
       >
@@ -1599,30 +1632,55 @@ export function VatDeclarationView() {
 
       {data && !awaitingFiscalPeriod && (
         <div
-          className={`space-y-4 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
+          className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
         >
-          <VatCompositionChart rutor={data.rutor} />
+          {/* The page follows the filing pipeline: kontrollera, granska,
+              bokför, lämna in. The checks come first because their errors
+              invalidate everything below them. */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              1 · Kontrollera underlaget
+            </h2>
+            <VatChecksCard
+              checks={checks}
+              periodType={periodType}
+              year={year}
+              period={period}
+              fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+              onCorrected={() => setRetryKey((k) => k + 1)}
+            />
+          </section>
 
-          {/* Summary */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              2 · Granska deklarationen
+            </h2>
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <CardTitle>Momsdeklaration - {data.period.start} till {data.period.end}</CardTitle>
-                <Badge
-                  variant={
-                    data.rutor.ruta49 > 0
-                      ? 'warning'
+                <div className="flex items-center gap-3">
+                  <Badge
+                    variant={
+                      data.rutor.ruta49 > 0
+                        ? 'warning'
+                        : data.rutor.ruta49 < 0
+                        ? 'success'
+                        : 'secondary'
+                    }
+                  >
+                    {data.rutor.ruta49 > 0
+                      ? 'Att betala'
                       : data.rutor.ruta49 < 0
-                      ? 'success'
-                      : 'secondary'
-                  }
-                >
-                  {data.rutor.ruta49 > 0
-                    ? `Att betala: ${formatAmount(data.rutor.ruta49)} kr`
-                    : data.rutor.ruta49 < 0
-                    ? `Att återfå: ${formatAmount(Math.abs(data.rutor.ruta49))} kr`
-                    : 'Ingen moms'}
-                </Badge>
+                      ? 'Att återfå'
+                      : 'Ingen moms'}
+                  </Badge>
+                  {data.rutor.ruta49 !== 0 && (
+                    <span className="font-display text-xl tabular-nums">
+                      {formatAmount(Math.abs(data.rutor.ruta49))} kr
+                    </span>
+                  )}
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -1633,9 +1691,11 @@ export function VatDeclarationView() {
               <div className="grid md:grid-cols-2 gap-6">
                 {/* Utgående moms */}
                 <div>
-                  <h4 className="font-semibold mb-3">Utgående moms (försäljning)</h4>
-                  <div><table className="w-full text-sm">
-                    <tbody>
+                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                    Utgående moms (försäljning)
+                  </h3>
+                  <Table>
+                    <TableBody>
                       {data.rutor.ruta05 > 0 && (
                         <VatRutaRow
                           ruta="05"
@@ -1694,27 +1754,30 @@ export function VatDeclarationView() {
                         year={year}
                         period={period}
                       />
-                    </tbody>
+                    </TableBody>
                     <tfoot>
-                      <tr className="border-t-2 font-semibold">
-                        <td className="py-2">Summa utgående</td>
-                        <td className="py-2 text-right">
+                      <tr className="border-t font-medium">
+                        <td className="py-2">Summa utgående moms</td>
+                        <td className="py-2 text-right tabular-nums">
                           {formatAmount(
                             data.rutor.ruta10 + data.rutor.ruta11 + data.rutor.ruta12 +
-                            data.rutor.ruta30 + data.rutor.ruta31 + data.rutor.ruta32
+                            data.rutor.ruta30 + data.rutor.ruta31 + data.rutor.ruta32 +
+                            data.rutor.ruta60 + data.rutor.ruta61 + data.rutor.ruta62
                           )} kr
                         </td>
                       </tr>
                     </tfoot>
-                  </table></div>
+                  </Table>
 
                   {/* Omvänd skattskyldighet (inköp) */}
                   {(data.rutor.ruta20 > 0 || data.rutor.ruta21 > 0 || data.rutor.ruta22 > 0 || data.rutor.ruta23 > 0 || data.rutor.ruta24 > 0 ||
                     data.rutor.ruta30 > 0 || data.rutor.ruta31 > 0 || data.rutor.ruta32 > 0) && (
                     <>
-                      <h4 className="font-semibold mb-3 mt-6">Omvänd skattskyldighet (inköp)</h4>
-                      <div><table className="w-full text-sm">
-                        <tbody>
+                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3 mt-6">
+                        Omvänd skattskyldighet (inköp)
+                      </h3>
+                      <Table>
+                        <TableBody>
                           <VatRutaRow ruta="20" label="Inköp av varor från annat EU-land" amount={0} baseAmount={data.rutor.ruta20} noVat periodType={periodType} year={year} period={period} />
                           <VatRutaRow ruta="21" label="Inköp av tjänster från annat EU-land" amount={0} baseAmount={data.rutor.ruta21} noVat periodType={periodType} year={year} period={period} />
                           <VatRutaRow ruta="22" label="Inköp av tjänster utanför EU" amount={0} baseAmount={data.rutor.ruta22} noVat periodType={periodType} year={year} period={period} />
@@ -1723,17 +1786,36 @@ export function VatDeclarationView() {
                           <VatRutaRow ruta="30" label="Utgående moms 25% (omvänd)" amount={data.rutor.ruta30} baseAmount={0} periodType={periodType} year={year} period={period} />
                           <VatRutaRow ruta="31" label="Utgående moms 12% (omvänd)" amount={data.rutor.ruta31} baseAmount={0} periodType={periodType} year={year} period={period} />
                           <VatRutaRow ruta="32" label="Utgående moms 6% (omvänd)" amount={data.rutor.ruta32} baseAmount={0} periodType={periodType} year={year} period={period} />
-                        </tbody>
-                      </table></div>
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+
+                  {/* Moms vid import */}
+                  {(data.rutor.ruta50 > 0 || data.rutor.ruta60 > 0 || data.rutor.ruta61 > 0 || data.rutor.ruta62 > 0) && (
+                    <>
+                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3 mt-6">
+                        Moms vid import
+                      </h3>
+                      <Table>
+                        <TableBody>
+                          <VatRutaRow ruta="50" label="Beskattningsunderlag vid import" amount={0} baseAmount={data.rutor.ruta50} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="60" label="Utgående moms 25% import" amount={data.rutor.ruta60} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="61" label="Utgående moms 12% import" amount={data.rutor.ruta61} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="62" label="Utgående moms 6% import" amount={data.rutor.ruta62} baseAmount={0} periodType={periodType} year={year} period={period} />
+                        </TableBody>
+                      </Table>
                     </>
                   )}
                 </div>
 
                 {/* Ingående moms */}
                 <div>
-                  <h4 className="font-semibold mb-3">Ingående moms (avdragsgill)</h4>
-                  <div><table className="w-full text-sm">
-                    <tbody>
+                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                    Ingående moms (avdragsgill)
+                  </h3>
+                  <Table>
+                    <TableBody>
                       <VatRutaRow
                         ruta="48"
                         label="Ingående moms att dra av"
@@ -1759,28 +1841,29 @@ export function VatDeclarationView() {
                           </td>
                         </tr>
                       )}
-                    </tbody>
+                    </TableBody>
                     <tfoot>
-                      <tr className="border-t-2 font-semibold">
-                        <td className="py-2">Summa ingående</td>
-                        <td className="py-2 text-right">{formatAmount(data.rutor.ruta48)} kr</td>
+                      <tr className="border-t font-medium">
+                        <td className="py-2">Summa ingående moms</td>
+                        <td className="py-2 text-right tabular-nums">{formatAmount(data.rutor.ruta48)} kr</td>
                       </tr>
                     </tfoot>
-                  </table></div>
+                  </Table>
                 </div>
               </div>
 
-              {/* Net result */}
-              <div className="mt-6 pt-4 border-t-2">
+              {/* Net result: the tables' sum row. The headline amount lives in
+                  the card header next to the status badge. */}
+              <div className="mt-6 pt-4 border-t">
                 <div className="flex justify-between items-center">
                   <div>
                     <span className="font-mono text-xs bg-muted px-1 rounded mr-2">49</span>
-                    <span className="font-bold text-lg">
+                    <span className="text-sm font-medium">
                       {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
                     </span>
                   </div>
                   <span
-                    className={`text-xl font-bold ${
+                    className={`font-semibold tabular-nums ${
                       data.rutor.ruta49 > 0
                         ? 'text-warning'
                         : data.rutor.ruta49 < 0
@@ -1794,18 +1877,30 @@ export function VatDeclarationView() {
               </div>
             </CardContent>
           </Card>
+          </section>
 
-          <VatBookingCard
-            periodType={periodType}
-            year={year}
-            period={period}
-            fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
-          />
+          <section className="space-y-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              3 · Bokför momsen
+            </h2>
+            <VatBookingCard
+              periodType={periodType}
+              year={year}
+              period={period}
+              fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+              checksBlocked={checksBlocked}
+            />
+          </section>
 
-          <VatManualFilingCard
-            xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
-            pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
-          />
+          <section className="space-y-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              4 · Lämna in
+            </h2>
+            <VatManualFilingCard
+              xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
+              pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
+            />
+          </section>
         </div>
       )}
 
@@ -1818,7 +1913,7 @@ export function VatDeclarationView() {
           year={year}
           period={period}
           hasData={data !== null}
-          rutor={data?.rutor ?? null}
+          localBlocked={checksBlocked}
         />
       )}
     </div>
