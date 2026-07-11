@@ -1192,3 +1192,99 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
     expect(result.period.end).toBe('2026-03-31')
   })
 })
+
+// ============================================================
+// #984: settlement entries never zero the report
+// ============================================================
+
+describe('calculateVatDeclaration: settlement-shaped exclusion (#984)', () => {
+  function line(entryId: string, account: string, debit: number, credit: number) {
+    return {
+      journal_entry_id: entryId,
+      account_number: account,
+      debit_amount: debit,
+      credit_amount: credit,
+    }
+  }
+
+  it('excludes a manual momsomföring so the report survives nollställning', async () => {
+    results = [
+      {
+        data: [{ id: 'e1' }, { id: 'e2', source_type: 'manual' }],
+        error: null,
+      },
+      {
+        data: [
+          // Business activity.
+          line('e1', '2611', 0, 2500),
+          line('e1', '2641', 1000, 0),
+          line('e1', '3001', 0, 10000),
+          // Manual settlement clearing the period to 2650 (booked without
+          // the vat_settlement source_type, e.g. before #980 shipped).
+          line('e2', '2611', 2500, 0),
+          line('e2', '2641', 0, 1000),
+          line('e2', '2650', 0, 1500),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 5)
+
+    // Without the shape exclusion every ruta reads 0 after the settlement.
+    expect(result.rutor.ruta10).toBe(2500)
+    expect(result.rutor.ruta48).toBe(1000)
+    expect(result.rutor.ruta49).toBe(1500)
+    expect(result.rutor.ruta05).toBe(10000)
+  })
+
+  it('excludes a storno of a settlement (annullera must not inflate the rutor)', async () => {
+    results = [
+      {
+        // The tagged settlement itself is filtered out by the query; its
+        // storno reversal is not, and would otherwise re-credit 2611.
+        data: [{ id: 'e1' }, { id: 'e3', source_type: 'storno' }],
+        error: null,
+      },
+      {
+        data: [
+          line('e1', '2611', 0, 100),
+          line('e3', '2611', 0, 100),
+          line('e3', '2650', 100, 0),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 5)
+
+    expect(result.rutor.ruta10).toBe(100)
+    expect(result.rutor.ruta49).toBe(100)
+  })
+
+  it('keeps opening-balance entries: carried-in 26xx balances are unsettled VAT', async () => {
+    results = [
+      {
+        data: [{ id: 'ib', source_type: 'opening_balance' }],
+        error: null,
+      },
+      {
+        data: [
+          // Migrating company: undeclared input VAT and a prior VAT debt
+          // carried in through the same opening-balance entry.
+          line('ib', '2641', 500, 0),
+          line('ib', '2650', 0, 300),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(result.rutor.ruta48).toBe(500)
+    expect(result.rutor.ruta49).toBe(-500)
+  })
+})
