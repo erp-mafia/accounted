@@ -208,4 +208,18 @@ describe('POST /api/billing/checkout', () => {
     expect(status).toBe(200)
     expect(sessionsCreate.mock.calls[0][0].subscription_data.trial_end).toBeUndefined()
   })
+
+  it('fails closed (500, no Stripe session) when the trial lookup errors', async () => {
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: null, error: { message: 'boom' } }) // trial lookup fails
+
+    const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await POST(req, routeParams),
+    )
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('TRIAL_LOOKUP_FAILED')
+    expect(sessionsCreate).not.toHaveBeenCalled()
+  })
 })

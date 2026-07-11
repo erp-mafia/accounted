@@ -58,7 +58,7 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
   // Reuse the company's Stripe customer if we already created one, and read
   // the trial expiry for the deferred-first-charge decision below. Independent
   // reads, so one round-trip batch.
-  const [{ data: existing }, { data: trialGrant }] = await Promise.all([
+  const [{ data: existing }, { data: trialGrant, error: trialGrantError }] = await Promise.all([
     service
       .from('company_subscriptions')
       .select('stripe_customer_id')
@@ -73,6 +73,21 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       .limit(1)
       .maybeSingle(),
   ])
+
+  // Fail closed on an uncertain trial state: proceeding on a lookup error
+  // would silently charge immediately after the UI promised "0 kr idag".
+  if (trialGrantError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'TRIAL_LOOKUP_FAILED',
+          message: 'Kunde inte läsa din provperiod. Försök igen om en stund.',
+          message_en: 'Could not resolve the trial state. Try again shortly.',
+        },
+      },
+      { status: 500 },
+    )
+  }
 
   // Defer the first charge to the end of an active trial. The company already
   // holds the paid capabilities free until then, so charging at checkout would

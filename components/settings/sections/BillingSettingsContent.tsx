@@ -232,7 +232,7 @@ export function BillingSettingsContent() {
 
       <p className="text-sm text-muted-foreground leading-relaxed">
         Utan abonnemang behåller du bokföringen, fakturorna, rapporterna och all din data utan kostnad. Ingenting
-        raderas.
+        raderas: räkenskapsinformation bevaras i sju år enligt bokföringslagen, oavsett abonnemang.
       </p>
     </div>
   )

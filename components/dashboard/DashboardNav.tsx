@@ -248,15 +248,21 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const refreshInFlightRef = useRef(false)
   const refreshQueuedRef = useRef(false)
   // Trial countdown for the sidebar touchpoint. Computed in an effect (not
-  // during render) so server and client markup agree at hydration.
+  // during render) so server and client markup agree at hydration; an hourly
+  // tick keeps a long-lived tab from showing yesterday's count.
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null)
   useEffect(() => {
     if (!trialEndsAt) {
       setTrialDaysLeft(null)
       return
     }
-    const msLeft = new Date(trialEndsAt).getTime() - Date.now()
-    setTrialDaysLeft(msLeft > 0 ? Math.ceil(msLeft / 86_400_000) : null)
+    const update = () => {
+      const msLeft = new Date(trialEndsAt).getTime() - Date.now()
+      setTrialDaysLeft(msLeft > 0 ? Math.ceil(msLeft / 86_400_000) : null)
+    }
+    update()
+    const id = setInterval(update, 3_600_000)
+    return () => clearInterval(id)
   }, [trialEndsAt])
 
   const hasCompany = !!company
