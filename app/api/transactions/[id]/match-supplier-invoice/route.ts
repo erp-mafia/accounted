@@ -4,6 +4,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -116,26 +117,13 @@ export const POST = withRouteContext(
     // booked to 2893) and has no relationship to which bank account a real,
     // matched transaction settled from. Reusing it here silently misbooked a
     // genuine 1930 bank payment to 2893 once a private payment had set that
-    // sticky default. Mirrors the settlement-account resolution in
-    // transactions/[id]/categorize/route.ts.
-    let paymentAccount = '1930'
-    if (transaction.cash_account_id) {
-      const { data: txCashAccount, error: cashAccountError } = await supabase
-        .from('cash_accounts')
-        .select('ledger_account')
-        .eq('id', transaction.cash_account_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-      if (cashAccountError) {
-        txLog.warn('settlement-account lookup failed; defaulting to 1930', {
-          cashAccountId: transaction.cash_account_id,
-          error: cashAccountError.message,
-        })
-      }
-      if (txCashAccount?.ledger_account) {
-        paymentAccount = txCashAccount.ledger_account as string
-      }
-    }
+    // sticky default.
+    const paymentAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
 
     // Route on the supplier invoice's actual booking state: if 2440 was posted
     // at receipt (accrual), the match clears 2440 regardless of the company's

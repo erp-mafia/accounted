@@ -13,6 +13,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { ORE_TOLERANCE } from '@/lib/money'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -82,24 +83,12 @@ export const GET = withRouteContext(
     // transaction is actually linked to, never the sticky
     // last_supplier_payment_account (that setting reflects the manual
     // mark-paid/private-funds flow, not a real matched bank transaction).
-    let paymentAccount = '1930'
-    if (transaction.cash_account_id) {
-      const { data: txCashAccount, error: cashAccountError } = await supabase
-        .from('cash_accounts')
-        .select('ledger_account')
-        .eq('id', transaction.cash_account_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-      if (cashAccountError) {
-        log.warn('settlement-account lookup failed; defaulting to 1930', {
-          cashAccountId: transaction.cash_account_id,
-          error: cashAccountError.message,
-        })
-      }
-      if (txCashAccount?.ledger_account) {
-        paymentAccount = txCashAccount.ledger_account as string
-      }
-    }
+    const paymentAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      log,
+    )
 
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
