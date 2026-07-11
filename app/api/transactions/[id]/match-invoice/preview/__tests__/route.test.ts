@@ -202,4 +202,125 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
     expect(vat?.credit_amount).toBe(1042.5)
     expect(bank?.debit_amount).toBe(5212.5)
   })
+
+  // Settlement-account resolution (customer-invoice counterpart of the
+  // supplier-side fix): the bank leg must reflect THIS transaction's own
+  // linked cash account, not a hardcoded 1930, so a receipt into a secondary
+  // account previews the exact verifikat the POST handler will commit.
+  describe('settlement account resolution', () => {
+    it('clearing entry: previews the bank leg on the transaction\'s own linked cash account, not 1930', async () => {
+      const tx = makeTransaction({
+        id: 'tx-4',
+        amount: 1250,
+        currency: 'SEK',
+        date: '2026-05-30',
+        invoice_id: null,
+        cash_account_id: 'ca-1940',
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        currency: 'SEK',
+        total: 1250,
+        remaining_amount: 1250,
+        paid_amount: 0,
+        journal_entry_id: 'je-original', // already booked → clearing path
+      })
+      enqueue({ data: tx, error: null }) // transactions
+      enqueue({ data: invoice, error: null }) // invoices
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null }) // company_settings
+      enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+
+      const request = createMockRequest('/api/transactions/tx-4/match-invoice/preview', {
+        searchParams: { invoice_id: VALID_UUID },
+      })
+      const response = await GET(request, createMockRouteParams({ id: 'tx-4' }))
+      const { status, body } = await parseJsonResponse<{
+        entry_type: string
+        lines: Array<{ account_number: string; debit_amount: number }>
+      }>(response)
+
+      expect(status).toBe(200)
+      expect(body.entry_type).toBe('clearing')
+      const accounts = body.lines.map((l) => l.account_number)
+      expect(accounts).toContain('1940')
+      expect(accounts).not.toContain('1930')
+      expect(body.lines.find((l) => l.account_number === '1940')?.debit_amount).toBe(1250)
+    })
+
+    it('cash entry: previews the bank leg on the transaction\'s own linked cash account, not 1930', async () => {
+      const tx = makeTransaction({
+        id: 'tx-5',
+        amount: 12500,
+        currency: 'SEK',
+        date: '2026-05-30',
+        invoice_id: null,
+        cash_account_id: 'ca-1940',
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        currency: 'SEK',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+      })
+      enqueue({ data: tx, error: null })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+      enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+
+      const request = createMockRequest('/api/transactions/tx-5/match-invoice/preview', {
+        searchParams: { invoice_id: VALID_UUID },
+      })
+      const response = await GET(request, createMockRouteParams({ id: 'tx-5' }))
+      const { status, body } = await parseJsonResponse<{
+        entry_type: string
+        lines: Array<{ account_number: string; debit_amount: number }>
+      }>(response)
+
+      expect(status).toBe(200)
+      expect(body.entry_type).toBe('cash')
+      const accounts = body.lines.map((l) => l.account_number)
+      expect(accounts).toContain('1940')
+      expect(accounts).not.toContain('1930')
+      expect(body.lines.find((l) => l.account_number === '1940')?.debit_amount).toBe(12500)
+    })
+
+    it('defaults to 1930 when the transaction has no linked cash account', async () => {
+      const tx = makeTransaction({
+        id: 'tx-6',
+        amount: 1250,
+        currency: 'SEK',
+        date: '2026-05-30',
+        invoice_id: null,
+        cash_account_id: null,
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        currency: 'SEK',
+        total: 1250,
+        remaining_amount: 1250,
+        paid_amount: 0,
+        journal_entry_id: 'je-original',
+      })
+      enqueue({ data: tx, error: null })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+      // No cash_accounts enqueue: resolveSettlementAccount short-circuits to
+      // '1930' when cash_account_id is null, with no DB call.
+
+      const request = createMockRequest('/api/transactions/tx-6/match-invoice/preview', {
+        searchParams: { invoice_id: VALID_UUID },
+      })
+      const response = await GET(request, createMockRouteParams({ id: 'tx-6' }))
+      const { status, body } = await parseJsonResponse<{
+        lines: Array<{ account_number: string; debit_amount: number }>
+      }>(response)
+
+      expect(status).toBe(200)
+      expect(body.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(1250)
+    })
+  })
 })

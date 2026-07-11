@@ -129,12 +129,30 @@ export interface PaymentClearingLines {
  *   otherwise defer (book 1930 = 1510 = bankSek with no FX line). The
  *   deferred path leaves the GL slightly understated until the final
  *   settlement closes the invoice.
+ *
+ * # paymentAccount
+ *   The bank-leg account (the debit line below). Defaults to '1930': callers
+ *   that haven't resolved the transaction's actual cash account keep booking
+ *   there unchanged. Callers matching a real bank transaction should resolve
+ *   it via resolveSettlementAccount (cash_account_id -> cash_accounts.ledger_
+ *   account) and pass it here so a receipt into a non-primary bank/cash
+ *   account (e.g. a secondary SEK account, or a EUR account on 1940) doesn't
+ *   silently get misbooked to the primary account.
  */
 export function buildInvoicePaymentClearingLines(
   tx: PaymentClearingTx,
   invoice: PaymentClearingInvoice,
   description: string,
   paidInInvoiceCurrency?: number,
+  /**
+   * BAS account for the bank leg (the 1930 debit below). Defaults to '1930'
+   * to preserve existing behaviour for every caller that doesn't pass one.
+   * Callers that know which cash account the underlying bank transaction
+   * actually belongs to (via cash_account_id -> cash_accounts.ledger_account,
+   * see lib/bookkeeping/settlement-account.ts) should resolve it and pass it
+   * here instead of always booking to the primary bank account.
+   */
+  paymentAccount = '1930',
 ): PaymentClearingLines {
   // Bank-leg: actual SEK that hit the bank. resolveSekAmount returns the
   // raw amount for SEK txs and amount * exchange_rate for foreign txs
@@ -201,7 +219,7 @@ export function buildInvoicePaymentClearingLines(
 
   const lines: CreateJournalEntryLineInput[] = [
     {
-      account_number: '1930',
+      account_number: paymentAccount,
       debit_amount: bankSek,
       credit_amount: 0,
       line_description: description,

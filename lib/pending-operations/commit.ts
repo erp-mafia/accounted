@@ -25,6 +25,7 @@ import {
   createInvoiceJournalEntry,
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -1412,16 +1413,24 @@ async function commitMatchTransactionInvoice(
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
+  // Debit the cash account THIS transaction actually belongs to, never a
+  // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
+  // only source of truth for which bank/cash account a real, matched
+  // transaction settled into. Mirrors the match-invoice route fix.
+  const paymentAccount = await resolveSettlementAccount(supabase, companyId, transaction.cash_account_id, log)
+
   let journalEntryId: string | null = null
   try {
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
+        paymentAccount,
       )
       journalEntryId = je?.id ?? null
     } else {
       const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, paidAmount
+        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, paidAmount,
+        paymentAccount,
       )
       journalEntryId = je?.id ?? null
     }

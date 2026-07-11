@@ -635,6 +635,168 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
+  // Settlement-account resolution (customer-invoice counterpart of the
+  // supplier-side fix in match-supplier-invoice/route.ts): the bank leg must
+  // be resolved from THIS transaction's own cash_account_id, never hardcoded
+  // to 1930, so a receipt into a secondary/foreign-currency account books to
+  // that account.
+  describe('settlement account resolution', () => {
+    it('clearing entry: credits the transaction\'s own linked cash account, not 1930', async () => {
+      const tx = makeTransaction({
+        id: 'tx-1',
+        amount: 12500,
+        invoice_id: null,
+        date: '2024-06-15',
+        cash_account_id: 'ca-1940',
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        subtotal: 10000,
+        vat_amount: 2500,
+        invoice_number: 'F-2024001',
+      })
+
+      enqueue({ data: tx, error: null }) // transactions
+      enqueue({ data: invoice, error: null }) // invoices
+      enqueue({ data: [], error: null }) // hard-duplicate check
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null }) // company_settings
+      enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+
+      mockCreateJournalEntry.mockResolvedValue({ id: 'je-1940' })
+
+      enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+      enqueue({ data: null, error: null }) // insert invoice_payments
+      enqueue({ data: null, error: null }) // update transaction
+      enqueue({ data: null, error: null }) // logMatchEvent
+
+      const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+        method: 'POST',
+        body: { invoice_id: VALID_UUID },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1940')
+      expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        expect.objectContaining({
+          lines: expect.arrayContaining([
+            expect.objectContaining({ account_number: '1940', debit_amount: 12500 }),
+            expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
+          ]),
+        }),
+      )
+      // The primary bank account must NOT appear on this verifikat.
+      const call = mockCreateJournalEntry.mock.calls[0][3] as { lines: Array<{ account_number: string }> }
+      expect(call.lines.some((l) => l.account_number === '1930')).toBe(false)
+    })
+
+    it('cash entry: passes the transaction\'s own linked cash account through to createInvoiceCashEntry', async () => {
+      const tx = makeTransaction({
+        id: 'tx-1',
+        amount: 12500,
+        invoice_id: null,
+        date: '2024-06-15',
+        cash_account_id: 'ca-1940',
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+      })
+
+      enqueue({ data: tx, error: null })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: [], error: null }) // hard-duplicate check
+      enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+      enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+
+      mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash-1940' })
+
+      enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+      enqueue({ data: null, error: null }) // insert invoice_payments
+      enqueue({ data: null, error: null }) // update transaction
+      enqueue({ data: null, error: null }) // logMatchEvent
+
+      const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+        method: 'POST',
+        body: { invoice_id: VALID_UUID },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_id).toBe('je-cash-1940')
+      expect(mockCreateInvoiceCashEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        expect.anything(),
+        '2024-06-15',
+        'enskild_firma',
+        undefined,
+        '1940',
+      )
+    })
+
+    it('falls back to 1930 when the transaction has no linked cash account', async () => {
+      const tx = makeTransaction({
+        id: 'tx-1',
+        amount: 12500,
+        invoice_id: null,
+        date: '2024-06-15',
+        cash_account_id: null,
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+      })
+
+      enqueue({ data: tx, error: null })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: [], error: null }) // hard-duplicate check
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+      // No cash_accounts enqueue: resolveSettlementAccount short-circuits to
+      // '1930' when cash_account_id is null, with no DB call.
+
+      mockCreateJournalEntry.mockResolvedValue({ id: 'je-default' })
+
+      enqueue({ data: [{ id: VALID_UUID }], error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: null, error: null })
+
+      const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+        method: 'POST',
+        body: { invoice_id: VALID_UUID },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        expect.objectContaining({
+          lines: expect.arrayContaining([
+            expect.objectContaining({ account_number: '1930', debit_amount: 12500 }),
+          ]),
+        }),
+      )
+    })
+  })
+
   it('returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING when tx amount exceeds invoice remaining', async () => {
     // Tx is +12 000 SEK, invoice has 5 000 SEK remaining. Legacy code path
     // would push paid_amount past invoice.total; the new guard rejects so

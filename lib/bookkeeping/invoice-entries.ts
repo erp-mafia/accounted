@@ -454,7 +454,16 @@ export async function createInvoicePaymentJournalEntry(
   paymentDate: string,
   exchangeRateDifference?: number,
   customerName?: string,
-  paymentAmount?: number
+  paymentAmount?: number,
+  /**
+   * BAS account for the bank leg (the 1930 debit below). Defaults to '1930'
+   * to preserve existing behaviour for every caller that doesn't pass one.
+   * Callers that know which cash account the underlying bank transaction
+   * actually belongs to (via cash_account_id -> cash_accounts.ledger_account,
+   * see lib/bookkeeping/settlement-account.ts) should resolve it and pass it
+   * here instead of always booking to the primary bank account.
+   */
+  paymentAccount = '1930'
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -489,7 +498,7 @@ export async function createInvoicePaymentJournalEntry(
 
     // Debit: Bank at actual SEK received
     lines.push({
-      account_number: '1930',
+      account_number: paymentAccount,
       debit_amount: Math.round(actualSekReceived * 100) / 100,
       credit_amount: 0,
       line_description: desc,
@@ -525,7 +534,7 @@ export async function createInvoicePaymentJournalEntry(
     // Standard SEK payment or no exchange rate difference
     lines.push(
       {
-        account_number: '1930',
+        account_number: paymentAccount,
         debit_amount: Math.round(bookedSekAmount * 100) / 100,
         credit_amount: 0,
         line_description: desc,
@@ -682,7 +691,16 @@ export async function createInvoiceCashEntry(
   invoice: Invoice,
   paymentDate: string,
   entityType: EntityType = 'enskild_firma',
-  customerName?: string
+  customerName?: string,
+  /**
+   * BAS account for the bank leg (the 1930 debit below). Defaults to '1930'
+   * to preserve existing behaviour for every caller that doesn't pass one.
+   * Callers that know which cash account the underlying bank transaction
+   * actually belongs to (via cash_account_id -> cash_accounts.ledger_account,
+   * see lib/bookkeeping/settlement-account.ts) should resolve it and pass it
+   * here instead of always booking to the primary bank account.
+   */
+  paymentAccount = '1930'
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -748,7 +766,7 @@ export async function createInvoiceCashEntry(
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
   const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
   lines.push({
-    account_number: '1930',
+    account_number: paymentAccount,
     debit_amount: bankAmount,
     credit_amount: 0,
     line_description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -27,8 +28,17 @@ ensureInitialized()
  * 3. Updates invoice status to 'paid' or 'partially_paid'
  * 4. Records payment in invoice_payments table
  * 5. Creates journal entry for payment receipt
- *    - Debit 1930 Företagskonto (Bank)
+ *    - Debit <resolved bank account> Företagskonto (Bank)
  *    - Credit 1510 Kundfordringar (Accounts Receivable)
+ *
+ * The bank leg is resolved from THIS transaction's own cash_account_id via
+ * resolveSettlementAccount (cash_account_id -> cash_accounts.ledger_account),
+ * never hardcoded to 1930: a receipt landing in a secondary SEK account or a
+ * foreign-currency account (e.g. 1940 for EUR) must book to that account, not
+ * silently to the primary bank account. Mirrors the fix already applied on
+ * the supplier-invoice side (match-supplier-invoice/route.ts), which resolves
+ * the credited account the same way instead of falling back to a stale
+ * company-wide setting.
  */
 export const POST = withRouteContext(
   'transaction.match_invoice',
@@ -323,6 +333,20 @@ export const POST = withRouteContext(
     const accountingMethod = settings?.accounting_method || 'accrual'
     const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
+    // Debit the cash account THIS transaction actually belongs to, never a
+    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
+    // only source of truth for which bank/cash account a real, matched
+    // transaction settled into. A receipt into a secondary SEK account or a
+    // foreign-currency account (e.g. 1940 for EUR) must book there, not to
+    // the primary account, or the GL silently diverges from the actual bank
+    // statement it's meant to represent (BFL 5 kap 1-2§).
+    const paymentAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
+
     // Drive the JE shape from the INVOICE'S booking state, not from the
     // company's current accounting_method setting. If the invoice was already
     // booked at send (Dr 1510 / Cr 30xx + VAT) we MUST clear 1510 here:
@@ -374,7 +398,7 @@ export const POST = withRouteContext(
       } else if (useCashEntry) {
         const journalEntry = await createInvoiceCashEntry(
           supabase, companyId, user.id, invoice as Invoice, transaction.date,
-          entityType, invoice.customer?.name,
+          entityType, invoice.customer?.name, paymentAccount,
         )
         journalEntryId = journalEntry?.id ?? null
       } else {
@@ -420,6 +444,7 @@ export const POST = withRouteContext(
           // amount so the helper credits 1510 proportionally and posts the
           // FX-diff line. Same-currency: undefined, helper just uses bankSek.
           fx.required ? fx.paidInInvoiceCurrency : undefined,
+          paymentAccount,
         )
         const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
           fiscal_period_id: fiscalPeriodId,
