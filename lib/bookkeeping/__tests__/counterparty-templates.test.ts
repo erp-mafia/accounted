@@ -17,6 +17,7 @@ import {
   populateTemplatesFromSieVouchers,
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
+import { roundOre } from '@/lib/money'
 import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { LinePatternEntry } from '@/types'
 import type { SIETransactionLine } from '@/lib/import/types'
@@ -991,8 +992,8 @@ describe('learning-loop repair (issue #865)', () => {
       // End-to-end: the RC pair nets to zero, business keeps the gross amount,
       // and the whole entry balances
       const lines = buildTransactionEntryLines(tx, result)
-      const debits = Math.round(lines.reduce((s, l) => s + l.debit_amount, 0) * 100) / 100
-      const credits = Math.round(lines.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
+      const debits = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
+      const credits = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
       expect(debits).toBe(credits)
       expect(lines.find((l) => l.account_number === '4535')?.credit_amount).toBe(5000)
     })

@@ -2,6 +2,7 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { extractNetAmount, extractVatAmount } from './vat-entries'
+import { roundOre } from '@/lib/money'
 import { InvalidMappingResultError } from '@/lib/bookkeeping/errors'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -193,9 +194,9 @@ export function buildTransactionEntryLines(
       // Has output VAT. Net the credits against any debit VAT legs: a
       // mirrored reverse-charge refund carries a credit 2645 + debit 2614
       // pair that nets to zero, so the business line keeps the gross amount.
-      const vatCredit = Math.round(
-        mappingResult.vat_lines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0) * 100
-      ) / 100
+      const vatCredit = roundOre(
+        mappingResult.vat_lines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
+      )
       const netAmount = Math.round((absAmount - vatCredit) * 100) / 100
 
       // Debit bank for gross amount
