@@ -31,7 +31,9 @@ import {
   Package,
   Tag,
   Tags,
+  ChevronRight,
   ChevronsUpDown,
+  Clock,
   Sparkles,
   Percent,
   Landmark,
@@ -230,7 +232,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
-  const { company, capabilities } = useCompany()
+  const { company, capabilities, trialEndsAt } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
   // generic Sparkles glyph.
@@ -245,6 +247,23 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   )
   const refreshInFlightRef = useRef(false)
   const refreshQueuedRef = useRef(false)
+  // Trial countdown for the sidebar touchpoint. Computed in an effect (not
+  // during render) so server and client markup agree at hydration; an hourly
+  // tick keeps a long-lived tab from showing yesterday's count.
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null)
+  useEffect(() => {
+    if (!trialEndsAt) {
+      setTrialDaysLeft(null)
+      return
+    }
+    const update = () => {
+      const msLeft = new Date(trialEndsAt).getTime() - Date.now()
+      setTrialDaysLeft(msLeft > 0 ? Math.ceil(msLeft / 86_400_000) : null)
+    }
+    update()
+    const id = setInterval(update, 3_600_000)
+    return () => clearInterval(id)
+  }, [trialEndsAt])
 
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
@@ -664,6 +683,26 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 })}
             </nav>
           </div>
+
+          {/* Trial countdown touchpoint: the paywall is a lifecycle flow, not
+              a settings page, so trial state stays quietly visible in the
+              chrome instead of only inside Inställningar → Abonnemang.
+              Hidden for sandbox/demo (no checkout) and once any non-trial
+              grant is active (trialEndsAt is null then). */}
+          {!isSandbox && trialDaysLeft !== null && (
+            <div className="flex-shrink-0 px-3 pb-2">
+              <Link
+                href="/settings/billing"
+                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+              >
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate">
+                  {tNav('trial_days_left', { days: trialDaysLeft })}
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </Link>
+            </div>
+          )}
 
           {/* Account popover (bottom-left). Triggered by the signed-in
               user's name + initial. Holds Inställningar, Hjälp, Support,

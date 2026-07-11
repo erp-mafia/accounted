@@ -2,14 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildVatSettlementProposal } from '../vat-settlement'
 
 // ============================================================
-// Mock: results routed by table + select shape (the builder runs its two
+// Mock: results routed by table + applied filters (the builder runs its two
 // ledger queries and the existing-entries lookup concurrently, so a
 // sequential result queue would be order-fragile).
 // ============================================================
 
 interface MockData {
-  /** journal_entries rows for the entry-scope query (fetchEntryLines step 1). */
-  entries?: Array<{ id: string }>
+  /**
+   * journal_entries rows for the entry-scope query (fetchEntryLines step 1).
+   * Shape-detection reads status/entry_date/source_type/voucher_* off these.
+   */
+  entries?: Array<Record<string, unknown>>
   /** journal_entry_lines rows (fetchEntryLines step 2). */
   lines?: Array<Record<string, unknown>>
   /** Existing vat_settlement entries in the period. */
@@ -26,16 +29,16 @@ function makeClient(data: MockData) {
   neqCalls = []
   return {
     from: vi.fn().mockImplementation((table: string) => {
-      let selectStr = ''
+      const eqCalls: Array<[string, unknown]> = []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const b: Record<string, any> = {}
-      b.select = vi.fn().mockImplementation((s: string) => {
-        selectStr = s
-        return b
-      })
-      for (const m of ['eq', 'in', 'gte', 'lte', 'order', 'range', 'limit']) {
+      for (const m of ['select', 'in', 'gte', 'lte', 'order', 'range', 'limit']) {
         b[m] = vi.fn().mockReturnValue(b)
       }
+      b.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
+        eqCalls.push([col, val])
+        return b
+      })
       b.neq = vi.fn().mockImplementation((col: string, val: unknown) => {
         neqCalls.push([col, val])
         return b
@@ -44,9 +47,9 @@ function makeClient(data: MockData) {
       b.then = (resolve: (v: unknown) => void) => {
         if (table === 'journal_entry_lines') return resolve({ data: data.lines ?? [], error: null })
         // journal_entries serves two queries: the entry scope for the ledger
-        // totals (select 'id') and the existing-settlement lookup (selects
-        // voucher columns).
-        if (selectStr.includes('voucher_series')) {
+        // totals (filters vat_settlement OUT via .neq) and the tagged
+        // existing-settlement lookup (filters it IN via .eq).
+        if (eqCalls.some(([col, val]) => col === 'source_type' && val === 'vat_settlement')) {
           return resolve(
             data.existingError
               ? { data: null, error: data.existingError }
@@ -62,11 +65,11 @@ function makeClient(data: MockData) {
 }
 
 let lineId = 0
-function vatLine(account: string, debit: number, credit: number) {
+function vatLine(account: string, debit: number, credit: number, entryId = 'e1') {
   lineId += 1
   return {
     id: `l${lineId}`,
-    journal_entry_id: 'e1',
+    journal_entry_id: entryId,
     account_number: account,
     debit_amount: debit,
     credit_amount: credit,
@@ -210,6 +213,114 @@ describe('buildVatSettlementProposal', () => {
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
 
     expect(proposal.existing_entries).toEqual(existing)
+  })
+
+  it('gates on a manual settlement-shaped entry and still proposes the full-period clear (#984)', async () => {
+    const manualSettlement = {
+      id: 'e2', status: 'posted', entry_date: '2026-03-31',
+      source_type: 'manual', voucher_series: 'A', voucher_number: 9,
+    }
+    const supabase = makeClient({
+      entries: [{ id: 'e1' }, manualSettlement],
+      lines: [
+        // Business activity on e1.
+        vatLine('2611', 0, 100),
+        vatLine('2641', 25, 0),
+        // Manual momsomföring on e2: clears 26xx to 2650 without the
+        // vat_settlement source_type (booked before #980 shipped).
+        vatLine('2611', 100, 0, 'e2'),
+        vatLine('2641', 0, 25, 'e2'),
+        vatLine('2650', 0, 75, 'e2'),
+      ],
+    })
+
+    const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
+
+    // The manual settlement is excluded from the projection: the proposal
+    // shows the same full-period clear the report shows, and the posted
+    // shaped entry gates the booking button via existing_entries.
+    expect(proposal.is_empty).toBe(false)
+    expect(proposal.filed_net).toBe(75)
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 100, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 0, credit_amount: 25 },
+      {
+        account_number: '2650', debit_amount: 0, credit_amount: 75,
+        line_description: 'Moms att betala',
+      },
+    ])
+    expect(proposal.existing_entries).toEqual([manualSettlement])
+  })
+
+  it('does not gate on a storno of a settlement (annullera must re-enable booking)', async () => {
+    const supabase = makeClient({
+      entries: [
+        { id: 'e1' },
+        // A manual settlement that has been annulled...
+        {
+          id: 'e2', status: 'reversed', entry_date: '2026-03-31',
+          source_type: 'manual', voucher_series: 'A', voucher_number: 9,
+        },
+        // ...and its storno reversal.
+        {
+          id: 'e3', status: 'posted', entry_date: '2026-03-31',
+          source_type: 'storno', voucher_series: 'A', voucher_number: 10,
+        },
+      ],
+      lines: [
+        vatLine('2611', 0, 100),
+        vatLine('2611', 100, 0, 'e2'),
+        vatLine('2650', 0, 100, 'e2'),
+        vatLine('2611', 0, 100, 'e3'),
+        vatLine('2650', 100, 0, 'e3'),
+      ],
+    })
+
+    const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
+
+    // Settlement + storno are both excluded from the projection (they would
+    // otherwise double ruta 10), and neither gates: the period can be
+    // settled again.
+    expect(proposal.existing_entries).toEqual([])
+    expect(proposal.filed_net).toBe(100)
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 100, credit_amount: 0 },
+      {
+        account_number: '2650', debit_amount: 0, credit_amount: 100,
+        line_description: 'Moms att betala',
+      },
+    ])
+  })
+
+  it('ignores a plain VAT payment on 2650 (no declaration accounts touched)', async () => {
+    const supabase = makeClient({
+      entries: [
+        { id: 'e1' },
+        {
+          id: 'e2', status: 'posted', entry_date: '2026-02-12',
+          source_type: 'bank_transaction', voucher_series: 'A', voucher_number: 7,
+        },
+      ],
+      lines: [
+        vatLine('2611', 0, 100),
+        // Paying last period's VAT debt: 2650 against the bank account.
+        // Touches a settlement net account but no declaration account, so it
+        // is NOT settlement-shaped: it must neither gate nor shift the rutor.
+        vatLine('2650', 75, 0, 'e2'),
+      ],
+    })
+
+    const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
+
+    expect(proposal.existing_entries).toEqual([])
+    expect(proposal.filed_net).toBe(100)
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 100, credit_amount: 0 },
+      {
+        account_number: '2650', debit_amount: 0, credit_amount: 100,
+        line_description: 'Moms att betala',
+      },
+    ])
   })
 
   it('throws when the existing-settlement lookup fails (the UI gate depends on it)', async () => {

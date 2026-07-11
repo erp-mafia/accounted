@@ -50,11 +50,16 @@ export interface VatSettlementProposalLine {
   line_description?: string
 }
 
-/** A vat_settlement entry already booked (or drafted) inside the period. */
+/**
+ * A settlement entry already booked (or drafted) inside the period: tagged
+ * (source_type 'vat_settlement') or detected by shape (a manual momsomföring
+ * clearing 26xx to 2650/1650, see fetchVatAccountTotals in vat-declaration.ts).
+ */
 export interface VatSettlementExistingEntry {
   id: string
   status: string
   entry_date: string
+  source_type: string | null
   voucher_series: string | null
   voucher_number: number | null
 }
@@ -103,11 +108,11 @@ export async function buildVatSettlementProposal(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  const [totals, existingResult] = await Promise.all([
+  const [{ totals, settlementShapedEntries }, existingResult] = await Promise.all([
     fetchVatAccountTotals(supabase, companyId, start, end),
     supabase
       .from('journal_entries')
-      .select('id, status, entry_date, voucher_series, voucher_number')
+      .select('id, status, entry_date, source_type, voucher_series, voucher_number')
       .eq('company_id', companyId)
       .eq('source_type', 'vat_settlement')
       .in('status', ['draft', 'posted'])
@@ -125,6 +130,22 @@ export async function buildVatSettlementProposal(
       `existing vat_settlement lookup failed: ${existingResult.error.message}`
     )
   }
+
+  // Shape-detected settlements (manual momsomföring, SIE imports) gate the
+  // booking button exactly like tagged ones (#984): the proposal re-clears
+  // the FULL period, so booking on top of a manual settlement would corrupt
+  // the 26xx balances. Stornos are the CANCELLATION of a settlement and must
+  // not gate, or annullera could never re-enable the button. Only posted
+  // entries gate: the shape of an unposted draft has no balance effect.
+  const shapedExisting = settlementShapedEntries.filter(
+    (e) => e.status === 'posted' && e.source_type !== 'storno'
+  )
+  const existingEntries = [
+    ...((existingResult.data ?? []) as VatSettlementExistingEntry[]),
+    ...shapedExisting,
+  ]
+    .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0))
+    .slice(0, 5)
 
   const rutor = rutorFromTotals(totals)
   const { net: filedNet } = buildFiledAmounts(rutor)
@@ -192,6 +213,6 @@ export async function buildVatSettlementProposal(
     filed_net: filedNet,
     rounding_amount: roundingAmount,
     is_empty: lines.length === 0,
-    existing_entries: (existingResult.data ?? []) as VatSettlementExistingEntry[],
+    existing_entries: existingEntries,
   }
 }

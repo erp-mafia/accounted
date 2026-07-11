@@ -13,6 +13,8 @@ interface MockLine {
   account_number: string
   debit_amount: number
   credit_amount: number
+  journal_entry_id?: string
+  journal_entries?: { source_type: string | null } | Array<{ source_type: string | null }>
 }
 
 function mockSupabaseWithLines(lines: MockLine[]) {
@@ -24,6 +26,7 @@ function mockSupabaseWithLines(lines: MockLine[]) {
   const terminal = { data: lines, error: null }
   const chain: Record<string, () => unknown> = {}
   chain.range = () => terminal
+  chain.order = () => chain
   chain.lte = () => chain
   chain.gte = () => chain
   chain.neq = () => chain
@@ -184,6 +187,50 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta35).toBe(5000)        // The new ruta we just added
     expect(result.rutor.ruta39).toBe(0)
     expect(result.rutor.ruta40).toBe(0)
+  })
+
+  it('excludes a manual settlement-shaped entry from the rutor (#984)', async () => {
+    const lines: MockLine[] = [
+      // Business activity on e1.
+      { journal_entry_id: 'e1', account_number: '3001', debit_amount: 0, credit_amount: 1000, journal_entries: { source_type: 'invoice_created' } },
+      { journal_entry_id: 'e1', account_number: '2611', debit_amount: 0, credit_amount: 250, journal_entries: { source_type: 'invoice_created' } },
+      // Manual momsomföring on e2 (no vat_settlement tag): would zero ruta10.
+      { journal_entry_id: 'e2', account_number: '2611', debit_amount: 250, credit_amount: 0, journal_entries: { source_type: 'manual' } },
+      { journal_entry_id: 'e2', account_number: '2650', debit_amount: 0, credit_amount: 250, journal_entries: { source_type: 'manual' } },
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'monthly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta05).toBe(1000)
+    expect(result.rutor.ruta10).toBe(250)
+    expect(result.rutor.ruta49).toBe(250)
+  })
+
+  it('settlement-shape exclusion handles the array-typed embed and exempts opening balances', async () => {
+    const lines: MockLine[] = [
+      // Storno of a settlement, with the embed in array form (the client's
+      // inferred shape): must be excluded from ruta10.
+      { journal_entry_id: 'e3', account_number: '2611', debit_amount: 0, credit_amount: 100, journal_entries: [{ source_type: 'storno' }] },
+      { journal_entry_id: 'e3', account_number: '2650', debit_amount: 100, credit_amount: 0, journal_entries: [{ source_type: 'storno' }] },
+      // Opening balance carrying undeclared input VAT and a prior VAT debt:
+      // stays IN the projection.
+      { journal_entry_id: 'ib', account_number: '2641', debit_amount: 500, credit_amount: 0, journal_entries: [{ source_type: 'opening_balance' }] },
+      { journal_entry_id: 'ib', account_number: '2650', debit_amount: 0, credit_amount: 300, journal_entries: [{ source_type: 'opening_balance' }] },
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'monthly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta10).toBe(0)
+    expect(result.rutor.ruta48).toBe(500)
+    expect(result.rutor.ruta49).toBe(-500)
   })
 
   it('refund summary string when ruta49 is negative', async () => {

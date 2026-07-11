@@ -121,6 +121,7 @@
     "badge_beta": "Beta",
     "needs_company_tooltip": "Lägg till ett företag för att aktivera",
     "logout_sandbox": "Avsluta sandbox",
+    "trial_days_left": "Provperiod: {days, plural, =1 {1 dag} other {# dagar}} kvar",
     "ext_tic": "Företagsprofil",
     "ext_invoice_inbox": "Dokumentinkorg"
   },

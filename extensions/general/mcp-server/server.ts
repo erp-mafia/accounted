@@ -26,6 +26,7 @@ import {
   calculateVatLiability,
 } from '@/lib/reports/kpi'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { ACCOUNT_RUTA, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
@@ -1071,14 +1072,18 @@ export async function computeVatReport(
   // Paginate. An unbounded .select() caps at PostgREST's 1000-row default,
   // which silently truncates a yearly (or busy quarterly) VAT period with
   // >1000 entry lines and under-reports the momsdeklaration.
+  // journal_entries is a to-one embed: PostgREST returns an object at
+  // runtime, but the untyped client infers an array, so accept both shapes.
   const lines = await fetchAllRows<{
+    journal_entry_id: string
     account_number: string
     debit_amount: number
     credit_amount: number
+    journal_entries?: { source_type: string | null } | Array<{ source_type: string | null }>
   }>(({ from, to }) =>
     supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id)')
+      .select('journal_entry_id, account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id, source_type)')
       .eq('journal_entries.company_id', companyId)
       .in('journal_entries.status', ['posted', 'reversed'])
       // Momsredovisning entries (the settlement verifikat clearing 26xx to
@@ -1087,11 +1092,40 @@ export async function computeVatReport(
       .neq('journal_entries.source_type', 'vat_settlement')
       .gte('journal_entries.entry_date', startDate)
       .lte('journal_entries.entry_date', endDate)
+      // Stable total order for correct paging (see fetch-all.ts): without it,
+      // rows can shift across page boundaries on reports over 1000 lines.
+      .order('id', { ascending: true })
       .range(from, to)
   )
 
+  // Settlements booked WITHOUT the vat_settlement tag (manual momsomföring,
+  // SIE-imported settlements, stornos of a settlement) are excluded by shape,
+  // mirroring fetchVatAccountTotals (#984): an entry touching both a
+  // declaration account (ACCOUNT_RUTA) and a settlement net account
+  // (2650/1650) is a momsredovisning, not VAT-bearing activity. Opening
+  // balances are exempt: carried-in 26xx balances are unsettled VAT that
+  // belongs in the next declaration.
+  const declarationEntryIds = new Set<string>()
+  const netEntryIds = new Set<string>()
+  for (const line of lines) {
+    if (ACCOUNT_RUTA[line.account_number]) declarationEntryIds.add(line.journal_entry_id)
+    else if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(line.account_number)) {
+      netEntryIds.add(line.journal_entry_id)
+    }
+  }
+  const settlementShapedIds = new Set<string>()
+  for (const line of lines) {
+    const id = line.journal_entry_id
+    if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
+    const embedded = line.journal_entries
+    const entry = Array.isArray(embedded) ? embedded[0] : embedded
+    if (!entry || entry.source_type === 'opening_balance') continue
+    settlementShapedIds.add(id)
+  }
+
   const accountTotals = new Map<string, { debit: number; credit: number }>()
   for (const line of lines) {
+    if (settlementShapedIds.has(line.journal_entry_id)) continue
     const acc = line.account_number
     const existing = accountTotals.get(acc) ?? { debit: 0, credit: 0 }
     existing.debit += Number(line.debit_amount) || 0
