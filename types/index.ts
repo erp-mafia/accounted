@@ -1636,7 +1636,9 @@ export interface LinePatternEntry {
 // Per-tenant counterparty-based categorization template
 export interface CategorizationTemplate {
   id: string
-  user_id: string
+  // Pre-multi-tenant relic: nullable since 20260711100000 and never written
+  // by the learning path anymore. Scoping is company_id.
+  user_id: string | null
   company_id: string
   counterparty_name: string
   counterparty_aliases: string[]
