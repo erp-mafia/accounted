@@ -37,9 +37,12 @@ export async function GET() {
       .eq('company_id', companyId)
       .maybeSingle()
     const status = (sub as { status: string | null } | null)?.status ?? null
-    // Paying = a real subscription. Deliberately excludes 'trialing' so a
-    // trialing company still sees the upgrade path (not the manage button).
-    isPaying = status === 'active' || status === 'past_due'
+    // Paying = a real subscription. Includes 'trialing': checkout defers the
+    // first charge to the product-trial end, so a Stripe-trialing subscription
+    // means the card is already committed and the user should see the manage
+    // view, not the upgrade pitch. Companies without a subscription (product
+    // trial only, no card) stay on the upgrade path.
+    isPaying = status === 'active' || status === 'past_due' || status === 'trialing'
 
     const { data: trial } = await supabase
       .from('capability_grants')

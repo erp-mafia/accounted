@@ -121,6 +121,7 @@
     "badge_beta": "Beta",
     "needs_company_tooltip": "Add a company to enable",
     "logout_sandbox": "Exit sandbox",
+    "trial_days_left": "Trial: {days, plural, =1 {1 day} other {# days}} left",
     "ext_tic": "Company profile",
     "ext_invoice_inbox": "Document inbox"
   },

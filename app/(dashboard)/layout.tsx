@@ -13,7 +13,7 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import { getActiveCompanyId } from '@/lib/company/context'
-import { getCompanyCapabilities } from '@/lib/entitlements/has-capability'
+import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
@@ -90,6 +90,7 @@ export default async function DashboardLayout({
           team,
           isSandbox: false,
           capabilities: [],
+          trialEndsAt: null,
         }}
       >
         <AgentSheetProvider>
@@ -134,7 +135,7 @@ export default async function DashboardLayout({
     pendingOpsCount,
     { data: agentProfileIdentity },
     { data: userProfile },
-    capabilities,
+    entitlements,
     { data: allSettingsNames },
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
@@ -161,7 +162,7 @@ export default async function DashboardLayout({
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
-    getCompanyCapabilities(supabase, companyId),
+    getCompanyEntitlements(supabase, companyId),
     // Current display names for ALL the user's companies (the switcher list).
     // RLS scopes company_settings SELECT to user_company_ids(), so this bare
     // select returns exactly the caller's companies, letting non-active rows
@@ -191,6 +192,7 @@ export default async function DashboardLayout({
       team,
       isSandbox: false,
       capabilities: [],
+      trialEndsAt: null,
     }
 
     return (
@@ -281,7 +283,8 @@ export default async function DashboardLayout({
     isTeamMember,
     team,
     isSandbox,
-    capabilities,
+    capabilities: entitlements.capabilities,
+    trialEndsAt: entitlements.trialEndsAt,
   }
 
   return (
