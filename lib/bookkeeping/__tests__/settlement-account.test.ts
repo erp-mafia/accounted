@@ -48,4 +48,20 @@ describe('resolveSettlementAccount', () => {
 
     expect(result).toBe('1930')
   })
+
+  it('falls back to 1930 and warns when the row has no ledger_account', async () => {
+    const { supabase, mockResult } = createMockSupabase()
+    mockResult({ data: { ledger_account: null }, error: null })
+    const warn = vi.fn()
+
+    const result = await resolveSettlementAccount(supabase as never, 'company-1', 'ca-1', {
+      warn,
+    } as unknown as import('@/lib/logger').Logger)
+
+    expect(result).toBe('1930')
+    expect(warn).toHaveBeenCalledWith(
+      'settlement-account lookup returned no ledger_account; defaulting to 1930',
+      expect.objectContaining({ cashAccountId: 'ca-1' }),
+    )
+  })
 })

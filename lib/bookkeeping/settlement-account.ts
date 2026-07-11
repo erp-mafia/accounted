@@ -33,7 +33,19 @@ export async function resolveSettlementAccount(
       cashAccountId,
       error: error.message,
     })
+    return FALLBACK_ACCOUNT
   }
 
-  return (data?.ledger_account as string) || FALLBACK_ACCOUNT
+  // A transaction with a cash_account_id that resolves to no row, or a row
+  // with no ledger_account, is a data-integrity gap (not a normal "no cash
+  // account linked" case): the fallback fires silently otherwise, masking a
+  // bad cash_accounts row behind a plausible-looking 1930 verifikat.
+  if (!data?.ledger_account) {
+    log.warn('settlement-account lookup returned no ledger_account; defaulting to 1930', {
+      cashAccountId,
+    })
+    return FALLBACK_ACCOUNT
+  }
+
+  return data.ledger_account as string
 }

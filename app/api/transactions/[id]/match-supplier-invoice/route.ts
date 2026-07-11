@@ -265,10 +265,11 @@ export const POST = withRouteContext(
           transaction.date,
           invoice.supplier?.supplier_type || 'swedish_business',
           undefined, // supplierName (unchanged default)
-          undefined, // paymentAccount (unchanged default 1930)
-          // Pin a foreign-currency settlement to the payment-date rate so 1930
-          // equals the bank movement (kontantmetoden books the expense at
-          // payment). No-op for SEK invoices and same-rate settlements.
+          paymentAccount,
+          // Pin a foreign-currency settlement to the payment-date rate so the
+          // settlement account equals the bank movement (kontantmetoden books
+          // the expense at payment). No-op for SEK invoices and same-rate
+          // settlements.
           exchangeRateDifference !== 0 && fullSettlement ? actualBankSek : undefined,
         )
         if (journalEntry) journalEntryId = journalEntry.id
@@ -303,6 +304,8 @@ export const POST = withRouteContext(
           supabase, companyId, user.id, invoice as SupplierInvoice,
           paymentAmountSek, transaction.date,
           exchangeRateDifference !== 0 ? exchangeRateDifference : undefined,
+          undefined, // supplierName (unchanged default)
+          paymentAccount,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       }
