@@ -1098,6 +1098,39 @@ describe('learning-loop repair (issue #865)', () => {
       expect(supabase.from).not.toHaveBeenCalled()
     })
 
+    it('falls back to the pattern direction when the legacy fields cannot classify a multi-line template', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      // Both legacy fields settlement-ish → legacy direction 'unknown';
+      // the pattern's business sides say expense.
+      const existing = makeCategorizationTemplate({
+        debit_account: '2440',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+
+      const params: TemplateUpsertParams = {
+        counterpartyName: 'telia',
+        aliases: [],
+        debitAccount: '1930', // income-shaped: opposite of the learned pattern
+        creditAccount: '3001',
+        vatTreatment: null,
+        vatAccount: null,
+        category: null,
+        occurrenceCount: 1,
+        confidence: 0.45,
+        lastSeenDate: '2024-07-01',
+        source: 'user_approved',
+      }
+
+      const written = await insertOrUpdateTemplate(supabase as never, 'company-1', params, existing)
+
+      expect(written).toBe(false)
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
     it('still applies a same-direction account correction', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       const existing = makeCategorizationTemplate({
@@ -1124,6 +1157,77 @@ describe('learning-loop repair (issue #865)', () => {
 
       expect(written).toBe(true)
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
+    })
+  })
+
+  describe('reduced_12 templates across the livsmedel transition (2026-04-01)', () => {
+    const staleTemplate = () => makeCategorizationTemplate({
+      debit_account: '4010',
+      credit_account: '1930',
+      vat_treatment: 'reduced_12',
+      last_seen_date: '2026-03-10', // learned before the 12→6 livsmedel change
+    })
+
+    it('review-gates a stale 12% template applied after the transition', () => {
+      const match = { template: staleTemplate(), matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -560, date: '2026-05-02' })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.requires_review).toBe(true)
+      expect(result.direction_mismatch).toBeUndefined()
+    })
+
+    it('does not gate a 12% template re-confirmed after the transition', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5831', // e.g. restaurant/hotel: legitimately still 12%
+        credit_account: '1930',
+        vat_treatment: 'reduced_12',
+        last_seen_date: '2026-04-20',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -560, date: '2026-05-02' })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.requires_review).toBe(false)
+    })
+
+    it('does not gate pre-transition transaction dates or other rates', () => {
+      const match = { template: staleTemplate(), matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const backdated = makeTransaction({ amount: -560, date: '2026-03-20' })
+      expect(
+        buildMappingResultFromCounterpartyTemplate(match, backdated, 'enskild_firma').requires_review
+      ).toBe(false)
+
+      const t25 = makeCategorizationTemplate({
+        vat_treatment: 'standard_25',
+        last_seen_date: '2026-03-10',
+      })
+      const match25 = { template: t25, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -560, date: '2026-05-02' })
+      expect(
+        buildMappingResultFromCounterpartyTemplate(match25, tx, 'enskild_firma').requires_review
+      ).toBe(false)
+    })
+
+    it('review-gates a stale multi-line pattern carrying a 12% VAT entry', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '4010',
+        credit_account: '1930',
+        vat_treatment: null,
+        last_seen_date: '2026-02-01',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.12 },
+          { account: '4010', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1120, date: '2026-05-02' })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.requires_review).toBe(true)
     })
   })
 

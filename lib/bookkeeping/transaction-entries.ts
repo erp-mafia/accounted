@@ -194,6 +194,8 @@ export function buildTransactionEntryLines(
       // Has output VAT. Net the credits against any debit VAT legs: a
       // mirrored reverse-charge refund carries a credit 2645 + debit 2614
       // pair that nets to zero, so the business line keeps the gross amount.
+      // Ordinary output-VAT lines are credit-only (debit_amount 0), so the
+      // net equals the old credit-sum for every non-RC path.
       const vatCredit = roundOre(
         mappingResult.vat_lines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
       )

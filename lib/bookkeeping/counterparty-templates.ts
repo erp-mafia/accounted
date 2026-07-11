@@ -180,6 +180,26 @@ function rateToTreatment(rate: number): string | null {
   return null
 }
 
+/**
+ * Livsmedel VAT dropped from 12% to 6% on 2026-04-01 (Prop. 2025/26:55);
+ * restaurant/hotel/camping stay at 12%. A 12% template that has not been
+ * confirmed since the transition may belong to either group, so its match is
+ * review-gated until a post-transition approval refreshes last_seen_date
+ * (re-approval keeps 12%, a correction relearns 6%).
+ */
+const REDUCED_12_TRANSITION_DATE = '2026-04-01'
+
+function isStaleReduced12Match(
+  hasReduced12: boolean,
+  transactionDate: string,
+  lastSeenDate: string | null
+): boolean {
+  if (!hasReduced12) return false
+  // ISO yyyy-mm-dd strings: plain comparison is chronological
+  if (transactionDate < REDUCED_12_TRANSITION_DATE) return false
+  return !lastSeenDate || lastSeenDate < REDUCED_12_TRANSITION_DATE
+}
+
 // ── Lookup ─────────────────────────────────────────────────────
 
 export interface CounterpartyTemplateMatch {
@@ -399,7 +419,9 @@ export function buildMappingResultFromCounterpartyTemplate(
     credit_account: tmpl.credit_account,
     risk_level: 'NONE',
     confidence: match.confidence,
-    requires_review: false,
+    requires_review: isStaleReduced12Match(
+      tmpl.vat_treatment === 'reduced_12', transaction.date, tmpl.last_seen_date
+    ),
     default_private: isPrivate,
     vat_lines: vatLines,
     description: `Motpart: ${tmpl.counterparty_name} (${tmpl.occurrence_count} ggr)`,
@@ -546,7 +568,11 @@ function buildMultiLineMappingResult(
     credit_account: mirror ? tmpl.debit_account : tmpl.credit_account,
     risk_level: 'NONE',
     confidence: match.confidence,
-    requires_review: mirror,
+    requires_review: mirror || isStaleReduced12Match(
+      pattern.some(e => e.type === 'vat' && e.vat_rate === 0.12),
+      transaction.date,
+      tmpl.last_seen_date
+    ),
     ...(mirror ? { direction_mismatch: true } : {}),
     default_private: false,
     vat_lines: allLines,
@@ -636,7 +662,13 @@ export async function insertOrUpdateTemplate(
     const newSource = resolveSource(existing.source, params.source)
 
     if (isCorrection) {
-      const existingDirection = legacyTemplateDirection(existing.debit_account, existing.credit_account)
+      // For multi-line templates the legacy fields can both be settlement-ish
+      // (direction 'unknown'); fall back to the pattern's business sides so
+      // the opposite-direction guard still holds.
+      let existingDirection = legacyTemplateDirection(existing.debit_account, existing.credit_account)
+      if (existingDirection === 'unknown' && existing.line_pattern && existing.line_pattern.length > 0) {
+        existingDirection = patternDirection(existing.line_pattern)
+      }
       const incomingDirection = legacyTemplateDirection(params.debitAccount, params.creditAccount)
       if (
         existingDirection !== 'unknown' &&
