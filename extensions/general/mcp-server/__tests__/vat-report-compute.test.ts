@@ -26,6 +26,7 @@ function mockSupabaseWithLines(lines: MockLine[]) {
   const terminal = { data: lines, error: null }
   const chain: Record<string, () => unknown> = {}
   chain.range = () => terminal
+  chain.order = () => chain
   chain.lte = () => chain
   chain.gte = () => chain
   chain.neq = () => chain

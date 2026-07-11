@@ -1092,6 +1092,9 @@ export async function computeVatReport(
       .neq('journal_entries.source_type', 'vat_settlement')
       .gte('journal_entries.entry_date', startDate)
       .lte('journal_entries.entry_date', endDate)
+      // Stable total order for correct paging (see fetch-all.ts): without it,
+      // rows can shift across page boundaries on reports over 1000 lines.
+      .order('id', { ascending: true })
       .range(from, to)
   )
 
