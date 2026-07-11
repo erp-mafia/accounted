@@ -768,7 +768,7 @@ async function categorizeTransactionCore(
   // Upsert counterparty template for future auto-matching
   try {
     await upsertCounterpartyTemplate(
-      supabase, userId, transaction as Transaction, mappingResult, 'user_approved'
+      supabase, companyId, transaction as Transaction, mappingResult, 'user_approved'
     )
   } catch {
     // Non-critical

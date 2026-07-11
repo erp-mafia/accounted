@@ -663,7 +663,9 @@ export const POST = withRouteContext(
       }
     }
 
-    if (is_business && transaction.merchant_name) {
+    // direction_mismatch = a mirrored refund/repayment booking; learning it
+    // as a rule would store backwards accounts for the merchant.
+    if (is_business && transaction.merchant_name && !mappingResult.direction_mismatch) {
       try {
         await saveUserMappingRule(
           supabase,
@@ -681,8 +683,10 @@ export const POST = withRouteContext(
     }
 
     try {
+      // Templates are company-scoped since the multi-tenant refactor: passing
+      // user.id here broke learning entirely (FK/RLS reject the write).
       await upsertCounterpartyTemplate(
-        supabase, user.id, transaction as Transaction, mappingResult, 'user_approved',
+        supabase, companyId, transaction as Transaction, mappingResult, 'user_approved',
       )
     } catch (err) {
       txLog.warn('failed to upsert counterparty template (non-critical)', err as Error)

@@ -1595,6 +1595,11 @@ export interface MappingResult {
   vat_lines: VatJournalLine[]
   all_lines_complete?: boolean  // when true, vat_lines contains ALL non-settlement lines
   description: string
+  // Set when a matched counterparty template's learned direction contradicts
+  // the transaction sign (e.g. an incoming refund matching an expense-learned
+  // template). The result is mirrored and review-gated, and must never be
+  // learned back into the template (it would flip the learned accounts).
+  direction_mismatch?: boolean
   // Dimensions bag applied to the business (expense/revenue) lines of the
   // generated entry: from a counterparty template's line pattern or an
   // explicit categorize param (dimensions PR7). Bank/VAT lines stay untagged.

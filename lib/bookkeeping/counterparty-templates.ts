@@ -9,6 +9,8 @@ import {
   getVatRate,
 } from './vat-entries'
 import { dimensionsBagKey } from './dimension-resolver'
+import { resolveSekAmount } from './currency-utils'
+import { createLogger } from '@/lib/logger'
 import type {
   CategorizationTemplate,
   CategorizationTemplateSource,
@@ -20,6 +22,8 @@ import type {
   VatTreatment,
 } from '@/types'
 import type { SIEVoucher } from '@/lib/import/types'
+
+const log = createLogger('counterparty-templates')
 
 // ── Normalization ──────────────────────────────────────────────
 
@@ -154,6 +158,25 @@ const VAT_ACCOUNT_TREATMENT: Record<string, string> = {
   '2634': 'reverse_charge',
 }
 
+/**
+ * Reverse-charge VAT accounts (fiktiv in-/utgående moms). These net to zero
+ * inside a voucher, so SIE pattern extraction must not count them as
+ * deductible VAT: doing so poisons the non-VAT base the business ratios are
+ * computed against. 2647 = domestic RC input (ML 16 kap).
+ */
+const REVERSE_CHARGE_VAT_ACCOUNTS = new Set(['2614', '2624', '2634', '2645', '2647'])
+
+/** Legal Swedish VAT rates a learned pattern is allowed to carry. */
+const LEGAL_VAT_RATES = [0.25, 0.12, 0.06]
+
+/** Map a learned VAT rate back to its treatment string. */
+function rateToTreatment(rate: number): string | null {
+  if (rate === 0.25) return 'standard_25'
+  if (rate === 0.12) return 'reduced_12'
+  if (rate === 0.06) return 'reduced_6'
+  return null
+}
+
 // ── Lookup ─────────────────────────────────────────────────────
 
 export interface CounterpartyTemplateMatch {
@@ -269,9 +292,43 @@ export async function findCounterpartyTemplatesBatch(
 
 // ── Build MappingResult ────────────────────────────────────────
 
+/** Which side of a template the money settles on. */
+type TemplateDirection = 'expense' | 'income' | 'unknown'
+
+/**
+ * Learned direction of a legacy (single debit/credit) template: expenses
+ * settle on the credit side (credit bank, debit cost), income settles on the
+ * debit side. 'unknown' when neither or both accounts look like settlement.
+ */
+function legacyTemplateDirection(debitAccount: string, creditAccount: string): TemplateDirection {
+  const debitSettles = isSettlementAccount(debitAccount)
+  const creditSettles = isSettlementAccount(creditAccount)
+  if (creditSettles && !debitSettles) return 'expense'
+  if (debitSettles && !creditSettles) return 'income'
+  return 'unknown'
+}
+
+/** Learned direction of a multi-line pattern: read off the business sides. */
+function patternDirection(pattern: LinePatternEntry[]): TemplateDirection {
+  const business = pattern.filter((e) => e.type === 'business')
+  if (business.length === 0) return 'unknown'
+  const debitCount = business.filter((b) => b.side === 'debit').length
+  if (debitCount === business.length) return 'expense'
+  if (debitCount === 0) return 'income'
+  return 'unknown'
+}
+
 /**
  * Convert a counterparty template match into a MappingResult
  * (same shape the mapping engine expects).
+ *
+ * When the transaction's sign contradicts the template's learned direction
+ * (an incoming refund matching an expense-learned template, or an outgoing
+ * repayment matching an income-learned one), booking the template as-is
+ * would post backwards: debit an expense account for money coming IN. Those
+ * matches are mirrored instead (settle against the bank, reduce the business
+ * account), flagged requires_review, and marked direction_mismatch so they
+ * are never learned back into the template.
  */
 export function buildMappingResultFromCounterpartyTemplate(
   match: CounterpartyTemplateMatch,
@@ -279,15 +336,27 @@ export function buildMappingResultFromCounterpartyTemplate(
   _entityType: EntityType
 ): MappingResult {
   const tmpl = match.template
+  const isExpense = transaction.amount < 0
 
   // Multi-line pattern path
   if (tmpl.line_pattern && tmpl.line_pattern.length > 0) {
-    return buildMultiLineMappingResult(tmpl, match, transaction)
+    const learned = patternDirection(tmpl.line_pattern)
+    const mirror =
+      (learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)
+    return buildMultiLineMappingResult(tmpl, match, transaction, mirror)
   }
 
-  // Legacy single debit/credit path
-  const absAmount = Math.abs(transaction.amount)
-  const isExpense = transaction.amount < 0
+  // Legacy single debit/credit path.
+  // Journal lines are always booked in SEK: compute template amounts from the
+  // SEK-resolved amount so foreign-currency transactions stay balanced.
+  const absAmount = Math.abs(resolveSekAmount(
+    transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
+  ))
+
+  const learned = legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account)
+  if ((learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)) {
+    return buildLegacyMismatchResult(tmpl, match, absAmount, isExpense)
+  }
 
   const vatLines: VatJournalLine[] = []
   if (isExpense && tmpl.vat_treatment) {
@@ -335,6 +404,51 @@ export function buildMappingResultFromCounterpartyTemplate(
 }
 
 /**
+ * Mirrored result for a sign-mismatched legacy template match (see
+ * buildMappingResultFromCounterpartyTemplate). Settlement and business
+ * accounts swap sides; a refund of an expense with deductible input VAT also
+ * mirrors the VAT leg (credit 2641) so the moms follows the correction.
+ * Reverse-charge and income-learned mismatches book gross: their VAT legs
+ * do not survive mirroring through the legacy line builder, and the entry
+ * is review-gated either way.
+ */
+function buildLegacyMismatchResult(
+  tmpl: CategorizationTemplate,
+  match: CounterpartyTemplateMatch,
+  absAmount: number,
+  isExpense: boolean
+): MappingResult {
+  const vatLines: VatJournalLine[] = []
+  if (!isExpense && tmpl.vat_treatment && tmpl.vat_treatment !== 'reverse_charge') {
+    const vatRate = getVatRate(tmpl.vat_treatment as VatTreatment)
+    if (vatRate > 0) {
+      const vatLine = generateInputVatLine(absAmount, vatRate)
+      if (vatLine) {
+        vatLines.push({
+          account_number: vatLine.account_number,
+          debit_amount: 0,
+          credit_amount: vatLine.debit_amount,
+          description: vatLine.line_description || '',
+        })
+      }
+    }
+  }
+
+  return {
+    rule: null,
+    debit_account: tmpl.credit_account,
+    credit_account: tmpl.debit_account,
+    risk_level: 'NONE',
+    confidence: match.confidence,
+    requires_review: true,
+    direction_mismatch: true,
+    default_private: false,
+    vat_lines: vatLines,
+    description: `Motpart: ${tmpl.counterparty_name} (retur/återbetalning)`,
+  }
+}
+
+/**
  * Build a MappingResult from a multi-line counterparty template pattern.
  *
  * VAT is computed from rate (exact), business/tax from ratio against non-VAT subtotal.
@@ -344,10 +458,19 @@ export function buildMappingResultFromCounterpartyTemplate(
 function buildMultiLineMappingResult(
   tmpl: CategorizationTemplate,
   match: CounterpartyTemplateMatch,
-  transaction: Transaction
+  transaction: Transaction,
+  mirror: boolean = false
 ): MappingResult {
   const pattern = tmpl.line_pattern!
-  const absAmount = Math.abs(transaction.amount)
+  // Journal lines are always booked in SEK (see legacy path).
+  const absAmount = Math.abs(resolveSekAmount(
+    transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
+  ))
+
+  // Sign mismatch (refund/repayment): flip every learned side so the mirrored
+  // entry reduces what the original pattern built up.
+  const side = (s: 'debit' | 'credit'): 'debit' | 'credit' =>
+    mirror ? (s === 'debit' ? 'credit' : 'debit') : s
 
   const allLines: VatJournalLine[] = []
 
@@ -359,8 +482,8 @@ function buildMultiLineMappingResult(
       totalVat += vatAmount
       allLines.push({
         account_number: entry.account,
-        debit_amount: entry.side === 'debit' ? vatAmount : 0,
-        credit_amount: entry.side === 'credit' ? vatAmount : 0,
+        debit_amount: side(entry.side) === 'debit' ? vatAmount : 0,
+        credit_amount: side(entry.side) === 'credit' ? vatAmount : 0,
         description: '',
       })
     }
@@ -377,8 +500,8 @@ function buildMultiLineMappingResult(
       nonVatAllocated += amount
       allLines.push({
         account_number: entry.account,
-        debit_amount: entry.side === 'debit' ? amount : 0,
-        credit_amount: entry.side === 'credit' ? amount : 0,
+        debit_amount: side(entry.side) === 'debit' ? amount : 0,
+        credit_amount: side(entry.side) === 'credit' ? amount : 0,
         description: '',
         // Dimensions PR7: business lines carry the pattern's learned bag;
         // VAT/tax/rounding lines stay untagged.
@@ -394,7 +517,7 @@ function buildMultiLineMappingResult(
   const roundingDiff = Math.round((absAmount - totalAllocated) * 100) / 100
   if (roundingDiff !== 0) {
     // Determine the side for the rounding line (same side as business lines)
-    const businessSide = pattern.find(e => e.type === 'business')?.side ?? 'credit'
+    const businessSide = side(pattern.find(e => e.type === 'business')?.side ?? 'credit')
     allLines.push({
       account_number: '3740',
       debit_amount: businessSide === 'debit' ? Math.abs(roundingDiff) : 0,
@@ -405,15 +528,18 @@ function buildMultiLineMappingResult(
 
   return {
     rule: null,
-    debit_account: tmpl.debit_account,
-    credit_account: tmpl.credit_account,
+    debit_account: mirror ? tmpl.credit_account : tmpl.debit_account,
+    credit_account: mirror ? tmpl.debit_account : tmpl.credit_account,
     risk_level: 'NONE',
     confidence: match.confidence,
-    requires_review: false,
+    requires_review: mirror,
+    ...(mirror ? { direction_mismatch: true } : {}),
     default_private: false,
     vat_lines: allLines,
     all_lines_complete: true,
-    description: `Motpart: ${tmpl.counterparty_name} (${tmpl.occurrence_count} ggr)`,
+    description: mirror
+      ? `Motpart: ${tmpl.counterparty_name} (retur/återbetalning)`
+      : `Motpart: ${tmpl.counterparty_name} (${tmpl.occurrence_count} ggr)`,
   }
 }
 
@@ -437,20 +563,29 @@ export interface TemplateUpsertParams {
 /**
  * Low-level insert-or-update for a counterparty template.
  *
- * - existingTemplate undefined → DB lookup by (userId, counterpartyName)
+ * - existingTemplate undefined → DB lookup by (companyId, counterpartyName)
  * - existingTemplate null → skip lookup (batch mode: caller knows none exists)
  * - existingTemplate object → use directly (batch mode: pre-fetched)
  *
  * Re-approval: accumulates occurrence_count, recalculates confidence from total.
- * Correction: uses params.occurrenceCount/confidence, updates accounts.
+ * Correction: uses params.occurrenceCount/confidence, updates accounts. A
+ * "correction" whose settlement direction opposes the existing template's
+ * (a refund shape against an expense-learned template) is skipped: it is a
+ * different kind of event, not a correction, and must never flip the
+ * learned accounts.
  * Both paths use resolveSource() so lower-priority sources never overwrite higher.
+ *
+ * Returns true when a row was actually written. Write failures are logged
+ * (learning is non-critical, but it must never fail silently again: the
+ * post-refactor NOT NULL mismatch went unnoticed for months because these
+ * results were discarded).
  */
 export async function insertOrUpdateTemplate(
   supabase: SupabaseClient,
   companyId: string,
   params: TemplateUpsertParams,
   existingTemplate?: CategorizationTemplate | null
-): Promise<void> {
+): Promise<boolean> {
   // Resolve existing template
   let existing: CategorizationTemplate | null = null
   if (existingTemplate === undefined) {
@@ -463,6 +598,12 @@ export async function insertOrUpdateTemplate(
     existing = data as CategorizationTemplate | null
   } else {
     existing = existingTemplate
+  }
+
+  const logContext = {
+    companyId,
+    counterpartyName: params.counterpartyName,
+    source: params.source,
   }
 
   if (existing) {
@@ -481,7 +622,17 @@ export async function insertOrUpdateTemplate(
     const newSource = resolveSource(existing.source, params.source)
 
     if (isCorrection) {
-      await supabase
+      const existingDirection = legacyTemplateDirection(existing.debit_account, existing.credit_account)
+      const incomingDirection = legacyTemplateDirection(params.debitAccount, params.creditAccount)
+      if (
+        existingDirection !== 'unknown' &&
+        incomingDirection !== 'unknown' &&
+        existingDirection !== incomingDirection
+      ) {
+        return false
+      }
+
+      const { error } = await supabase
         .from('categorization_templates')
         .update({
           debit_account: params.debitAccount,
@@ -497,12 +648,16 @@ export async function insertOrUpdateTemplate(
           line_pattern: params.linePattern !== undefined ? params.linePattern : existing.line_pattern,
         })
         .eq('id', existing.id)
+      if (error) {
+        log.error('counterparty template correction failed', { ...logContext, error: error.message })
+        return false
+      }
     } else {
       // Re-approval: accumulate count, recalculate confidence from total
       const newCount = existing.occurrence_count + params.occurrenceCount
       const newConfidence = calculateConfidence(newCount)
 
-      await supabase
+      const { error } = await supabase
         .from('categorization_templates')
         .update({
           occurrence_count: newCount,
@@ -514,9 +669,13 @@ export async function insertOrUpdateTemplate(
           ...(params.linePattern !== undefined ? { line_pattern: params.linePattern } : {}),
         })
         .eq('id', existing.id)
+      if (error) {
+        log.error('counterparty template re-approval failed', { ...logContext, error: error.message })
+        return false
+      }
     }
   } else {
-    await supabase
+    const { error } = await supabase
       .from('categorization_templates')
       .insert({
         company_id: companyId,
@@ -533,7 +692,13 @@ export async function insertOrUpdateTemplate(
         last_seen_date: params.lastSeenDate,
         source: params.source,
       })
+    if (error) {
+      log.error('counterparty template insert failed', { ...logContext, error: error.message })
+      return false
+    }
   }
+
+  return true
 }
 
 /**
@@ -547,6 +712,10 @@ export async function upsertCounterpartyTemplate(
   mappingResult: MappingResult,
   source: CategorizationTemplateSource
 ): Promise<void> {
+  // Mirrored refund/repayment bookings must never be learned: they would
+  // flip the template's accounts and poison future matches.
+  if (mappingResult.direction_mismatch) return
+
   const rawName = transaction.merchant_name || transaction.description
   if (!rawName) return
 
@@ -652,6 +821,7 @@ interface VoucherLinePattern {
   entries: LinePatternEntry[]
   settlementAccount: string
   settlementSide: 'debit' | 'credit'
+  hasReverseCharge: boolean
 }
 
 /**
@@ -665,12 +835,19 @@ function extractVoucherLinePattern(
   const settlement: PatternLine[] = []
   const vat: PatternLine[] = []
   const business: PatternLine[] = []
+  let hasReverseCharge = false
 
   for (const line of lines) {
     if (isSettlementAccount(line.account)) {
       settlement.push(line)
     } else if (isRoundingAccount(line.account)) {
       // Skip 3740 lines: rounding artifacts
+      continue
+    } else if (REVERSE_CHARGE_VAT_ACCOUNTS.has(line.account)) {
+      // Fiktiv moms nets to zero inside the voucher: exclude it from the VAT
+      // total (it must not shrink the base the business ratios use) and only
+      // remember that the counterparty is reverse-charge.
+      hasReverseCharge = true
       continue
     } else if (isVatAccount(line.account)) {
       vat.push(line)
@@ -699,10 +876,23 @@ function extractVoucherLinePattern(
 
   // VAT lines: store vat_rate, not ratio
   for (const v of vat) {
-    const treatment = VAT_ACCOUNT_TREATMENT[v.account]
-    if (!treatment) continue
-    const rate = vatTreatmentToRate(treatment)
-    if (rate === 0) continue
+    let rate: number
+    if (v.account === '2641' && vat.length === 1) {
+      // 2641 (debiterad ingående moms) is rate-agnostic in BAS: the account
+      // alone says nothing about 25/12/6%. Infer the rate from the voucher's
+      // own amounts and snap it to a legal rate. If nothing snaps, drop the
+      // VAT leg rather than learn a wrong rate. Only safe with a single VAT
+      // line: with several, each line's base is unknowable.
+      const observed = Math.abs(v.amount) / nonVatTotal
+      const snapped = LEGAL_VAT_RATES.find(r => Math.abs(observed - r) <= 0.015)
+      if (snapped === undefined) continue
+      rate = snapped
+    } else {
+      const treatment = VAT_ACCOUNT_TREATMENT[v.account]
+      if (!treatment) continue
+      rate = vatTreatmentToRate(treatment)
+      if (rate === 0) continue
+    }
     entries.push({
       account: v.account,
       type: 'vat',
@@ -731,6 +921,7 @@ function extractVoucherLinePattern(
     entries,
     settlementAccount: settlement[0].account,
     settlementSide,
+    hasReverseCharge,
   }
 }
 
@@ -998,12 +1189,28 @@ export async function populateTemplatesFromSieVouchers(
       creditAccount = item.settlementAccount
     }
 
-    // VAT info from first VAT entry (for legacy fields)
+    // VAT info from first VAT entry (for legacy fields). The learned rate is
+    // authoritative: for 2641 it was inferred from the voucher amounts, so
+    // mapping it back through the account table would re-hardcode 25%.
     const firstVat = vatEntries[0]
-    const vatAccount = firstVat?.account ?? null
-    const vatTreatment = vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null
+    let vatAccount = firstVat?.account ?? null
+    let vatTreatment = firstVat?.vat_rate !== undefined
+      ? rateToTreatment(firstVat.vat_rate)
+      : (vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null)
 
-    await insertOrUpdateTemplate(supabase, companyId, {
+    // Reverse-charge counterparty (fiktiv moms in every source voucher, no
+    // deductible VAT): the simple builder regenerates the RC legs from the
+    // treatment, so record it on the legacy fields.
+    if (
+      isSimple &&
+      !vatAccount &&
+      item.pattern.voucherPatterns.every(vp => vp.hasReverseCharge)
+    ) {
+      vatTreatment = 'reverse_charge'
+      vatAccount = '2645'
+    }
+
+    const written = await insertOrUpdateTemplate(supabase, companyId, {
       counterpartyName: item.normalizedName,
       aliases: item.aliases,
       debitAccount,
@@ -1018,7 +1225,7 @@ export async function populateTemplatesFromSieVouchers(
       linePattern: isSimple ? null : avgPattern,
     }, existing)
 
-    count += 1
+    if (written) count += 1
   }
 
   return count
