@@ -31,8 +31,10 @@ describe('resolveSettlementAccount', () => {
 
     await expect(
       resolveSettlementAccount(supabase as never, 'company-1', 'ca-1', noopLog),
+    ).rejects.toBeInstanceOf(BookkeepingDatabaseError)
+    await expect(
+      resolveSettlementAccount(supabase as never, 'company-1', 'ca-1', noopLog),
     ).rejects.toMatchObject({
-      constructor: BookkeepingDatabaseError,
       operation: 'resolve_settlement_account',
       message: expect.stringContaining('boom'),
     })
