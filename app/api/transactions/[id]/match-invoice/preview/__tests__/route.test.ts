@@ -322,5 +322,38 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
       expect(status).toBe(200)
       expect(body.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(1250)
     })
+
+    it('aborts with 500 BOOKKEEPING_DATABASE_ERROR when the cash_accounts lookup errors', async () => {
+      const tx = makeTransaction({
+        id: 'tx-7',
+        amount: 1250,
+        currency: 'SEK',
+        date: '2026-05-30',
+        invoice_id: null,
+        cash_account_id: 'ca-broken',
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        currency: 'SEK',
+        total: 1250,
+        remaining_amount: 1250,
+        paid_amount: 0,
+        journal_entry_id: 'je-original',
+      })
+      enqueue({ data: tx, error: null })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+      enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
+
+      const request = createMockRequest('/api/transactions/tx-7/match-invoice/preview', {
+        searchParams: { invoice_id: VALID_UUID },
+      })
+      const response = await GET(request, createMockRouteParams({ id: 'tx-7' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(500)
+      expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
+    })
   })
 })

@@ -170,4 +170,51 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       '1930',
     )
   })
+
+  it('rejects the operation (mutates nothing) when the cash_accounts lookup errors', async () => {
+    // Regression: an explicit cash_account_id almost certainly resolves to a
+    // non-1930 account, so a transient lookup failure must not silently
+    // degrade to 1930 -- the same misbooking risk this fix exists to close,
+    // just triggered by infra flakiness instead of a stale setting.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 12500,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: 'ca-broken',
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
+    enqueue({ data: null, error: null }) // dispatcher marks the op 'rejected'
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+  })
 })

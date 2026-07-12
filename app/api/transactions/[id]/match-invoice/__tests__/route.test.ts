@@ -795,6 +795,43 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         }),
       )
     })
+
+    it('aborts with 500 BOOKKEEPING_DATABASE_ERROR (mutates nothing) when the cash_accounts lookup errors', async () => {
+      // Regression: an explicit cash_account_id almost certainly resolves to
+      // a non-1930 account, so a transient lookup failure must not silently
+      // degrade to 1930 -- the same misbooking risk this fix exists to close,
+      // just triggered by infra flakiness instead of a stale setting.
+      const tx = makeTransaction({
+        id: 'tx-1',
+        amount: 12500,
+        invoice_id: null,
+        date: '2024-06-15',
+        cash_account_id: 'ca-broken',
+      })
+      const invoice = makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+      })
+
+      enqueue({ data: tx, error: null })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: [], error: null }) // hard-duplicate check
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+      enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
+
+      const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+        method: 'POST',
+        body: { invoice_id: VALID_UUID },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(500)
+      expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
+      expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    })
   })
 
   it('returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING when tx amount exceeds invoice remaining', async () => {
