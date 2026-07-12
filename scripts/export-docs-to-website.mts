@@ -28,6 +28,18 @@ if (!buildErrorReferenceMd || !buildResourcePages || !buildReferenceOverviewMd) 
 
 const WEBSITE = resolve('/Users/jakobwennberg/gnubok-website')
 
+/**
+ * The website is served from www.accounted.se while the API (and everything
+ * under /api/v1 and /.well-known) lives on app.gnubok.se — root-relative links
+ * to app-served resources would 404 on the website, so absolutise them.
+ */
+const APP_ORIGIN = 'https://app.gnubok.se'
+function adaptForWebsite(md: string): string {
+  return md
+    .replaceAll('](/api/v1/', `](${APP_ORIGIN}/api/v1/`)
+    .replaceAll('](/.well-known/', `](${APP_ORIGIN}/.well-known/`)
+}
+
 function write(rel: string, content: string) {
   const out = resolve(WEBSITE, rel)
   mkdirSync(dirname(out), { recursive: true })
@@ -35,13 +47,13 @@ function write(rel: string, content: string) {
   console.log(`wrote ${out} (${content.length} chars)`)
 }
 
-const errorsMd = buildErrorReferenceMd()
+const errorsMd = adaptForWebsite(buildErrorReferenceMd())
 write(
   'lib/docs/content/errors.generated.ts',
   `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const ERRORS_MD = ${JSON.stringify(errorsMd)}\n`,
 )
 
-const refOverview = buildReferenceOverviewMd()
+const refOverview = adaptForWebsite(buildReferenceOverviewMd())
 const refPages = buildResourcePages()
 const slugs = refPages.map((p: { slug: string }) => p.slug)
 
@@ -49,7 +61,7 @@ const pagesPayload = refPages.map((p: { slug: string; label: string; description
   slug: p.slug,
   label: p.label,
   description: p.description,
-  markdown: p.markdown,
+  markdown: adaptForWebsite(p.markdown),
 }))
 
 write(
@@ -59,7 +71,7 @@ write(
   )} as const\n\nexport const RESOURCE_PAGES: ResourcePage[] = ${JSON.stringify(pagesPayload, null, 2)}\n\nexport function findResourcePage(slug: string): ResourcePage | undefined {\n  return RESOURCE_PAGES.find((p) => p.slug === slug)\n}\n`,
 )
 
-const connectClaudeMd = connectClaude.CONNECT_CLAUDE_MD
+const connectClaudeMd = connectClaude.CONNECT_CLAUDE_MD && adaptForWebsite(connectClaude.CONNECT_CLAUDE_MD)
 if (!connectClaudeMd) {
   console.error('Missing CONNECT_CLAUDE_MD export. Inspect:', { connectClaudeKeys: Object.keys(connectClaude) })
   process.exit(1)
