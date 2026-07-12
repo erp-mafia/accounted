@@ -79,6 +79,43 @@ export function formatVoucherLabel(
   return num === '' ? series : `${series}-${num}`
 }
 
+/**
+ * Is `journalEntryId` a LIVE link, i.e. does it reference a posted verifikat?
+ *
+ * A transaction can carry a non-null `journal_entry_id` that no longer points
+ * at a live booking: reversing (storno) or correcting an entry marks the
+ * original `reversed`, and while both flows try to detach or re-point the
+ * transaction (engine.ts `reverseEntry`, storno-service `relinkTransactions-
+ * ToEntry`), those re-links are best-effort and rows reversed before #726
+ * (2026-06-15) were never touched at all. Such a transaction reads as "utan
+ * koppling" in the UI: the transactions page enriches only `status='posted'`
+ * links, so a reversed pointer renders as no link, yet the raw column is still
+ * set.
+ *
+ * The "already linked" guards on the re-booking paths must mirror that same
+ * posted-only predicate. If they treat any non-null pointer as linked, a
+ * transaction the UI shows as free can never be re-linked or re-categorized
+ * (issue #988). Returns true ONLY when the pointer references a posted entry;
+ * null / missing / reversed / cancelled / draft all count as no live link, so
+ * the caller may overwrite the stale pointer. Fails closed (returns true) on a
+ * read error so a transient lookup blip can never detach a genuinely live link.
+ */
+export async function hasLiveJournalEntryLink(
+  supabase: SupabaseClient,
+  companyId: string,
+  journalEntryId: string | null | undefined,
+): Promise<boolean> {
+  if (!journalEntryId) return false
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('status')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return true
+  return data?.status === 'posted'
+}
+
 export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
   userId: string,
@@ -103,7 +140,15 @@ export async function linkTransactionToJournalEntry(
     return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
   }
 
-  if (transaction.journal_entry_id) {
+  // Only a LIVE (posted) pointer blocks re-linking. A pointer left behind by a
+  // storno/correction references a 'reversed' entry: the UI already shows the
+  // row as "utan koppling", so the guard must agree and let the user re-link it
+  // to another verifikat (issue #988). The stale pointer is overwritten by the
+  // optimistic-locked UPDATE below.
+  if (
+    transaction.journal_entry_id &&
+    (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id as string))
+  ) {
     return {
       ok: false,
       code: 'LINK_TX_TX_ALREADY_LINKED',
@@ -211,14 +256,20 @@ export async function linkTransactionToJournalEntry(
   // if a subsequent step fails: otherwise a partial state would persist
   // (tx linked, invoice unchanged, no payment row).
   const priorTxState = {
-    journal_entry_id: transaction.journal_entry_id, // validated null above
+    // null, or a stale 'reversed'-entry id we're clearing (validated not-live above)
+    journal_entry_id: transaction.journal_entry_id,
     invoice_id: transaction.invoice_id,
     potential_invoice_id: transaction.potential_invoice_id,
     potential_supplier_invoice_id: transaction.potential_supplier_invoice_id,
     is_business: transaction.is_business,
   }
 
-  const { error: updateTxError } = await supabase
+  // Optimistic lock on the pointer we validated: null for a free row, or the
+  // exact stale id for one we're detaching from a reversed entry. Locking on
+  // the known value (rather than always .is(null)) lets the stale-pointer
+  // overwrite through while still turning a concurrent re-link into a no-op.
+  const previousJournalEntryId = (transaction.journal_entry_id as string | null) ?? null
+  const txUpdate = supabase
     .from('transactions')
     .update({
       journal_entry_id: journalEntryId,
@@ -229,7 +280,9 @@ export async function linkTransactionToJournalEntry(
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
-    .is('journal_entry_id', null)
+  const { error: updateTxError } = await (previousJournalEntryId === null
+    ? txUpdate.is('journal_entry_id', null)
+    : txUpdate.eq('journal_entry_id', previousJournalEntryId))
 
   if (updateTxError) {
     return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }

@@ -12,7 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
+import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
@@ -6397,7 +6397,10 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
       if (txError || !tx) throw new Error('Transaction not found')
-      if (tx.journal_entry_id) {
+      // Only a live posted link blocks re-linking; a stale pointer at a reversed
+      // entry (storno/correction) reads as "utan koppling" and must stay
+      // re-linkable (issue #988). The commit handler re-validates the same way.
+      if (tx.journal_entry_id && (await hasLiveJournalEntryLink(supabase, companyId, tx.journal_entry_id))) {
         throw new Error('Transaction is already linked to a journal entry')
       }
 

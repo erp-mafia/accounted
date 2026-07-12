@@ -4,6 +4,7 @@ import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 
 // ============================================================
 // Types
@@ -620,7 +621,11 @@ export async function manualLink(
     return { success: false, error: 'Transaktionen kunde inte hittas.' }
   }
 
-  if (tx.journal_entry_id) {
+  // Only a LIVE (posted) pointer blocks re-linking. A transaction still pointing
+  // at a 'reversed' entry (storno/correction left the link behind) reads as
+  // "utan koppling" in the UI, so it must be re-linkable to another verifikat
+  // (issue #988). The stale pointer is overwritten by the locked UPDATE below.
+  if (tx.journal_entry_id && (await hasLiveJournalEntryLink(supabase, companyId, tx.journal_entry_id))) {
     return { success: false, error: 'Transaktionen är redan kopplad till en verifikation.' }
   }
 
@@ -683,11 +688,14 @@ export async function manualLink(
   // already-matched voucher when the user opts in via "Visa även matchade
   // verifikationer", so this can't happen by accident.
 
-  // Apply link. The .is('journal_entry_id', null) guard re-checks the "not
-  // already linked" precondition inside the write itself: the read above is
-  // advisory, and two concurrent linkers would otherwise silently re-point the
-  // row (same optimistic-lock pattern as lib/transactions/link-journal-entry.ts).
-  const { data: updatedRows, error: updateError } = await supabase
+  // Apply link. The write re-checks the pointer we validated inside the write
+  // itself (the read above is advisory): null for a free row, or the exact
+  // stale 'reversed'-entry id we're detaching from. Locking on the known value
+  // lets the stale-pointer overwrite through while a concurrent re-link becomes
+  // a no-op (0 rows → the "redan kopplad" branch below). Same optimistic-lock
+  // pattern as lib/transactions/link-journal-entry.ts.
+  const previousJournalEntryId = (tx.journal_entry_id as string | null) ?? null
+  const linkUpdate = supabase
     .from('transactions')
     .update({
       journal_entry_id: journalEntryId,
@@ -696,8 +704,10 @@ export async function manualLink(
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-    .select('id')
+  const { data: updatedRows, error: updateError } = await (previousJournalEntryId === null
+    ? linkUpdate.is('journal_entry_id', null)
+    : linkUpdate.eq('journal_entry_id', previousJournalEntryId)
+  ).select('id')
 
   if (updateError) {
     return { success: false, error: 'Kunde inte koppla transaktionen. Försök igen.' }

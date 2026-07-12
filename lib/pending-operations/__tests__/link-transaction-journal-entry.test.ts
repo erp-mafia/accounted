@@ -84,13 +84,14 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     expect(result.http_status).toBe(404)
   })
 
-  it('returns 400 when transaction already linked', async () => {
+  it('returns 400 when transaction already linked to a LIVE (posted) entry', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
       data: makeTransaction({ id: TX_UUID, journal_entry_id: 'je-prior' }),
       error: null,
     })
+    enqueue({ data: { status: 'posted' }, error: null }) // hasLiveJournalEntryLink: prior link is live
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const op = makePendingOp({
@@ -101,6 +102,38 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/already linked/i)
+  })
+
+  it('re-links a transaction stranded on a reversed entry (#988)', async () => {
+    // The tx still points at a status='reversed' entry (a storno/correction left
+    // the pointer behind). The UI shows it as "utan koppling"; the guard must
+    // agree and let it be linked to another posted verifikat.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: 'je-reversed', amount: 1000, date: '2026-05-15' }),
+      error: null,
+    })
+    enqueue({ data: { status: 'reversed' }, error: null }) // hasLiveJournalEntryLink: stale link
+    enqueue({
+      data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-15' },
+      error: null,
+    }) // target JE fetch
+    enqueue({ data: null, error: null }) // tx UPDATE (overwrites the stale pointer)
+    enqueue({ data: null, error: null }) // logMatchEvent insert
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    const op = makePendingOp({
+      params: { transaction_id: TX_UUID, journal_entry_id: JE_UUID },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      transaction_id: TX_UUID,
+      journal_entry_id: JE_UUID,
+      voucher_label: 'A-12',
+    })
   })
 
   it('returns 400 when JE is not posted', async () => {

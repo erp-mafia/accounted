@@ -29,6 +29,7 @@ import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templ
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { detectBookingDuplicate, type BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
+import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
@@ -165,7 +166,17 @@ export async function categorizeMatchedTransaction(
   if (fetchError || !transaction) {
     return { error: 'Transaction not found: it may have been deleted.', status: 404 }
   }
-  if (transaction.journal_entry_id) {
+  // A stale pointer at a 'reversed' entry (storno/correction left it behind)
+  // must not block re-categorization: the row reads as "utan koppling" in the
+  // UI, so a fresh booking has to be allowed (issue #988). Only a live posted
+  // link means it was genuinely categorized in the meantime. The UPDATE below
+  // is unconditional (no null-lock), so it overwrites the stale pointer; the
+  // duplicate guard still catches an existing live correction and steers the
+  // user to link instead.
+  if (
+    transaction.journal_entry_id &&
+    (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
+  ) {
     return { error: 'Transaction already has a journal entry: it was categorized in the meantime.', status: 409 }
   }
 

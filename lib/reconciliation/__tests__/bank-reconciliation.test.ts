@@ -709,17 +709,36 @@ describe('manualLink', () => {
     expect(result.error).toBe('Transaktionen kunde inte hittas.')
   })
 
-  it('rejects when transaction is already linked', async () => {
+  it('rejects when transaction is already linked to a LIVE (posted) entry', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const tx = makeTransaction({ id: 'tx-1', journal_entry_id: 'je-existing' })
 
-    // Transaction found but already linked
+    // Transaction found, still pointing at a live posted verifikat
     enqueue({ data: tx })
+    enqueue({ data: { status: 'posted' } }) // hasLiveJournalEntryLink: prior link is live
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+  })
+
+  it('re-links a transaction stranded on a reversed entry (#988)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // Still carries a pointer at a status='reversed' entry (storno/correction
+    // left it behind). The UI shows it as "utan koppling", so manualLink must
+    // treat it as free and overwrite the stale pointer.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: 'je-reversed' })
+
+    enqueue({ data: tx }) // tx fetch
+    enqueue({ data: { status: 'reversed' } }) // hasLiveJournalEntryLink: stale link
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } }) // target JE fetch
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] }) // line on 1930
+    enqueue({ data: [{ id: 'tx-1' }] }) // UPDATE .eq(stale id) → 1 row overwritten
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
   })
 
   it('rejects when journal entry has no line on the selected account', async () => {

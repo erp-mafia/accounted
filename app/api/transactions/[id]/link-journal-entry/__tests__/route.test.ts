@@ -71,11 +71,12 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(body.error.code).toBe('TX_CATEGORIZE_TX_NOT_FOUND')
   })
 
-  it('returns 400 when transaction is already linked', async () => {
+  it('returns 400 when transaction is already linked to a LIVE (posted) entry', async () => {
     enqueue({
       data: makeTransaction({ id: TX_UUID, journal_entry_id: 'je-prior' }),
       error: null,
     })
+    enqueue({ data: { status: 'posted' }, error: null }) // hasLiveJournalEntryLink: prior link is live
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
       method: 'POST',
       body: { journal_entry_id: JE_UUID },
@@ -84,6 +85,31 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('LINK_TX_TX_ALREADY_LINKED')
+  })
+
+  it('re-links a transaction stranded on a reversed entry (#988)', async () => {
+    // Pointer at a status='reversed' entry reads as "utan koppling" in the UI;
+    // the link must succeed to another posted verifikat, overwriting the stale id.
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: 'je-reversed', amount: 1000, date: '2026-05-15' }),
+      error: null,
+    })
+    enqueue({ data: { status: 'reversed' }, error: null }) // hasLiveJournalEntryLink: stale link
+    enqueue({
+      data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 7, entry_date: '2026-05-15' },
+      error: null,
+    }) // target JE fetch
+    enqueue({ data: null, error: null }) // tx UPDATE
+    enqueue({ data: null, error: null }) // logMatchEvent insert
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
+      method: 'POST',
+      body: { journal_entry_id: JE_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; voucher_label: string }>(response)
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.voucher_label).toBe('A-7')
   })
 
   it('returns 404 when journal entry not found', async () => {
