@@ -406,6 +406,41 @@ describe('POST :id/categorize', () => {
     const mappingResult = createTxJE.mock.calls[0][4] as { credit_account: string }
     expect(mappingResult.credit_account).toBe('1930')
   })
+
+  it('aborts with 500 BOOKKEEPING_DATABASE_ERROR when the cash_accounts lookup errors, mutating nothing', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+            cash_account_id: 'ca-broken',
+          },
+          error: null,
+        },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        cash_accounts: { data: null, error: { message: 'connection reset' } },
+      }),
+    )
+
+    const res = await categorizePOST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/categorize`,
+        { is_business: true, category: 'expense_office' },
+      ),
+      txParams(TX_ID),
+    )
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST :id/uncategorize', () => {
@@ -764,6 +799,53 @@ describe('POST :id/match-supplier-invoice', () => {
       expect(res.status).toBe(200)
       const paymentAccountArg = createSupplierInvPmtJE.mock.calls[0][8]
       expect(paymentAccountArg).toBe('1930')
+    })
+
+    it('aborts with 500 BOOKKEEPING_DATABASE_ERROR when the cash_accounts lookup errors, mutating nothing', async () => {
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          transactions: {
+            data: {
+              id: TX_ID,
+              amount: -600,
+              date: '2026-02-01',
+              currency: 'SEK',
+              supplier_invoice_id: null,
+              journal_entry_id: null,
+              cash_account_id: 'ca-broken',
+            },
+            error: null,
+          },
+          supplier_invoices: {
+            data: {
+              id: SI_ID,
+              status: 'registered',
+              total: 600,
+              paid_amount: 0,
+              remaining_amount: 600,
+              currency: 'SEK',
+              exchange_rate: null,
+              supplier: { name: 'Acme', supplier_type: 'swedish_business' },
+              items: [],
+            },
+            error: null,
+          },
+          company_settings: { data: { accounting_method: 'accrual' }, error: null },
+          cash_accounts: { data: null, error: { message: 'connection reset' } },
+        }),
+      )
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
+      expect(createSupplierInvPmtJE).not.toHaveBeenCalled()
     })
   })
 })
