@@ -18,7 +18,8 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { eventBus } from '@/lib/events/bus'
@@ -244,6 +245,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // for foreign-currency matches, same as the dashboard route.
     const isPureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
 
+    // Guard the resolved account against the chart (mirrors the categorize
+    // routes): an inactive cash_accounts.ledger_account would otherwise reach
+    // the engine as a generic MATCH_SI_RECORD_PAYMENT_FAILED instead of
+    // ACCOUNTS_NOT_IN_CHART. Only reachable where the account is actually used.
+    if (isPureSek && !useCashEntry && !customLines) {
+      const missingAccounts = await findUnresolvableAccounts(
+        ctx.supabase,
+        ctx.companyId!,
+        [paymentAccount],
+      )
+      if (missingAccounts.length > 0) {
+        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
+    }
+
     // Full settlement = the bank amount pays off the whole remaining balance.
     // Cross-currency always settles the remaining (paymentAmountInvoiceCurrency
     // is clamped to invoice.remaining_amount above).
@@ -336,6 +355,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     } catch (err) {
       txLog.error('match-supplier-invoice: payment JE creation failed: aborting before state mutation', err as Error)
+      // AccountsNotInChartError means the account was deactivated between our
+      // pre-validation above and the engine call (race): return the same
+      // structured error rather than falling through to the generic
+      // MATCH_SI_RECORD_PAYMENT_FAILED, mirroring the categorize routes.
+      if (err instanceof AccountsNotInChartError) {
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
       const message = isBookkeepingError(err)
         ? getErrorMessage(err, { context: 'supplier_invoice' })
         : err instanceof Error

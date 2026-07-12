@@ -847,5 +847,59 @@ describe('POST :id/match-supplier-invoice', () => {
       expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
       expect(createSupplierInvPmtJE).not.toHaveBeenCalled()
     })
+
+    it('returns 400 ACCOUNTS_NOT_IN_CHART when the linked cash account is deactivated in the kontoplan', async () => {
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          transactions: {
+            data: {
+              id: TX_ID,
+              amount: -5000,
+              date: '2026-05-12',
+              currency: 'SEK',
+              supplier_invoice_id: null,
+              journal_entry_id: null,
+              cash_account_id: 'ca-1940',
+            },
+            error: null,
+          },
+          supplier_invoices: {
+            data: {
+              id: SI_ID,
+              status: 'approved',
+              total: 5000,
+              paid_amount: 0,
+              remaining_amount: 5000,
+              currency: 'SEK',
+              exchange_rate: null,
+              supplier: { name: 'Acme', supplier_type: 'swedish_business' },
+              items: [],
+            },
+            error: null,
+          },
+          company_settings: { data: { accounting_method: 'accrual' }, error: null },
+          cash_accounts: { data: { ledger_account: '1940' }, error: null },
+        }),
+      )
+      // Simulate the 1940 account existing in cash_accounts but having been
+      // deactivated in chart_of_accounts since.
+      findMissingAccountsMock.mockResolvedValueOnce(['1940'])
+
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(body.error.details.account_numbers).toEqual(['1940'])
+      // Engine and invoice/transaction updates must NOT run: the match stays
+      // retryable rather than posting a payment against a dead account.
+      expect(createSupplierInvPmtJE).not.toHaveBeenCalled()
+    })
   })
 })
