@@ -317,7 +317,13 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
     expect(input.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(750)
   })
 
-  it('falls back to 1930 and warns when the cash_accounts lookup errors', async () => {
+  it('aborts with 500 BOOKKEEPING_DATABASE_ERROR (mutates nothing) when the cash_accounts lookup errors', async () => {
+    // Regression: an explicit cash_account_id almost certainly resolves to a
+    // non-1930 account, so a transient lookup failure must not silently
+    // degrade to 1930 (same misbooking risk this whole fix exists to close,
+    // just triggered by infra flakiness instead of a stale setting). The
+    // request should fail before any state mutation, not book to a guessed
+    // account.
     enqueue({
       data: {
         id: TX_UUID,
@@ -346,20 +352,13 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
     })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
-    enqueue({ data: [{ id: SI_UUID }], error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
 
-    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
 
-    const input = mockCreateJournalEntry.mock.calls[0][3] as {
-      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
-    }
-    expect(input.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(600)
-    expect(mockLoggerWarn).toHaveBeenCalledWith(
-      'settlement-account lookup failed; defaulting to 1930',
-      expect.objectContaining({ cashAccountId: 'ca-broken', error: 'connection reset' }),
-    )
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 })
 
