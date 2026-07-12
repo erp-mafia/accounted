@@ -280,12 +280,25 @@ export async function linkTransactionToJournalEntry(
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
-  const { error: updateTxError } = await (previousJournalEntryId === null
+  const { data: updatedTxRows, error: updateTxError } = await (previousJournalEntryId === null
     ? txUpdate.is('journal_entry_id', null)
-    : txUpdate.eq('journal_entry_id', previousJournalEntryId))
+    : txUpdate.eq('journal_entry_id', previousJournalEntryId)
+  ).select('id')
 
   if (updateTxError) {
     return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
+  }
+  // CAS lost: a concurrent linker changed the pointer between the liveness
+  // check and this write, so 0 rows matched. Fail BEFORE any invoice side
+  // effects: otherwise we'd settle the invoice + insert an invoice_payments row
+  // for a transaction we didn't actually link (same optimistic-lock contract as
+  // manualLink in lib/reconciliation/bank-reconciliation.ts).
+  if (!updatedTxRows || updatedTxRows.length === 0) {
+    return {
+      ok: false,
+      code: 'LINK_TX_TX_ALREADY_LINKED',
+      details: { existingJournalEntryId: previousJournalEntryId },
+    }
   }
 
   async function rollbackTxLink(reason: string): Promise<void> {

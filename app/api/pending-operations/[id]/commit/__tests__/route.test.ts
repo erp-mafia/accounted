@@ -181,6 +181,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: pendingOp },                         // fetch pending op
         { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction (already has JE)
+        { data: { status: 'posted' } },              // hasLiveJournalEntryLink: existing JE is live
         { data: null, error: null },                  // auto-reject update
       ])
 

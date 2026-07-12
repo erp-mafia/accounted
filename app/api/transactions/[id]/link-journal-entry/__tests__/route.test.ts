@@ -99,7 +99,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 7, entry_date: '2026-05-15' },
       error: null,
     }) // target JE fetch
-    enqueue({ data: null, error: null }) // tx UPDATE
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: null, error: null }) // logMatchEvent insert
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
       method: 'POST',
@@ -171,7 +171,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       error: null,
     })
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: TX_UUID }], error: null })
     // logMatchEvent insert
     enqueue({ data: null, error: null })
 
@@ -225,7 +225,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       error: null,
     })
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: TX_UUID }], error: null })
     // Update invoice (optimistic lock returns updated row)
     enqueue({ data: [{ id: INV_UUID }], error: null })
     // Insert invoice_payments
@@ -329,7 +329,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       error: null,
     })
     // Update transaction succeeds
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: TX_UUID }], error: null })
     // Optimistic invoice update returns 0 rows
     enqueue({ data: [], error: null })
     // Compensating rollback: restore prior tx state
@@ -371,7 +371,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       error: null,
     })
     // Update transaction succeeds
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: TX_UUID }], error: null })
     // Optimistic invoice update succeeds
     enqueue({ data: [{ id: INV_UUID }], error: null })
     // invoice_payments insert fails with non-23505 error

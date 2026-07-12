@@ -119,7 +119,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-15' },
       error: null,
     }) // target JE fetch
-    enqueue({ data: null, error: null }) // tx UPDATE (overwrites the stale pointer)
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE (overwrites the stale pointer)
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
 
@@ -182,7 +182,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
-    enqueue({ data: null, error: null }) // tx UPDATE
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
 
@@ -229,7 +229,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       }),
       error: null,
     })
-    enqueue({ data: null, error: null }) // tx UPDATE
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: [{ id: INV_UUID }], error: null }) // optimistic-lock invoice UPDATE
     enqueue({ data: null, error: null }) // invoice_payments INSERT
     enqueue({ data: null, error: null }) // logMatchEvent insert
@@ -274,7 +274,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       data: makeInvoice({ id: INV_UUID, status: 'sent', total: 1000, remaining_amount: 1000 }),
       error: null,
     })
-    enqueue({ data: null, error: null }) // tx UPDATE succeeds
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE succeeds
     enqueue({ data: [], error: null }) // optimistic invoice UPDATE returns 0 rows
     enqueue({ data: null, error: null }) // compensating rollback restores tx
     enqueue({ data: null, error: null }) // dispatcher's reject update
