@@ -23,14 +23,48 @@ export interface GoogleDriveConnection {
 }
 
 /**
+ * State of one file in the company's Drive backup folder: an `Arkiv <år>.zip`
+ * per räkenskapsår, `Grunddata.zip`, and the folder LÄSMIG.txt. Files are
+ * updated in place; `fingerprint` decides whether a sync re-uploads them.
+ */
+export interface DriveFileState {
+  kind: 'period' | 'base' | 'readme'
+  /** Set when kind = 'period'. */
+  period_id?: string
+  file_id: string
+  file_name: string
+  size_bytes: number
+  /** Change-detection key: the file re-uploads only when this differs. */
+  fingerprint: string
+  /**
+   * SHA-256 of the uploaded bytes. The upload itself is verified against
+   * Drive's md5Checksum; this hash is recorded for evidentiary value (the
+   * user can prove the file in their Drive is the one Accounted produced).
+   */
+  sha256: string
+  /** False when the file was built without document blobs (size fallback). */
+  included_documents: boolean
+  uploaded_at: string
+}
+
+/**
  * Last-sync snapshot stored under key `google_drive_last_sync`.
+ *
+ * Current records carry `files` (per-fiscal-year layout). The flat
+ * `file_id`/`file_name`/`file_size_bytes` fields are the legacy single-ZIP
+ * layout, kept optional so old records still render.
  */
 export interface GoogleDriveLastSync {
   at: string
-  file_id: string
-  file_name: string
-  file_size_bytes: number
   folder_id: string
+  files?: DriveFileState[]
+  total_size_bytes?: number
+  // Legacy single-file layout fields.
+  file_id?: string
+  file_name?: string
+  file_size_bytes?: number
+  included_documents?: boolean
+  sha256?: string
 }
 
 /**
@@ -40,14 +74,30 @@ export interface GoogleDriveLastSync {
  */
 export interface GoogleDriveSchedule {
   enabled: boolean
-  /** 0-23, UTC hour when the daily auto-sync should run. */
+  /**
+   * 0-23, UTC hour when the daily auto-sync should run. Legacy field: kept
+   * for records written before hour_local existed, and mirrored on writes so
+   * old readers keep an approximate value.
+   */
   hour_utc: number
+  /**
+   * 0-23, Europe/Stockholm wall-clock hour. Preferred over hour_utc: it stays
+   * put across DST transitions. Absent on records from before this field.
+   */
+  hour_local?: number
   /** ISO timestamp of the last auto-sync attempt (success or failure). */
   last_auto_sync_at: string | null
   /** Outcome of the last auto-sync attempt. */
   last_auto_sync_status: 'success' | 'error' | null
   /** Short error message if the last auto-sync failed. */
   last_auto_sync_error: string | null
+  /**
+   * Number of auto-sync attempts in a row that failed. Reset to 0 on
+   * success; drives the failure-alert email threshold.
+   */
+  consecutive_failures?: number
+  /** ISO timestamp of the last failure-alert email (throttle anchor). */
+  last_alert_at?: string | null
 }
 
 /**

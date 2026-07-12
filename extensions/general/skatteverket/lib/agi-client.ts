@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { skvRequest } from './api-client'
+import { skvRequest, skvRequestWithAuth, type SkvAuth } from './api-client'
 import type {
   SkatteverketAGIErrorBody,
   SkatteverketAGIGranskningsunderlagResponse,
@@ -282,16 +282,18 @@ export async function agiSkapaGranskningsunderlag(
  *
  * Returns an empty kvittenser array until the user has signed in Mina Sidor.
  * Once signed, each receipt carries uuidKvittens + signeradAv + signeradTid.
+ *
+ * Takes SkvAuth (not supabase+userId): kvittens polling is a background
+ * read, so the crons can run it on system credentials when the company has
+ * granted the lasombud behorighet.
  */
 export async function agiGetKvittenser(
-  supabase: SupabaseClient,
-  userId: string,
+  auth: SkvAuth,
   arbetsgivare: string,
   period: string,
 ): Promise<Result<SkatteverketAGIKvittenserResponse>> {
-  const response = await skvRequest(
-    supabase,
-    userId,
+  const response = await skvRequestWithAuth(
+    auth,
     'GET',
     `${periodPath(arbetsgivare, period)}/kvittenser`,
     undefined,

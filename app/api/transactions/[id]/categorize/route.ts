@@ -8,6 +8,7 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -314,26 +315,12 @@ export const POST = withRouteContext(
     // real bank line never reconciles. applySettlementAccount only rewrites a
     // 1930 leg and is a no-op when the settlement account is 1930, so legacy
     // rows with no cash_account_id behave exactly as before.
-    let settlementAccount = '1930'
-    if (transaction.cash_account_id) {
-      const { data: txCashAccount, error: cashAccountError } = await supabase
-        .from('cash_accounts')
-        .select('ledger_account')
-        .eq('id', transaction.cash_account_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-      if (cashAccountError) {
-        // Don't fail the booking: fall back to 1930, but surface the lookup
-        // failure so a silent mis-booking to the wrong bank leg stays auditable.
-        txLog.warn('settlement-account lookup failed; defaulting to 1930', {
-          cashAccountId: transaction.cash_account_id,
-          error: cashAccountError.message,
-        })
-      }
-      if (txCashAccount?.ledger_account) {
-        settlementAccount = txCashAccount.ledger_account as string
-      }
-    }
+    const settlementAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
     mappingResult = applySettlementAccount(mappingResult, settlementAccount)
 
     txLog.info('mapping resolved', {

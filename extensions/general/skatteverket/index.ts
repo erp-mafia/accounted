@@ -12,7 +12,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
-import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
+import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
@@ -21,6 +21,13 @@ import {
   type VatDeclarationPrep,
   type AgiUnderlagPrep,
 } from './lib/declaration-prep'
+import { submitVatDeclarationChain } from './lib/vat-submit'
+import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
+import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
+import { getConnection, markConnectionRevoked } from './lib/connection-store'
+import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
+import { probeCompanyGrants } from './lib/grant-probe'
+import { formatRedovisare } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type { SkvSubmitResult } from '@/lib/pending-operations/skatteverket-commit'
 import {
@@ -46,7 +53,7 @@ import {
   SkattekontoMatchError,
 } from './lib/skattekonto-match'
 import { splitTransactions } from './lib/skattekonto-buckets'
-import type { SkattekontoBalanceSnapshot, SkatteverketUtkastResponse } from './types'
+import type { SkattekontoBalanceSnapshot } from './types'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -104,6 +111,26 @@ import type { VatPeriodType } from '@/types'
  *      `kvittensnummer` (BFL 7 kap.).
  *  10. Run a single AGI end-to-end against test on a real client before
  *      switching that client over.
+ *
+ * ─── System auth (ombud + org certificate) cutover checklist ──────────────
+ * The hybrid model's background-read credentials. All code ships behind
+ * SKATTEVERKET_SYSTEM_AUTH_MODE=off; flipping to shadow/on requires:
+ *
+ *   1. Skatteverket's CCG/org-flow docs (token endpoint URL, mechanism
+ *      mTLS vs private_key_jwt, scope names, whether APIGW headers persist,
+ *      whether resource calls need the client cert).
+ *   2. Organisationscertifikat from Expisoft (test + prod) for Accounted's
+ *      org number, base64-wrapped into SKATTEVERKET_SYSTEM_CERT_PEM_B64 /
+ *      _KEY_PEM_B64.
+ *   3. Bilateral avtal per API for the org flow (skattekonto read, AGI read,
+ *      momsdeklaration ombud) + APIGW subscriptions for the system client.
+ *   4. Set SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL, _SCOPES, _CLIENT_ID,
+ *      _AUTH_MECHANISM per the docs; SKATTEVERKET_OMBUD_ORG_NUMBER =
+ *      Accounted's org number (shown to users in the grant instructions).
+ *   5. Validate grant-probe.ts classification against real sandbox 403
+ *      bodies (shadow mode in the test environment first).
+ *   6. Godkännandetest per API, then SKATTEVERKET_SYSTEM_AUTH_MODE=on in
+ *      prod. User tokens remain the fallback indefinitely.
  *
  * The /status endpoint reports which environment is active so the UI can
  * surface a Testmiljö / Produktion badge.
@@ -452,6 +479,138 @@ export const skatteverketExtension: Extension = {
       },
     },
 
+    // ══════════════════════════════════════════════════════════════
+    // System connection (ombud + organization certificate)
+    //
+    // The hybrid auth model's per-company side: the user grants Accounted's
+    // org number a behorighet at Skatteverket's Ombud och behorigheter
+    // e-service (one-time BankID signature), we verify it with a probe on
+    // SYSTEM credentials, and background reads stop depending on the
+    // 65-minute personal token. All of it is inert until
+    // SKATTEVERKET_SYSTEM_AUTH_MODE is switched on.
+    // ══════════════════════════════════════════════════════════════
+
+    // ── System connection: status + instructions ────────────────────
+    {
+      method: 'GET',
+      path: '/system-connection',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
+
+        const mode = getSystemAuthMode()
+        const available = mode !== 'off' && isSystemAuthConfigured()
+        if (!available) {
+          return NextResponse.json({ available: false, mode })
+        }
+
+        const connection = await getConnection(ctx.companyId, currentSkvEnvironment())
+        return NextResponse.json({
+          available: true,
+          mode,
+          environment: currentSkvEnvironment(),
+          // What the user grants the behorigheter to, plus where.
+          ombud_org_number: getOmbudOrgNumber(),
+          grant_url: 'https://skatteverket.se/ombud',
+          behorigheter: [
+            { key: 'lasombud', label: 'Juridiskt läsombud' },
+            { key: 'moms_ombud', label: 'Momsdeklaration, ombud' },
+          ],
+          cert: getSystemCertInfo(),
+          connection,
+        })
+      },
+    },
+
+    // ── System connection: verify (probe the grants) ────────────────
+    {
+      method: 'POST',
+      path: '/system-connection/verify',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
+        const roleBlocked = await requireAgiWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
+
+        if (getSystemAuthMode() === 'off' || !isSystemAuthConfigured()) {
+          return NextResponse.json(
+            { error: 'Systemanslutningen är inte aktiverad i denna miljö.' },
+            { status: 503 }
+          )
+        }
+
+        // Manual probes are rate limited: one per minute per company.
+        const existing = await getConnection(ctx.companyId, currentSkvEnvironment())
+        if (existing?.last_probe_at && Date.now() - new Date(existing.last_probe_at).getTime() < 60_000) {
+          return NextResponse.json(
+            { error: 'Vänta en minut mellan verifieringar.', connection: existing },
+            { status: 429 }
+          )
+        }
+
+        const { data: settings } = await ctx.supabase
+          .from('company_settings')
+          .select('org_number, entity_type')
+          .eq('company_id', ctx.companyId)
+          .single()
+        if (!settings?.org_number) {
+          return NextResponse.json(
+            { error: 'Organisationsnummer saknas. Ange det under Inställningar först.' },
+            { status: 400 }
+          )
+        }
+        const orgNumber = formatRedovisare(
+          settings.org_number as string,
+          settings.entity_type as 'enskild_firma' | 'aktiebolag'
+        )
+
+        try {
+          const result = await probeCompanyGrants(ctx.companyId, orgNumber, ctx.userId)
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'system-connection/verify',
+            agRegistreradId: orgNumber,
+            outcome: 'ok',
+          })
+          return NextResponse.json({
+            data: {
+              connection: result.connection,
+              // Spelled-out per-behorighet outcome so the UI can say
+              // "läsombud OK, momsbehörighet saknas fortfarande".
+              lasombud: result.lasombud,
+              moms_ombud: result.momsOmbud,
+            },
+          })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── System connection: revoke locally ───────────────────────────
+    {
+      method: 'DELETE',
+      path: '/system-connection',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const roleBlocked = await requireAgiWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
+
+        // Marks the local row revoked (kept for history). Withdrawing the
+        // actual behorighet happens at skatteverket.se; this only stops us
+        // from using system credentials for the company.
+        await markConnectionRevoked(ctx.companyId, currentSkvEnvironment())
+        return NextResponse.json({ success: true })
+      },
+    },
+
     // ── Validate declaration (dry run) ──────────────────────────────
     // Sends momsuppgift to Skatteverket's /kontrollera endpoint.
     // Returns ERROR/WARNING/OK without saving anything.
@@ -730,6 +889,67 @@ export const skatteverketExtension: Extension = {
       },
     },
 
+    // ── One-click submit (kontrollera -> utkast -> lås) ─────────────
+    // The whole "skicka för signering" chain behind one button. Validation
+    // errors abort before anything is written to Eget utrymme; a lock
+    // failure leaves the saved draft in place and says so (draft_saved),
+    // so the UI can offer a lock-only retry instead of a full re-submit.
+    {
+      method: 'POST',
+      path: '/declaration/submit',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
+
+        try {
+          const body = (await request.json()) as {
+            periodType?: VatPeriodType
+            year?: number
+            period?: number
+          }
+          const { periodType, year, period } = body
+          if (!periodType || !year || !period) {
+            return NextResponse.json(
+              { error: 'Saknar obligatoriska fält: periodType, year, period' },
+              { status: 400 }
+            )
+          }
+
+          const result = await submitVatDeclarationChain(
+            ctx,
+            { periodType, year, period },
+            { validate: true }
+          )
+
+          if (!result.ok) {
+            return NextResponse.json(
+              {
+                error: result.error,
+                stage: result.stage,
+                draft_saved: result.draftSaved,
+                kontrollResultat: result.kontrollresultat,
+              },
+              { status: result.httpStatus }
+            )
+          }
+
+          return NextResponse.json({
+            data: {
+              signeringsLank: result.signingUrl,
+              redovisare: result.redovisare,
+              redovisningsperiod: result.redovisningsperiod,
+              kontrollResultat: result.kontrollresultat,
+            },
+          })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
     // ── Fetch submitted declaration ─────────────────────────────────
     {
       method: 'GET',
@@ -742,9 +962,20 @@ export const skatteverketExtension: Extension = {
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
 
-          const response = await skvRequest(
-            ctx.supabase,
-            ctx.userId,
+          // resolveReadAuth: post-signing checks should outlive the user's
+          // 65-minute session when the company has a moms_ombud grant.
+          const resolved = await resolveReadAuth(ctx.supabase, ctx.companyId, {
+            requires: 'moms_ombud',
+            userId: ctx.userId,
+          })
+          if (!resolved.ok) {
+            return NextResponse.json(
+              { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
+              { status: 401 }
+            )
+          }
+          const response = await skvRequestWithAuth(
+            resolved.auth,
             'GET',
             `/inlamnat/${redovisare}/${redovisningsperiod}`
           )
@@ -762,6 +993,14 @@ export const skatteverketExtension: Extension = {
           }
 
           const data = await response.json()
+
+          // A non-null inlamnat means the declaration is filed: complete the
+          // period's moms deadline. Best-effort, gated on the caller passing
+          // the picker params (older clients omit them).
+          if (data) {
+            await completeVatDeadlineFromRequest(request, ctx, 'submitted')
+          }
+
           return NextResponse.json({ data })
         } catch (err) {
           return handleSkvError(err)
@@ -781,9 +1020,18 @@ export const skatteverketExtension: Extension = {
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
 
-          const response = await skvRequest(
-            ctx.supabase,
-            ctx.userId,
+          const resolved = await resolveReadAuth(ctx.supabase, ctx.companyId, {
+            requires: 'moms_ombud',
+            userId: ctx.userId,
+          })
+          if (!resolved.ok) {
+            return NextResponse.json(
+              { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
+              { status: 401 }
+            )
+          }
+          const response = await skvRequestWithAuth(
+            resolved.auth,
             'GET',
             `/beslutat/${redovisare}/${redovisningsperiod}`
           )
@@ -801,6 +1049,13 @@ export const skatteverketExtension: Extension = {
           }
 
           const data = await response.json()
+
+          // A beslut means Skatteverket has processed the filing: confirm
+          // the period's moms deadline (terminal state).
+          if (data) {
+            await completeVatDeadlineFromRequest(request, ctx, 'confirmed')
+          }
+
           return NextResponse.json({ data })
         } catch (err) {
           return handleSkvError(err)
@@ -1246,7 +1501,11 @@ export const skatteverketExtension: Extension = {
             )
           }
 
-          const result = await agiGetKvittenser(ctx.supabase, ctx.userId, arbetsgivare, period)
+          const result = await agiGetKvittenser(
+            { mode: 'user', supabase: ctx.supabase, userId: ctx.userId },
+            arbetsgivare,
+            period
+          )
           if (!result.ok) {
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
@@ -1970,6 +2229,46 @@ function parseQueryParams(
 }
 
 /**
+ * Build the deadline generator's tax_period string (`YYYY-MM` monthly,
+ * `YYYY-QN` quarterly) from the picker params. Annual VAT has no system
+ * deadline type, so yearly returns null and the deadline hook is a no-op.
+ */
+function vatTaxPeriod(periodType: VatPeriodType, year: number, period: number): string | null {
+  if (periodType === 'monthly') return `${year}-${String(period).padStart(2, '0')}`
+  if (periodType === 'quarterly') return `${year}-Q${period}`
+  return null
+}
+
+/**
+ * Complete the moms deadline for the period identified by the request's
+ * optional periodType/year/period query params. Both moms deadline types are
+ * passed: company settings decide which one exists, the other is a no-op.
+ * Best-effort by design (completeTaxDeadline never throws).
+ */
+async function completeVatDeadlineFromRequest(
+  request: Request,
+  ctx: ExtensionContext,
+  newStatus: 'submitted' | 'confirmed'
+): Promise<void> {
+  const url = new URL(request.url)
+  const periodType = url.searchParams.get('periodType') as VatPeriodType | null
+  const year = Number(url.searchParams.get('year'))
+  const period = Number(url.searchParams.get('period'))
+  if (!periodType || !Number.isFinite(year) || !Number.isFinite(period) || !year || !period) {
+    return
+  }
+  const taxPeriod = vatTaxPeriod(periodType, year, period)
+  if (!taxPeriod) return
+  await completeTaxDeadline(
+    ctx.supabase,
+    ctx.companyId,
+    ['moms_monthly', 'moms_quarterly'],
+    taxPeriod,
+    newStatus
+  )
+}
+
+/**
  * Load the AGI XML for a salary run from agi_declarations.xml_content
  * (built by app/api/salary/runs/[id]/agi/xml/route.ts via generateAGIXml).
  *
@@ -2092,65 +2391,21 @@ async function commitSubmitVatDeclaration(
   const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
 
   try {
-    const { redovisare, redovisningsperiod, momsuppgift } =
-      await buildMomsuppgift(supabase, companyId, { periodType, year, period })
-
-    // 1. POST /utkast: save the draft to Eget utrymme. Overwrites any prior
-    //    draft for the period, so retry after a mid-chain failure is safe.
-    const utkast = await skvRequest(
-      supabase, userId, 'POST', `/utkast/${redovisare}/${redovisningsperiod}`, momsuppgift,
-    )
-    await writeSkatteverketAudit(ctx, {
-      endpoint: 'declaration/draft', agRegistreradId: redovisare, redovisningsperiod,
-      outcome: utkast.ok ? 'ok' : 'skv_error', responseStatus: utkast.status,
-    })
-    if (!utkast.ok) {
-      const text = await utkast.text().catch(() => '')
+    // The staged figures were already reviewed at approval time, so the
+    // chain starts at the utkast write (no kontrollera pre-step here).
+    const result = await submitVatDeclarationChain(ctx, { periodType, year, period })
+    if (!result.ok) {
       return {
-        ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: utkast.status,
-        recoverable: false, error: `Skatteverket svarade med ${utkast.status}: ${text}`,
+        ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: result.httpStatus,
+        recoverable: false, error: result.error,
       }
     }
-    const utkastData = (await utkast.json()) as SkatteverketUtkastResponse
-
-    // 2. PUT /las: lock for signing; returns the BankID signeringslänk.
-    const las = await skvRequest(
-      supabase, userId, 'PUT', `/las/${redovisare}/${redovisningsperiod}`,
-    )
-    await writeSkatteverketAudit(ctx, {
-      endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod,
-      outcome: las.ok ? 'ok' : 'skv_error', responseStatus: las.status,
-    })
-    if (!las.ok) {
-      const text = await las.text().catch(() => '')
-      return {
-        ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: las.status,
-        recoverable: false, error: `Skatteverket svarade med ${las.status}: ${text}`,
-      }
-    }
-    const lasData = (await las.json()) as SkatteverketUtkastResponse
-    if (!lasData.signeringsLank) {
-      return {
-        ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: 502, recoverable: false,
-        error: 'Skatteverket låste deklarationen men returnerade ingen signeringslänk.',
-      }
-    }
-
-    // Persist locked state so the UI/poller can resume (mirrors /declaration/lock).
-    await ctx.settings.set(
-      `submission_${redovisningsperiod}`,
-      JSON.stringify({
-        status: 'draft_locked', redovisare, redovisningsperiod,
-        signeringsLank: lasData.signeringsLank, updatedAt: new Date().toISOString(),
-      }),
-    )
-
     return {
       ok: true,
-      signing_url: lasData.signeringsLank,
-      redovisningsperiod,
-      redovisare,
-      kontrollresultat: utkastData.kontrollResultat ?? null,
+      signing_url: result.signingUrl,
+      redovisningsperiod: result.redovisningsperiod,
+      redovisare: result.redovisare,
+      kontrollresultat: result.kontrollresultat,
     }
   } catch (err) {
     return mapServiceError(ctx, 'declaration/submit', err)

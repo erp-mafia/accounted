@@ -34,8 +34,14 @@ export function skvAuthCodeToStructured(
       return { code: 'SKATTEVERKET_NOT_CONNECTED', httpStatus: 401 }
     case 'BEHORIGHET_SAKNAS':
     case 'ACCESS_DENIED':
+    // Missing ombud grant is fixed at SKV's Ombud och behorigheter, same
+    // remediation family as BEHORIGHET_SAKNAS.
+    case 'OMBUD_GRANT_MISSING':
       return { code: 'SKATTEVERKET_ACCESS_DENIED', httpStatus: 403 }
     case 'RATE_LIMITED':
       return { code: 'SKATTEVERKET_RATE_LIMITED', httpStatus: 429 }
+    case 'SYSTEM_AUTH_FAILED':
+      // Configuration-side failure: nothing the end user can remediate.
+      return { code: 'SKATTEVERKET_INTERNAL_ERROR', httpStatus: 502 }
   }
 }

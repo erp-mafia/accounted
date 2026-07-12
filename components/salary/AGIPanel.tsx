@@ -18,6 +18,8 @@ import {
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
@@ -785,7 +787,11 @@ export function AGIPanel(props: AGIPanelProps) {
             BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && !draftIsStale && (
           <div className="rounded-md border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium">{t('draft_locked_title')}</p>
+            <p className="text-sm font-medium">
+              <InfoTooltip variant="help" content={t('granskningsunderlag_gloss')}>
+                {t('draft_locked_title')}
+              </InfoTooltip>
+            </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('draft_locked_description')}
             </p>
@@ -920,11 +926,6 @@ export function AGIPanel(props: AGIPanelProps) {
               variant="outline"
               onClick={handleSubmit}
               disabled={actionLoading === 'submit' || !hasSkatteverket}
-              title={
-                !hasSkatteverket
-                  ? t('submit_upgrade_title')
-                  : undefined
-              }
             >
               {actionLoading === 'submit' ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -977,13 +978,7 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {!readOnly && !isSigned && !hasSkatteverket && (
-          <p className="text-xs text-muted-foreground">
-            {t('upgrade_hint_before')}{' '}
-            <a href="/settings/billing" className="font-medium underline hover:no-underline">
-              {t('upgrade_hint_link')}
-            </a>{' '}
-            {t('upgrade_hint_after')}
-          </p>
+          <UpgradeNote>{t('upgrade_note')}</UpgradeNote>
         )}
       </CardContent>
     </Card>

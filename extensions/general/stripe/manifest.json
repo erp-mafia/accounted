@@ -1,0 +1,20 @@
+{
+  "id": "stripe",
+  "sector": "general",
+  "exportName": "stripeExtension",
+  "entryPoint": "@/extensions/general/stripe",
+  "workspace": null,
+  "requiredEnvVars": ["STRIPE_SECRET_KEY", "STRIPE_CONNECT_CLIENT_ID"],
+  "optionalEnvVars": [],
+  "npmDependencies": [],
+  "definition": {
+    "name": "Stripe-betalningar",
+    "category": "operations",
+    "icon": "CreditCard",
+    "dataPattern": "manual",
+    "hasOwnData": true,
+    "description": "Betalningslänkar på fakturor och automatisk avprickning via Stripe",
+    "longDescription": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura. Betalningar prickas av mot rätt faktura och Stripe-utbetalningar bokförs med avgifter och moms.",
+    "subscriptionNotice": "Denna integration kräver ett eget Stripe-konto. Stripes transaktionsavgifter tillkommer enligt ditt avtal med Stripe."
+  }
+}

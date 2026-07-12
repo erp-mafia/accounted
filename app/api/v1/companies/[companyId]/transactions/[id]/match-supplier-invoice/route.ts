@@ -16,8 +16,10 @@ import {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { eventBus } from '@/lib/events/bus'
@@ -219,11 +221,47 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .single()
     const accountingMethod = settings?.accounting_method || 'accrual'
 
+    // Credit the cash account THIS transaction actually belongs to, never a
+    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
+    // only source of truth for which bank account a matched transaction
+    // settled from (mirrors the dashboard route's #985 fix). Only applied to
+    // the pure-SEK accrual path below; the FX path keeps its pre-existing
+    // internal 1930 default, matching that fix's scope.
+    const paymentAccount = await resolveSettlementAccount(
+      ctx.supabase,
+      ctx.companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
+
     // Route on the supplier invoice's actual booking state. An invoice
     // booked at receipt (registration_journal_entry_id set) must clear
     // 2440 regardless of the company's current setting.
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
+
+    // Pure SEK: both legs of the match are SEK, so the payment account
+    // resolved above can safely replace the 1930 default. Kept out of scope
+    // for foreign-currency matches, same as the dashboard route.
+    const isPureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
+
+    // Guard the resolved account against the chart (mirrors the categorize
+    // routes): an inactive cash_accounts.ledger_account would otherwise reach
+    // the engine as a generic MATCH_SI_RECORD_PAYMENT_FAILED instead of
+    // ACCOUNTS_NOT_IN_CHART. Only reachable where the account is actually used.
+    if (isPureSek && !useCashEntry && !customLines) {
+      const missingAccounts = await findUnresolvableAccounts(
+        ctx.supabase,
+        ctx.companyId!,
+        [paymentAccount],
+      )
+      if (missingAccounts.length > 0) {
+        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
+    }
 
     // Full settlement = the bank amount pays off the whole remaining balance.
     // Cross-currency always settles the remaining (paymentAmountInvoiceCurrency
@@ -307,11 +345,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           paymentAmountSek,
           transaction.date,
           exchangeRateDifference !== 0 ? exchangeRateDifference : undefined,
+          undefined, // supplierName (unchanged default)
+          // Resolved settlement account, pure-SEK matches only: the FX
+          // branch keeps defaulting internally to 1930, out of scope here
+          // just as it was for the dashboard route's #985 fix.
+          isPureSek ? paymentAccount : undefined,
         )
         if (je) journalEntryId = je.id
       }
     } catch (err) {
       txLog.error('match-supplier-invoice: payment JE creation failed: aborting before state mutation', err as Error)
+      // AccountsNotInChartError means the account was deactivated between our
+      // pre-validation above and the engine call (race): return the same
+      // structured error rather than falling through to the generic
+      // MATCH_SI_RECORD_PAYMENT_FAILED, mirroring the categorize routes.
+      if (err instanceof AccountsNotInChartError) {
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
       const message = isBookkeepingError(err)
         ? getErrorMessage(err, { context: 'supplier_invoice' })
         : err instanceof Error

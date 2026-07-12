@@ -12,6 +12,8 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
+import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
+import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
 import {
   ChevronRight,
   CheckCircle2,
@@ -121,6 +123,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
 
   return (
     <div className="stagger-enter space-y-8">
+      <BackupHealthBanner />
       {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. Once the assistant is built the
@@ -239,6 +242,16 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
           </Card>
         </div>
       </section>
+
+      {/* Connect-Skatteverket nudge for existing companies. Gated on
+          agentBuilt so it never stacks under the build-assistant hero:
+          one CTA surface at a time. */}
+      {agentBuilt && (
+        <SkatteverketPromoCard
+          companyId={companyId}
+          connected={!!onboardingProgress?.hasSkatteverketConnected}
+        />
+      )}
 
       {/* Att göra: the unified worklist. One section, every actionable item,
           same counts as the sidebar badges (lib/worklist). */}

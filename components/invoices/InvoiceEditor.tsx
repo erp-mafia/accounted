@@ -46,6 +46,7 @@ import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDi
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import {
   ROT_WORK_TYPES,
@@ -120,6 +121,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   // Self-billing is never available when editing an existing draft.
   const [mode, setMode] = useState<'invoice' | 'self_billed'>('invoice')
+  // Active Stripe connection: drives the "auto payment link" toggle in the
+  // payment link section. Absent extension or no connection → toggle hidden.
+  const [stripeConnected, setStripeConnected] = useState(false)
+  useEffect(() => {
+    if (!ENABLED_EXTENSION_IDS.has('stripe')) return
+    let cancelled = false
+    fetch('/api/extensions/ext/stripe/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.connection?.status === 'active') setStripeConnected(true)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const schema = useMemo(() => {
     const itemSchema = z.object({
@@ -213,6 +230,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           },
           { message: t('validation_payment_link_https') },
         ),
+      // Opt-out for the automatic Stripe payment link on send (only rendered
+      // when the company has an active Stripe connection).
+      payment_link_auto: z.boolean().optional(),
       // Self-billing received (mottagen självfaktura). Present in the form for
       // both modes; required only in self_billed mode: enforced in onSubmit.
       external_invoice_number: z.string().optional(),
@@ -315,6 +335,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           our_reference: initial.our_reference ?? '',
           notes: initial.notes ?? '',
           payment_link_url: initial.payment_link_url ?? '',
+          payment_link_auto: initial.payment_link_auto ?? true,
           external_invoice_number: '',
           self_billing_agreement_ref: '',
           received_date: '',
@@ -348,6 +369,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           currency: 'SEK',
           document_type: 'invoice' as InvoiceDocumentType,
           payment_link_url: '',
+          payment_link_auto: true,
           external_invoice_number: '',
           self_billing_agreement_ref: '',
           received_date: '',
@@ -2126,7 +2148,26 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       {errors.payment_link_url ? (
                         <p className="text-sm text-destructive">{errors.payment_link_url.message}</p>
                       ) : (
-                        <p className="text-xs text-muted-foreground">{t('payment_link_hint')}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {stripeConnected ? t('payment_link_hint_auto') : t('payment_link_hint')}
+                        </p>
+                      )}
+                      {stripeConnected && !watch('payment_link_url')?.trim() && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <Switch
+                            id="payment_link_auto"
+                            checked={watch('payment_link_auto') ?? true}
+                            onCheckedChange={(v) =>
+                              setValue('payment_link_auto', v, { shouldDirty: true })
+                            }
+                          />
+                          <Label
+                            htmlFor="payment_link_auto"
+                            className="text-sm font-normal text-muted-foreground"
+                          >
+                            {t('payment_link_auto_label')}
+                          </Label>
+                        </div>
                       )}
                     </div>
                   )}

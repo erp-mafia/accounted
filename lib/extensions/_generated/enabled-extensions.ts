@@ -10,4 +10,5 @@ export const ENABLED_EXTENSION_IDS: ReadonlySet<string> = new Set([
   'skatteverket',
   'invoice-inbox',
   'document-extraction',
+  'stripe',
 ])

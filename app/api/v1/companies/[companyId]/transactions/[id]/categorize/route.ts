@@ -33,7 +33,8 @@ import {
 } from '@/lib/bookkeeping/counterparty-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
+import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -239,6 +240,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         body.vat_treatment,
       )
     }
+
+    // Book the bank leg against the transaction's ACTUAL settlement account
+    // rather than the hardcoded 1930 in the templates. Without this, interest
+    // or fees that landed on a savings/EUR account mis-book to 1930 and the
+    // real bank line never reconciles. applySettlementAccount only rewrites a
+    // 1930 leg and is a no-op when the settlement account is 1930, so legacy
+    // rows with no cash_account_id behave exactly as before. Mirrors the
+    // internal dashboard route (app/api/transactions/[id]/categorize); this
+    // v1 surface previously never called applySettlementAccount at all.
+    const settlementAccount = await resolveSettlementAccount(
+      ctx.supabase,
+      ctx.companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
+    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
 
     if (
       is_business &&

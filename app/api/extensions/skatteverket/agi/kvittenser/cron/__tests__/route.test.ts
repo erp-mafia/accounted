@@ -30,7 +30,11 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
       this.name = 'SkatteverketAuthError'
     }
   }
-  return { SkatteverketAuthError }
+  return {
+    SkatteverketAuthError,
+    // resolve-auth's currentSkvEnvironment (grant-revoked path) reads this.
+    getSkatteverketEnvironment: vi.fn().mockReturnValue('test'),
+  }
 })
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
@@ -49,17 +53,40 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   hasCapability: vi.fn().mockResolvedValue(true),
 }))
 
+// The route's real connection-store hits the DB via its own service client;
+// mocking keeps the grant-revoked path deterministic. resolve-auth also
+// imports getConnection from here (only used when system auth mode is on,
+// which is off in tests), so export it too.
+vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
+  getConnection: vi.fn().mockResolvedValue(null),
+  markGrantRevoked: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/lib/deadlines/complete-tax-deadline', () => ({
+  completeTaxDeadline: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/extensions/general/skatteverket/lib/kvittens-notification', () => ({
+  sendKvittensNotification: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { GET } from '../route'
 import { createClient } from '@supabase/supabase-js'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
+import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
+import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
 const mockAgiGetKvittenser = vi.mocked(agiGetKvittenser)
 const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
+const mockMarkGrantRevoked = vi.mocked(markGrantRevoked)
+const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
+const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
 
 function makeRequest() {
   return new Request('http://localhost/api/extensions/skatteverket/agi/kvittenser/cron', {
@@ -87,7 +114,7 @@ function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknow
       const result = tables[table] ?? { data: null, error: null }
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
-      for (const method of ['select', 'eq', 'order', 'limit', 'update', 'delete']) {
+      for (const method of ['select', 'eq', 'in', 'order', 'limit', 'update', 'delete', 'insert']) {
         chain[method] = vi.fn(() => chain)
       }
       chain.maybeSingle = vi.fn().mockResolvedValue(resolved)
@@ -162,8 +189,103 @@ describe('AGI kvittenser cron', () => {
 
     expect(body.signed).toBe(1)
     expect(body.errors).toBe(0)
+    expect(body.grantRevoked).toBe(0)
+    expect(body.results[0].status).toBe('signed')
+    expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
+    expect(mockSendKvittensNotification).toHaveBeenCalledTimes(1)
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still reports signed and sends the notification when completeTaxDeadline throws', async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockAgiGetKvittenser.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: {
+        kvittenser: [
+          {
+            uuidKvittens: 'uuid-1',
+            signeradAv: '191212121212',
+            signeradTid: '2026-06-01T10:00:00Z',
+          },
+        ],
+      },
+    } as any)
+    mockCompleteTaxDeadline.mockRejectedValueOnce(new Error('deadline table unavailable'))
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    // The filing succeeded before the best-effort step failed: the row must
+    // still land as signed, never as error (the next run only revisits
+    // pending_signature rows, so an error here would be lost permanently).
+    expect(body.signed).toBe(1)
+    expect(body.errors).toBe(0)
+    expect(body.results[0].status).toBe('signed')
+
+    // The notification still goes out even though deadline completion threw.
+    expect(mockSendKvittensNotification).toHaveBeenCalledTimes(1)
+    expect(mockSendKvittensNotification).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'comp-1',
+      userId: 'user-1',
+      kind: 'agi',
+      period: expect.any(String),
+      kvittensnummer: 'uuid-1',
+      referenceId: 'decl-1',
+    })
+
+    // The failure is a warning, not an error.
+    expect(errorSpy).not.toHaveBeenCalled()
+    const warnMessages = warnSpy.mock.calls.map(c => String(c[0]))
+    expect(warnMessages.some(m => m.includes('completeTaxDeadline failed'))).toBe(true)
+  })
+
+  it('still reports signed when sendKvittensNotification throws', async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockAgiGetKvittenser.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: {
+        kvittenser: [
+          {
+            uuidKvittens: 'uuid-1',
+            signeradAv: '191212121212',
+            signeradTid: '2026-06-01T10:00:00Z',
+          },
+        ],
+      },
+    } as any)
+    mockSendKvittensNotification.mockRejectedValueOnce(new Error('smtp down'))
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.signed).toBe(1)
+    expect(body.errors).toBe(0)
     expect(body.results[0].status).toBe('signed')
     expect(errorSpy).not.toHaveBeenCalled()
+    const warnMessages = warnSpy.mock.calls.map(c => String(c[0]))
+    expect(warnMessages.some(m => m.includes('sendKvittensNotification failed'))).toBe(true)
+  })
+
+  it('counts grant_revoked in the run summary', async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockAgiGetKvittenser.mockRejectedValueOnce(
+      new SkatteverketAuthError('Ombud grant missing.', 'OMBUD_GRANT_MISSING'),
+    )
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.processed).toBe(1)
+    expect(body.grantRevoked).toBe(1)
+    expect(body.errors).toBe(0)
+    expect(body.apigwConfig).toBe(0)
+    expect(body.results[0]).toMatchObject({ status: 'grant_revoked', error: 'OMBUD_GRANT_MISSING' })
+    expect(mockMarkGrantRevoked).toHaveBeenCalledWith('comp-1', expect.any(String), 'lasombud', 'OMBUD_GRANT_MISSING')
+
+    const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
+    expect(summaryLine).toContain('1 grants revoked')
   })
 
   it('logs a warn (not error) and records apigw_config on ACCESS_DENIED', async () => {

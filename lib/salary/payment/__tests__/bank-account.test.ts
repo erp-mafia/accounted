@@ -7,7 +7,50 @@ import {
   lookupBankByClearing,
   lookupBicByClearing,
   lookupBicByBankName,
+  splitDomesticBankAccount,
 } from '@/lib/salary/payment/bank-account'
+
+describe('splitDomesticBankAccount', () => {
+  it('passes a 4-digit clearing + account through unchanged', () => {
+    expect(splitDomesticBankAccount('6000', '1234567')).toEqual({
+      clearing4: '6000',
+      accountDigits: '1234567',
+    })
+  })
+
+  it('moves the 5th digit of a Swedbank clearing into the account field', () => {
+    expect(splitDomesticBankAccount('83279', '1234567890')).toEqual({
+      clearing4: '8327',
+      accountDigits: '91234567890',
+    })
+  })
+
+  it('strips the redundant clearing prefix from an 11-digit Nordea personkonto', () => {
+    expect(splitDomesticBankAccount('1708', '17082042825')).toEqual({
+      clearing4: '1708',
+      accountDigits: '2042825',
+    })
+  })
+
+  it('keeps an 11-digit account that does not start with the clearing', () => {
+    expect(splitDomesticBankAccount('3300', '19850101234')).toEqual({
+      clearing4: '3300',
+      accountDigits: '19850101234',
+    })
+  })
+
+  it('normalizes hyphens and spaces before splitting', () => {
+    expect(splitDomesticBankAccount('8327-9', '123 456 789 0')).toEqual({
+      clearing4: '8327',
+      accountDigits: '91234567890',
+    })
+  })
+
+  it('throws on an invalid clearing number', () => {
+    expect(() => splitDomesticBankAccount('123', '1234567')).toThrow('Ogiltigt clearingnummer')
+    expect(() => splitDomesticBankAccount('12345', '1234567')).toThrow('Ogiltigt clearingnummer')
+  })
+})
 
 describe('normalizeBankNumber', () => {
   it('strips spaces and hyphens', () => {

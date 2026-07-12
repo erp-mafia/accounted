@@ -14,6 +14,7 @@ import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -131,6 +132,18 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
     }
 
+    // Auto-create an online payment link (extension-provided, e.g. Stripe) now
+    // that the number exists, so the email button and PDF QR carry it. A
+    // failure never blocks the send: the faktura is legally valid without a
+    // link, so it degrades to a PARTIAL warning instead.
+    const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
+      supabase,
+      companyId!,
+      user.id,
+      invoice as Invoice,
+      opLog,
+    )
+
     // Final render with the assigned number: this is the buffer attached to
     // the email and later archived as underlag. Override status to 'sent' on
     // the in-memory copy: the DB flip happens after email delivery (line
@@ -205,6 +218,10 @@ export const POST = withRouteContext(
     // success toast with a sub-warning, and the audit trail records exactly
     // which sub-step broke.
     const partialFailures: Array<{ step: string; reason: string }> = []
+
+    if (paymentLinkFailure) {
+      partialFailures.push({ step: 'payment_link', reason: paymentLinkFailure })
+    }
 
     {
       const { error: updateError } = await supabase

@@ -28,6 +28,8 @@ export const CAPABILITY = {
   migration: 'migration',
   /** Bolagsverket iXBRL årsredovisning filing. Reserved (extension not yet enabled). */
   bolagsverket: 'bolagsverket',
+  /** Stripe Connect: auto payment links on invoices + payment/payout sync. */
+  stripe_payments: 'stripe_payments',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -52,6 +54,7 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.bank_sync,
   CAPABILITY.skatteverket,
   CAPABILITY.email_send,
+  CAPABILITY.stripe_payments,
 ] as const
 
 /**

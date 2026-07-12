@@ -19,6 +19,7 @@ const GATED: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/authorize' },
   { method: 'POST', path: '/declaration/validate' },
   { method: 'POST', path: '/declaration/draft' },
+  { method: 'POST', path: '/declaration/submit' },
   { method: 'PUT', path: '/declaration/lock' },
   { method: 'POST', path: '/agi/submit' },
   { method: 'POST', path: '/agi/spara' },
