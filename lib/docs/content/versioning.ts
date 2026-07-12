@@ -64,7 +64,7 @@ What does NOT count as a breaking change:
 
 ## Idempotency
 
-Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is a UUID you generate; the server caches the response keyed by \`(user_id, company_id, idempotency_key)\` for 24 hours. The canonical hash of the request body is stored alongside and compared on replay: same key + same body returns the cached response, same key + different body returns \`409 IDEMPOTENCY_KEY_REUSE\`.
+Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is treated as an opaque string (a UUID is recommended, but any unique value works); the server caches the response keyed by \`(user_id, company_id, idempotency_key)\` for 24 hours. The canonical hash of the request body is stored alongside and compared on replay: same key + same body returns the cached response, same key + different body returns \`409 IDEMPOTENCY_KEY_REUSE\`.
 
 ### How it works
 
@@ -97,7 +97,7 @@ In an agent loop, generate the key once at the *start* of an attempt and reuse i
 
 Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true\` in the OpenAPI spec) accepts \`?dry_run=true\` query param **or** \`X-Dry-Run: true\` header. The endpoint executes its full validation pipeline (Zod, business rules, period-lock checks, VAT-rate compatibility, cross-tenant guards, ...) but does NOT commit. A dry-run always returns **HTTP 200** with the \`X-Dry-Run: true\` response header — never the resource's normal success status (201, 204). The body wraps a preview, not the resource itself:
 
-- All \`validation_error\` shapes that a real commit would produce surface here.
+- All **local** \`validation_error\` shapes that a real commit would produce surface here (Zod, business rules, period locks, cross-tenant guards). Failures that depend on external providers do **not** surface — dry-run skips them (see below), so a VIES/BankID/Skatteverket rejection only appears on the real commit.
 - \`data.preview\` holds the would-be record (same shape as the success response).
 - For **financial** writes (invoices, journal entries, period ops, salary) the preview also carries \`staged_operation_id\`, the \`journal_lines\` that would be posted, \`account_deltas\`, and \`voucher_number_assigned_on_commit\` (a projection — the committed number can differ by one or two if another writer takes the next number first).
 

@@ -32,7 +32,7 @@ registerEndpoint({
   doNotUseFor:
     'Smoke-testing the dispatcher itself (use a real event). Replaying a failed delivery (use POST /webhook-deliveries/{id}/retry).',
   pitfalls: [
-    'Test deliveries follow the same retry policy as real events: a 500 from your receiver will retry 7 times over ~72h. Use a 2xx ack-only handler if you want a clean signal.',
+    'Test deliveries follow the same retry policy as real events: a 500 from your receiver will retry 7 times over ~87h (about 3.6 days). Use a 2xx ack-only handler if you want a clean signal.',
   ],
   example: {
     response: {

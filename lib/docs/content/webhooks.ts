@@ -65,7 +65,7 @@ Every delivery wraps the event in a Stripe-style envelope:
   "id": "d290f1ee-6c54-4b01-90e6-d701748f0851",
   "type": "invoice.paid",
   "api_version": "2026-05-12",
-  "created": 1715797800,
+  "created": 1778846400,
   "data": {
     "object": {
       "invoice": { "id": "...", "invoice_number": "2026-0042", "total": 12500.00, ... },
@@ -78,7 +78,7 @@ Every delivery wraps the event in a Stripe-style envelope:
 }
 \`\`\`
 
-- \`id\` matches the \`webhook_delivery_id\` you can poll at [\`GET /webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-webhooks-deliveries-list).
+- \`id\` matches the \`webhook_delivery_id\` you can poll at [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-webhooks-deliveries-list).
 - \`api_version\` is the version pinned to your webhook at creation time. Payload shapes for *your* webhook will not change until you explicitly upgrade.
 - \`previous_attributes\` is reserved for a future field-diff feature and is currently always \`null\` for every event type.
 
@@ -90,7 +90,7 @@ Every outbound POST carries:
 POST /your-receiver-url HTTP/1.1
 Content-Type: application/json
 User-Agent: gnubok-webhook/1
-X-Gnubok-Signature: t=1715797800,v1=2f5c...
+X-Gnubok-Signature: t=1778846400,v1=2f5c...
 X-Gnubok-Event: invoice.paid
 X-Gnubok-Delivery: d290f1ee-6c54-4b01-90e6-d701748f0851
 X-Gnubok-Api-Version: 2026-05-12
@@ -219,7 +219,7 @@ Use [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/doc
 
 To replay a \`dead\` or \`delivered\` delivery, call [\`POST /api/v1/webhook-deliveries/{deliveryId}/retry\`](/docs/api/reference/webhooks#post-webhook_deliveries-retry). The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers must be idempotent on the \`X-Gnubok-Delivery\` header.
 
-To send a synthetic test event without driving real state, call [\`POST /webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload on the next per-minute tick.
+To send a synthetic test event without driving real state, call [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload on the next per-minute tick.
 
 ## Auto-disable behaviour
 
@@ -229,7 +229,7 @@ The dispatcher disables a webhook (sets \`active=false\` + \`disabled_reason\`) 
 - The receiver returns **HTTP 3xx redirect**: refusing to follow redirects to internal IPs is a security policy; a stable receiver should not return 3xx
 - The webhook URL **resolves to a private/loopback/link-local/cloud-metadata IP** at dispatch time (DNS rebinding refusal)
 
-Re-enable with [\`PATCH /webhooks/{webhookId}\`](/docs/api/reference/webhooks#patch-webhooks-update) setting \`active: true\`. This clears \`disabled_at\` + \`disabled_reason\` but does NOT replay the deliveries that died while disabled: replay them individually with the retry endpoint.
+Re-enable with [\`PATCH /api/v1/companies/{companyId}/webhooks/{webhookId}\`](/docs/api/reference/webhooks#patch-webhooks-update) setting \`active: true\`. This clears \`disabled_at\` + \`disabled_reason\` but does NOT replay the deliveries that died while disabled: replay them individually with the retry endpoint.
 
 ## Audit + retention
 

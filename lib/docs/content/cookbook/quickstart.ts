@@ -4,7 +4,7 @@ export const QUICKSTART_MD = `# Quickstart: send your first invoice
 
 ## What you'll need
 
-- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data: safe for evals. **Test keys are simulation-only:** the API wrapper forces every write (POST/PATCH/DELETE) into dry-run, so nothing persists and no emails go out. Walk through this whole guide with a test key to validate your integration, then swap in a live key (\`gnubok_sk_*\` with no \`test_\` infix) to actually commit records and send real invoices.
+- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data: safe for evals. **Test keys are simulation-only:** the API wrapper forces every write (POST/PATCH/DELETE) into dry-run, so nothing persists and no emails go out. Use a test key for steps 1–2 to confirm auth and validate request shapes. Steps 3–5 chain on real IDs (the customer's \`id\`, then the invoice's \`id\`, then \`/send\` and \`/mark-paid\`); because a forced dry-run returns \`id: null\`, run that stateful sequence with a **live** key (\`gnubok_sk_*\`, no \`test_\` infix) so each step gets a committed record the next one can reference.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
@@ -65,7 +65,7 @@ Response (\`X-Dry-Run: true\` header, no row written). The would-be record is ne
 }
 \`\`\`
 
-With a **live** key, dropping \`?dry_run=true\` commits the row: the response drops the \`dry_run\`/\`preview\` wrapper and returns the record directly under \`data\` with a real \`id\` and \`created_at\`. With a **test** key the write is forced to dry-run either way, so you keep getting this preview (\`id\`/\`created_at\` stay \`null\`) until you switch to a live key.
+With a **live** key, dropping \`?dry_run=true\` commits the row: the response drops the \`dry_run\`/\`preview\` wrapper and returns the record directly under \`data\` with a real \`id\` and \`created_at\`. Save that committed \`data.id\` as \`CUSTOMER_ID\` for the next step. With a **test** key the write is forced to dry-run either way, so you keep getting this preview (\`id\`/\`created_at\` stay \`null\`) — which is why the create→send→pay steps below need a live key to produce IDs to chain on.
 
 ## 3. Draft an invoice
 
@@ -74,13 +74,14 @@ Invoices are typed (B2B, EU-business, individual) and support mixed-rate VAT (pe
 \`\`\`bash
 INVOICE_IDEMP=$(uuidgen)
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $INVOICE_IDEMP" \\
   -H "Content-Type: application/json" \\
   -d '{
     "customer_id": "'$CUSTOMER_ID'",
     "invoice_date": "2026-05-15",
     "due_date": "2026-06-14",
+    "delivery_date": "2026-05-15",
     "currency": "SEK",
     "items": [
       { "description": "Konsultation, maj 2026", "quantity": 8, "unit": "tim", "unit_price": 1200, "vat_rate": 25 }
@@ -113,7 +114,7 @@ A fresh draft has \`invoice_number: null\`: the F-series löpnummer is allocated
 
 \`\`\`bash
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -143,7 +144,7 @@ When the customer pays, mark the invoice paid. The engine generates the payment 
 
 \`\`\`bash
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{ "payment_date": "2026-05-22" }'
@@ -151,7 +152,7 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOI
 
 ## What just happened
 
-With a live key this flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. Five API calls; the engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. With the test key used above every write is simulated (forced dry-run), so nothing persists: repoint at a live key to run it for real.
+This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. Five API calls; the engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. A test key validates the request shapes in steps 1–2 via dry-run but never persists, so the create→send→pay sequence runs with a live key (each step chains on the previous step's committed \`id\`).
 
 The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate): including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date: ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
 

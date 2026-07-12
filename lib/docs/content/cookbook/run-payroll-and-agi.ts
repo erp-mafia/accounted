@@ -2,7 +2,7 @@ export const COOKBOOK_PAYROLL_AGI_MD = `# Cookbook: run payroll and generate the
 
 > Drive a Swedish salary run from draft to booked, then generate the arbetsgivardeklaration på individnivå (AGI) XML for manual submission to Skatteverket. Five-step lifecycle, every state transition idempotent and dry-runnable (generate-agi is idempotent but not dry-runnable).
 
-This is the operational companion to the [Salary-runs reference](/docs/api/reference/salary-runs). The route surface mirrors the dashboard exactly: anything you can do in the UI is callable from the API.
+This is the operational companion to the [Salary-runs reference](/docs/api/reference/salary-runs). Most of the payroll lifecycle is API-callable, but one step is still dashboard-only: **attaching employees to a run** (the \`/salary-runs/{id}/employees\` v1 endpoint is forthcoming), so a run can't yet be populated end-to-end from the public API. Everything after that — calculate, approve, mark paid, book, generate AGI — is.
 
 ## What you'll need
 

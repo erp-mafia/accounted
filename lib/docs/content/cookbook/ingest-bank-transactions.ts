@@ -117,7 +117,7 @@ In a REST integration you supply the category yourself: choose a \`category\`, o
 
 ## 5. Commit the categorisation
 
-\`POST /transactions/{id}/categorize\` books the transaction (creates the verifikation directly — it is not staged for approval). \`is_business\` is required; pass either \`category\`, \`account_override\`, \`template_id\`, or \`counterparty_template_id\`. Dry-run first to preview the resolved mapping:
+\`POST /transactions/{id}/categorize\` books the transaction (creates the verifikation directly — it is not staged for approval). \`is_business\` is required. Then supply a mapping: a \`template_id\` or \`counterparty_template_id\` (these take precedence), or a \`category\` for the default mapping. \`account_override\` is an optional posting-account override that **combines with \`category\`** — it applies only when neither \`template_id\` nor \`counterparty_template_id\` is present (as in the example below). Dry-run first to preview the resolved mapping:
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/categorize?dry_run=true" \\

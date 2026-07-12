@@ -77,12 +77,12 @@ Wait up to 60s, then check the receiver logs. The delivery should arrive with:
 \`\`\`
 POST /gnubok HTTP/1.1
 Content-Type: application/json
-X-Gnubok-Signature: t=1715797800,v1=2f5c...
+X-Gnubok-Signature: t=1778846400,v1=2f5c...
 X-Gnubok-Event: webhook.test
 X-Gnubok-Delivery: f47ac10b-58cc-4372-a567-0e02b2c3d479
 X-Gnubok-Api-Version: 2026-05-12
 
-{"id":"f47ac10b-58cc-4372-a567-0e02b2c3d479","type":"webhook.test","api_version":"2026-05-12","created":1715797800,"data":{"object":{"hello":"from Accounted","tested_at":"2026-05-15T12:00:00Z"}},"previous_attributes":null}
+{"id":"f47ac10b-58cc-4372-a567-0e02b2c3d479","type":"webhook.test","api_version":"2026-05-12","created":1778846400,"data":{"object":{"hello":"from Accounted","tested_at":"2026-05-15T12:00:00Z"}},"previous_attributes":null}
 \`\`\`
 
 If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns 4xx (other than 410) or 5xx, it goes to \`failed\` and retries on the schedule \`1m / 5m / 30m / 2h / 12h / 24h / 48h\`.

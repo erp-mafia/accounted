@@ -9,7 +9,7 @@ This is the operational companion to the [Fiscal-periods reference](/docs/api/re
 - A test API key with \`bookkeeping:write\`, \`bookkeeping:read\`, \`reports:read\`, \`compliance:read\`, \`documents:write\`, and \`operations:read\` scopes.
 - All transactions for the year posted (no drafts).
 - All VAT declarations for the year filed (12 monthly, 4 quarterly, or 1 annual: see the [VAT cookbook](/docs/api/cookbook/file-vat-declaration)).
-- All AGI declarations filed and kontrolluppgift (KU) generated.
+- All AGI declarations for the year filed. (Employment income reported through monthly AGI is **not** re-reported on an annual kontrolluppgift — KU remains only for the specific payment types AGI doesn't cover, e.g. certain ränta/utdelning; it is not a blanket year-end step.)
 - The bokslut date: usually 31 december for calendar-year companies (kalenderår), or the last day of the räkenskapsår for off-calendar (brutet räkenskapsår).
 
 ## 1. Pre-flight: continuity check (IB/UB per BFL 5 kap)
@@ -47,7 +47,7 @@ When a mismatch exists \`valid\` is \`false\` and each offending account appears
 }
 \`\`\`
 
-\`valid: false\` is a BFL violation: investigate before proceeding. A discrepancy on \`1930\` (bank) usually means a missed reconciliation; on \`2611-2641\` (moms) means a VAT declaration disagrees with the GL.
+\`valid: false\` is a BFL violation: the previous period's closing balance (UB) was not carried into this period as the opening balance (IB). This is always a carry-forward problem — a missing/incorrect opening-balance entry, or a post-close mutation of the prior period — not a missed bank reconciliation or a VAT-vs-GL disagreement. Investigate the opening-balance entry for the flagged account before proceeding.
 
 ## 2. Pre-flight: voucher gaps (BFNAR 2013:2)
 
@@ -230,6 +230,6 @@ The one exception: the VAT declaration cadence is monthly/kvartalsvis/årlig reg
 ## Next steps
 
 - **[VAT declaration cookbook](/docs/api/cookbook/file-vat-declaration)**: covers each monthly cycle within the year.
-- **[Payroll cookbook](/docs/api/cookbook/run-payroll-and-agi)**: kontrolluppgift season (jan of year N+1) follows naturally after year-end.
+- **[Payroll cookbook](/docs/api/cookbook/run-payroll-and-agi)**: the monthly AGI cycle, plus any exception-based kontrolluppgifter (the KU types AGI doesn't cover) filed in January of year N+1.
 - **[Fiscal-periods reference](/docs/api/reference/fiscal-periods)**: every parameter, every state transition.
 `

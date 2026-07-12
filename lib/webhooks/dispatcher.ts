@@ -28,7 +28,7 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('webhooks/dispatcher')
 
-/** 7 retries over ~72h. Index = attempts BEFORE this one. */
+/** 7 retries over ~87h (≈3.6 days). Index = attempts BEFORE this one. */
 const RETRY_BACKOFF_SECONDS: ReadonlyArray<number> = [
   60,        //  1m: first retry
   5 * 60,    //  5m
