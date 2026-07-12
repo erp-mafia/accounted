@@ -1,1 +1,1 @@
-{"$schema":"./extensions.schema.json","extensions":["enable-banking","email","arcim-migration","tic","mcp-server","cloud-backup","skatteverket","invoice-inbox","document-extraction"]}
+{"$schema":"./extensions.schema.json","extensions":["enable-banking","email","arcim-migration","tic","mcp-server","cloud-backup","skatteverket","invoice-inbox","document-extraction","stripe"]}

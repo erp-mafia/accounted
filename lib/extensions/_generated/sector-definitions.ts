@@ -119,5 +119,17 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
                 "invoice_inbox_items"
           ]
     },
+    {
+          "slug": "stripe",
+          "name": "Stripe-betalningar",
+          "sector": "general",
+          "category": "operations",
+          "icon": "CreditCard",
+          "dataPattern": "manual",
+          "description": "Betalningslänkar på fakturor och automatisk avprickning via Stripe",
+          "longDescription": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura. Betalningar prickas av mot rätt faktura och Stripe-utbetalningar bokförs med avgifter och moms.",
+          "hasOwnData": true,
+          "subscriptionNotice": "Denna integration kräver ett eget Stripe-konto. Stripes transaktionsavgifter tillkommer enligt ditt avtal med Stripe."
+    },
   ],
 }

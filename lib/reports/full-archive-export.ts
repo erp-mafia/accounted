@@ -10,7 +10,20 @@ import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
-import type { AuditLogEntry } from '@/types'
+import {
+  trialBalanceToCsv,
+  incomeStatementToCsv,
+  balanceSheetToCsv,
+  generalLedgerToCsv,
+  type TrialBalanceLike,
+} from './archive-csv'
+import { buildArchiveReadme, buildDriveFolderReadme } from './archive-readme'
+import type { GeneralLedgerReport } from './general-ledger'
+import type {
+  AuditLogEntry,
+  BalanceSheetReport,
+  IncomeStatementReport,
+} from '@/types'
 
 export type FullArchiveOptions =
   | { scope: 'period'; period_id: string; include_documents?: boolean }
@@ -85,7 +98,10 @@ const REPORT_CONCURRENCY = 3
 // 5 MB for SIE + reports + audit + system doc, +3 MB headroom for master-data
 // JSON dumps and raw imported SIE files (the bucket caps each file at 50 MB,
 // but typical SIE4 files are tens of KB so a few MB covers most companies).
-const ARCHIVE_OVERHEAD_BYTES = 8 * 1024 * 1024
+export const ARCHIVE_OVERHEAD_BYTES = 8 * 1024 * 1024
+
+/** Documents included in an archive: per-period, everything, or only the rest. */
+type DocumentMode = ArchiveScope | 'unlinked'
 
 /**
  * Generate a full archive ZIP for a company.
@@ -175,6 +191,62 @@ export async function generateFullArchive(
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, options.scope)
   revision.file('systemdokumentation.json', JSON.stringify(systemDoc, null, 2))
 
+  zip.file(
+    'LÄSMIG.txt',
+    buildArchiveReadme({
+      companyName: company.company_name || 'Okänt företag',
+      orgNumber: company.org_number,
+      generatedAt: new Date().toISOString(),
+      scope: options.scope,
+      periodLabel: options.scope === 'period' ? periodLabel(periods[0]) : undefined,
+      appName: getBranding().appName,
+    })
+  )
+
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+/**
+ * Generate the "Grunddata" archive for the per-fiscal-year Drive backup:
+ * everything that is not tied to a single fiscal year. Master-data JSON
+ * dumps, original imported SIE files, documents no period archive carries
+ * (unlinked/draft), the full behandlingshistorik and the system
+ * documentation. Complements one `generateFullArchive(scope='period')` ZIP
+ * per räkenskapsår.
+ */
+export async function generateBaseDataArchive(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: { include_documents?: boolean } = {}
+): Promise<ArrayBuffer> {
+  const company = await fetchCompany(supabase, companyId)
+  const periods = await fetchAllPeriods(supabase, companyId)
+  const includeDocuments = options.include_documents !== false
+
+  const zip = new JSZip()
+
+  if (includeDocuments) {
+    await writeDocuments(zip, supabase, companyId, periods, 'unlinked')
+  }
+  await writeSieSourceFiles(zip, supabase, companyId, includeDocuments)
+  await writeMasterData(zip, supabase, companyId)
+
+  const revision = zip.folder('revision')!
+  const auditEntries = await fetchAllAuditEntries(supabase, companyId, {})
+  revision.file('behandlingshistorik.json', JSON.stringify(auditEntries, null, 2))
+  const systemDoc = await buildSystemDoc(supabase, companyId, periods, 'all')
+  revision.file('systemdokumentation.json', JSON.stringify(systemDoc, null, 2))
+
+  zip.file(
+    'LÄSMIG.txt',
+    buildDriveFolderReadme({
+      companyName: company.company_name || 'Okänt företag',
+      orgNumber: company.org_number,
+      generatedAt: new Date().toISOString(),
+      appName: getBranding().appName,
+    })
+  )
+
   return zip.generateAsync({ type: 'arraybuffer' })
 }
 
@@ -192,11 +264,11 @@ export async function estimateArchiveSize(
   scope: ArchiveScope,
   periodId?: string
 ): Promise<{ total_bytes: number; document_bytes: number; document_count: number }> {
+  // Scope=all counts every document (linked or not), mirroring writeDocuments.
   let query = supabase
     .from('document_attachments')
     .select('file_size_bytes, journal_entry_id', { count: 'exact' })
     .eq('company_id', companyId)
-    .not('journal_entry_id', 'is', null)
 
   if (scope === 'period') {
     if (!periodId) {
@@ -326,6 +398,24 @@ function writeReports(folder: JSZip, reports: PeriodReports): void {
   if (reports.vatDeclaration) {
     folder.file('momsdeklaration.json', JSON.stringify(reports.vatDeclaration, null, 2))
   }
+  // CSV twins for humans: the JSON is complete but unreadable in Excel.
+  // Never let a formatting bug take down the archive (the JSON stays
+  // canonical), and never let one broken report take down the other CSVs.
+  const tryCsv = (file: string, make: () => string) => {
+    try {
+      folder.file(file, make())
+    } catch {
+      // Skip this CSV on shape mismatch.
+    }
+  }
+  tryCsv('saldobalans.csv', () => trialBalanceToCsv(reports.trialBalance as TrialBalanceLike))
+  tryCsv('resultatrakning.csv', () =>
+    incomeStatementToCsv(reports.incomeStatement as IncomeStatementReport)
+  )
+  tryCsv('balansrakning.csv', () =>
+    balanceSheetToCsv(reports.balanceSheet as BalanceSheetReport)
+  )
+  tryCsv('huvudbok.csv', () => generalLedgerToCsv(reports.generalLedger as GeneralLedgerReport))
 }
 
 async function writeDocuments(
@@ -333,32 +423,48 @@ async function writeDocuments(
   supabase: SupabaseClient,
   companyId: string,
   periods: FiscalPeriodRow[],
-  scope: ArchiveScope
+  scope: DocumentMode
 ): Promise<void> {
   const dokument = zip.folder('dokument')!
   const manifest: DocumentManifestEntry[] = []
 
   try {
-    const documents = await fetchAllRows<DocumentRow>(({ from, to }) =>
-      supabase
+    const documents = await fetchAllRows<DocumentRow>(({ from, to }) => {
+      let q = supabase
         .from('document_attachments')
         .select(
           'id, file_name, storage_path, journal_entry_id, sha256_hash, version, digitization_date, upload_source, mime_type, file_size_bytes, journal_entries:journal_entry_id(voucher_number, voucher_series, entry_date)'
         )
         .eq('company_id', companyId)
-        .not('journal_entry_id', 'is', null)
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
+      // Backups (scope=all/unlinked) include every document, even those not
+      // yet linked to an entry: inbox items and unbooked receipts are
+      // räkenskapsinformation too. The per-period archive keeps the
+      // linked-only filter.
+      if (scope === 'period') {
+        q = q.not('journal_entry_id', 'is', null)
+      }
+      // Stable total order for correct paging (see fetch-all.ts).
+      return q.order('id', { ascending: true }).range(from, to)
+    })
 
     if (documents.length > 0) {
-      const entryIdToPeriodId = await buildEntryToPeriodMap(supabase, companyId, periods, scope)
+      const entryIdToPeriodId = await buildEntryToPeriodMap(
+        supabase,
+        companyId,
+        periods,
+        scope === 'period' ? 'period' : 'all'
+      )
 
       const inScopeDocuments =
         scope === 'period'
           ? documents.filter((d) => d.journal_entry_id && entryIdToPeriodId.has(d.journal_entry_id))
-          : documents.filter((d) => d.journal_entry_id) // all-mode: keep every linked doc
+          : scope === 'unlinked'
+            ? // Grunddata mode: only what no period archive carries (orphans
+              // and docs linked to draft/unposted entries).
+              documents.filter(
+                (d) => !d.journal_entry_id || !entryIdToPeriodId.has(d.journal_entry_id)
+              )
+            : documents // all-mode: keep every doc, linked or not
 
       // Track used paths so we can disambiguate collisions (two documents with
       // identical voucher prefix + filename) by appending a short id suffix.
@@ -654,6 +760,197 @@ async function writeSieSourceFiles(
   }
 }
 
+export interface MasterDataTableSpec {
+  name: string
+  file: string
+  orderBy?: string
+  /**
+   * Unique column used as the paging/dedupe key. Defaults to 'id'; override
+   * for tables whose PK has another name (e.g. journal_entry_no_doc_required).
+   */
+  pageKey?: string
+  /**
+   * Child tables without a company_id column: rows are fetched by first
+   * collecting the parent table's ids for the company, then paging the child
+   * table through `fk IN (...)` chunks.
+   */
+  via?: { parent: string; fk: string }
+}
+
+/**
+ * Tables dumped as JSON under `data/` in the scope='all' backup.
+ *
+ * This list is a contract enforced by tests/pg/full-archive-coverage.pg.test.ts:
+ * every public table with a company_id column must appear here, in
+ * ARCHIVE_COVERED_ELSEWHERE_TABLES, or in ARCHIVE_EXCLUDED_TABLES. A migration
+ * that adds a company-scoped table fails that test until the table is
+ * classified, so the backup can never silently fall behind the schema again.
+ */
+export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
+  // Counterparties and articles
+  { name: 'customers', file: 'customers.json', orderBy: 'created_at' },
+  { name: 'suppliers', file: 'suppliers.json', orderBy: 'created_at' },
+  { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
+  // Customer invoicing
+  { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
+  { name: 'invoice_items', file: 'invoice_items.json', via: { parent: 'invoices', fk: 'invoice_id' } },
+  { name: 'invoice_payments', file: 'invoice_payments.json', orderBy: 'payment_date' },
+  { name: 'invoice_reminders', file: 'invoice_reminders.json' },
+  { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
+  // Supplier invoicing
+  { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
+  { name: 'supplier_invoice_items', file: 'supplier_invoice_items.json', via: { parent: 'supplier_invoices', fk: 'supplier_invoice_id' } },
+  { name: 'supplier_invoice_payments', file: 'supplier_invoice_payments.json' },
+  // Receipts
+  { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
+  { name: 'receipt_line_items', file: 'receipt_line_items.json', via: { parent: 'receipts', fk: 'receipt_id' } },
+  // Bank and categorization
+  // NOTE: the date column on transactions is `date` (a previous spec said
+  // booking_date, which does not exist: every backup got an error stub).
+  { name: 'transactions', file: 'transactions.json', orderBy: 'date' },
+  { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
+  { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
+  { name: 'cash_accounts', file: 'cash_accounts.json' },
+  { name: 'mapping_rules', file: 'mapping_rules.json' },
+  { name: 'categorization_templates', file: 'categorization_templates.json' },
+  { name: 'booking_template_library', file: 'booking_template_library.json' },
+  { name: 'skattekonto_rules', file: 'skattekonto_rules.json' },
+  // Salary (räkenskapsinformation with 7-year retention)
+  { name: 'employees', file: 'employees.json', orderBy: 'created_at' },
+  { name: 'employee_benefits', file: 'employee_benefits.json', orderBy: 'created_at' },
+  { name: 'salary_runs', file: 'salary_runs.json', orderBy: 'created_at' },
+  { name: 'salary_run_employees', file: 'salary_run_employees.json', orderBy: 'created_at' },
+  { name: 'salary_line_items', file: 'salary_line_items.json', orderBy: 'created_at' },
+  { name: 'salary_absence_days', file: 'salary_absence_days.json' },
+  { name: 'salary_worked_days', file: 'salary_worked_days.json' },
+  { name: 'salary_payslip_links', file: 'salary_payslip_links.json' },
+  { name: 'shift_premium_rules', file: 'shift_premium_rules.json' },
+  { name: 'agi_declarations', file: 'agi_declarations.json', orderBy: 'created_at' },
+  // Assets and accruals
+  { name: 'assets', file: 'assets.json', orderBy: 'created_at' },
+  { name: 'depreciation_schedules', file: 'depreciation_schedules.json', orderBy: 'created_at' },
+  { name: 'accrual_schedules', file: 'accrual_schedules.json', orderBy: 'created_at' },
+  { name: 'accrual_schedule_installments', file: 'accrual_schedule_installments.json', orderBy: 'created_at' },
+  // Dimensions
+  { name: 'dimensions', file: 'dimensions.json', orderBy: 'created_at' },
+  { name: 'dimension_values', file: 'dimension_values.json', orderBy: 'created_at' },
+  { name: 'cost_centers', file: 'cost_centers.json', orderBy: 'created_at' },
+  { name: 'projects', file: 'projects.json', orderBy: 'created_at' },
+  { name: 'account_dimension_rules', file: 'account_dimension_rules.json' },
+  // Compliance records
+  { name: 'voucher_gap_explanations', file: 'voucher_gap_explanations.json', orderBy: 'created_at' },
+  { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
+  { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
+  { name: 'rot_rut_payout_request_items', file: 'rot_rut_payout_request_items.json', via: { parent: 'rot_rut_payout_requests', fk: 'request_id' } },
+  { name: 'arsredovisning_narratives', file: 'arsredovisning_narratives.json' },
+  { name: 'arsredovisning_submissions', file: 'arsredovisning_submissions.json' },
+  // Settings
+  { name: 'company_settings', file: 'company_settings.json' },
+]
+
+/**
+ * Company-scoped tables whose content reaches the archive through another
+ * section, so they are deliberately not part of the `data/` dump.
+ */
+export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
+  journal_entries: 'sie/<period>.se + rapporter/<period>/grundbok.json',
+  fiscal_periods: 'revision/systemdokumentation.json + SIE #RAR',
+  chart_of_accounts: 'revision/systemdokumentation.json (kontoplan)',
+  voucher_sequences: 'revision/systemdokumentation.json (verifikationsserier)',
+  audit_log: 'revision/behandlingshistorik.json',
+  document_attachments: 'dokument/ + dokument/manifest.json',
+  sie_imports: 'sie/imports.json + sie/original/',
+  sie_account_mappings: 'sie/account_mappings.json',
+}
+
+/**
+ * Company-scoped tables deliberately kept out of the archive, with the reason.
+ * Platform state, secrets, telemetry and re-fetchable mirrors do not belong in
+ * a portable räkenskapsinformation backup.
+ */
+export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  agent_conversations: 'AI assistant state, not räkenskapsinformation',
+  agent_memory: 'AI assistant state, not räkenskapsinformation',
+  agent_profiles: 'AI assistant state, not räkenskapsinformation',
+  api_keys: 'secrets',
+  arsredovisning_signature_requests: 'signing workflow state',
+  bank_connections: 'PSD2 connection state and tokens, not portable',
+  bolagsverket_avtal_acceptances: 'service agreement acceptance state',
+  bolagsverket_subscriptions: 'integration subscription state',
+  booking_template_usage: 'usage telemetry',
+  calendar_feeds: 'feed tokens (secrets)',
+  capability_grants: 'entitlement state',
+  chat_messages: 'AI assistant state, not räkenskapsinformation',
+  chat_sessions: 'AI assistant state, not räkenskapsinformation',
+  company_capability_config: 'entitlement state',
+  company_inbound_domains: 'inbound-mail infrastructure',
+  company_inboxes: 'inbound-mail infrastructure',
+  company_invitations: 'membership state, meaningless outside the platform',
+  company_members: 'membership state, meaningless outside the platform',
+  company_subscriptions: 'billing state',
+  deadlines: 'regenerable operational calendar state',
+  dimension_retag_log: 'operation log',
+  event_log: '30-day TTL event bus log',
+  extension_data: 'extension runtime state (includes this backup\'s own state)',
+  graph_counterparties: 'derived AI context graph, regenerable',
+  graph_transaction_counterparties: 'derived AI context graph, regenerable',
+  idempotency_keys: 'infrastructure',
+  inbox_rate_counters: 'infrastructure',
+  invoice_inbox_items: 'inbox workflow state; the files live in document_attachments',
+  metered_events: 'billing telemetry',
+  notification_log: 'notification dedup log',
+  operations: 'staged-operation workflow state',
+  payment_match_log: 'derived matching log',
+  pending_operations: 'staged-operation workflow state',
+  processing_history: 'internal processing log; behandlingshistorik exports from audit_log',
+  provider_consents: 'consent tokens, not portable',
+  salary_payslip_deliveries: 'delivery log',
+  skattekonto_transactions: 'mirror of Skatteverket skattekonto, re-fetchable at source',
+  skatteverket_api_audit_log: 'integration audit log',
+  skatteverket_company_connections: 'integration connection state',
+  skatteverket_tokens: 'secrets',
+  stripe_connections: 'Stripe OAuth state (secrets)',
+  stripe_payment_events: 'mirror of Stripe data, re-fetchable at source',
+  stripe_payouts: 'mirror of Stripe data, re-fetchable at source',
+  webhook_deliveries: 'automation delivery log',
+  webhooks: 'automation config with signing secrets',
+}
+
+/** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */
+const CHILD_FK_CHUNK = 100
+
+async function fetchChildTableRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  spec: MasterDataTableSpec
+): Promise<Record<string, unknown>[]> {
+  const via = spec.via!
+  const parents = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from(via.parent)
+      .select('id')
+      .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+
+  const pageKey = spec.pageKey ?? 'id'
+  const rows: Record<string, unknown>[] = []
+  for (let i = 0; i < parents.length; i += CHILD_FK_CHUNK) {
+    const chunk = parents.slice(i, i + CHILD_FK_CHUNK).map((p) => p.id)
+    const chunkRows = await fetchAllRows<Record<string, unknown>>(
+      ({ from, to }) => {
+        let q = supabase.from(spec.name).select('*').in(via.fk, chunk)
+        if (spec.orderBy) q = q.order(spec.orderBy, { ascending: true })
+        return q.order(pageKey, { ascending: true }).range(from, to)
+      },
+      { dedupeBy: (r) => String(r[pageKey]) }
+    )
+    rows.push(...chunkRows)
+  }
+  return rows
+}
+
 /**
  * Dump structured master data as JSON under `data/`. These records are implicit
  * in the SIE export (as journal entries) but not recoverable as domain objects
@@ -666,51 +963,38 @@ async function writeMasterData(
 ): Promise<void> {
   const data = zip.folder('data')!
 
-  const tables: Array<{ name: string; file: string; orderBy?: string }> = [
-    { name: 'customers', file: 'customers.json', orderBy: 'created_at' },
-    { name: 'suppliers', file: 'suppliers.json', orderBy: 'created_at' },
-    { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
-    { name: 'invoice_items', file: 'invoice_items.json' },
-    { name: 'invoice_payments', file: 'invoice_payments.json', orderBy: 'payment_date' },
-    { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
-    { name: 'supplier_invoice_items', file: 'supplier_invoice_items.json' },
-    { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
-    { name: 'receipt_line_items', file: 'receipt_line_items.json' },
-    { name: 'transactions', file: 'transactions.json', orderBy: 'booking_date' },
-    { name: 'mapping_rules', file: 'mapping_rules.json' },
-    { name: 'categorization_templates', file: 'categorization_templates.json' },
-    { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
-    { name: 'company_settings', file: 'company_settings.json' },
-  ]
-
-  await Promise.all(
-    tables.map(async (t) => {
-      try {
-        const rows = await fetchAllRows<{ id: string } & Record<string, unknown>>(({ from, to }) => {
-          let q = supabase.from(t.name).select('*').eq('company_id', companyId)
-          if (t.orderBy) {
-            q = q.order(t.orderBy, { ascending: true })
-          }
-          // Always end on the unique PK so paging has a stable TOTAL order. A
-          // non-unique display order (e.g. created_at) or no order at all
-          // silently SKIPS/DUPLICATES rows across page boundaries: data loss in
-          // a statutory 7-year retention archive. (All these tables have an
-          // `id uuid` PK.) dedupeBy is defense-in-depth against the duplicate case.
-          return q.order('id', { ascending: true }).range(from, to)
-        }, { dedupeBy: (r) => r.id })
-        data.file(t.file, JSON.stringify(rows, null, 2))
-      } catch (err) {
-        data.file(
-          t.file,
-          JSON.stringify(
-            { error: err instanceof Error ? err.message : 'Fetch failed', rows: [] },
-            null,
-            2
-          )
+  // Sequential on purpose: ~50 fast queries in series are gentler on
+  // PostgREST than 50 concurrent ones, and the deterministic order keeps the
+  // queued-mock tests stable.
+  for (const t of MASTER_DATA_DUMP_TABLES) {
+    const pageKey = t.pageKey ?? 'id'
+    try {
+      const rows = t.via
+        ? await fetchChildTableRows(supabase, companyId, t)
+        : await fetchAllRows<Record<string, unknown>>(({ from, to }) => {
+            let q = supabase.from(t.name).select('*').eq('company_id', companyId)
+            if (t.orderBy) {
+              q = q.order(t.orderBy, { ascending: true })
+            }
+            // Always end on the unique PK so paging has a stable TOTAL order. A
+            // non-unique display order (e.g. created_at) or no order at all
+            // silently SKIPS/DUPLICATES rows across page boundaries: data loss in
+            // a statutory 7-year retention archive. dedupeBy is defense-in-depth
+            // against the duplicate case.
+            return q.order(pageKey, { ascending: true }).range(from, to)
+          }, { dedupeBy: (r) => String(r[pageKey]) })
+      data.file(t.file, JSON.stringify(rows, null, 2))
+    } catch (err) {
+      data.file(
+        t.file,
+        JSON.stringify(
+          { error: err instanceof Error ? err.message : 'Fetch failed', rows: [] },
+          null,
+          2
         )
-      }
-    })
-  )
+      )
+    }
+  }
 }
 
 function sanitizeFileName(name: string): string {

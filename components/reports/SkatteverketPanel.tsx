@@ -27,7 +27,6 @@ import {
   Info,
   Link2,
   Loader2,
-  Lock,
   MoreHorizontal,
   Send,
   ShieldAlert,
@@ -37,6 +36,7 @@ import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/f
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 
 interface SkatteverketStatus {
   connected: boolean
@@ -113,6 +113,9 @@ function isOrgNumberMissing(err: unknown): boolean {
  * so a slow SKV round-trip is never silent.
  */
 const ACTION_IN_FLIGHT_LABELS: Record<string, string> = {
+  validate: 'Validerar deklarationen...',
+  draft: 'Sparar utkast...',
+  lock: 'Låser utkastet...',
   fetchDraft: 'Hämtar utkast...',
   check: 'Kontrollerar inlämning...',
   fetchDecided: 'Hämtar beslut...',
@@ -389,6 +392,84 @@ function SkatteverketPanelInner({
     }
   }
 
+  /**
+   * One-click filing: the server chains kontrollera -> utkast -> lås and
+   * returns the signing link. Stage-aware failures come back with a `stage`
+   * discriminator: `validation` stopped before anything was written at SKV,
+   * `lock` with `draft_saved` means the draft survives in Eget utrymme and
+   * only the lock step needs a retry (available under Fler åtgärder).
+   */
+  const handleSubmit = async () => {
+    if (localBlocked) {
+      setNotice({
+        kind: 'error',
+        text:
+          'Åtgärda felen under Kontroll av underlaget högst upp på sidan innan ' +
+          'du skickar till Skatteverket.',
+      })
+      return
+    }
+    setActionLoading('submit')
+    setNotice(null)
+    setKontroller([])
+    try {
+      const res = await fetch('/api/extensions/ext/skatteverket/declaration/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ periodType, year, period }),
+      })
+      const result = await res.json()
+
+      if (res.ok && result.data?.signeringsLank) {
+        const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
+        setKontroller(controls)
+        setSigneringslank(result.data.signeringsLank)
+        setNotice({
+          kind: 'success',
+          text:
+            'Deklarationen är kontrollerad, sparad och låst. Öppna signeringslänken ' +
+            'för att signera med BankID.',
+        })
+        return
+      }
+
+      if (result.stage) {
+        const controls: KontrollResult[] = result.kontrollResultat?.resultat || []
+        if (controls.length > 0) setKontroller(controls)
+        if (result.stage === 'validation') {
+          setNotice({
+            kind: 'error',
+            text: result.error || 'Skatteverket hittade valideringsfel i deklarationen.',
+          })
+        } else if (result.stage === 'lock' && result.draft_saved) {
+          setNotice({
+            kind: 'error',
+            text:
+              'Utkastet är sparat hos Skatteverket men kunde inte låsas för signering. ' +
+              'Försök igen med "Lås och signera" under Fler åtgärder.',
+          })
+        } else {
+          setNotice({
+            kind: 'error',
+            text: result.error || 'Kunde inte skicka deklarationen till Skatteverket',
+          })
+        }
+        return
+      }
+
+      if (!applyApiError(result)) {
+        setNotice({
+          kind: 'error',
+          text: 'Kunde inte skicka deklarationen till Skatteverket',
+        })
+      }
+    } catch {
+      setNotice({ kind: 'error', text: 'Kunde inte skicka deklarationen till Skatteverket' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const handleUnlock = async () => {
     setActionLoading('unlock')
     setNotice(null)
@@ -426,10 +507,12 @@ function SkatteverketPanelInner({
     setActionLoading('check')
     setNotice(null)
     try {
+      // periodType/year/period let the server complete the period's moms
+      // deadline when the filing is confirmed.
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/submitted?redovisare=${encodeURIComponent(
           await getRedovisare()
-        )}&redovisningsperiod=${getRedovisningsperiod()}`
+        )}&redovisningsperiod=${getRedovisningsperiod()}&periodType=${periodType}&year=${year}&period=${period}`
       )
       const result = await res.json()
       if (applyApiError(result)) {
@@ -449,7 +532,7 @@ function SkatteverketPanelInner({
     } finally {
       setActionLoading(null)
     }
-  }, [applyApiError, getRedovisare, getRedovisningsperiod])
+  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, year, period])
 
   // While a signing link is outstanding, re-check submission status when the
   // user returns to this tab: signing happens on Skatteverket's site, so the
@@ -534,7 +617,7 @@ function SkatteverketPanelInner({
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/decided?redovisare=${encodeURIComponent(
           await getRedovisare()
-        )}&redovisningsperiod=${getRedovisningsperiod()}`
+        )}&redovisningsperiod=${getRedovisningsperiod()}&periodType=${periodType}&year=${year}&period=${period}`
       )
       const result = await res.json()
       if (applyApiError(result)) {
@@ -691,6 +774,45 @@ function SkatteverketPanelInner({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-72">
+                {/* The demoted step-by-step actions: the visible surface is
+                    the one-click "Skicka till Skatteverket" button; these
+                    remain for partial retries (e.g. lock-only after a lock
+                    failure) and for users who want to inspect each step. */}
+                <DropdownMenuLabel>Steg för steg</DropdownMenuLabel>
+                <DropdownMenuItem
+                  disabled={!hasData || localBlocked || actionLoading !== null}
+                  onSelect={() => handleValidate()}
+                >
+                  <div>
+                    <p>Validera</p>
+                    <p className="text-xs text-muted-foreground">
+                      Kontrollera deklarationen hos Skatteverket utan att spara
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!hasData || localBlocked || actionLoading !== null}
+                  onSelect={() => handleSaveDraft()}
+                >
+                  <div>
+                    <p>Spara utkast</p>
+                    <p className="text-xs text-muted-foreground">
+                      Spara deklarationen som utkast i Eget utrymme
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!hasData || actionLoading !== null}
+                  onSelect={() => handleLock()}
+                >
+                  <div>
+                    <p>Lås och signera</p>
+                    <p className="text-xs text-muted-foreground">
+                      Lås det sparade utkastet och hämta signeringslänken
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuLabel>Status hos Skatteverket</DropdownMenuLabel>
                 <DropdownMenuItem
                   disabled={actionLoading !== null}
@@ -889,61 +1011,46 @@ function SkatteverketPanelInner({
           </div>
         )}
 
-        {/* Forward lifecycle: the only always-visible action row. */}
-        <div className="flex flex-wrap gap-2 pt-1">
+        {/* Forward lifecycle: one primary action. The individual steps live
+            in the overflow menu under "Steg för steg". */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button
-            variant="outline"
-            onClick={handleValidate}
+            onClick={handleSubmit}
             disabled={!hasData || localBlocked || actionLoading !== null}
             className="gap-2"
           >
-            {actionLoading === 'validate' ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <FileCheck className="h-4 w-4" />
-            )}
-            Validera
-          </Button>
-
-          <Button
-            variant="outline"
-            onClick={handleSaveDraft}
-            disabled={!hasData || localBlocked || actionLoading !== null}
-            className="gap-2"
-          >
-            {actionLoading === 'draft' ? (
+            {actionLoading === 'submit' ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Send className="h-4 w-4" />
             )}
-            Spara utkast
-          </Button>
-
-          <Button
-            onClick={handleLock}
-            disabled={!hasData || hasErrors || actionLoading !== null}
-            className="gap-2"
-          >
-            {actionLoading === 'lock' ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Lock className="h-4 w-4" />
-            )}
-            Lås och signera
+            Skicka till Skatteverket
           </Button>
         </div>
+
+        <p className="text-xs text-muted-foreground">
+          Deklarationen kontrolleras, sparas som utkast i{' '}
+          <InfoTooltip
+            variant="help"
+            content="Ditt företags privata yta hos Skatteverket. Utkast som sparas där räknas inte som inlämnade förrän de har signerats med BankID."
+          >
+            <span>Eget utrymme</span>
+          </InfoTooltip>{' '}
+          och låses för signering med BankID hos Skatteverket. Inget lämnas in
+          förrän du har signerat.
+        </p>
 
         {/* Visible disabled-state explanations: title attributes never show
             on disabled buttons. */}
         {localBlocked && (
           <p className="text-sm text-destructive">
             Åtgärda felen under Kontroll av underlaget högst upp på sidan innan du
-            validerar eller skickar in.
+            skickar in.
           </p>
         )}
         {hasErrors && !localBlocked && (
           <p className="text-sm text-muted-foreground">
-            Valideringsfelen ovan måste åtgärdas innan utkastet kan låsas.
+            Valideringsfelen ovan måste åtgärdas innan deklarationen kan lämnas in.
           </p>
         )}
       </CardContent>

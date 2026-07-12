@@ -121,6 +121,54 @@ export function validateEmployeeBankAccount(
   return issues
 }
 
+export interface DomesticBankAccountParts {
+  /** 4-digit clearing: the Bankgirot LB clearing field and the pain.001 SESBA member id. */
+  clearing4: string
+  /** Account digits without the clearing prefix (see the special cases below). */
+  accountDigits: string
+}
+
+/**
+ * Split an employee's clearing/account pair into the 4-digit clearing and the
+ * account digits used by BOTH payout formats. This is the single source of
+ * truth: the Bankgirot LB file (fixed 4-digit clearing field, TK 54) and the
+ * pain.001 file (CdtrAgt ClrSysMmbId SESBA + CdtrAcct BBAN without clearing)
+ * must present identical routing for the same employee, or one format pays a
+ * different account than the other.
+ *
+ * Special cases, per the Bankgirot LB spec and kept format-identical here:
+ *  - Swedbank 5-digit clearings (8xxx-y): the first 4 digits are the clearing,
+ *    the 5th digit is carried as the leading digit of the account field.
+ *  - Nordea personkonto entered as an 11-digit account that repeats the
+ *    4-digit clearing as its prefix: the redundant prefix is stripped so the
+ *    account field holds only the account itself.
+ */
+export function splitDomesticBankAccount(
+  clearingInput: string,
+  accountInput: string
+): DomesticBankAccountParts {
+  const clearing = (clearingInput ?? '').replace(/\D/g, '')
+  const account = (accountInput ?? '').replace(/\D/g, '')
+
+  if (clearing.length === 4) {
+    if (account.length === 11 && account.startsWith(clearing)) {
+      return { clearing4: clearing, accountDigits: account.slice(4) }
+    }
+    return { clearing4: clearing, accountDigits: account }
+  }
+
+  if (clearing.length === 5 && clearing.startsWith('8')) {
+    return {
+      clearing4: clearing.slice(0, 4),
+      accountDigits: clearing.slice(4) + account,
+    }
+  }
+
+  throw new Error(
+    `Ogiltigt clearingnummer: ${clearingInput} (förväntat 4 siffror, eller 5 siffror som börjar med 8 för Swedbank)`
+  )
+}
+
 /**
  * Conservative clearing-number -> bank-name lookup, for reassurance next to the
  * field. Only the major, long-stable, unambiguous ranges are included; any

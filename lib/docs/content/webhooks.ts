@@ -1,16 +1,16 @@
 export const WEBHOOKS_MD = `# Webhooks
 
-> Receive HMAC-signed POST notifications when state changes in Accounted: invoices paid, journal entries committed, periods locked, salary runs booked, AGI files generated. At-least-once delivery with exponential backoff over ~72 hours.
+> Receive HMAC-signed POST notifications when state changes in Accounted: invoices paid, journal entries committed, periods locked, salary runs booked, AGI files generated. At-least-once delivery with exponential backoff over ~87 hours (about 3.6 days).
 
 If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is identical: subscribe a URL to an event type, Accounted POSTs each event with a signed JSON body, your receiver returns 2xx to acknowledge. The signature header format and retry policy are the same. The event types are gnubok-specific.
 
 ## Lifecycle
 
-1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, delete the webhook and create a new one.
+1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret): a fresh secret is issued in place and the old one is invalidated immediately, with no change to the webhook's id or delivery history.
 2. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
 3. **The dispatcher cron runs every minute**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout.
 4. **Your receiver verifies the signature**, processes the event idempotently, and returns 2xx.
-5. **Failed deliveries retry** at \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~72 hours total). After all attempts the delivery is marked \`dead\`. HTTP 410 from your receiver short-circuits to \`dead\` immediately and **auto-disables** the webhook.
+5. **Failed deliveries retry** at \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~87 hours total, about 3.6 days). After all attempts the delivery is marked \`dead\`. HTTP 410 from your receiver short-circuits to \`dead\` immediately and **auto-disables** the webhook.
 
 ## Event types
 
@@ -62,10 +62,10 @@ Every delivery wraps the event in a Stripe-style envelope:
 
 \`\`\`json
 {
-  "id": "wh_dlv_a8f1...",
+  "id": "d290f1ee-6c54-4b01-90e6-d701748f0851",
   "type": "invoice.paid",
   "api_version": "2026-05-12",
-  "created": 1715797800,
+  "created": 1778846400,
   "data": {
     "object": {
       "invoice": { "id": "...", "invoice_number": "2026-0042", "total": 12500.00, ... },
@@ -78,9 +78,9 @@ Every delivery wraps the event in a Stripe-style envelope:
 }
 \`\`\`
 
-- \`id\` matches the \`webhook_delivery_id\` you can poll at [\`GET /webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-deliveries).
+- \`id\` matches the \`webhook_delivery_id\` you can poll at [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-webhooks-deliveries-list).
 - \`api_version\` is the version pinned to your webhook at creation time. Payload shapes for *your* webhook will not change until you explicitly upgrade.
-- \`previous_attributes\` carries the prior values of any fields that changed on update-style events (e.g. \`invoice.paid\` carries the prior invoice state). \`null\` for create-style events.
+- \`previous_attributes\` is reserved for a future field-diff feature and is currently always \`null\` for every event type.
 
 ## Request headers
 
@@ -90,11 +90,11 @@ Every outbound POST carries:
 POST /your-receiver-url HTTP/1.1
 Content-Type: application/json
 User-Agent: gnubok-webhook/1
-X-Gnubok-Signature: t=1715797800,v1=2f5c...
+X-Gnubok-Signature: t=1778846400,v1=2f5c...
 X-Gnubok-Event: invoice.paid
-X-Gnubok-Delivery: wh_dlv_a8f1...
+X-Gnubok-Delivery: d290f1ee-6c54-4b01-90e6-d701748f0851
 X-Gnubok-Api-Version: 2026-05-12
-X-Request-Id: whdel_a8f1...
+X-Request-Id: whdel_d290f1ee-6c54-4b01-90e6-d701748f0851
 \`\`\`
 
 The \`X-Gnubok-Delivery\` header is the canonical correlation id: log it on receipt and use it to deduplicate retries (deliveries are at-least-once, so the same delivery id may arrive more than once after a network blip).
@@ -210,16 +210,16 @@ def verify_signature(body: bytes, header: str, secret: bytes) -> bool:
 - **Using parsed JSON instead of raw bytes.** Re-serialising the body (\`JSON.stringify(req.body)\`) produces different bytes than Accounted sent: the signature won't match. Capture the raw body before any framework parses it.
 - **Forgetting the timestamp window.** Without checking \`t\`, an attacker who captured one signed payload can replay it forever. 5 minutes is our recommended window; tighten if your clock skew is small.
 - **Treating retries as duplicates of failure.** Retries arrive when *we* didn't get a 2xx. A 200 response that arrives slowly may not reach us in time and we'll retry: your receiver sees the same \`X-Gnubok-Delivery\` twice. Idempotency is on you.
-- **Returning 5xx for application errors.** A 5xx triggers the full retry policy (~72h of attempts). If your handler hit an application bug that won't resolve on retry, return 200 and queue the failure for internal investigation; only return 5xx for genuinely transient problems.
+- **Returning 5xx for application errors.** A 5xx triggers the full retry policy (~87h of attempts). If your handler hit an application bug that won't resolve on retry, return 200 and queue the failure for internal investigation; only return 5xx for genuinely transient problems.
 - **Missing \`redirect: 'error'\`-style refusal at receiver level.** If your receiver follows redirects, an attacker who can MITM the response could redirect re-tries to a malicious URL. Modern HTTP clients refuse redirects by default for POST; verify yours does.
 
 ## Delivery debugging
 
-Use [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-deliveries) to list the recent delivery history for a webhook: every row has the response status, response body (truncated to 4 KB, only \`text/plain\` and \`application/json\` content types persisted), error message, and current state (\`pending\` / \`in_flight\` / \`delivered\` / \`failed\` / \`dead\`).
+Use [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-webhooks-deliveries-list) to list the recent delivery history for a webhook: every row has the response status, response body (truncated to 4 KB, only \`text/plain\` and \`application/json\` content types persisted), error message, and current state (\`pending\` / \`in_flight\` / \`delivered\` / \`failed\` / \`dead\`).
 
-To replay a \`dead\` or \`delivered\` delivery, call [\`POST /api/v1/webhook-deliveries/{deliveryId}/retry\`](/docs/api/reference/webhooks#post-retry). The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers must be idempotent on the \`X-Gnubok-Delivery\` header.
+To replay a \`dead\` or \`delivered\` delivery, call [\`POST /api/v1/webhook-deliveries/{deliveryId}/retry\`](/docs/api/reference/webhooks#post-webhook_deliveries-retry). The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers must be idempotent on the \`X-Gnubok-Delivery\` header.
 
-To send a synthetic test event without driving real state, call [\`POST /webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-test). The dispatcher delivers a \`webhook.test\` event with a static payload on the next per-minute tick.
+To send a synthetic test event without driving real state, call [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload on the next per-minute tick.
 
 ## Auto-disable behaviour
 
@@ -229,7 +229,7 @@ The dispatcher disables a webhook (sets \`active=false\` + \`disabled_reason\`) 
 - The receiver returns **HTTP 3xx redirect**: refusing to follow redirects to internal IPs is a security policy; a stable receiver should not return 3xx
 - The webhook URL **resolves to a private/loopback/link-local/cloud-metadata IP** at dispatch time (DNS rebinding refusal)
 
-Re-enable with [\`PATCH /webhooks/{webhookId}\`](/docs/api/reference/webhooks#patch-webhooks) setting \`active: true\`. This clears \`disabled_at\` + \`disabled_reason\` but does NOT replay the deliveries that died while disabled: replay them individually with the retry endpoint.
+Re-enable with [\`PATCH /api/v1/companies/{companyId}/webhooks/{webhookId}\`](/docs/api/reference/webhooks#patch-webhooks-update) setting \`active: true\`. This clears \`disabled_at\` + \`disabled_reason\` but does NOT replay the deliveries that died while disabled: replay them individually with the retry endpoint.
 
 ## Audit + retention
 

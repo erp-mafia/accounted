@@ -18,6 +18,8 @@
  * the salary journal entry. Subject to 7-year retention.
  */
 
+import { splitDomesticBankAccount } from './bank-account'
+
 export interface BgLbCompanyData {
   name: string
   /** Sender bankgiro number, with or without dash. e.g. "123-4567" or "1234567" */
@@ -112,7 +114,7 @@ export function generateBgLb(
   // Pos 54-59: Payment date YYMMDD
   // Pos 60-80: Free reference / period label (21 chars)
   for (const emp of positivePayments) {
-    const { clearing4, accountWithSwedbankPrefix } = encodeReceiverAccount(
+    const { clearing4, accountDigits } = splitDomesticBankAccount(
       emp.clearingNumber,
       emp.bankAccountNumber
     )
@@ -122,7 +124,7 @@ export function generateBgLb(
     records.push(
       pad('54', 2) +
         padNumber(clearing4, 4) +
-        padNumber(accountWithSwedbankPrefix, 10) +
+        padNumber(accountDigits, 10) +
         padText(emp.name, 25) +
         padNumber(String(amountOre), 12) +
         paymentDateYyMmDd +
@@ -301,47 +303,4 @@ function padText(value: string, length: number): string {
 function pad(value: string, length: number): string {
   if (value.length > length) return value.slice(0, length)
   return value.padEnd(length, ' ')
-}
-
-/**
- * Bankgirot encodes 4-digit clearings directly. Swedbank uses 5-digit clearings
- * (8xxx-x); the 5th digit is moved to the leading position of the account field.
- *
- * For 5-digit clearings starting with "8": digits 1-4 go to the clearing field,
- * the 5th digit becomes the first digit of the 10-position account field.
- *
- * Nordea Personkonto with 11-digit account number: the displayed account
- * already includes the 4-digit clearing as its leading digits (e.g. clearing
- * 1708 + account 17082042825). The 10-digit BG-LB account field cannot fit
- * 11 digits, so we strip the redundant clearing prefix and zero-pad the
- * remaining 7 digits to 10. The receiving bank reconstructs the full
- * personkonto from clearing + account.
- */
-function encodeReceiverAccount(
-  clearingInput: string,
-  accountInput: string
-): { clearing4: string; accountWithSwedbankPrefix: string } {
-  const clearing = clearingInput.replace(/\D/g, '')
-  const account = accountInput.replace(/\D/g, '')
-
-  if (clearing.length === 4) {
-    // Nordea Personkonto: account is 11 digits and starts with the clearing.
-    // Strip the redundant clearing prefix so it fits the 10-digit account field.
-    if (account.length === 11 && account.startsWith(clearing)) {
-      return { clearing4: clearing, accountWithSwedbankPrefix: account.slice(4) }
-    }
-    return { clearing4: clearing, accountWithSwedbankPrefix: account }
-  }
-
-  if (clearing.length === 5 && clearing.startsWith('8')) {
-    // Swedbank: keep 4 leading digits in clearing field, prepend 5th digit to account.
-    return {
-      clearing4: clearing.slice(0, 4),
-      accountWithSwedbankPrefix: clearing.slice(4) + account,
-    }
-  }
-
-  throw new Error(
-    `Ogiltigt clearingnummer: ${clearingInput} (förväntat 4 siffror, eller 5 siffror som börjar med 8 för Swedbank)`
-  )
 }

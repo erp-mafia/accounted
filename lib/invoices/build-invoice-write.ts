@@ -70,6 +70,8 @@ export interface InvoiceWriteInput {
   notes?: string
   /** Optional https payment link (schema-validated). Omitted/empty → null. */
   payment_link_url?: string
+  /** Per-invoice opt-out for the automatic Stripe payment link. Omitted → true. */
+  payment_link_auto?: boolean
   /** Per-invoice öresavrundning override (display-only). Omitted → null (inherit company setting). */
   ore_rounding?: boolean
   deduction_personnummer?: string
@@ -108,6 +110,7 @@ export type InvoiceWriteFields = {
   our_reference: string | null | undefined
   notes: string | null | undefined
   payment_link_url: string | null
+  payment_link_auto: boolean
   ore_rounding: boolean | null
   document_type: InvoiceDocumentType
   deduction_total: number
@@ -371,6 +374,9 @@ export async function buildInvoiceWriteData(params: {
     // Always a concrete value (never undefined) so a draft edit that cleared
     // the field actually NULLs the column: supabase-js drops undefined keys.
     payment_link_url: input.payment_link_url?.trim() || null,
+    // Automation opt-out for the Stripe payment link; default on. The form
+    // always sends the field, so a draft edit that unticked it persists false.
+    payment_link_auto: input.payment_link_auto ?? true,
     // Display-only öresavrundning override; null inherits company_settings.ore_rounding.
     ore_rounding: input.ore_rounding ?? null,
     document_type: documentType,

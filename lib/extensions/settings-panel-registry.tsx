@@ -16,6 +16,9 @@ const SETTINGS_PANELS: Record<string, ComponentType> = {
   'cloud-backup': dynamic(
     () => import('@/extensions/general/cloud-backup/components/CloudBackupCard')
   ),
+  stripe: dynamic(
+    () => import('@/extensions/general/stripe/components/StripeSettingsPanel')
+  ),
 }
 
 /**

@@ -207,7 +207,9 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'reminder_fee',
   'accrual',
   'result_appropriation',
+  'rot_rut_payout',
   'vat_settlement',
+  'stripe_payout',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -384,6 +386,9 @@ export const CreateInvoiceSchema = z.object({
     ])
     .transform((v) => v || undefined)
     .optional(),
+  // Per-invoice opt-out for the automatic Stripe payment link on send.
+  // Omitted → true (create) / kept as sent by the form (edit).
+  payment_link_auto: z.boolean().optional(),
   // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
   // encrypted server-side before it ever hits the DB (see encryptPersonnummer
   // in lib/salary/personnummer.ts). `deduction_housing_designation` is the
@@ -482,6 +487,34 @@ export const RotRutSettleSchema = z.object({
     .string()
     .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
     .optional(),
+})
+
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
+// (dev_docs/skatteverket/husavdrag/exempel_beslut.json + ht.raml).
+export const RotRutBeslutFileSchema = z.object({
+  version: z.string(),
+  // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
+  utforare: z.string().regex(/^\d{10,12}$/),
+  beslut: z
+    .array(
+      z.object({
+        // NamnPaBegaran as submitted (1-16 chars); the primary match key
+        // against rot_rut_payout_requests.name.
+        namn: z.string().min(1),
+        referensnummer: z.string().regex(/^\d{11}(-\d+)?$/),
+        arenden: z
+          .array(
+            z.object({
+              personnummer: z.string().regex(/^\d{12}$/),
+              fakturanummer: z.string().max(20).optional(),
+              // Whole kronor; 0 = avslag for the ärende.
+              godkantBelopp: z.number().int().min(0),
+            }),
+          )
+          .min(1),
+      }),
+    )
+    .min(1),
 })
 
 // ============================================================

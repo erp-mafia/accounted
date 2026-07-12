@@ -1,5 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { skvRequest } from './api-client'
+import { skvRequestWithAuth, type SkvAuth } from './api-client'
 import type {
   SkatteverketSaldoResponse,
   SkatteverketTransaktionerResponse,
@@ -20,7 +19,7 @@ import type {
 const DEFAULT_SKATTEKONTO_BASE_URL =
   'https://api.test.skatteverket.se/beskattning/skattekonto/v2'
 
-function getBaseUrl(): string {
+export function getSkattekontoBaseUrl(): string {
   return (
     process.env.SKATTEVERKET_SKATTEKONTO_API_BASE_URL ||
     DEFAULT_SKATTEKONTO_BASE_URL
@@ -100,19 +99,17 @@ export class SkatteverketSkattekontoError extends Error {
  * @param datum    Optional ISO date (YYYY-MM-DD); fetch balance as of date
  */
 export async function getSaldo(
-  supabase: SupabaseClient,
-  userId: string,
+  auth: SkvAuth,
   omfragad: string,
   datum?: string,
 ): Promise<SkatteverketSaldoResponse> {
   const qs = datum ? `?datum=${encodeURIComponent(datum)}` : ''
-  const response = await skvRequest(
-    supabase,
-    userId,
+  const response = await skvRequestWithAuth(
+    auth,
     'GET',
     `/skattekonton/${omfragad}/saldo${qs}`,
     undefined,
-    { baseUrl: getBaseUrl() },
+    { baseUrl: getSkattekontoBaseUrl() },
   )
 
   if (!response.ok) {
@@ -130,19 +127,17 @@ export async function getSaldo(
  *                   555 days back; max lookback is 915 days.
  */
 export async function getTransaktioner(
-  supabase: SupabaseClient,
-  userId: string,
+  auth: SkvAuth,
   omfragad: string,
   datumFrom?: string,
 ): Promise<SkatteverketTransaktionerResponse> {
   const qs = datumFrom ? `?datumFrom=${encodeURIComponent(datumFrom)}` : ''
-  const response = await skvRequest(
-    supabase,
-    userId,
+  const response = await skvRequestWithAuth(
+    auth,
     'GET',
     `/skattekonton/${omfragad}/transaktioner${qs}`,
     undefined,
-    { baseUrl: getBaseUrl() },
+    { baseUrl: getSkattekontoBaseUrl() },
   )
 
   if (!response.ok) {

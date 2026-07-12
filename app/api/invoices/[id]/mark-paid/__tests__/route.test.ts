@@ -172,7 +172,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       expect.objectContaining({ id: 'inv-1' }),
       expect.any(String),
       undefined,
-      expect.anything()
+      expect.anything(),
+      undefined, // paymentAmount: full settle
+      undefined // settlementAccountNumber: default 1930
     )
   })
 
@@ -239,7 +241,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       expect.objectContaining({ id: 'inv-1' }),
       expect.any(String),
       'enskild_firma',
-      expect.anything()
+      expect.anything(),
+      undefined // settlementAccountNumber: default 1930
     )
   })
 

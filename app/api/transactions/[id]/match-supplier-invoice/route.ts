@@ -4,6 +4,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -104,15 +105,25 @@ export const POST = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method, last_supplier_payment_account')
+      .select('accounting_method')
       .eq('company_id', companyId)
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    // Same default the preview route uses, so the committed verifikat credits the
-    // same account the user saw previewed (the old path hardcoded 1930 here).
-    const paymentAccount =
-      (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account || '1930'
+
+    // Credit the cash account THIS transaction actually belongs to, never a
+    // company-wide "last used" preference: last_supplier_payment_account is
+    // written by the manual mark-paid flow (e.g. a private-funds payment
+    // booked to 2893) and has no relationship to which bank account a real,
+    // matched transaction settled from. Reusing it here silently misbooked a
+    // genuine 1930 bank payment to 2893 once a private payment had set that
+    // sticky default.
+    const paymentAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
 
     // Route on the supplier invoice's actual booking state: if 2440 was posted
     // at receipt (accrual), the match clears 2440 regardless of the company's
@@ -254,10 +265,11 @@ export const POST = withRouteContext(
           transaction.date,
           invoice.supplier?.supplier_type || 'swedish_business',
           undefined, // supplierName (unchanged default)
-          undefined, // paymentAccount (unchanged default 1930)
-          // Pin a foreign-currency settlement to the payment-date rate so 1930
-          // equals the bank movement (kontantmetoden books the expense at
-          // payment). No-op for SEK invoices and same-rate settlements.
+          paymentAccount,
+          // Pin a foreign-currency settlement to the payment-date rate so the
+          // settlement account equals the bank movement (kontantmetoden books
+          // the expense at payment). No-op for SEK invoices and same-rate
+          // settlements.
           exchangeRateDifference !== 0 && fullSettlement ? actualBankSek : undefined,
         )
         if (journalEntry) journalEntryId = journalEntry.id
@@ -292,6 +304,8 @@ export const POST = withRouteContext(
           supabase, companyId, user.id, invoice as SupplierInvoice,
           paymentAmountSek, transaction.date,
           exchangeRateDifference !== 0 ? exchangeRateDifference : undefined,
+          undefined, // supplierName (unchanged default)
+          paymentAccount,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       }

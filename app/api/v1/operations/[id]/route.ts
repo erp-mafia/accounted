@@ -46,7 +46,7 @@ registerEndpoint({
   description:
     'Returns the current snapshot of a v1 async operation: status (queued / running / succeeded / failed / cancelled), progress (jsonb, free-form), result (on success), and error (on failure). The operation_id is returned by the POST endpoints that initiate async work (period close, year-end, currency revaluation, SIE import).',
   useWhen:
-    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds; switch to the `operation.completed` webhook for production integrations.',
+    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response advertises `operation.completed` as the eventual push signal, but that webhook event is not deliverable yet — polling is the only supported completion signal today.)',
   doNotUseFor:
     'Fetching the resource the operation produced: once status=succeeded, read the result field or call the resource-specific GET endpoint. Cancelling a running operation (no cancel endpoint exists in v1).',
   pitfalls: [

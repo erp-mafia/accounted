@@ -13,6 +13,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { ORE_TOLERANCE } from '@/lib/money'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -50,7 +51,9 @@ export const GET = withRouteContext(
       // amount_sek is needed for the cash-method preview: a foreign-currency
       // settlement is translated at the payment-date rate (the SEK that left
       // the bank), mirroring the committed verifikat from the POST handler.
-      .select('id, date, amount, currency, amount_sek')
+      // cash_account_id resolves which BAS account this bank line actually
+      // settles from, mirroring the POST handler's settlement-account lookup.
+      .select('id, date, amount, currency, amount_sek, cash_account_id')
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -70,13 +73,22 @@ export const GET = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method, last_supplier_payment_account')
+      .select('accounting_method')
       .eq('company_id', companyId)
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const paymentAccount =
-      (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account || '1930'
+
+    // Same resolution as the POST handler: credit the cash account this
+    // transaction is actually linked to, never the sticky
+    // last_supplier_payment_account (that setting reflects the manual
+    // mark-paid/private-funds flow, not a real matched bank transaction).
+    const paymentAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      log,
+    )
 
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'

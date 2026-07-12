@@ -41,6 +41,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
   const hasCompany = !!company
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMcpExtension = ENABLED_EXTENSION_IDS.has('mcp-server')
+  const hasStripeExtension = ENABLED_EXTENSION_IDS.has('stripe')
 
   // Företagsprofil (TIC-snapshot) lives under Företag; Skatteverket under Skatt;
   // assistentens minne + kunskap under Assistenten; säkerhetsbackup under
@@ -56,6 +57,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     // with staff. #782
     { id: 'salary', href: '/settings/salary', label: t('salary'), group: 'accounting', show: hasCompany && (company?.entity_type === 'aktiebolag' || !!company?.pays_salaries) },
     { id: 'invoicing', href: '/settings/invoicing', label: t('invoicing'), group: 'sales', show: hasCompany },
+    { id: 'payments', href: '/settings/payments', label: t('payments'), group: 'sales', show: hasCompany && !isSandbox && hasStripeExtension },
     { id: 'templates', href: '/settings/templates', label: t('templates'), group: 'sales', show: hasCompany },
     { id: 'banking', href: '/settings/banking', label: t('banking'), group: 'tools', show: hasCompany && !isSandbox && hasBankingExtension },
     { id: 'assistant', href: '/settings/assistant', label: t('assistant'), group: 'tools', show: hasCompany && identity.isVerified },
