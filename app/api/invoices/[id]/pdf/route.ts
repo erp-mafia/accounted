@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -60,6 +60,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       company as CompanySettings,
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, invoice as Invoice)
+    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: invoice as Invoice,
@@ -69,6 +70,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         originalInvoiceNumber,
         branding,
         swishQrDataUrl,
+        paymentLinkQrDataUrl,
       })
     )
 

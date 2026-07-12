@@ -871,6 +871,13 @@ export interface Invoice {
   your_reference: string | null
   our_reference: string | null
 
+  // Optional online payment link (pasted by the user, e.g. a Stripe Payment
+  // Link). Rendered as a "Betala online" button in the invoice email and as a
+  // QR code + link on the PDF. Never copied to derived documents (credit
+  // notes, conversions, recurring invoices). Optional in TS for pre-migration
+  // fixtures.
+  payment_link_url?: string | null
+
   // Notes
   notes: string | null
 
@@ -1215,6 +1222,8 @@ export interface CreateInvoiceInput {
   your_reference?: string
   our_reference?: string
   notes?: string
+  /** Optional https link where the customer can pay online (e.g. a Stripe Payment Link). */
+  payment_link_url?: string
   /** Plaintext personnummer: encrypted server-side before storage. */
   deduction_personnummer?: string
   /** Fastighetsbeteckning. Required when any item carries deduction_type === 'rot'. */
@@ -1595,6 +1604,11 @@ export interface MappingResult {
   vat_lines: VatJournalLine[]
   all_lines_complete?: boolean  // when true, vat_lines contains ALL non-settlement lines
   description: string
+  // Set when a matched counterparty template's learned direction contradicts
+  // the transaction sign (e.g. an incoming refund matching an expense-learned
+  // template). The result is mirrored and review-gated, and must never be
+  // learned back into the template (it would flip the learned accounts).
+  direction_mismatch?: boolean
   // Dimensions bag applied to the business (expense/revenue) lines of the
   // generated entry: from a counterparty template's line pattern or an
   // explicit categorize param (dimensions PR7). Bank/VAT lines stay untagged.
@@ -1631,7 +1645,9 @@ export interface LinePatternEntry {
 // Per-tenant counterparty-based categorization template
 export interface CategorizationTemplate {
   id: string
-  user_id: string
+  // Pre-multi-tenant relic: nullable since 20260711100000 and never written
+  // by the learning path anymore. Scoping is company_id.
+  user_id: string | null
   company_id: string
   counterparty_name: string
   counterparty_aliases: string[]

@@ -775,6 +775,19 @@ async function commitCreateInvoice(
   const uniqueRates = new Set(billableItems.map((item) => item.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1
 
+  // Validated https-only at staging time (gnubok_create_invoice); re-checked
+  // here so a hand-crafted pending-operation row can't smuggle a non-https
+  // link into customer-facing emails/PDFs. Invalid → dropped, never blocks.
+  const paymentLinkUrl = (() => {
+    const raw = typeof params.payment_link_url === 'string' ? params.payment_link_url.trim() : ''
+    if (!raw || raw.length > 2048) return null
+    try {
+      return new URL(raw).protocol === 'https:' ? raw : null
+    } catch {
+      return null
+    }
+  })()
+
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
@@ -800,6 +813,7 @@ async function commitCreateInvoice(
       our_reference: (params.our_reference as string) || null,
       your_reference: (params.your_reference as string) || null,
       notes: (params.notes as string) || null,
+      payment_link_url: paymentLinkUrl,
       default_dimensions: defaultDimensions ?? {},
     })
     .select()

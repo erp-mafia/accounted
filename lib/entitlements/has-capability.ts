@@ -167,17 +167,29 @@ export async function requireCapability(
   return capabilityBlockedResponse(key)
 }
 
+export interface CompanyEntitlements {
+  capabilities: CapabilityKey[]
+  /**
+   * Expiry of the company's trial, present only while the trial is the SOLE
+   * source of paid access: null once any non-trial grant (stripe/comp/team)
+   * is active, and null after the trial has lapsed. Drives the trial
+   * countdown touchpoint in the dashboard chrome.
+   */
+  trialEndsAt: string | null
+}
+
 /**
  * Resolve which PAID capabilities a company currently holds (entitled AND
- * enabled), in two queries. Used to seed the client CompanyContext so the UI
- * can hide/disable/upsell gated features. Self-hosted holds everything.
+ * enabled) plus its trial state, in two queries. Used to seed the client
+ * CompanyContext so the UI can hide/disable/upsell gated features.
+ * Self-hosted holds everything.
  */
-export async function getCompanyCapabilities(
+export async function getCompanyEntitlements(
   supabase: SupabaseClient,
   companyId: string,
-): Promise<CapabilityKey[]> {
-  if (isPaywallBypassed()) return [...PAID_CAPABILITIES]
-  if (!isUuid(companyId)) return [] // fail-closed: never interpolate a non-UUID
+): Promise<CompanyEntitlements> {
+  if (isPaywallBypassed()) return { capabilities: [...PAID_CAPABILITIES], trialEndsAt: null }
+  if (!isUuid(companyId)) return { capabilities: [], trialEndsAt: null } // fail-closed: never interpolate a non-UUID
 
   // The disabled-config subtraction only needs companyId, so it runs in
   // parallel with the team lookup — this function sits on the dashboard
@@ -198,24 +210,45 @@ export async function getCompanyCapabilities(
     : `company_id.eq.${companyId}`
   const { data: grants } = await supabase
     .from('capability_grants')
-    .select('capability_key, expires_at')
+    .select('capability_key, expires_at, source')
     .in('capability_key', PAID_CAPABILITIES as unknown as string[])
     .or(scopeFilter)
 
   const now = Date.now()
   const entitled = new Set<string>()
+  let trialEndsAt: string | null = null
+  let hasActiveNonTrialGrant = false
   for (const g of grants ?? []) {
-    const row = g as { capability_key: string; expires_at: string | null }
-    if (row.expires_at === null || new Date(row.expires_at).getTime() > now) {
-      entitled.add(row.capability_key)
+    const row = g as { capability_key: string; expires_at: string | null; source: string | null }
+    const active = row.expires_at === null || new Date(row.expires_at).getTime() > now
+    if (!active) continue
+    entitled.add(row.capability_key)
+    if (row.source === 'trial') {
+      // Latest trial expiry (ISO strings from the same column compare lexically).
+      if (row.expires_at && (!trialEndsAt || row.expires_at > trialEndsAt)) {
+        trialEndsAt = row.expires_at
+      }
+    } else {
+      hasActiveNonTrialGrant = true
     }
   }
-  if (entitled.size === 0) return []
+  // Paying/comped companies are not "on trial" even if the seeded trial rows
+  // haven't expired yet: the countdown would nag someone who already converted.
+  if (hasActiveNonTrialGrant) trialEndsAt = null
+  if (entitled.size === 0) return { capabilities: [], trialEndsAt: null }
 
   // Subtract any explicitly-disabled (enablement axis).
   for (const c of configs ?? []) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }
 
-  return PAID_CAPABILITIES.filter((k) => entitled.has(k))
+  return { capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)), trialEndsAt }
+}
+
+/** Capability list only; see getCompanyEntitlements for the full shape. */
+export async function getCompanyCapabilities(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<CapabilityKey[]> {
+  return (await getCompanyEntitlements(supabase, companyId)).capabilities
 }

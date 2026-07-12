@@ -119,7 +119,8 @@ describe('POST /api/billing/checkout', () => {
   })
 
   it('reuses an existing Stripe customer and returns the checkout URL', async () => {
-    enqueue({ data: { stripe_customer_id: 'cus_existing' } })
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: null }) // no trial grant
     sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
 
     const req = createMockRequest('/api/billing/checkout', {
@@ -138,10 +139,13 @@ describe('POST /api/billing/checkout', () => {
         client_reference_id: 'company-1',
       })
     )
+    // No trial grant → billing starts immediately, no Stripe trial.
+    expect(sessionsCreate.mock.calls[0][0].subscription_data.trial_end).toBeUndefined()
   })
 
   it('creates a Stripe customer when none exists yet', async () => {
     enqueue({ data: null }) // no existing subscription row
+    enqueue({ data: null }) // no trial grant
     enqueue({ data: null }) // upsert result
     customersCreate.mockResolvedValue({ id: 'cus_new' })
     sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
@@ -157,5 +161,65 @@ describe('POST /api/billing/checkout', () => {
     expect(sessionsCreate).toHaveBeenCalledWith(
       expect.objectContaining({ customer: 'cus_new' })
     )
+  })
+
+  it('defers the first charge to the trial end when the trial has >48h left', async () => {
+    const trialEnd = new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString()
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: { expires_at: trialEnd } }) // active trial grant
+    sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+    const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+    const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subscription_data: expect.objectContaining({
+          metadata: { company_id: 'company-1' },
+          trial_end: Math.floor(new Date(trialEnd).getTime() / 1000),
+        }),
+      })
+    )
+  })
+
+  it('bills immediately when the trial is inside the 48h Stripe floor', async () => {
+    const trialEnd = new Date(Date.now() + 24 * 3600 * 1000).toISOString()
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: { expires_at: trialEnd } }) // trial ends tomorrow
+    sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+    const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+    const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(sessionsCreate.mock.calls[0][0].subscription_data.trial_end).toBeUndefined()
+  })
+
+  it('bills immediately when the trial has already expired', async () => {
+    const trialEnd = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: { expires_at: trialEnd } }) // lapsed trial
+    sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+    const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+    const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(sessionsCreate.mock.calls[0][0].subscription_data.trial_end).toBeUndefined()
+  })
+
+  it('fails closed (500, no Stripe session) when the trial lookup errors', async () => {
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: null, error: { message: 'boom' } }) // trial lookup fails
+
+    const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await POST(req, routeParams),
+    )
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('TRIAL_LOOKUP_FAILED')
+    expect(sessionsCreate).not.toHaveBeenCalled()
   })
 })

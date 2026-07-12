@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
+import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -50,9 +51,28 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
     return NextResponse.json({ error: dimFilter.error }, { status: 400 })
   }
 
+  // Validate the optional date sub-range against the fiscal period bounds.
+  const { data: period } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('id', periodId)
+    .eq('company_id', companyId)
+    .single()
+
+  let range: DateRange = {}
+  if (period) {
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    range = parsed.range
+  }
+
   try {
     const report = await generateGeneralLedger(supabase, companyId, periodId, accountFrom, accountTo, {
       dimensions: dimFilter.dimensions,
+      fromDate: range.fromDate,
+      toDate: range.toDate,
     })
 
     // Flatten accounts + their lines into a single sheet. Each account contributes

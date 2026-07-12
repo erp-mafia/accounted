@@ -189,7 +189,7 @@ function FocusedView({
     case 'ink2-declaration':
       return isAktiebolag ? <INK2DeclarationView periodId={periodId} /> : null
     case 'huvudbok':
-      return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} />
+      return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} dateRange={dateRange} />
     case 'grundbok':
       return <JournalRegisterView periodId={periodId} />
     case 'kundreskontra':

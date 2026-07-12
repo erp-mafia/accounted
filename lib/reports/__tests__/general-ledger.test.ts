@@ -317,6 +317,98 @@ describe('generateGeneralLedger', () => {
     expect(acc.lines[2].description).toBe('Second')
   })
 
+  it('rolls lines before fromDate into the opening balance and drops lines after toDate', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:compute_prior_opening_balances': [
+        {
+          data: [{ account_number: '1930', debit: 10000, credit: 0 }],
+          error: null,
+        },
+      ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-03-15', voucher_number: 1, voucher_series: 'A', description: 'Pre-range', source_type: 'manual' },
+            { id: 'e2', entry_date: '2026-06-10', voucher_number: 2, voucher_series: 'A', description: 'In range', source_type: 'manual' },
+            { id: 'e3', entry_date: '2026-09-01', voucher_number: 3, voucher_series: 'A', description: 'Post-range', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            // Before the range: rolls into opening
+            { account_number: '1930', debit_amount: 0, credit_amount: 2000, journal_entry_id: 'e1' },
+            // Inside the range: shown
+            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e2' },
+            // After the range: dropped entirely
+            { account_number: '1930', debit_amount: 0, credit_amount: 300, journal_entry_id: 'e3' },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        { data: [{ account_number: '1930', account_name: 'Företagskonto' }], error: null },
+      ],
+    }
+
+    const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      fromDate: '2026-06-01',
+      toDate: '2026-06-30',
+    })
+
+    const acc = report.accounts.find((a) => a.account_number === '1930')!
+    // Opening at range start = period IB 10000 - pre-range 2000
+    expect(acc.opening_balance).toBe(8000)
+    expect(acc.lines).toHaveLength(1)
+    expect(acc.lines[0].description).toBe('In range')
+    expect(acc.lines[0].balance).toBe(8500)
+    // Closing = opening + in-range movement only; post-range line excluded
+    expect(acc.closing_balance).toBe(8500)
+    expect(report.period).toEqual({ start: '2026-06-01', end: '2026-06-30' })
+  })
+
+  it('keeps an account visible when all its lines fall before the range', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-02-01', voucher_number: 1, voucher_series: 'A', description: 'Hyra feb', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '5010', debit_amount: 4000, credit_amount: 0, journal_entry_id: 'e1' },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        { data: [{ account_number: '5010', account_name: 'Lokalhyra' }], error: null },
+      ],
+    }
+
+    const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      fromDate: '2026-06-01',
+      toDate: '2026-06-30',
+    })
+
+    const acc = report.accounts.find((a) => a.account_number === '5010')!
+    expect(acc.opening_balance).toBe(4000)
+    expect(acc.lines).toHaveLength(0)
+    expect(acc.closing_balance).toBe(4000)
+  })
+
   it('uses Math.round for monetary precision', async () => {
     mockResults = {
       fiscal_periods: [

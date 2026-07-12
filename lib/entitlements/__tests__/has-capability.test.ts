@@ -4,8 +4,9 @@ import {
   hasCapability,
   requireCapability,
   capabilityBlockedResponse,
+  getCompanyEntitlements,
 } from '../has-capability'
-import { CAPABILITY } from '../keys'
+import { CAPABILITY, PAID_CAPABILITIES } from '../keys'
 
 /**
  * Per-table mock: each table resolves to its own configured result, so a
@@ -154,6 +155,64 @@ describe('requireCapability', () => {
     const body = await res!.json()
     expect(body.capability_blocked).toBe(true)
     expect(body.capability).toBe(CAPABILITY.ai)
+  })
+})
+
+describe('getCompanyEntitlements', () => {
+  const companyId = '11111111-1111-4111-8111-111111111111'
+
+  it('reports the trial expiry while the trial is the only source of access', async () => {
+    const expiry = iso(10 * 24 * 3600 * 1000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: expiry, source: 'trial' },
+          { capability_key: CAPABILITY.bank_sync, expires_at: expiry, source: 'trial' },
+        ],
+      },
+      company_capability_config: { data: [] },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBe(expiry)
+    expect(result.capabilities).toContain(CAPABILITY.ai)
+    expect(result.capabilities).toContain(CAPABILITY.bank_sync)
+  })
+
+  it('hides the trial once a non-trial grant is active (converted customer)', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: iso(10 * 24 * 3600 * 1000), source: 'trial' },
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe' },
+        ],
+      },
+      company_capability_config: { data: [] },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toContain(CAPABILITY.ai)
+  })
+
+  it('returns no trial and no capabilities after the trial lapsed', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial' }],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([])
+  })
+
+  it('bypass (self-hosted) holds everything with no trial countdown', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({})
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
   })
 })
 

@@ -68,6 +68,8 @@ export interface InvoiceWriteInput {
   your_reference?: string
   our_reference?: string
   notes?: string
+  /** Optional https payment link (schema-validated). Omitted/empty → null. */
+  payment_link_url?: string
   /** Per-invoice öresavrundning override (display-only). Omitted → null (inherit company setting). */
   ore_rounding?: boolean
   deduction_personnummer?: string
@@ -105,6 +107,7 @@ export type InvoiceWriteFields = {
   your_reference: string | null | undefined
   our_reference: string | null | undefined
   notes: string | null | undefined
+  payment_link_url: string | null
   ore_rounding: boolean | null
   document_type: InvoiceDocumentType
   deduction_total: number
@@ -365,6 +368,9 @@ export async function buildInvoiceWriteData(params: {
     your_reference: input.your_reference,
     our_reference: input.our_reference,
     notes: input.notes,
+    // Always a concrete value (never undefined) so a draft edit that cleared
+    // the field actually NULLs the column: supabase-js drops undefined keys.
+    payment_link_url: input.payment_link_url?.trim() || null,
     // Display-only öresavrundning override; null inherits company_settings.ore_rounding.
     ore_rounding: input.ore_rounding ?? null,
     document_type: documentType,

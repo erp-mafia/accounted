@@ -291,6 +291,38 @@ describe('CreateInvoiceSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('payment_link_url accepts a valid https URL', () => {
+    const result = CreateInvoiceSchema.safeParse(validInvoice({
+      payment_link_url: 'https://buy.stripe.com/test_abc123',
+    }))
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.payment_link_url).toBe('https://buy.stripe.com/test_abc123')
+    }
+  })
+
+  it('payment_link_url normalises empty string to undefined (form always sends the field)', () => {
+    const result = CreateInvoiceSchema.safeParse(validInvoice({ payment_link_url: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.payment_link_url).toBeUndefined()
+    }
+  })
+
+  it('payment_link_url rejects non-https and malformed values', () => {
+    const bad = [
+      'http://buy.stripe.com/abc', // plaintext link in a customer email
+      'javascript:alert(1)',
+      'not a url',
+      `https://pay.example.se/${'a'.repeat(2049)}`, // over the 2048 cap
+    ]
+    for (const value of bad) {
+      expect(
+        CreateInvoiceSchema.safeParse(validInvoice({ payment_link_url: value })).success,
+      ).toBe(false)
+    }
+  })
+
   it('accepts invoice with per-line VAT rates', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice({
       items: [
