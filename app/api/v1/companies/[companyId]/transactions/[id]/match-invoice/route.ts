@@ -30,6 +30,7 @@ import {
   createInvoiceCashEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -359,6 +360,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           invoice_total: invoice.total,
         },
       })
+    }
+
+    // Guard the resolved account against the chart (mirrors the categorize
+    // routes and the same fix on match-supplier-invoice): an inactive
+    // cash_accounts.ledger_account would otherwise reach the engine as a
+    // generic INVOICE_PAID_BOOK_FAILED instead of ACCOUNTS_NOT_IN_CHART.
+    // Only reachable where the account is actually used: customLines specify
+    // their own accounts directly and never consume paymentAccount.
+    if (!customLines) {
+      const missingAccounts = await findUnresolvableAccounts(ctx.supabase, ctx.companyId!, [
+        paymentAccount,
+      ])
+      if (missingAccounts.length > 0) {
+        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
     }
 
     // Strict-mode for the public API: if the payment JE can't be created we
