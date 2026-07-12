@@ -4,16 +4,16 @@ export const QUICKSTART_MD = `# Quickstart: send your first invoice
 
 ## What you'll need
 
-- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data: safe for evals. **Test keys are simulation-only:** the API wrapper forces every write (POST/PATCH/DELETE) into dry-run, so nothing persists and no emails go out. Use a test key for steps 1–2 to confirm auth and validate request shapes. Steps 3–5 chain on real IDs (the customer's \`id\`, then the invoice's \`id\`, then \`/send\` and \`/mark-paid\`); because a forced dry-run returns \`id: null\`, run that stateful sequence with a **live** key (\`gnubok_sk_*\`, no \`test_\` infix) so each step gets a committed record the next one can reference.
+- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first — it's bound to a deterministic sandbox company and the wrapper forces every write into dry-run — but because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow, and its sandbox \`companyId\` differs from your live one. So: **use one key throughout.** If you validate with a test key first, re-run step 1 with your live key before step 3 so \`COMPANY_ID\` matches the company you're actually writing to.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
 
-Test keys are scoped to a single sandbox company by default; this call confirms the auth works and returns the \`companyId\` you'll use in the rest of the cookbook.
+This call confirms your key works and returns the \`companyId\` you'll use throughout. Run it with the **same key you'll use for the committing steps** so the \`companyId\` matches — a live key resolves to the real companies it can access; a test key resolves to its sandbox company.
 
 \`\`\`bash
 curl https://app.gnubok.se/api/v1/companies \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response (truncated):
@@ -33,7 +33,7 @@ Most writes support \`?dry_run=true\`: the response shows the would-be record wi
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -113,9 +113,12 @@ A fresh draft has \`invoice_number: null\`: the F-series löpnummer is allocated
 \`POST /invoices/{id}/send\` runs a sequential pipeline: preflight PDF render (validates rendering before a number is burned) → allocate the F-series number atomically → final PDF render → email the customer via Resend (PDF attached, copy to the company). Any hard failure up to and including the email rolls nothing forward. Once the email is delivered the pipeline hits a **point of no return**: the status flip to \`sent\`, the journal entry (accrual + real invoices), PDF archival as underlag, and the \`invoice.sent\` event are best-effort, and any of their failures surface as \`warnings\` on the response rather than unwinding the send. It is not a single atomic transaction.
 
 \`\`\`bash
+# Generate the key ONCE and reuse it on every retry of this same send, so a
+# timeout-then-retry replays the original result instead of sending twice.
+SEND_IDEMP=$(uuidgen)
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
-  -H "Idempotency-Key: $(uuidgen)"
+  -H "Idempotency-Key: $SEND_IDEMP"
 \`\`\`
 
 Response carries the allocated invoice number and the id of the posted journal entry (there is no \`meta.audit\` block on this endpoint: use \`data.journal_entry_id\` and \`data.invoice_number\` as the posting reference):
@@ -143,16 +146,18 @@ If any post-email step degraded, \`data.warnings\` is present (e.g. \`JOURNAL_EN
 When the customer pays, mark the invoice paid. The engine generates the payment voucher (debit 1930 bank, credit 1510 AR) and links it to the invoice. There is no \`payment_amount\` field: the default books the full remaining amount (\`remaining_amount\`). For a partial payment, pass a custom \`lines\` array (at least two balanced rows).
 
 \`\`\`bash
+# One key per logical payment; reuse it across retries of this mark-paid.
+PAY_IDEMP=$(uuidgen)
 curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
-  -H "Idempotency-Key: $(uuidgen)" \\
+  -H "Idempotency-Key: $PAY_IDEMP" \\
   -H "Content-Type: application/json" \\
   -d '{ "payment_date": "2026-05-22" }'
 \`\`\`
 
 ## What just happened
 
-This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. Five API calls; the engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. A test key validates the request shapes in steps 1–2 via dry-run but never persists, so the create→send→pay sequence runs with a live key (each step chains on the previous step's committed \`id\`).
+This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. That's **five committing calls** — list companies, create customer, create invoice, send, mark-paid — plus the optional \`?dry_run=true\` preview in step 2 if you run it. The engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. Run the committing calls with a live key; a test key can validate request shapes via dry-run first but never persists, so it can't chain the real IDs each step needs.
 
 The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate): including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date: ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
 

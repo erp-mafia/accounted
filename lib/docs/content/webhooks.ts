@@ -6,7 +6,7 @@ If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is
 
 ## Lifecycle
 
-1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret) to get a fresh secret in place, or delete the webhook and create a new one.
+1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret): a fresh secret is issued in place and the old one is invalidated immediately, with no change to the webhook's id or delivery history.
 2. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
 3. **The dispatcher cron runs every minute**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout.
 4. **Your receiver verifies the signature**, processes the event idempotently, and returns 2xx.
