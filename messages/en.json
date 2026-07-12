@@ -130,6 +130,8 @@
     "ext_invoice_inbox": "Document inbox"
   },
   "agentKnowledge": {
+    "load_error_title": "Couldn't load the knowledge profile",
+    "load_error_description": "Something went wrong loading what your agent knows. Try reopening this tab.",
     "title": "What your agent knows",
     "description": "How your company books, derived from your own accounting. This is the context your assistant reads before categorizing or creating vouchers.",
     "meta_window": "Period",

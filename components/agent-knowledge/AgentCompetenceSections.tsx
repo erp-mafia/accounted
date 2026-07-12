@@ -1,4 +1,6 @@
-import { getTranslations } from 'next-intl/server'
+'use client'
+
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Pin, ArrowUpRight } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
@@ -14,8 +16,8 @@ import type { AgentCompetence, AtomTier, FactKind, FactSource } from '@/lib/agen
 
 const TIER_ORDER: AtomTier[] = ['horizontal', 'vertical', 'modifier']
 
-export async function CompetenceCard({ competence }: { competence: AgentCompetence }) {
-  const t = await getTranslations('agentKnowledge')
+export function CompetenceCard({ competence }: { competence: AgentCompetence }) {
+  const t = useTranslations('agentKnowledge')
   const { atoms } = competence
   const activeAtoms = atoms.filter((a) => a.active).length
   const tierLabel = (tier: AtomTier) =>
@@ -69,8 +71,8 @@ export async function CompetenceCard({ competence }: { competence: AgentCompeten
   )
 }
 
-export async function FactsCard({ competence }: { competence: AgentCompetence }) {
-  const t = await getTranslations('agentKnowledge')
+export function FactsCard({ competence }: { competence: AgentCompetence }) {
+  const t = useTranslations('agentKnowledge')
   const { facts, factsActiveTotal } = competence
   const kindLabel = (k: FactKind) =>
     k === 'fact' ? t('kind_fact') : k === 'preference' ? t('kind_preference') : k === 'pattern' ? t('kind_pattern') : t('kind_correction')

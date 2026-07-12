@@ -1,4 +1,6 @@
-import { getTranslations } from 'next-intl/server'
+'use client'
+
+import { useTranslations } from 'next-intl'
 import { Brain } from 'lucide-react'
 import {
   Card,
@@ -49,7 +51,7 @@ function vatLabel(code: string | null): string | null {
   return VAT_LABELS[code] ?? code
 }
 
-export async function AgentKnowledgeView({
+export function AgentKnowledgeView({
   context,
   deep,
   competence,
@@ -60,7 +62,7 @@ export async function AgentKnowledgeView({
   competence: AgentCompetence
   companyName: string
 }) {
-  const t = await getTranslations('agentKnowledge')
+  const t = useTranslations('agentKnowledge')
 
   const { meta, explicit_rules, vat_profile, conventions } = context
 
