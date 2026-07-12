@@ -7,9 +7,10 @@ ensureInitialized()
 /**
  * Mark the AGI period's tax payment (skatt + avgifter) as paid.
  *
- * This is a manual confirmation by the user: bank reconciliation against
- * Skattekontot transactions can also flip this flag automatically (handled
- * elsewhere via the Skattekonto sync).
+ * This is a manual confirmation by the user. The Skattekonto sync also flips
+ * the flag automatically when the period's AGI debit row is booked with the
+ * exact declared amount and the account is not in deficit (see
+ * extensions/general/skatteverket/lib/agi-tax-settlement.ts).
  */
 export const POST = withRouteContext<{ params: Promise<{ period: string }> }>(
   'tax_payment.mark_paid',

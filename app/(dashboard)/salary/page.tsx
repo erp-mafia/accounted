@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ArrowRight, CalendarClock, HandCoins, Loader2, Plus, UserX, Users } from 'lucide-react'
+import { ArrowRight, CalendarClock, CheckCircle2, HandCoins, Loader2, Plus, UserX, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -51,13 +51,18 @@ export default function SalaryPage() {
   const [payDay, setPayDay] = useState(25)
   const [agiDeadline, setAgiDeadline] = useState<{ due_date: string; title: string } | null>(null)
   const [taxPayment, setTaxPayment] = useState<TaxPaymentState | null>(null)
+  // The Skatteverket connection previously worked but now needs re-consent:
+  // the skattekonto sync (which auto-settles the tax card) is paused.
+  const [skvNeedsReconsent, setSkvNeedsReconsent] = useState(false)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
+  const [markingPaid, setMarkingPaid] = useState(false)
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
   const { toast } = useToast()
   const router = useRouter()
   const t = useTranslations('salary')
+  const tp = useTranslations('salary_payments')
 
   const load = useCallback(async () => {
     const [runsRes, empRes, settingsRes] = await Promise.all([
@@ -90,6 +95,19 @@ export default function SalaryPage() {
         const tx = await txRes.json()
         setTaxPayment(tx.data)
       }
+    }
+
+    // Connection health for the tax card hint. Only needs_reconsent counts:
+    // the routine short-lived token expiry is normal and must not nag. Any
+    // failure (extension disabled → 503, network) silently means no hint.
+    try {
+      const statusRes = await fetch('/api/extensions/ext/skatteverket/status')
+      if (statusRes.ok) {
+        const status = await statusRes.json()
+        setSkvNeedsReconsent(status?.needsReconsent === true)
+      }
+    } catch {
+      // Extension unavailable: no hint.
     }
 
     setLoading(false)
@@ -145,6 +163,34 @@ export default function SalaryPage() {
       })
     } finally {
       setStarting(false)
+    }
+  }
+
+  // Inline mark-paid on the tax card: same endpoint as TaxPaymentPanel on the
+  // run detail page, for users who paid Skatteverket outside the app.
+  async function markTaxPaid(period: string) {
+    setMarkingPaid(true)
+    try {
+      const res = await fetch(`/api/skatteverket/tax-payments/${period}/mark-paid`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const result = await res.json().catch(() => null)
+        toast({
+          title: tp('tax_mark_paid_failed_title'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: tp('tax_marked_paid') })
+      const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
+      if (txRes.ok) {
+        const tx = await txRes.json()
+        setTaxPayment(tx.data)
+      }
+    } finally {
+      setMarkingPaid(false)
     }
   }
 
@@ -388,6 +434,30 @@ export default function SalaryPage() {
                     ? t('card_tax_paid', { date: formatDate(taxPayment.tax_paid_at) })
                     : t('card_tax_unpaid', { period: periodOf(latestBooked) })}
                 </p>
+                {!taxPayment?.tax_paid_at && skvNeedsReconsent && (
+                  <Link
+                    href="/settings/tax"
+                    className="mt-1 block text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  >
+                    {t('card_tax_reconnect')}
+                  </Link>
+                )}
+                {!taxPayment?.tax_paid_at && canWrite && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => markTaxPaid(periodOf(latestBooked))}
+                    disabled={markingPaid}
+                  >
+                    {markingPaid ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                    )}
+                    {tp('tax_mark_paid_button')}
+                  </Button>
+                )}
               </>
             ) : (
               <p className="text-sm text-muted-foreground">{t('card_tax_none')}</p>

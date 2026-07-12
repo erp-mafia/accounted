@@ -133,11 +133,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
     const messageId = `${getBranding().appName.toUpperCase()}-${company.org_number?.replace('-', '')}-${periodLabel}`
 
-    const xml = generatePain001(companyData, employees, {
-      messageId,
-      paymentDate: run.payment_date,
-      periodLabel,
-    })
+    let xml: string
+    try {
+      xml = generatePain001(companyData, employees, {
+        messageId,
+        paymentDate: run.payment_date,
+        periodLabel,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Kunde inte generera betalfil'
+      return NextResponse.json({ error: msg }, { status: 400 })
+    }
 
     await supabase
       .from('salary_runs')

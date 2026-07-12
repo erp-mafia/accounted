@@ -21,6 +21,10 @@
  *      500 INVOICE_SEND_PDF_RENDER_FAILED, no number burned.
  *   6. ensureInvoiceNumber allocates the F-series number atomically.
  *      Fail → 500 INVOICE_SEND_NUMBER_ASSIGN_FAILED.
+ *   6b. Auto-create an online payment link (extension-provided, e.g. Stripe)
+ *      and persist it on the invoice row. Best-effort: a provider or persist
+ *      failure never blocks the send; it surfaces as a PAYMENT_LINK_FAILED
+ *      warning on the response once the email is delivered.
  *   7. Final PDF render with the real number.
  *   8. Email send via Resend (the email extension). Fail → 502
  *      INVOICE_SEND_PROVIDER_FAILED. The number IS consumed at this point;
@@ -43,7 +47,8 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -357,6 +362,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const finalInvoiceNumber =
       (numbered as { invoice_number?: string } | null)?.invoice_number ?? typed.invoice_number
+
+    // Step 6b: auto-create an online payment link (extension-provided, e.g.
+    // Stripe) now that the number exists, so the email button and PDF QR
+    // carry it. Failure degrades to a PAYMENT_LINK_FAILED warning: the
+    // faktura is legally valid without a link. The helper mirrors the link
+    // onto the in-memory row only after a successful persist so a link on
+    // the PDF can always be matched back to the row.
+    const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
+      ctx.supabase,
+      ctx.companyId!,
+      ctx.userId,
+      typed as Invoice,
+      ctx.log,
+      {
+        invoiceNumber: finalInvoiceNumber,
+        logPrefix: 'invoices.send: ',
+        logContext: { invoiceId },
+      },
+    )
+
     // Also override `status` to 'sent' on the in-memory copy. The actual DB
     // flip happens at step 9a (after email delivery), but if we render with
     // the stale 'draft' status the customer receives a PDF stamped
@@ -371,6 +396,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     try {
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(settings)
       const swishQrDataUrl = await buildSwishQrDataUrl(settings, renderableInvoice)
+      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -380,6 +406,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           originalInvoiceNumber,
           branding,
           swishQrDataUrl,
+          paymentLinkQrDataUrl,
         }),
       )
     } catch (err) {
@@ -434,6 +461,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // ── POINT OF NO RETURN ────────────────────────────────────────────
     // Email has been delivered. Subsequent failures surface as warnings.
     const warnings: { code: string; message: string }[] = []
+
+    if (paymentLinkFailure) {
+      warnings.push({ code: 'PAYMENT_LINK_FAILED', message: paymentLinkFailure })
+    }
 
     // Step 9a: status flip to 'sent'. The `.eq('status', 'draft')` is an
     // optimistic-lock guard against a concurrent state change between fetch

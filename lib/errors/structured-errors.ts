@@ -712,6 +712,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Filen kunde inte skapas.',
     message_en: 'The payout file could not be created.',
   },
+  ROT_RUT_BESLUT_WRONG_COMPANY: {
+    httpStatus: 400,
+    message_sv:
+      'Beslutsfilens utförare matchar inte företagets organisationsnummer. Kontrollera att filen laddades ner för rätt företag.',
+    message_en:
+      "The decision file's utförare does not match the company's organisation number. Check that the file was downloaded for the right company.",
+  },
   INVOICE_CREATE_INSERT_FAILED: {
     httpStatus: 500,
     message_sv: 'Fakturan kunde inte sparas.',

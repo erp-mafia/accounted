@@ -31,6 +31,7 @@ import {
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { eventBus } from '@/lib/events'
+import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -660,19 +661,15 @@ export async function generateAgiDeclaration(
 
   // 11. Auto-complete the arbetsgivardeklaration deadline for this period
   //     (Skatteförfarandelagen: AGI generation satisfies the filing
-  //     obligation). Optimistic-lock on status='pending'.
+  //     obligation).
   const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  await supabase
-    .from('deadlines')
-    .update({
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      completed_by: userId,
-    })
-    .eq('company_id', companyId)
-    .eq('type', 'arbetsgivardeklaration')
-    .eq('period', period)
-    .eq('status', 'pending')
+  await completeTaxDeadline(
+    supabase,
+    companyId,
+    ['arbetsgivardeklaration'],
+    period,
+    'submitted'
+  )
 
   opLog.info('AGI declaration generated', {
     requestId,

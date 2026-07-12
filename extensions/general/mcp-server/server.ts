@@ -67,6 +67,8 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
+import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
+import { RotRutBeslutFileSchema } from '@/lib/api/schemas'
 import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
@@ -9024,7 +9026,7 @@ export const tools: McpTool[] = [
         // leaves kvittenser null rather than hard-failing the status check;
         // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
         let kvittenser: unknown = null
-        const res = await agiGetKvittenser(supabase, userId, arbetsgivare, period)
+        const res = await agiGetKvittenser({ mode: 'user', supabase, userId }, arbetsgivare, period)
         await writeSkatteverketAudit(ctx, {
           endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
           outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
@@ -9412,6 +9414,82 @@ export const tools: McpTool[] = [
         arenden: result.file.arenden,
         warnings: result.file.warnings,
         upload_url: uploadUrl,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_import_rot_rut_beslut',
+    title: 'Import Rot/Rut Decision File',
+    description:
+      'Import Skatteverkets beslutsfil (decision JSON from the rot/rut e-tjänst) and record godkänt belopp on the matching begäran. Exact matching only; per-beslut outcomes in results. Book the payout afterwards via the settle endpoint hint in next.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        file_content: {
+          type: 'string',
+          description: 'The beslutsfil content verbatim (JSON text as downloaded from skatteverket.se)',
+        },
+      },
+      required: ['file_content'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        imported: { type: 'number' },
+        already_imported: { type: 'number' },
+        errors: { type: 'number' },
+        results: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Per-beslut outcome: status imported/already_imported/error, request_id, decided_total, rejected flag, next-step hint',
+        },
+      },
+      required: ['imported', 'already_imported', 'errors', 'results'],
+    },
+    annotations: {
+      readOnlyHint: false, // records beslut on rot_rut_payout_requests
+      destructiveHint: false,
+      idempotentHint: true, // re-importing the same file reports already_imported
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const raw = args.file_content as string
+      if (typeof raw !== 'string' || raw.trim() === '') {
+        throw new Error('file_content is required (the beslutsfil JSON text)')
+      }
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        throw new Error('file_content är inte giltig JSON. Klistra in beslutsfilen oförändrad.')
+      }
+      const validated = RotRutBeslutFileSchema.safeParse(parsed)
+      if (!validated.success) {
+        throw new Error(
+          `Beslutsfilen har fel format: ${validated.error.issues
+            .slice(0, 3)
+            .map((i) => `${i.path.join('.')}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+
+      const result = await importRotRutBeslutFile(supabase, companyId, validated.data)
+      if (!result.ok) {
+        throw new Error(
+          result.code === 'ROT_RUT_BESLUT_WRONG_COMPANY'
+            ? 'Beslutsfilens utförare matchar inte företagets organisationsnummer.'
+            : 'Beslutsfilen kunde inte importeras.',
+        )
+      }
+
+      return {
+        imported: result.imported,
+        already_imported: result.already_imported,
+        errors: result.errors,
+        results: result.results,
       }
     },
   },

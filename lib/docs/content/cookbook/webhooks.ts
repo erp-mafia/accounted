@@ -31,7 +31,7 @@ Response:
 \`\`\`json
 {
   "data": {
-    "id": "wh_a8f1...",
+    "id": "a8f1e4c2-3b5d-4e6f-8a90-1b2c3d4e5f60",
     "name": "CRM sync: invoice paid",
     "event_type": "invoice.paid",
     "webhook_url": "https://my-receiver.example.com/gnubok",
@@ -44,7 +44,7 @@ Response:
 }
 \`\`\`
 
-> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, the recovery path is to delete the webhook and create a new one (which generates a fresh secret); receivers must re-deploy with the new value.
+> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, mint a fresh one with \`POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret\`: it re-issues the signing secret in place (returned exactly once, like creation) without deleting the webhook or its delivery history. Rotation invalidates the old secret immediately — there is no grace period — so stage the new value on the receiver first (or \`PATCH active=false\` to pause delivery while you swap), then re-deploy the receiver with the new value.
 
 **Store the secret in a secrets manager** (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, Doppler, 1Password Connect, ...) rather than a plaintext \`.env\` file or a config commit. The secret is signing material: anyone who reads it can forge events that will pass your signature check. Treat it with the same care as a database password.
 
@@ -67,7 +67,7 @@ Response:
 
 \`\`\`json
 {
-  "data": { "webhook_delivery_id": "wh_dlv_...", "status": "pending" },
+  "data": { "webhook_delivery_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479", "status": "pending" },
   "meta": { "request_id": "req_...", "api_version": "2026-05-12" }
 }
 \`\`\`
@@ -77,12 +77,12 @@ Wait up to 60s, then check the receiver logs. The delivery should arrive with:
 \`\`\`
 POST /gnubok HTTP/1.1
 Content-Type: application/json
-X-Gnubok-Signature: t=1715797800,v1=2f5c...
+X-Gnubok-Signature: t=1778846400,v1=2f5c...
 X-Gnubok-Event: webhook.test
-X-Gnubok-Delivery: wh_dlv_...
+X-Gnubok-Delivery: f47ac10b-58cc-4372-a567-0e02b2c3d479
 X-Gnubok-Api-Version: 2026-05-12
 
-{"id":"wh_dlv_...","type":"webhook.test","api_version":"2026-05-12","created":1715797800,"data":{"object":{"hello":"from Accounted","tested_at":"2026-05-15T12:00:00Z"}},"previous_attributes":null}
+{"id":"f47ac10b-58cc-4372-a567-0e02b2c3d479","type":"webhook.test","api_version":"2026-05-12","created":1778846400,"data":{"object":{"hello":"from Accounted","tested_at":"2026-05-15T12:00:00Z"}},"previous_attributes":null}
 \`\`\`
 
 If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns 4xx (other than 410) or 5xx, it goes to \`failed\` and retries on the schedule \`1m / 5m / 30m / 2h / 12h / 24h / 48h\`.
@@ -99,7 +99,7 @@ Response carries the captured response status and body (truncated to 4 KB), whic
 \`\`\`json
 {
   "data": [{
-    "id": "wh_dlv_...",
+    "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     "event_type": "webhook.test",
     "status": "delivered",
     "attempts": 1,
@@ -107,7 +107,7 @@ Response carries the captured response status and body (truncated to 4 KB), whic
     "response_status": 200,
     "response_body": "ok",
     "error": null,
-    "request_id": "whdel_...",
+    "request_id": "req_...",
     "created_at": "2026-05-15T12:00:00Z",
     "delivered_at": "2026-05-15T12:00:01Z"
   }]
@@ -123,7 +123,7 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOI
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
-  -d '{ "payment_date": "2026-05-22", "payment_amount": 12000.00 }'
+  -d '{ "payment_date": "2026-05-22" }'
 \`\`\`
 
 The next dispatcher tick (within 60s) delivers an \`invoice.paid\` event to your receiver carrying the full invoice payload + payment details.
@@ -159,7 +159,7 @@ curl -X POST "https://app.gnubok.se/api/v1/webhook-deliveries/$DELIVERY_ID/retry
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
-The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers see the same \`X-Gnubok-Delivery\` (the new row's id, not the original's), so the idempotency table needs no special handling.
+The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers see a new \`X-Gnubok-Delivery\` (the new row's id, not the original's), so the idempotency table needs no special handling.
 
 ## Auto-disable
 
@@ -183,6 +183,6 @@ This clears \`disabled_at\` and \`disabled_reason\` but does NOT replay the deli
 
 - **Re-serialising the body.** \`JSON.parse(rawBody); JSON.stringify(parsed)\` produces different bytes than Accounted sent. Always sign-check against the raw bytes.
 - **Forgetting the timestamp window.** Without a \`t\` check, an attacker who captured one signed payload can replay it forever. 5 minutes is the recommended tolerance.
-- **Returning 5xx for application errors.** A 5xx triggers full retries (~72h). If a payload is malformed-but-stable, return 200 and queue for internal investigation.
+- **Returning 5xx for application errors.** A 5xx triggers the full retry schedule (~87h, roughly 3.6 days). If a payload is malformed-but-stable, return 200 and queue for internal investigation.
 - **Treating \`failed\` as terminal.** \`failed\` rows will retry; only \`delivered\` and \`dead\` are terminal. Don't alert on \`failed\`: alert when retries exhaust to \`dead\`.
 `

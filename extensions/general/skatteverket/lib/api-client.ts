@@ -3,7 +3,21 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
+import { getSystemAccessToken, invalidateSystemToken } from './system-auth/token-provider'
 import type { SkatteverketTokens } from '../types'
+
+/**
+ * Credential selector for SKV API calls.
+ *
+ * 'user'   : the personal BankID OAuth token (per-user, 65-minute refresh
+ *            chain). The only mode that existed before the hybrid model.
+ * 'system' : Accounted's own Client Credentials token (org certificate),
+ *            authorized per company via an ombud grant at Skatteverket.
+ *            Used by background reads; carries no user session at all.
+ */
+export type SkvAuth =
+  | { mode: 'user'; supabase: SupabaseClient; userId: string }
+  | { mode: 'system' }
 
 const log = createLogger('skatteverket-api-client')
 
@@ -191,16 +205,38 @@ async function refreshTokenForUser(
 }
 
 /**
- * Make an authenticated request to the Skatteverket API.
- *
- * Automatically handles:
- * - Token refresh if expired
- * - Required headers (Client_Id, Client_Secret, correlation ID)
- * - Rate limiting
+ * Make an authenticated request to the Skatteverket API with the user's
+ * personal BankID token. Thin wrapper kept for the ~40 existing call sites;
+ * new auth-aware code calls skvRequestWithAuth directly.
  */
 export async function skvRequest(
   supabase: SupabaseClient,
   userId: string,
+  method: string,
+  path: string,
+  body?: unknown,
+  options?: { baseUrl?: string; contentType?: string }
+): Promise<Response> {
+  return skvRequestWithAuth({ mode: 'user', supabase, userId }, method, path, body, options)
+}
+
+/**
+ * Make an authenticated request to the Skatteverket API.
+ *
+ * Automatically handles:
+ * - Credential resolution per auth mode (user token refresh, or the cached
+ *   system CCG token)
+ * - Required headers (Client_Id, Client_Secret, correlation ID)
+ * - Rate limiting
+ *
+ * Error semantics differ by mode: user-mode 401/403s map to the reconnect
+ * codes (SESSION_EXPIRED, TOKEN_REVOKED, ...); system-mode failures never
+ * touch skatteverket_tokens and map to SYSTEM_AUTH_FAILED (run-level
+ * credential problem) or OMBUD_GRANT_MISSING (this company has not granted,
+ * or has revoked, the behorighet).
+ */
+export async function skvRequestWithAuth(
+  auth: SkvAuth,
   method: string,
   path: string,
   body?: unknown,
@@ -212,7 +248,20 @@ export async function skvRequest(
       'ACCESS_DENIED'
     )
   }
-  const accessToken = await getValidToken(supabase, userId)
+
+  let accessToken: string
+  if (auth.mode === 'user') {
+    accessToken = await getValidToken(auth.supabase, auth.userId)
+  } else {
+    try {
+      accessToken = await getSystemAccessToken()
+    } catch (err) {
+      throw new SkatteverketAuthError(
+        err instanceof Error ? err.message : 'Systemtoken kunde inte hämtas.',
+        'SYSTEM_AUTH_FAILED'
+      )
+    }
+  }
 
   await enforceRateLimit()
 
@@ -279,9 +328,22 @@ export async function skvRequest(
     log.warn('401 from Skatteverket API', {
       url,
       statusCode: 401,
+      authMode: auth.mode,
       body: safeBodyForLog(text),
       headers: skvHeaders,
     })
+
+    if (auth.mode === 'system') {
+      // A rejected system token is a run-level credential problem (cert,
+      // token endpoint, APIGW subscription): drop the cache so the next
+      // call mints fresh, and never touch the user token table from here.
+      invalidateSystemToken()
+      throw new SkatteverketAuthError(
+        'Skatteverket avvisade systemautentiseringen. Kontrollera certifikatet ' +
+        'och APIGW-prenumerationerna för systemklienten.',
+        'SYSTEM_AUTH_FAILED'
+      )
+    }
 
     const lower = text.toLowerCase()
 
@@ -313,9 +375,9 @@ export async function skvRequest(
     // primary auth error to the user.
     if (lower.includes('revoked') || lower.includes('token has been revoked')) {
       try {
-        await deleteTokens(supabase, userId)
+        await deleteTokens(auth.supabase, auth.userId)
       } catch (cleanupErr) {
-        log.error('failed to clear revoked token row', cleanupErr as Error, { userId })
+        log.error('failed to clear revoked token row', cleanupErr as Error, { userId: auth.userId })
       }
       throw new SkatteverketAuthError(
         'Skatteverket har återkallat anslutningen. Detta händer t.ex. om ' +
@@ -390,8 +452,28 @@ export async function skvRequest(
     log.warn('403 from Skatteverket API', {
       url,
       statusCode: 403,
+      authMode: auth.mode,
       body: safeBodyForLog(text),
     })
+
+    if (auth.mode === 'system') {
+      if (text.includes('invalid_scope') || text.includes('required scope')) {
+        throw new SkatteverketAuthError(
+          'Systemtokenens scope räcker inte för denna tjänst. Kontrollera ' +
+          'SKATTEVERKET_SYSTEM_SCOPES mot tjänstens krav.',
+          'SYSTEM_AUTH_FAILED'
+        )
+      }
+      // With valid system credentials, a 403 means this company has not
+      // granted (or has revoked) the behorighet for Accounted's org number.
+      // Company-level: the caller downgrades the connection row, other
+      // companies in the same run are unaffected.
+      throw new SkatteverketAuthError(
+        'Företaget har inte gett Accounted behörighet hos Skatteverket, ' +
+        'eller så har behörigheten återkallats i Ombud och behörigheter.',
+        'OMBUD_GRANT_MISSING'
+      )
+    }
     // Missing scope on the access token: fires when an existing connection
     // pre-dates an extension that needed a new scope (the AGI/`agd` rollout
     // is the canonical example). The user has to disconnect + reconnect to
@@ -458,6 +540,12 @@ export async function skvRequest(
  *   RATE_LIMITED       : 429 from SKV API gateway
  *   TOKEN_CORRUPTED    : stored tokens cannot be decrypted (key rotated
  *                        or row tampered with); user must reconnect
+ *   SYSTEM_AUTH_FAILED : system (CCG) credential problem: token could not
+ *                        be minted, was rejected, or lacks scope. Run-level:
+ *                        affects every company, fix is configuration-side.
+ *   OMBUD_GRANT_MISSING: 403 on a system-mode call: this company has not
+ *                        granted (or has revoked) Accounted's behorighet at
+ *                        Skatteverket. Company-level.
  */
 export class SkatteverketAuthError extends Error {
   constructor(
@@ -472,6 +560,8 @@ export class SkatteverketAuthError extends Error {
       | 'ACCESS_DENIED'
       | 'RATE_LIMITED'
       | 'TOKEN_CORRUPTED'
+      | 'SYSTEM_AUTH_FAILED'
+      | 'OMBUD_GRANT_MISSING'
   ) {
     super(message)
     this.name = 'SkatteverketAuthError'

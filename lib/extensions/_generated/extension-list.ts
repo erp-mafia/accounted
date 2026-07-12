@@ -9,6 +9,7 @@ import { cloudBackupExtension } from '@/extensions/general/cloud-backup'
 import { skatteverketExtension } from '@/extensions/general/skatteverket'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import { documentExtractionExtension } from '@/extensions/general/document-extraction'
+import { stripeExtension } from '@/extensions/general/stripe'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   enableBankingExtension,
@@ -20,4 +21,5 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   skatteverketExtension,
   invoiceInboxExtension,
   documentExtractionExtension,
+  stripeExtension,
 ]

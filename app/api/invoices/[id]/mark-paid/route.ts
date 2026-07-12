@@ -1,21 +1,12 @@
 import { NextResponse } from 'next/server'
-import {
-  createInvoicePaymentJournalEntry,
-  createInvoiceCashEntry,
-} from '@/lib/bookkeeping/invoice-entries'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
-import { eventBus } from '@/lib/events'
+import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { roundOre } from '@/lib/money'
-import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
+import type { EntityType, Invoice } from '@/types'
 
 ensureInitialized()
 
@@ -26,6 +17,10 @@ ensureInitialized()
  *
  * Faktureringsmetoden (accrual): Debit 1930, Credit 1510 (clearing entry)
  * Kontantmetoden (cash):         Debit 1930, Credit 30xx, Credit 26xx
+ *
+ * The booking + status transition live in settleInvoicePayment (shared with
+ * the Stripe payment sync); this route owns request parsing, the payable
+ * guard, and the duplicate-payment advisory.
  */
 export const POST = withRouteContext(
   'invoice.mark_paid',
@@ -142,23 +137,10 @@ export const POST = withRouteContext(
     const accountingMethod = settings?.accounting_method || 'accrual'
     const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
-    // Drive the JE shape from the invoice's actual booking state, not from
-    // the current accounting_method setting. If the invoice was booked at
-    // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510:
-    // otherwise the receivable orphans and 30xx + VAT double-count. Only
-    // when there is no prior JE (pure kontantmetoden) do we recognise
-    // revenue + VAT here.
-    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
-
-    // Ledger math + overpayment guard via the shared planInvoicePayment helper:
-    // the same single source of truth the match-invoice flow uses, so the three
-    // mark-paid surfaces (this route, the v1 API, and the agent commit path)
-    // cannot drift again. Runs BEFORE any journal entry is created so a doomed
-    // overpayment never burns a voucher number. paymentAmount and the
-    // duplicate-payment guard above operate in the booking currency (SEK for
-    // custom lines); convert to invoice currency for the ledger comparison so a
-    // foreign-currency invoice isn't falsely rejected as overpaid.
+    // paymentAmount and the duplicate-payment guard above operate in the
+    // booking currency (SEK for custom lines); convert to invoice currency for
+    // the ledger comparison so a foreign-currency invoice isn't falsely
+    // rejected as overpaid.
     const fxRate =
       invoice.currency && invoice.currency !== 'SEK' && invoice.exchange_rate
         ? invoice.exchange_rate
@@ -166,168 +148,49 @@ export const POST = withRouteContext(
     const paymentAmountInInvoiceCurrency = customLines
       ? roundOre(paymentAmount / fxRate)
       : paymentAmount
-    const payment = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency)
-    if (!payment.ok) {
-      return errorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', opLog, {
-        requestId,
-        details: payment.details,
-      })
-    }
-    const { newPaidAmount, newRemaining, newStatus } = payment.plan
 
-    const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-    let journalEntryId: string | null = null
+    const result = await settleInvoicePayment(supabase, companyId!, user.id, {
+      invoice: invoice as Invoice & { customer?: { name?: string | null } | null },
+      paymentAmountInInvoiceCurrency,
+      paymentDate,
+      accountingMethod,
+      entityType,
+      exchangeRateDifference,
+      customLines,
+    })
 
-    if (isRealInvoice) {
-      try {
-        if (customLines) {
-          const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-          const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-          if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-            return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', opLog, {
-              requestId,
-              details: { totalDebit, totalCredit },
-            })
-          }
-
-          const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
-          if (!fiscalPeriodId) {
-            return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', opLog, {
-              requestId,
-              details: { paymentDate },
-            })
-          }
-          const sourceType = resolveInvoicePaymentSourceType({
-            invoiceAlreadyBooked,
-            accountingMethod,
+    if (!result.ok) {
+      switch (result.code) {
+        case 'BOOKKEEPING_ERROR':
+          return errorResponse(result.error, opLog, { requestId })
+        case 'UPDATE_FAILED':
+          opLog.error('failed to update invoice status', result.error as Error)
+          return errorResponse(result.error, opLog, { requestId })
+        case 'INVOICE_PAID_BOOK_FAILED':
+          opLog.error('failed to create payment journal entry', undefined, {
+            details: result.details,
           })
-          const input: CreateJournalEntryInput = {
-            fiscal_period_id: fiscalPeriodId,
-            entry_date: paymentDate,
-            description: invoice.customer?.name
-              ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-              : `Inbetalning kundfaktura ${invoice.invoice_number}`,
-            source_type: sourceType,
-            source_id: invoice.id,
-            lines: customLines,
-          }
-          const journalEntry = await createJournalEntry(supabase, companyId!, user.id, input)
-          journalEntryId = journalEntry?.id ?? null
-        } else if (useCashEntry) {
-          const journalEntry = await createInvoiceCashEntry(
-            supabase, companyId!, user.id, invoice as Invoice, paymentDate,
-            entityType, invoice.customer?.name,
-          )
-          journalEntryId = journalEntry?.id ?? null
-        } else {
-          const journalEntry = await createInvoicePaymentJournalEntry(
-            supabase, companyId!, user.id, invoice as Invoice, paymentDate,
-            exchangeRateDifference, invoice.customer?.name,
-          )
-          journalEntryId = journalEntry?.id ?? null
-        }
-      } catch (err) {
-        if (isBookkeepingError(err)) {
-          return errorResponse(err, opLog, { requestId })
-        }
-        opLog.error('failed to create payment journal entry', err as Error)
-        return errorResponseFromCode('INVOICE_PAID_BOOK_FAILED', opLog, {
-          requestId,
-          details: { reason: err instanceof Error ? err.message : 'unknown' },
-        })
+          return errorResponseFromCode(result.code, opLog, {
+            requestId,
+            details: result.details,
+          })
+        case 'INVOICE_PAID_RACE':
+          return errorResponseFromCode(result.code, opLog, { requestId })
+        default:
+          return errorResponseFromCode(result.code, opLog, {
+            requestId,
+            details: result.details,
+          })
       }
-
-      // Fail closed: a real invoice must produce a payment voucher. If a helper
-      // returned null without throwing (e.g. a closed/locked fiscal period),
-      // refuse to mark the invoice paid: flipping status with no journal entry
-      // orphans the receivable and diverges the GL from the sub-ledger.
-      if (!journalEntryId) {
-        opLog.error('mark-paid produced no journal entry; refusing to mark paid', undefined, {
-          invoiceId: id,
-        })
-        return errorResponseFromCode('INVOICE_PAID_BOOK_FAILED', opLog, {
-          requestId,
-          details: { reason: 'no_journal_entry_created' },
-        })
-      }
-    }
-
-    // CAS guard: only update if status is still in a payable state.
-    const { data: updateResult, error: updateError } = await supabase
-      .from('invoices')
-      .update({
-        status: newStatus,
-        paid_amount: newPaidAmount,
-        remaining_amount: newRemaining,
-        ...(newStatus === 'paid' ? { paid_at: now } : {}),
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue', 'partially_paid'])
-      .select('id')
-
-    if (updateError) {
-      opLog.error('failed to update invoice status', updateError)
-      // The payment voucher already posted but the invoice row did not flip to
-      // paid; cancel the orphan so the GL doesn't diverge from the sub-ledger.
-      if (journalEntryId) {
-        await cancelOrphanedPaymentEntry(
-          supabase,
-          companyId!,
-          user.id,
-          journalEntryId,
-          'Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning',
-        )
-      }
-      return errorResponse(updateError, opLog, { requestId })
-    }
-
-    if (!updateResult || updateResult.length === 0) {
-      // Status changed between read and write (concurrent settle): cancel the
-      // orphaned payment voucher and document the voucher gap before reporting.
-      if (journalEntryId) {
-        await cancelOrphanedPaymentEntry(
-          supabase,
-          companyId!,
-          user.id,
-          journalEntryId,
-          'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-        )
-      }
-      return errorResponseFromCode('INVOICE_PAID_RACE', opLog, { requestId })
-    }
-
-    // Notify subscribers: invoice.paid fans out to registered webhooks
-    // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
-    // so an emit failure must not fail the request. Mirrors the v1 route.
-    try {
-      await eventBus.emit({
-        type: 'invoice.paid',
-        payload: {
-          invoice: {
-            ...(invoice as Invoice),
-            status: newStatus,
-            paid_amount: newPaidAmount,
-            remaining_amount: newRemaining,
-            paid_at: newStatus === 'paid' ? now : (invoice as Invoice).paid_at,
-          } as Invoice,
-          companyId: companyId!,
-          userId: user.id,
-          paymentAmount: paymentAmountInInvoiceCurrency,
-          paymentDate,
-        },
-      })
-    } catch (err) {
-      opLog.error('invoice.paid emit failed', err as Error, { invoiceId: id })
     }
 
     return NextResponse.json({
       success: true,
-      status: newStatus,
-      paid_at: newStatus === 'paid' ? now : null,
-      paid_amount: newPaidAmount,
-      remaining_amount: newRemaining,
-      journal_entry_id: journalEntryId,
+      status: result.newStatus,
+      paid_at: result.paidAt,
+      paid_amount: result.newPaidAmount,
+      remaining_amount: result.newRemaining,
+      journal_entry_id: result.journalEntryId,
     })
   },
   { requireWrite: true },

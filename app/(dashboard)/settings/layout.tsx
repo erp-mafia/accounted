@@ -9,6 +9,7 @@ import { SettingsShell } from '@/components/settings/SettingsShell'
 const TAB_TO_ROUTE: Record<string, string> = {
   company: '/settings/company',
   invoicing: '/settings/invoicing',
+  payments: '/settings/payments',
   bookkeeping: '/settings/bookkeeping',
   tax: '/settings/tax',
   team: '/settings/team',

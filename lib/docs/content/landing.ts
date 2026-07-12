@@ -4,7 +4,7 @@ export const LANDING_MD = `# accounted API
 
 > Swedish double-entry bookkeeping as a public REST API for agents and integrations. API version \`${API_V1_VERSION}\`.
 
-The accounted API lets you do anything the dashboard can do: create invoices, ingest bank transactions, file VAT declarations, run payroll, and subscribe to webhooks for state changes. Every endpoint is designed for autonomous agents first: machine-readable schemas, dry-run previews, idempotent retries, and inline audit blocks on every write.
+The accounted API covers the financial workflows an integration needs: create invoices, ingest bank transactions, file VAT declarations, run payroll, and subscribe to webhooks for state changes. Every endpoint is designed for autonomous agents first: machine-readable schemas, dry-run previews, idempotent retries, and inline audit blocks on every write. (A few dashboard-only steps remain — e.g. attaching employees to a salary run — and each cookbook calls out where one applies.)
 
 If you've used [Stripe's API](https://docs.stripe.com/api), the shape will feel familiar: bearer-token auth, dated API versions, webhook signature verification, idempotency keys. The accounting concepts are Swedish (BAS chart, BFL retention, K2/K3, momsdeklaration) but the surface is built for the same kind of integrator.
 
@@ -24,7 +24,7 @@ Create keys in the accounted dashboard at **/settings/api**. Two key prefixes ar
 
 Each key carries one or more **scopes** (\`invoices:read\`, \`invoices:write\`, \`payroll:write\`, \`webhooks:manage\`, ...) that gate which endpoints it can call. Scopes are listed on every endpoint reference page.
 
-Rate limit: 100 requests per minute per key, returned in \`X-RateLimit-*\` headers.
+Rate limit: 100 requests per minute per key.
 
 ## Base URL
 
@@ -74,7 +74,7 @@ Every response has the same shape:
 }
 \`\`\`
 
-Errors swap \`data\` for \`error\`:
+Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` block — the \`request_id\` moves inside \`error\`):
 
 \`\`\`json
 {
@@ -82,11 +82,11 @@ Errors swap \`data\` for \`error\`:
     "code": "PERIOD_LOCKED",
     "message": "Den valda perioden är låst.",
     "message_en": "The selected period is locked.",
-    "remediation": { "description": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.", "tool": "fiscal_periods.unlock" },
     "details": { "fiscal_period_id": "..." },
-    "docs_url": "https://app.gnubok.se/docs/api/errors#period_locked"
-  },
-  "meta": { "request_id": "req_...", "api_version": "${API_V1_VERSION}" }
+    "recovery_hint": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",
+    "docs_url": "https://app.gnubok.se/docs/api/errors/PERIOD_LOCKED",
+    "request_id": "req_..."
+  }
 }
 \`\`\`
 

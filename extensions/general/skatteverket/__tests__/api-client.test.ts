@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // Mock the token-store to bypass DB and supply a fresh access token.
 const deleteTokensMock = vi.fn()
@@ -25,7 +25,8 @@ vi.mock('../lib/oauth', () => ({
   exchangeCodeForTokens: vi.fn(),
 }))
 
-import { skvRequest, SkatteverketAuthError } from '../lib/api-client'
+import { skvRequest, skvRequestWithAuth, SkatteverketAuthError } from '../lib/api-client'
+import { __resetSystemTokenCacheForTests } from '../lib/system-auth/token-provider'
 
 const fakeSupabase = {} as unknown as Parameters<typeof skvRequest>[0]
 
@@ -154,6 +155,78 @@ describe('SkatteverketAuthError', () => {
     const b = new SkatteverketAuthError('msg', 'RATE_LIMITED')
     expect(a.code).toBe('TOKEN_CORRUPTED')
     expect(b.code).toBe('RATE_LIMITED')
+  })
+})
+
+describe('skvRequestWithAuth: system mode', () => {
+  beforeEach(() => {
+    process.env.SKATTEVERKET_SYSTEM_AUTH_MODE = 'on'
+    process.env.SKATTEVERKET_SYSTEM_AUTH_MECHANISM = 'stub'
+    __resetSystemTokenCacheForTests()
+    deleteTokensMock.mockClear()
+  })
+
+  afterEach(() => {
+    delete process.env.SKATTEVERKET_SYSTEM_AUTH_MODE
+    delete process.env.SKATTEVERKET_SYSTEM_AUTH_MECHANISM
+  })
+
+  it('sends the system token and returns success responses', async () => {
+    mockFetchStatus(200, '{"ok":true}')
+    const res = await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+    expect(res.status).toBe(200)
+    const call = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect((call[1] as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer stub-system-token',
+    })
+  })
+
+  it('401 in system mode -> SYSTEM_AUTH_FAILED and NEVER touches the user token table', async () => {
+    mockFetchStatus(401, '{"error":"Token has been revoked."}')
+    try {
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
+    }
+    // The revoked-body branch deletes the user row in user mode; system
+    // mode must never reach it.
+    expect(deleteTokensMock).not.toHaveBeenCalled()
+  })
+
+  it('403 in system mode -> OMBUD_GRANT_MISSING (company-level)', async () => {
+    mockFetchStatus(403, 'Forbidden')
+    try {
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('OMBUD_GRANT_MISSING')
+    }
+    expect(deleteTokensMock).not.toHaveBeenCalled()
+  })
+
+  it('403 invalid_scope in system mode -> SYSTEM_AUTH_FAILED (config, not grant)', async () => {
+    mockFetchStatus(403, '{"error":"invalid_scope"}')
+    try {
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
+    }
+  })
+
+  it('unconfigured system auth -> SYSTEM_AUTH_FAILED before any fetch', async () => {
+    process.env.SKATTEVERKET_SYSTEM_AUTH_MODE = 'off'
+    global.fetch = vi.fn() as unknown as typeof fetch
+    try {
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
+    }
+    expect(global.fetch).not.toHaveBeenCalled()
   })
 })
 

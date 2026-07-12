@@ -5,7 +5,11 @@ import { verifyCronSecret } from '@/lib/auth/cron'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
+import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
+import { resolveReadAuth, currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
+import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
@@ -78,7 +82,7 @@ export async function GET(request: Request) {
     declarationId: string
     companyId: string
     period: string
-    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'apigw_config' | 'error'
+    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'apigw_config' | 'error'
     error?: string
   }
   const results: Result[] = []
@@ -103,26 +107,21 @@ export async function GET(request: Request) {
     }
 
     try {
-      // The token table is user-scoped (one BankID identity per user) but
-      // also carries company_id. Match on company_id so a multi-company
-      // operator's token is reused only for the company that owns the AGI.
-      const { data: token } = await supabase
-        .from('skatteverket_tokens')
-        .select('user_id, status')
-        .eq('company_id', companyId)
-        .maybeSingle()
-
-      if (!token?.user_id) {
-        results.push({ declarationId, companyId, period, status: 'no_token' })
-        continue
-      }
-
-      // A connection flagged needs_reconsent cannot heal on its own (SKV's
-      // per-flow refresh tokens live 65 minutes) — skip quietly instead of
-      // failing the same pending declaration every run until the user
-      // re-consents.
-      if (token.status === 'needs_reconsent') {
-        results.push({ declarationId, companyId, period, status: 'expired_token', error: 'needs_reconsent' })
+      // Auth resolution prefers system credentials (verified lasombud grant)
+      // and falls back to the company's user token: kvittens polling is the
+      // canonical case for the hybrid model, since the user signed at SKV
+      // and their 65-minute session is usually long dead by the time the
+      // kvittens exists.
+      const resolved = await resolveReadAuth(supabase, companyId, { requires: 'lasombud' })
+      if (!resolved.ok) {
+        if (resolved.reason === 'needs_reconsent') {
+          // A connection flagged needs_reconsent cannot heal on its own
+          // (SKV's per-flow refresh tokens live 65 minutes): skip quietly
+          // instead of failing the same declaration every run.
+          results.push({ declarationId, companyId, period, status: 'expired_token', error: 'needs_reconsent' })
+        } else {
+          results.push({ declarationId, companyId, period, status: 'no_token' })
+        }
         continue
       }
 
@@ -142,7 +141,7 @@ export async function GET(request: Request) {
         settings.entity_type as 'enskild_firma' | 'aktiebolag',
       )
 
-      const kvittRes = await agiGetKvittenser(supabase, token.user_id as string, arbetsgivare, period)
+      const kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period)
       if (!kvittRes.ok) {
         results.push({
           declarationId, companyId, period,
@@ -186,7 +185,7 @@ export async function GET(request: Request) {
           status: 'submitted',
           kvittensnummer: kvittens.uuidKvittens,
           submitted_at: submittedAt,
-          submitted_by: token.user_id,
+          submitted_by: resolved.tokenUserId,
           response_data: {
             signeradAv: kvittens.signeradAv ?? null,
             signeradTid: kvittens.signeradTid ?? null,
@@ -216,9 +215,61 @@ export async function GET(request: Request) {
         .eq('extension_id', 'skatteverket')
         .eq('key', `agi_submission_${period}`)
 
+      // The declaration is already flipped to submitted above, and the next
+      // run only revisits pending_signature rows: from here on everything is
+      // best-effort. Each step gets its own try/catch so a failure is logged
+      // as a warning without masking the successful filing or skipping the
+      // remaining confirmation steps.
+
+      // The kvittens is the canonical filing receipt: confirm the period's
+      // arbetsgivardeklaration deadline (terminal state).
+      try {
+        await completeTaxDeadline(
+          supabase,
+          companyId,
+          ['arbetsgivardeklaration'],
+          `${decl.period_year}-${String(decl.period_month).padStart(2, '0')}`,
+          'confirmed'
+        )
+      } catch (deadlineErr) {
+        console.warn('[agi-kvittenser-cron] completeTaxDeadline failed after successful filing', {
+          declarationId, companyId, period,
+          message: deadlineErr instanceof Error ? deadlineErr.message : 'Unknown error',
+        })
+      }
+
+      // Tell the user: signing happened at Skatteverket, often long after
+      // they closed our tab, so this is the only confirmation they get.
+      if (resolved.tokenUserId) {
+        try {
+          await sendKvittensNotification(supabase, {
+            companyId,
+            userId: resolved.tokenUserId,
+            kind: 'agi',
+            period,
+            kvittensnummer: kvittens.uuidKvittens,
+            referenceId: declarationId,
+          })
+        } catch (notifyErr) {
+          console.warn('[agi-kvittenser-cron] sendKvittensNotification failed after successful filing', {
+            declarationId, companyId, period,
+            message: notifyErr instanceof Error ? notifyErr.message : 'Unknown error',
+          })
+        }
+      }
+
       results.push({ declarationId, companyId, period, status: 'signed' })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
+
+      if (err instanceof SkatteverketAuthError && err.code === 'OMBUD_GRANT_MISSING') {
+        // System-mode read rejected: the company withdrew the behorighet.
+        // Downgrade the connection row so the next run falls back to the
+        // user token (if any). Never touches skatteverket_tokens.
+        await markGrantRevoked(companyId, currentSkvEnvironment(), 'lasombud', err.code)
+        results.push({ declarationId, companyId, period, status: 'grant_revoked', error: err.code })
+        continue
+      }
 
       if (
         err instanceof SkatteverketAuthError &&
@@ -272,11 +323,12 @@ export async function GET(request: Request) {
   const signed = results.filter(r => r.status === 'signed').length
   const stillPending = results.filter(r => r.status === 'still_pending').length
   const expired = results.filter(r => r.status === 'expired_token').length
+  const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const apigwConfig = results.filter(r => r.status === 'apigw_config').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${apigwConfig} apigw config gaps, ${errors} errors`,
+    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
   )
 
   return NextResponse.json({
@@ -284,6 +336,7 @@ export async function GET(request: Request) {
     signed,
     stillPending,
     expired,
+    grantRevoked,
     apigwConfig,
     errors,
     results,
