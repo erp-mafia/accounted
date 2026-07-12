@@ -92,9 +92,14 @@ describe('tools/list payload size guard', () => {
     //     eligible/blocked per-invoice output). Each side alone was under the
     //     ceiling; the combination crossed it by ~220. Descriptions are at
     //     their trimmed floor per the entries above.
+    //   * 45K → 45.5K when payment_link_url landed on gnubok_create_invoice
+    //     (manual payment-link MVP): one optional string property with an
+    //     already-minimal ~24-token description. Headroom before the change was
+    //     under 10 tokens, so even this smallest possible addition crossed;
+    //     other descriptions are at their trimmed floor per the entries above.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(45_000)
+    expect(approxTokens).toBeLessThan(45_500)
   })
 })

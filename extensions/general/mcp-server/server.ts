@@ -26,6 +26,7 @@ import {
   calculateVatLiability,
 } from '@/lib/reports/kpi'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { ACCOUNT_RUTA, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
@@ -768,7 +769,7 @@ async function categorizeTransactionCore(
   // Upsert counterparty template for future auto-matching
   try {
     await upsertCounterpartyTemplate(
-      supabase, userId, transaction as Transaction, mappingResult, 'user_approved'
+      supabase, companyId, transaction as Transaction, mappingResult, 'user_approved'
     )
   } catch {
     // Non-critical
@@ -1071,23 +1072,60 @@ export async function computeVatReport(
   // Paginate. An unbounded .select() caps at PostgREST's 1000-row default,
   // which silently truncates a yearly (or busy quarterly) VAT period with
   // >1000 entry lines and under-reports the momsdeklaration.
+  // journal_entries is a to-one embed: PostgREST returns an object at
+  // runtime, but the untyped client infers an array, so accept both shapes.
   const lines = await fetchAllRows<{
+    journal_entry_id: string
     account_number: string
     debit_amount: number
     credit_amount: number
+    journal_entries?: { source_type: string | null } | Array<{ source_type: string | null }>
   }>(({ from, to }) =>
     supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id)')
+      .select('journal_entry_id, account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id, source_type)')
       .eq('journal_entries.company_id', companyId)
       .in('journal_entries.status', ['posted', 'reversed'])
+      // Momsredovisning entries (the settlement verifikat clearing 26xx to
+      // 2650/1650) would zero the rutor once booked; exclude them so this
+      // report matches lib/reports/vat-declaration.ts (fetchVatAccountTotals).
+      .neq('journal_entries.source_type', 'vat_settlement')
       .gte('journal_entries.entry_date', startDate)
       .lte('journal_entries.entry_date', endDate)
+      // Stable total order for correct paging (see fetch-all.ts): without it,
+      // rows can shift across page boundaries on reports over 1000 lines.
+      .order('id', { ascending: true })
       .range(from, to)
   )
 
+  // Settlements booked WITHOUT the vat_settlement tag (manual momsomföring,
+  // SIE-imported settlements, stornos of a settlement) are excluded by shape,
+  // mirroring fetchVatAccountTotals (#984): an entry touching both a
+  // declaration account (ACCOUNT_RUTA) and a settlement net account
+  // (2650/1650) is a momsredovisning, not VAT-bearing activity. Opening
+  // balances are exempt: carried-in 26xx balances are unsettled VAT that
+  // belongs in the next declaration.
+  const declarationEntryIds = new Set<string>()
+  const netEntryIds = new Set<string>()
+  for (const line of lines) {
+    if (ACCOUNT_RUTA[line.account_number]) declarationEntryIds.add(line.journal_entry_id)
+    else if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(line.account_number)) {
+      netEntryIds.add(line.journal_entry_id)
+    }
+  }
+  const settlementShapedIds = new Set<string>()
+  for (const line of lines) {
+    const id = line.journal_entry_id
+    if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
+    const embedded = line.journal_entries
+    const entry = Array.isArray(embedded) ? embedded[0] : embedded
+    if (!entry || entry.source_type === 'opening_balance') continue
+    settlementShapedIds.add(id)
+  }
+
   const accountTotals = new Map<string, { debit: number; credit: number }>()
   for (const line of lines) {
+    if (settlementShapedIds.has(line.journal_entry_id)) continue
     const acc = line.account_number
     const existing = accountTotals.get(acc) ?? { debit: 0, credit: 0 }
     existing.debit += Number(line.debit_amount) || 0
@@ -3580,6 +3618,10 @@ export const tools: McpTool[] = [
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
         notes: { type: 'string' },
+        payment_link_url: {
+          type: 'string',
+          description: 'Optional https pay link for THIS invoice (e.g. Stripe); rendered in the invoice email and PDF.',
+        },
       },
       required: ['customer_id', 'items'],
     },
@@ -3628,6 +3670,21 @@ export const tools: McpTool[] = [
         const bag = resolvedDimBags[i + 1]
         return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
       })
+
+      // Same https-only gate as the web API (CreateInvoiceSchema): the link is
+      // rendered in customer-facing emails/PDFs under the company's name.
+      const paymentLinkUrl = (args.payment_link_url as string | undefined)?.trim() || null
+      if (paymentLinkUrl) {
+        let isHttps = false
+        try {
+          isHttps = new URL(paymentLinkUrl).protocol === 'https:'
+        } catch {
+          isHttps = false
+        }
+        if (!isHttps || paymentLinkUrl.length > 2048) {
+          throw new Error('payment_link_url must be a valid https URL (max 2048 chars).')
+        }
+      }
 
       const today = new Date().toISOString().split('T')[0]
       const currency = ((args.currency as string) || 'SEK') as Currency
@@ -3689,6 +3746,7 @@ export const tools: McpTool[] = [
           our_reference: (args.our_reference as string) || null,
           your_reference: (args.your_reference as string) || null,
           notes: (args.notes as string) || null,
+          payment_link_url: paymentLinkUrl,
         },
         {
           customer_name: customer.name,

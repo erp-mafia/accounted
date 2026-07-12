@@ -362,6 +362,28 @@ export const CreateInvoiceSchema = z.object({
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
   notes: z.string().optional(),
+  // Optional online payment link (manual MVP): the user pastes a link created
+  // in their PSP dashboard (e.g. a Stripe Payment Link). https-only because the
+  // URL is rendered in customer-facing emails/PDFs under the company's name.
+  // The invoice form always sends the field ('' when empty), so empty string
+  // normalises to undefined like external_invoice_number above; build-invoice-
+  // write maps undefined to NULL so clearing the field on a draft edit works.
+  payment_link_url: z
+    .union([
+      z
+        .string()
+        .max(2048)
+        .refine((v) => {
+          try {
+            return new URL(v).protocol === 'https:'
+          } catch {
+            return false
+          }
+        }, 'Ogiltig betalningslänk (måste vara en https-adress)'),
+      z.literal(''),
+    ])
+    .transform((v) => v || undefined)
+    .optional(),
   // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
   // encrypted server-side before it ever hits the DB (see encryptPersonnummer
   // in lib/salary/personnummer.ts). `deduction_housing_designation` is the

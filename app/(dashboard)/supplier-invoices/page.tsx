@@ -15,7 +15,10 @@ import Link from 'next/link'
 import { PageHeader } from '@/components/ui/page-header'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice } from '@/types'
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
@@ -43,11 +46,13 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
+  const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
+  const [approvingId, setApprovingId] = useState<string | null>(null)
 
   // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
   // optionally with inbox_item_id for the invoice-inbox conversion flow) so
@@ -88,15 +93,40 @@ export default function SupplierInvoicesPage() {
     fetchInvoices()
   }
 
+  // "Att betala" is the full payment queue: registered invoices are already
+  // booked as debt (2440), so they belong here too. Approval stays the gate
+  // for paying, not for visibility; unapproved rows get an inline approve.
   const filteredInvoices = invoices.filter((inv) => {
     switch (activeTab) {
       case 'registered': return inv.status === 'registered'
       case 'approved': return inv.status === 'approved'
-      case 'to_pay': return inv.status === 'approved' || inv.status === 'overdue'
+      case 'to_pay': return inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
       case 'paid': return inv.status === 'paid'
       default: return true
     }
   })
+
+  async function handleApprove(id: string) {
+    setApprovingId(id)
+    try {
+      const res = await fetch(`/api/supplier-invoices/${id}/approve`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        // Re-sync from the server: an operator about to pay must see the
+        // invoice's true approval state, not an optimistic guess.
+        fetchInvoices()
+      } else {
+        toast({ title: t('approved_title'), description: t('approved_description') })
+        setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, status: 'approved' as const } : inv)))
+      }
+    } catch {
+      toast({ title: t('approve_failed_title'), description: getErrorMessage(null, { context: 'supplier_invoice' }), variant: 'destructive' })
+      fetchInvoices()
+    } finally {
+      setApprovingId(null)
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -195,12 +225,37 @@ export default function SupplierInvoicesPage() {
                       </TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(inv.total, inv.currency)}</TableCell>
+                      {/* Belopp rounds like the detail page when the invoice's
+                          öresavrundning flag is on; "kvar att betala" stays
+                          öre-exact (it is the actual outstanding debt). */}
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(getDisplayTotal(
+                          { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
+                          { ore_rounding: false },
+                        ).displayed, inv.currency)}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{formatCurrency(inv.remaining_amount, inv.currency)}</TableCell>
                       <TableCell>
-                        <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
-                          {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
-                        </Badge>
+                        {activeTab === 'to_pay' && inv.status === 'registered' ? (
+                          <div className="flex items-center gap-2">
+                            <Badge variant="warning" className="whitespace-nowrap">{t('not_approved')}</Badge>
+                            {!inv.is_credit_note && canWrite && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleApprove(inv.id)}
+                                disabled={approvingId !== null}
+                              >
+                                {t('approve')}
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
+                            {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
+                          </Badge>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

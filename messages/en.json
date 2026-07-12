@@ -121,6 +121,7 @@
     "badge_beta": "Beta",
     "needs_company_tooltip": "Add a company to enable",
     "logout_sandbox": "Exit sandbox",
+    "trial_days_left": "Trial: {days, plural, =1 {1 day} other {# days}} left",
     "ext_tic": "Company profile",
     "ext_invoice_inbox": "Document inbox"
   },
@@ -432,7 +433,12 @@
     "status_overdue": "Overdue",
     "status_disputed": "Disputed",
     "status_credited": "Credited",
-    "status_reversed": "Reversed"
+    "status_reversed": "Reversed",
+    "not_approved": "Not approved",
+    "approve": "Approve",
+    "approve_failed_title": "Approval failed",
+    "approved_title": "Approved",
+    "approved_description": "The invoice has been approved"
   },
   "purchase_orders": {
     "title": "Purchase orders",
@@ -2357,6 +2363,10 @@
     "your_reference_placeholder": "Customer contact person",
     "our_reference_label": "Our reference",
     "our_reference_placeholder": "Your name",
+    "payment_link_label": "Payment link (optional)",
+    "payment_link_placeholder": "https://buy.stripe.com/…",
+    "payment_link_hint": "Paste a payment link created for this specific invoice (e.g. in Stripe). Make sure the amount matches and preferably limit the link to a single payment. The link is shown as a button in the invoice email and as a QR code on the PDF.",
+    "validation_payment_link_https": "The payment link must be an https address",
     "summary_card_title": "Summary",
     "subtotal_label": "Subtotal",
     "net_at_rate": "Net {rate}%",

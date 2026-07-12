@@ -337,7 +337,7 @@ export async function categorizeMatchedTransaction(
 
   try {
     await upsertCounterpartyTemplate(
-      supabase, userId, transaction as Transaction, mappingResult, 'user_approved'
+      supabase, companyId, transaction as Transaction, mappingResult, 'user_approved'
     )
   } catch { /* non-critical */ }
 

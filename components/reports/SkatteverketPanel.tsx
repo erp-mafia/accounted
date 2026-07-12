@@ -5,30 +5,35 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
-  Download,
   ExternalLink,
-  Gavel,
-  Link2,
-  Link2Off,
-  Loader2,
   FileCheck,
+  Info,
+  Link2,
+  Loader2,
   Lock,
-  Unlock,
+  MoreHorizontal,
   Send,
   ShieldAlert,
-  Trash2,
 } from 'lucide-react'
-import type { VatDeclarationRutor, VatPeriodType } from '@/types'
+import type { VatPeriodType } from '@/types'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
-import {
-  runVatDeclarationChecks,
-  type VatDeclarationCheck,
-} from '@/lib/reports/vat-declaration-checks'
-import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
-import { formatDate } from '@/lib/utils'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
@@ -71,16 +76,49 @@ interface SkatteverketPanelProps {
   period: number
   hasData: boolean
   /**
-   * Calculated rutor for the current period. Used to run local pre-flight
-   * checks before Skatteverket sees the payload: SKV only validates internal
-   * arithmetic consistency, so we have to catch "ruta 30-32 present but
-   * 20-24 empty" locally before letting the user submit.
+   * True when the local pre-flight checks (VatChecksCard, section 1 of the
+   * page) found ERRORs. Blocks validate/submit: SKV only validates internal
+   * arithmetic, so a locally broken declaration would pass their checks and
+   * still be materially wrong.
    */
-  rutor?: VatDeclarationRutor | null
+  localBlocked: boolean
+}
+
+/**
+ * One feedback slot: exactly one message at a time, replaced at the end of
+ * each action. 'info' is for neutral lookups ("inget utkast hittades"):
+ * rendering those as success taught users that green means nothing.
+ */
+interface Notice {
+  kind: 'error' | 'success' | 'info'
+  text: string
 }
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+const ORG_NUMBER_MISSING_NOTICE: Notice = {
+  kind: 'error',
+  text: 'Organisationsnummer saknas. Ange det under Inställningar innan du använder Skatteverket-kopplingen.',
+}
+
+function isOrgNumberMissing(err: unknown): boolean {
+  return err instanceof Error && err.message === 'Organisationsnummer saknas'
+}
+
+/**
+ * In-flight labels for actions with no visible button while running (the
+ * overflow-menu actions close the menu on select): rendered as a status row
+ * so a slow SKV round-trip is never silent.
+ */
+const ACTION_IN_FLIGHT_LABELS: Record<string, string> = {
+  fetchDraft: 'Hämtar utkast...',
+  check: 'Kontrollerar inlämning...',
+  fetchDecided: 'Hämtar beslut...',
+  unlock: 'Låser upp...',
+  delete: 'Raderar utkast...',
+  disconnect: 'Kopplar bort Skatteverket...',
 }
 
 const SKV_ENABLED = ENABLED_EXTENSION_IDS.has('skatteverket')
@@ -90,13 +128,19 @@ export function SkatteverketPanel(props: SkatteverketPanelProps) {
   return <SkatteverketPanelInner {...props} />
 }
 
-function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: SkatteverketPanelProps) {
+function SkatteverketPanelInner({
+  periodType,
+  year,
+  period,
+  hasData,
+  localBlocked,
+}: SkatteverketPanelProps) {
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
+  const { dialogProps, confirm } = useDestructiveConfirm()
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const [kontroller, setKontroller] = useState<KontrollResult[]>([])
   const [signeringslank, setSigneringslank] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState<{
@@ -104,81 +148,19 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
     tidpunkt?: string
   } | null>(null)
 
-  // Local sanity checks against the calculated declaration, run before any
-  // SKV call. SKV's "OK" only confirms arithmetic: these checks confirm
-  // the declaration looks plausible (no orphaned RC output, no missing
-  // basis, no summaMoms drift).
-  const localChecks: VatDeclarationCheck[] = rutor ? runVatDeclarationChecks(rutor) : []
-  const localErrors = localChecks.filter((c) => c.status === 'ERROR')
-  const localBlocked = localErrors.length > 0
-
-  // Per-voucher RC basis gap detection: fetched whenever a RC_BASIS_MISSING
-  // warning fires so we can show the user exactly which verifikationer are
-  // missing the basbelopp pair and offer a one-click correction.
-  const hasRcBasisWarning = localChecks.some((c) => c.code === 'RC_BASIS_MISSING')
-  const [gaps, setGaps] = useState<RcBasisGap[]>([])
-  const [gapsLoading, setGapsLoading] = useState(false)
-  const [fixingId, setFixingId] = useState<string | null>(null)
-  const [gapSelections, setGapSelections] = useState<
-    Record<string, { supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business'; supplyType: 'service' | 'goods' }>
-  >({})
-
-  useEffect(() => {
-    if (!hasRcBasisWarning) {
-      setGaps([])
-      return
-    }
-    let cancelled = false
-    setGapsLoading(true)
-    fetch(
-      `/api/reports/vat-declaration/rc-basis-gaps?periodType=${periodType}&year=${year}&period=${period}`,
-    )
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return
-        setGaps(j?.data?.gaps || [])
-      })
-      .catch(() => {
-        if (cancelled) return
-        setGaps([])
-      })
-      .finally(() => {
-        if (cancelled) return
-        setGapsLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [hasRcBasisWarning, periodType, year, period])
-
-  const handleFixGap = async (gap: RcBasisGap) => {
-    const sel = gapSelections[gap.entryId] ?? { supplierType: 'eu_business', supplyType: 'service' as const }
-    setFixingId(gap.entryId)
-    setError(null)
-    try {
-      const res = await fetch('/api/reports/vat-declaration/rc-basis-gaps/fix', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          entryId: gap.entryId,
-          supplierType: sel.supplierType,
-          supplyType: sel.supplyType,
-        }),
-      })
-      const result = await res.json()
-      if (!res.ok) {
-        setError(result?.error || 'Kunde inte korrigera verifikationen')
-      } else {
-        setGaps((prev) => prev.filter((g) => g.entryId !== gap.entryId))
-        setSuccess(
-          `Verifikation ${gap.voucherSeries}-${gap.voucherNumber} korrigerad. Storno + ny verifikation skapad. Ladda om sidan för att uppdatera rutorna.`,
-        )
-      }
-    } catch {
-      setError('Kunde inte korrigera verifikationen')
-    } finally {
-      setFixingId(null)
-    }
+  // Per-period SKV state resets when the picker changes (render-phase
+  // adjustment): a signing link, kvittens, or kontrollresultat fetched for
+  // one period must never render as if it belonged to another. Without this,
+  // the visibilitychange auto-check could stamp "Deklarationen har lämnats
+  // in" for a different period than the one being signed.
+  const periodKey = `${periodType}:${year}:${period}`
+  const [appliedPeriodKey, setAppliedPeriodKey] = useState(periodKey)
+  if (appliedPeriodKey !== periodKey) {
+    setAppliedPeriodKey(periodKey)
+    setKontroller([])
+    setSigneringslank(null)
+    setSubmitted(null)
+    setNotice(null)
   }
 
   /**
@@ -186,10 +168,12 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
    * has expired/been revoked/lost scope, immediately reflect that in the
    * local status so the "Förnya session" CTA appears next to the message:
    * the user shouldn't have to wait for /status to catch up.
+   * Extension routes return a FLAT { error: string, code } shape, unlike the
+   * core routes' nested envelope: do not unify the parsers.
    */
   const applyApiError = useCallback((result: { error?: string; code?: string } | null) => {
     if (!result?.error) return false
-    setError(result.error)
+    setNotice({ kind: 'error', text: result.error })
     if (result.code && AUTH_RECONNECT_CODES.has(result.code)) {
       setStatus((prev) => prev ? { ...prev, expired: true } : prev)
     }
@@ -216,7 +200,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
     // Check URL params for OAuth callback results
     const params = new URLSearchParams(window.location.search)
     if (params.get('skv_connected') === 'true') {
-      setSuccess('Ansluten till Skatteverket')
+      setNotice({ kind: 'success', text: 'Ansluten till Skatteverket' })
       fetchStatus()
       // Clean URL
       const url = new URL(window.location.href)
@@ -225,7 +209,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
     }
     const skvError = params.get('skv_error')
     if (skvError) {
-      setError(decodeURIComponent(skvError))
+      setNotice({ kind: 'error', text: decodeURIComponent(skvError) })
       const url = new URL(window.location.href)
       url.searchParams.delete('skv_error')
       window.history.replaceState({}, '', url.toString())
@@ -243,20 +227,25 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   const handleDisconnect = async () => {
     setActionLoading('disconnect')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/disconnect', {
         method: 'POST',
       })
       if (res.ok) {
         setStatus({ connected: false })
-        setSuccess(null)
+        setNotice(null)
         setKontroller([])
         setSigneringslank(null)
         setSubmitted(null)
+      } else {
+        const result = await res.json().catch(() => ({}))
+        if (!applyApiError(result)) {
+          setNotice({ kind: 'error', text: `Kunde inte koppla bort (${res.status})` })
+        }
       }
     } catch {
-      setError('Kunde inte koppla bort')
+      setNotice({ kind: 'error', text: 'Kunde inte koppla bort' })
     } finally {
       setActionLoading(null)
     }
@@ -264,14 +253,16 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   const handleValidate = async () => {
     if (localBlocked) {
-      setError(
-        'Lokala kontroller hittade fel i bokföringen. Åtgärda dessa innan ' +
-        'du skickar till Skatteverket.',
-      )
+      setNotice({
+        kind: 'error',
+        text:
+          'Åtgärda felen under Kontroll av underlaget högst upp på sidan innan ' +
+          'du skickar till Skatteverket.',
+      })
       return
     }
     setActionLoading('validate')
-    setError(null)
+    setNotice(null)
     setKontroller([])
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/declaration/validate', {
@@ -289,21 +280,26 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
           // SKV's OK only confirms arithmetic: it does NOT confirm that the
           // declaration is materially correct. We say so explicitly so the
           // user doesn't read this as a green light for actual filing.
-          setSuccess(
-            'Skatteverket har inga tekniska invändningar mot deklarationen. ' +
-            'Kontrollera siffrorna i förhandsgranskningen innan du skickar in.',
-          )
+          setNotice({
+            kind: 'success',
+            text:
+              'Skatteverket har inga tekniska invändningar mot deklarationen. ' +
+              'Kontrollera siffrorna i förhandsgranskningen innan du skickar in.',
+          })
         } else {
           const errors = controls.filter(k => k.status === 'ERROR')
           if (errors.length > 0) {
-            setError(`${errors.length} valideringsfel hittades`)
+            setNotice({ kind: 'error', text: `${errors.length} valideringsfel hittades` })
           } else {
-            setSuccess('Skatteverket har inga tekniska invändningar (med varningar)')
+            setNotice({
+              kind: 'success',
+              text: 'Skatteverket har inga tekniska invändningar (med varningar)',
+            })
           }
         }
       }
     } catch {
-      setError('Kunde inte validera deklarationen')
+      setNotice({ kind: 'error', text: 'Kunde inte validera deklarationen' })
     } finally {
       setActionLoading(null)
     }
@@ -311,14 +307,16 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   const handleSaveDraft = async () => {
     if (localBlocked) {
-      setError(
-        'Lokala kontroller hittade fel i bokföringen. Åtgärda dessa innan ' +
-        'du sparar utkastet hos Skatteverket.',
-      )
+      setNotice({
+        kind: 'error',
+        text:
+          'Åtgärda felen under Kontroll av underlaget högst upp på sidan innan ' +
+          'du sparar utkastet hos Skatteverket.',
+      })
       return
     }
     setActionLoading('draft')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/declaration/draft', {
         method: 'POST',
@@ -333,21 +331,36 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         setKontroller(controls)
         const errors = controls.filter(k => k.status === 'ERROR')
         if (errors.length === 0) {
-          setSuccess('Utkast sparat i Eget utrymme hos Skatteverket')
+          setNotice({ kind: 'success', text: 'Utkast sparat i Eget utrymme hos Skatteverket' })
         } else {
-          setError(`Utkastet sparades men har ${errors.length} valideringsfel`)
+          setNotice({
+            kind: 'error',
+            text: `Utkastet sparades men har ${errors.length} valideringsfel`,
+          })
         }
       }
     } catch {
-      setError('Kunde inte spara utkast')
+      setNotice({ kind: 'error', text: 'Kunde inte spara utkast' })
     } finally {
       setActionLoading(null)
     }
   }
 
+  // Helper to get redovisare from settings
+  const getRedovisare = useCallback(async (): Promise<string> => {
+    const res = await fetch('/api/settings')
+    const { data } = await res.json()
+    if (!data?.org_number) throw new Error('Organisationsnummer saknas')
+    return formatRedovisare(data.org_number, data.entity_type)
+  }, [])
+
+  const getRedovisningsperiod = useCallback((): string => {
+    return formatRedovisningsperiod(periodType, year, period)
+  }, [periodType, year, period])
+
   const handleLock = async () => {
     setActionLoading('lock')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/lock?redovisare=${encodeURIComponent(
@@ -360,10 +373,17 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         // surfaced + status updated; nothing more to do
       } else if (result.data?.signeringsLank) {
         setSigneringslank(result.data.signeringsLank)
-        setSuccess('Utkastet är låst. Öppna signeringslänken för att signera med BankID.')
+        setNotice({
+          kind: 'success',
+          text: 'Utkastet är låst. Öppna signeringslänken för att signera med BankID.',
+        })
       }
-    } catch {
-      setError('Kunde inte låsa utkastet')
+    } catch (err) {
+      setNotice(
+        isOrgNumberMissing(err)
+          ? ORG_NUMBER_MISSING_NOTICE
+          : { kind: 'error', text: 'Kunde inte låsa utkastet' },
+      )
     } finally {
       setActionLoading(null)
     }
@@ -371,7 +391,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   const handleUnlock = async () => {
     setActionLoading('unlock')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/lock?redovisare=${encodeURIComponent(
@@ -384,18 +404,27 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         // surfaced + status updated; nothing more to do
       } else {
         setSigneringslank(null)
-        setSuccess('Utkastet har låsts upp')
+        setNotice({ kind: 'success', text: 'Utkastet har låsts upp' })
       }
-    } catch {
-      setError('Kunde inte låsa upp utkastet')
+    } catch (err) {
+      setNotice(
+        isOrgNumberMissing(err)
+          ? ORG_NUMBER_MISSING_NOTICE
+          : { kind: 'error', text: 'Kunde inte låsa upp utkastet' },
+      )
     } finally {
       setActionLoading(null)
     }
   }
 
-  const handleCheckSubmitted = async () => {
+  /**
+   * `silent` suppresses the "inget hittades" notice: used by the automatic
+   * re-check when the tab regains focus after the user signed at SKV, where
+   * a recurring "nothing found" message would just be noise.
+   */
+  const handleCheckSubmitted = useCallback(async (silent = false) => {
     setActionLoading('check')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/submitted?redovisare=${encodeURIComponent(
@@ -407,20 +436,38 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         // surfaced + status updated; nothing more to do
       } else if (result.data) {
         setSubmitted(result.data)
-        setSuccess('Deklarationen har lämnats in')
-      } else {
-        setSuccess('Ingen inlämnad deklaration hittades för denna period')
+        setNotice({ kind: 'success', text: 'Deklarationen har lämnats in' })
+      } else if (!silent) {
+        setNotice({ kind: 'info', text: 'Ingen inlämnad deklaration hittades för denna period' })
       }
-    } catch {
-      setError('Kunde inte kontrollera inlämningsstatus')
+    } catch (err) {
+      if (isOrgNumberMissing(err)) {
+        setNotice(ORG_NUMBER_MISSING_NOTICE)
+      } else if (!silent) {
+        setNotice({ kind: 'error', text: 'Kunde inte kontrollera inlämningsstatus' })
+      }
     } finally {
       setActionLoading(null)
     }
-  }
+  }, [applyApiError, getRedovisare, getRedovisningsperiod])
+
+  // While a signing link is outstanding, re-check submission status when the
+  // user returns to this tab: signing happens on Skatteverket's site, so the
+  // return trip is the natural moment for the kvittens to appear.
+  useEffect(() => {
+    if (!signeringslank || submitted) return
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && actionLoading === null) {
+        handleCheckSubmitted(true)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [signeringslank, submitted, actionLoading, handleCheckSubmitted])
 
   const handleDeleteDraft = async () => {
     setActionLoading('delete')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/draft?redovisare=${encodeURIComponent(
@@ -431,15 +478,19 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
       if (res.status === 204 || res.ok) {
         setKontroller([])
         setSigneringslank(null)
-        setSuccess('Utkastet har raderats från Eget utrymme')
+        setNotice({ kind: 'success', text: 'Utkastet har raderats från Eget utrymme' })
       } else {
         const result = await res.json().catch(() => ({}))
         if (!applyApiError(result)) {
-          setError(`Kunde inte radera utkast (${res.status})`)
+          setNotice({ kind: 'error', text: `Kunde inte radera utkast (${res.status})` })
         }
       }
-    } catch {
-      setError('Kunde inte radera utkast')
+    } catch (err) {
+      setNotice(
+        isOrgNumberMissing(err)
+          ? ORG_NUMBER_MISSING_NOTICE
+          : { kind: 'error', text: 'Kunde inte radera utkast' },
+      )
     } finally {
       setActionLoading(null)
     }
@@ -447,7 +498,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   const handleFetchDraft = async () => {
     setActionLoading('fetchDraft')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/draft?redovisare=${encodeURIComponent(
@@ -458,15 +509,19 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
       if (applyApiError(result)) {
         // surfaced + status updated; nothing more to do
       } else if (!result.data) {
-        setSuccess('Inget sparat utkast hittades för perioden')
+        setNotice({ kind: 'info', text: 'Inget sparat utkast hittades för perioden' })
       } else {
         const locked = result.data?.locked ? ' (låst)' : ''
         const summa = result.data?.momsuppgift?.summaMoms
         const summaLabel = summa !== undefined ? `, summaMoms = ${formatAmount(summa)}` : ''
-        setSuccess(`Sparat utkast hittades${locked}${summaLabel}`)
+        setNotice({ kind: 'success', text: `Sparat utkast hittades${locked}${summaLabel}` })
       }
-    } catch {
-      setError('Kunde inte hämta utkast')
+    } catch (err) {
+      setNotice(
+        isOrgNumberMissing(err)
+          ? ORG_NUMBER_MISSING_NOTICE
+          : { kind: 'error', text: 'Kunde inte hämta utkast' },
+      )
     } finally {
       setActionLoading(null)
     }
@@ -474,7 +529,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   const handleFetchDecided = async () => {
     setActionLoading('fetchDecided')
-    setError(null)
+    setNotice(null)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/decided?redovisare=${encodeURIComponent(
@@ -485,60 +540,73 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
       if (applyApiError(result)) {
         // surfaced + status updated; nothing more to do
       } else if (!result.data) {
-        setSuccess('Inget beslut hittades för perioden')
+        setNotice({ kind: 'info', text: 'Inget beslut hittades för perioden' })
       } else {
         const tid = result.data?.beslutadTidpunkt
         const tidLabel = tid ? ` (beslutad ${new Date(tid).toLocaleDateString('sv-SE')})` : ''
-        setSuccess(`Beslut hittades${tidLabel}`)
+        setNotice({ kind: 'success', text: `Beslut hittades${tidLabel}` })
       }
-    } catch {
-      setError('Kunde inte hämta beslutade uppgifter')
+    } catch (err) {
+      setNotice(
+        isOrgNumberMissing(err)
+          ? ORG_NUMBER_MISSING_NOTICE
+          : { kind: 'error', text: 'Kunde inte hämta beslutade uppgifter' },
+      )
     } finally {
       setActionLoading(null)
     }
   }
 
-  // Helper to get redovisare from settings
-  const getRedovisare = async (): Promise<string> => {
-    const res = await fetch('/api/settings')
-    const { data } = await res.json()
-    if (!data?.org_number) throw new Error('Organisationsnummer saknas')
-    return formatRedovisare(data.org_number, data.entity_type)
+  const handleDeleteDraftConfirmed = async () => {
+    const ok = await confirm({
+      title: 'Radera utkastet hos Skatteverket?',
+      description:
+        'Utkastet tas bort från Eget utrymme hos Skatteverket. Detta går inte att ångra.',
+      confirmLabel: 'Radera utkast',
+    })
+    if (!ok) return
+    await handleDeleteDraft()
   }
 
-  const getRedovisningsperiod = (): string => {
-    return formatRedovisningsperiod(periodType, year, period)
+  const handleDisconnectConfirmed = async () => {
+    const ok = await confirm({
+      title: 'Koppla bort Skatteverket?',
+      description:
+        'Anslutningen tas bort och du behöver ansluta med BankID igen för att kunna skicka direkt.',
+      confirmLabel: 'Koppla bort',
+    })
+    if (!ok) return
+    await handleDisconnect()
   }
 
   if (loading) {
     return (
       <Card>
-        <CardContent className="p-6 flex items-center gap-2 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Kontrollerar Skatteverket-anslutning...
+        <CardContent className="p-6 space-y-4">
+          <Skeleton className="h-5 w-48" />
+          <Skeleton className="h-24" />
         </CardContent>
       </Card>
     )
   }
 
   // Paywall: direct API submission is the paid convenience; manual filing at
-  // skatteverket.se stays free and is described in the card above this panel.
+  // skatteverket.se stays free and is owned by the "Lämna in" card above.
   // Rendered BEFORE the connected check so a company that connected during
   // trial sees the upsell instead of action buttons that would 403.
   if (!hasSkvCapability) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <FileCheck className="h-5 w-5" />
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileCheck className="h-4 w-4" />
             Skicka direkt till Skatteverket (valfritt)
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Deklarationen är redan klar att lämnas in manuellt hos Skatteverket
-            (se ovan). Med ett abonnemang kan du ansluta med BankID och skicka
-            den direkt härifrån, samt validera, spara utkast och signera.
+            Med ett abonnemang kan du ansluta med BankID och skicka deklarationen
+            direkt härifrån, samt validera, spara utkast och signera.
           </p>
           <UpgradeNote>
             Direktinlämning till Skatteverket kräver ett abonnemang.
@@ -549,30 +617,31 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   }
 
   // Not connected. The momsdeklaration is already complete and can be filed
-  // manually at skatteverket.se with no connection (see the manual-filing card
-  // rendered above this panel). Connecting is an optional convenience for
-  // submitting directly from Accounted, so frame it that way: users must not
-  // read the connection as a prerequisite for producing or filing the report.
+  // manually at skatteverket.se with no connection (the "Lämna in" card above
+  // owns that path). Connecting is an optional convenience for submitting
+  // directly from Accounted, so frame it that way.
   if (!status?.connected) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <FileCheck className="h-5 w-5" />
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileCheck className="h-4 w-4" />
             Skicka direkt till Skatteverket (valfritt)
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {error && (
-            <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3">
-              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-              <span>{error}</span>
+          {notice?.kind === 'error' && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3"
+            >
+              <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+              <span>{notice.text}</span>
             </div>
           )}
           <p className="text-sm text-muted-foreground">
-            Deklarationen är redan klar att lämnas in manuellt hos Skatteverket
-            (se ovan). Vill du slippa skriva in siffrorna själv kan du ansluta med
-            BankID och skicka den direkt härifrån, samt validera, spara utkast och
+            Vill du slippa skriva in siffrorna själv kan du ansluta med BankID och
+            skicka deklarationen direkt härifrån, samt validera, spara utkast och
             signera.
           </p>
           <Button onClick={handleConnect} className="gap-2">
@@ -586,17 +655,16 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
   // Connected: show actions
   const hasErrors = kontroller.some(k => k.status === 'ERROR')
-  const hasWarnings = kontroller.some(k => k.status === 'WARNING')
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <FileCheck className="h-5 w-5" />
-            Skicka till Skatteverket
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileCheck className="h-4 w-4" />
+            Skicka direkt till Skatteverket
           </CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="success" className="gap-1">
               <CheckCircle2 className="h-3 w-3" />
               Ansluten
@@ -607,195 +675,145 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                   <AlertCircle className="h-3 w-3" />
                   Session utgången
                 </Badge>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleConnect}
-                  className="gap-1.5 h-7"
-                >
-                  <Link2 className="h-3.5 w-3.5" />
+                <Button variant="outline" onClick={handleConnect} className="gap-2">
+                  <Link2 className="h-4 w-4" />
                   Förnya session
                 </Button>
               </>
             )}
+            {/* Read-only lookups and recovery actions live in the overflow
+                menu: the visible surface stays the forward path (validera,
+                spara utkast, lås och signera). */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="Fler åtgärder">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel>Status hos Skatteverket</DropdownMenuLabel>
+                <DropdownMenuItem
+                  disabled={actionLoading !== null}
+                  onSelect={() => handleFetchDraft()}
+                >
+                  <div>
+                    <p>Hämta utkast</p>
+                    <p className="text-xs text-muted-foreground">
+                      Hämta sparat utkast från Eget utrymme
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={actionLoading !== null}
+                  onSelect={() => handleCheckSubmitted()}
+                >
+                  <div>
+                    <p>Kontrollera inlämning</p>
+                    <p className="text-xs text-muted-foreground">
+                      Kontrollera om en signerad deklaration har lämnats in
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={actionLoading !== null}
+                  onSelect={() => handleFetchDecided()}
+                >
+                  <div>
+                    <p>Hämta beslut</p>
+                    <p className="text-xs text-muted-foreground">
+                      Hämta Skatteverkets beslut för perioden
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Återställning</DropdownMenuLabel>
+                <DropdownMenuItem
+                  disabled={actionLoading !== null}
+                  onSelect={() => handleUnlock()}
+                >
+                  <div>
+                    <p>Lås upp</p>
+                    <p className="text-xs text-muted-foreground">
+                      Lås upp en låst period så att utkastet kan ändras
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={actionLoading !== null}
+                  onSelect={() => handleDeleteDraftConfirmed()}
+                >
+                  <div>
+                    <p>Radera utkast...</p>
+                    <p className="text-xs text-muted-foreground">
+                      Radera sparat utkast från Eget utrymme
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={actionLoading !== null}
+                  onSelect={() => handleDisconnectConfirmed()}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <div>
+                    <p>Koppla bort Skatteverket...</p>
+                    <p className="text-xs text-muted-foreground">
+                      Kräver ny BankID-anslutning för direktinlämning
+                    </p>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Messages */}
-        {error && (
-          <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3">
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-        {success && !error && (
-          <div className="flex items-start gap-2 text-sm rounded-lg border border-border bg-muted/30 p-3">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0 text-success" />
-            <span>{success}</span>
-          </div>
-        )}
-
-        {/* Local pre-flight check results: surfaced separately from SKV's
-            kontroller so the user knows these are Accounted's own sanity checks,
-            not Skatteverket's. ERRORs block the submit/validate buttons. */}
-        {localChecks.length > 0 && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Lokala kontroller
-            </p>
-            {localChecks.map((c, i) => (
-              <div
-                key={`${c.code}-${i}`}
-                className={`flex items-start gap-2 text-sm rounded-lg p-3 ${
-                  c.status === 'ERROR'
-                    ? 'bg-destructive/5 text-destructive'
-                    : 'border border-border bg-muted/30'
-                }`}
-              >
-                {c.status === 'ERROR' ? (
-                  <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-warning" />
-                )}
-                <div>
-                  <span className="font-mono text-xs mr-1.5">{c.code}</span>
-                  {c.message}
-                </div>
-              </div>
-            ))}
+        {/* In-flight status for overflow-menu actions: their menu closes on
+            select, so this row is the only visible sign of work. */}
+        {actionLoading && ACTION_IN_FLIGHT_LABELS[actionLoading] && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {ACTION_IN_FLIGHT_LABELS[actionLoading]}
           </div>
         )}
 
-        {/* Per-voucher RC basis gaps: concrete list of verifikationer that
-            triggered RC_BASIS_MISSING, with a one-click korrigera action. */}
-        {hasRcBasisWarning && (
-          <div className="space-y-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Verifikationer som saknar basbelopp
-            </p>
-            {gapsLoading ? (
-              <div className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Söker berörda verifikationer...
-              </div>
-            ) : gaps.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Inga verifikationer hittades. Bristen kan ligga utanför perioden
-                eller i bokföring som inte är posted.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {gaps.map((gap) => {
-                  const sel = gapSelections[gap.entryId] ?? {
-                    supplierType: 'eu_business' as const,
-                    supplyType: 'service' as const,
-                  }
-                  return (
-                    <div
-                      key={gap.entryId}
-                      className="rounded-lg border bg-card p-3 space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">
-                            Verifikation {gap.voucherSeries}-{gap.voucherNumber}
-                            <span className="text-muted-foreground font-normal">
-                              {' · '}
-                              {formatDate(gap.entryDate)}
-                            </span>
-                          </p>
-                          <p className="text-sm text-muted-foreground truncate">
-                            {gap.description}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-1 tabular-nums">
-                            {gap.rcOutputAccount} har{' '}
-                            {gap.rcOutputAmount.toLocaleString('sv-SE', {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}{' '}
-                            kr fiktiv moms: saknar basbelopp{' '}
-                            {gap.expectedBasisAmount.toLocaleString('sv-SE', {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}{' '}
-                            kr
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <select
-                          className="text-xs border rounded px-2 py-1 bg-background"
-                          value={sel.supplierType}
-                          onChange={(e) => {
-                            const next = e.target.value as typeof sel.supplierType
-                            setGapSelections((prev) => ({
-                              ...prev,
-                              [gap.entryId]: {
-                                supplierType: next,
-                                // Non-EU + goods is import VAT, not RC: coerce back
-                                // to service so the user can't submit an invalid combo.
-                                supplyType: next === 'non_eu_business' ? 'service' : sel.supplyType,
-                              },
-                            }))
-                          }}
-                          disabled={fixingId === gap.entryId}
-                        >
-                          <option value="eu_business">EU-leverantör</option>
-                          <option value="non_eu_business">Utanför EU</option>
-                          <option value="swedish_business">Svensk RC</option>
-                        </select>
-                        <select
-                          className="text-xs border rounded px-2 py-1 bg-background"
-                          value={sel.supplyType}
-                          onChange={(e) =>
-                            setGapSelections((prev) => ({
-                              ...prev,
-                              [gap.entryId]: {
-                                ...sel,
-                                supplyType: e.target.value as typeof sel.supplyType,
-                              },
-                            }))
-                          }
-                          disabled={fixingId === gap.entryId}
-                        >
-                          <option value="service">Tjänst</option>
-                          {/* Non-EU goods is import VAT, not reverse charge: hide the
-                              option for that combination so the fix endpoint never
-                              has to reject it. */}
-                          {sel.supplierType !== 'non_eu_business' && (
-                            <option value="goods">Vara</option>
-                          )}
-                        </select>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleFixGap(gap)}
-                          disabled={fixingId !== null}
-                          className="gap-1.5 h-7"
-                        >
-                          {fixingId === gap.entryId ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <CheckCircle2 className="h-3 w-3" />
-                          )}
-                          Korrigera
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
+        {/* Single feedback slot: errors are assertive alerts, success/info are
+            polite status messages on the neutral surface. */}
+        {notice && (
+          notice.kind === 'error' ? (
+            <div
+              role="alert"
+              className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3"
+            >
+              <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+              <span>{notice.text}</span>
+            </div>
+          ) : (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-start gap-2 text-sm rounded-lg border border-border bg-muted/30 p-3"
+            >
+              {notice.kind === 'success' ? (
+                <CheckCircle2 className="h-4 w-4 mt-1 shrink-0 text-success" />
+              ) : (
+                <Info className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
+              )}
+              <span>{notice.text}</span>
+            </div>
+          )
         )}
 
         {/* Validation results from Skatteverket */}
         {kontroller.length > 0 && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
               Skatteverkets valideringsresultat
-            </p>
+            </h3>
             {kontroller.map((k, i) => (
               <div
                 key={`${k.kod}-${i}`}
@@ -806,12 +824,12 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                 }`}
               >
                 {k.status === 'ERROR' ? (
-                  <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                  <ShieldAlert className="h-4 w-4 mt-1 shrink-0" />
                 ) : (
-                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-warning" />
+                  <AlertTriangle className="h-4 w-4 mt-1 shrink-0 text-warning" />
                 )}
                 <div>
-                  <span className="font-mono text-xs mr-1.5">{k.kod}</span>
+                  <span className="font-mono text-xs mr-2">{k.kod}</span>
                   {k.beskrivning}
                 </div>
               </div>
@@ -821,8 +839,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
         {/* Submitted confirmation */}
         {submitted && (
-          <div className="rounded-lg border p-3 space-y-1">
-            <p className="text-sm font-medium flex items-center gap-1.5">
+          <div className="rounded-lg border border-border p-3 space-y-1">
+            <p className="text-sm font-medium flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-success" />
               Inlämnad
             </p>
@@ -844,178 +862,92 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
           <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
             <p className="text-sm font-medium">Utkastet är låst och redo att signeras</p>
             <p className="text-xs text-muted-foreground">
-              Öppna länken nedan och signera med BankID på Skatteverkets sida.
+              Öppna länken nedan och signera med BankID på Skatteverkets sida. När du
+              kommer tillbaka hit kontrolleras inlämningen automatiskt.
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => window.open(signeringslank, '_blank')}
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Öppna signeringssidan
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" asChild className="gap-2">
+                <a href={signeringslank} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-4 w-4" />
+                  Öppna signeringssidan
+                </a>
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleCheckSubmitted()}
+                disabled={actionLoading !== null}
+                className="gap-2"
+              >
+                {actionLoading === 'check' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4" />
+                )}
+                Kontrollera inlämning
+              </Button>
+            </div>
           </div>
         )}
 
-        {/* Forward-lifecycle buttons */}
+        {/* Forward lifecycle: the only always-visible action row. */}
         <div className="flex flex-wrap gap-2 pt-1">
           <Button
             variant="outline"
-            size="sm"
             onClick={handleValidate}
             disabled={!hasData || localBlocked || actionLoading !== null}
-            className="gap-1.5"
-            title={localBlocked ? 'Åtgärda lokala kontrollfel innan validering' : undefined}
+            className="gap-2"
           >
             {actionLoading === 'validate' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <FileCheck className="h-3.5 w-3.5" />
+              <FileCheck className="h-4 w-4" />
             )}
             Validera
           </Button>
 
           <Button
             variant="outline"
-            size="sm"
             onClick={handleSaveDraft}
             disabled={!hasData || localBlocked || actionLoading !== null}
-            className="gap-1.5"
-            title={localBlocked ? 'Åtgärda lokala kontrollfel innan inlämning' : undefined}
+            className="gap-2"
           >
             {actionLoading === 'draft' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Send className="h-3.5 w-3.5" />
+              <Send className="h-4 w-4" />
             )}
             Spara utkast
           </Button>
 
           <Button
-            size="sm"
             onClick={handleLock}
             disabled={!hasData || hasErrors || actionLoading !== null}
-            className="gap-1.5"
-            title={hasErrors ? 'Valideringsfel måste åtgärdas först' : ''}
+            className="gap-2"
           >
             {actionLoading === 'lock' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Lock className="h-3.5 w-3.5" />
+              <Lock className="h-4 w-4" />
             )}
             Lås och signera
           </Button>
         </div>
 
-        {/* Read-only fetches from Skatteverket. */}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleFetchDraft}
-            disabled={actionLoading !== null}
-            className="gap-1.5 text-muted-foreground"
-            title="Hämta sparat utkast från Eget utrymme"
-          >
-            {actionLoading === 'fetchDraft' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5" />
-            )}
-            Hämta utkast
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleCheckSubmitted}
-            disabled={actionLoading !== null}
-            className="gap-1.5 text-muted-foreground"
-            title="Kontrollera om en signerad deklaration har lämnats in"
-          >
-            {actionLoading === 'check' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <CheckCircle2 className="h-3.5 w-3.5" />
-            )}
-            Kontrollera inlämning
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleFetchDecided}
-            disabled={actionLoading !== null}
-            className="gap-1.5 text-muted-foreground"
-            title="Hämta Skatteverkets beslut för perioden"
-          >
-            {actionLoading === 'fetchDecided' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Gavel className="h-3.5 w-3.5" />
-            )}
-            Hämta beslut
-          </Button>
-        </div>
-
-        {/* Recovery / cleanup buttons. Always visible when connected so
-           the user can back out of a locked or stale draft state without
-           depending on local UI state surviving a reload. SKV returns
-           404/409 if the action isn't applicable; we surface that as an
-           error message rather than hiding the button. */}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleUnlock}
-            disabled={actionLoading !== null}
-            className="gap-1.5 text-muted-foreground"
-            title="Lås upp en låst period så att utkastet kan ändras eller raderas"
-          >
-            {actionLoading === 'unlock' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Unlock className="h-3.5 w-3.5" />
-            )}
-            Lås upp
-          </Button>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDeleteDraft}
-            disabled={actionLoading !== null}
-            className="gap-1.5 text-muted-foreground"
-            title="Radera sparat utkast från Skatteverkets Eget utrymme"
-          >
-            {actionLoading === 'delete' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="h-3.5 w-3.5" />
-            )}
-            Radera utkast
-          </Button>
-        </div>
-
-        {/* Disconnect */}
-        <div className="pt-2 border-t">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDisconnect}
-            disabled={actionLoading !== null}
-            className="gap-1.5 text-muted-foreground hover:text-destructive"
-          >
-            {actionLoading === 'disconnect' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Link2Off className="h-3.5 w-3.5" />
-            )}
-            Koppla bort Skatteverket
-          </Button>
-        </div>
+        {/* Visible disabled-state explanations: title attributes never show
+            on disabled buttons. */}
+        {localBlocked && (
+          <p className="text-sm text-destructive">
+            Åtgärda felen under Kontroll av underlaget högst upp på sidan innan du
+            validerar eller skickar in.
+          </p>
+        )}
+        {hasErrors && !localBlocked && (
+          <p className="text-sm text-muted-foreground">
+            Valideringsfelen ovan måste åtgärdas innan utkastet kan låsas.
+          </p>
+        )}
       </CardContent>
+      <DestructiveConfirmDialog {...dialogProps} />
     </Card>
   )
 }

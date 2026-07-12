@@ -22,6 +22,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
@@ -859,6 +860,13 @@ export default function NewSupplierInvoiceForm({
   // bookkeeping: the line stays in the breakdown for transparency.
   const payableVat = watchedReverseCharge ? 0 : totalVat
   const total = Math.round((subtotal + payableVat) * 100) / 100
+
+  // Öresavrundning live preview: same helper as the detail page. Display-only;
+  // the registered amount and the booked verifikat keep the exact öre.
+  const displayRounding = getDisplayTotal(
+    { total, currency: watchedCurrency || 'SEK', ore_rounding: oreRounding },
+    { ore_rounding: false },
+  )
 
   // Show the AI-suggested supplier card when we have an inbox item, the AI
   // surfaced a supplier name, and we couldn't match it to an existing record.
@@ -1982,9 +1990,15 @@ export default function NewSupplierInvoiceForm({
                 </span>
                 <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
               </div>
+              {displayRounding.applies && (
+                <div className="flex justify-between sm:justify-end sm:gap-8">
+                  <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
+                  <span className="tabular-nums sm:w-32 text-right">{formatCurrency(displayRounding.roundingDelta, watchedCurrency)}</span>
+                </div>
+              )}
               <div className="flex justify-between sm:justify-end sm:gap-8 font-bold text-lg">
                 <span>{t('total_label')}</span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(total, watchedCurrency)}</span>
+                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(displayRounding.displayed, watchedCurrency)}</span>
               </div>
               {/* Öresavrundning: display-only rounding of the displayed total to
                   whole kronor (SEK only). The registered amount and the booked

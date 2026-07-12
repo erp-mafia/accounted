@@ -216,7 +216,7 @@ function round(value: number): number {
  * can't be resolved we fall back to the calendar span so behaviour degrades
  * gracefully instead of erroring.
  */
-async function resolvePeriodDates(
+export async function resolvePeriodDates(
   supabase: SupabaseClient,
   companyId: string,
   periodType: VatPeriodType,
@@ -236,6 +236,154 @@ async function resolvePeriodDates(
     }
   }
   return calculatePeriodDates(periodType, year, period)
+}
+
+/**
+ * Accounts a momsredovisning settles the period's net against: 2650
+ * (Redovisningskonto för moms, att betala) and 1650 (Momsfordran, att återfå).
+ * Mirrors VAT_SETTLEMENT_ACCOUNT/VAT_REFUND_ACCOUNT in vat-settlement.ts,
+ * which imports from this module and therefore cannot be imported here.
+ */
+export const VAT_SETTLEMENT_NET_ACCOUNTS = ['2650', '1650']
+
+/** A momsredovisning entry detected by shape rather than source_type. */
+export interface VatSettlementShapedEntry {
+  id: string
+  status: string
+  entry_date: string
+  source_type: string | null
+  voucher_series: string | null
+  voucher_number: number | null
+}
+
+export interface VatAccountTotals {
+  totals: Map<string, { debit: number; credit: number }>
+  /**
+   * Untagged momsredovisning entries found in the period (manual vouchers,
+   * SIE-imported settlements, stornos of a settlement). Already excluded
+   * from `totals`; surfaced so the settlement proposal can warn and gate.
+   */
+  settlementShapedEntries: VatSettlementShapedEntry[]
+}
+
+/**
+ * Fetch and aggregate debit/credit totals per VAT-relevant account
+ * (ACCOUNT_RUTA) for a period. Shared by the declaration calculation and the
+ * settlement proposal (lib/reports/vat-settlement.ts) so the two can never
+ * disagree on which ledger lines count.
+ *
+ * Momsredovisning entries are excluded. They are bookkeeping about the
+ * declaration, not VAT-bearing business activity; including them would zero
+ * out the rutor the moment the settlement is booked, turning the report, its
+ * exports, and a later Skatteverket submission into an empty declaration
+ * (#984). Two detection paths:
+ *
+ *   - tagged: source_type 'vat_settlement' (the app's own settlement flow),
+ *     filtered in the query;
+ *   - shaped: an entry with at least one line on a declaration account
+ *     (ACCOUNT_RUTA) and at least one on 2650/1650. This catches settlements
+ *     booked before the tagged flow existed, manual vouchers, SIE-imported
+ *     settlements, and storno reversals of a settlement (source_type
+ *     'storno', which would otherwise re-inflate the rutor after annullera).
+ *
+ * Opening-balance entries are exempt from the shape rule: 26xx balances
+ * carried in by a migrating company are unsettled VAT that belongs in the
+ * next declaration, even when the same entry carries a 2650/1650 balance.
+ */
+export async function fetchVatAccountTotals(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string
+): Promise<VatAccountTotals> {
+  const lines = await fetchEntryLines<{
+    journal_entry_id: string
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+    journal_entries?: VatSettlementShapedEntry
+  }>({
+    supabase,
+    entryColumns: 'id, status, entry_date, source_type, voucher_series, voucher_number',
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .in('status', ['posted', 'reversed'])
+        .neq('source_type', 'vat_settlement')
+        .gte('entry_date', start)
+        .lte('entry_date', end),
+    filterLines: (q: EntryLinesQuery) =>
+      q.in('account_number', [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS]),
+  })
+
+  // Shape detection: an entry is a settlement when it touches both a
+  // declaration account and a settlement net account (2650/1650).
+  const declarationEntryIds = new Set<string>()
+  const netEntryIds = new Set<string>()
+  for (const line of lines) {
+    if (ACCOUNT_RUTA[line.account_number]) declarationEntryIds.add(line.journal_entry_id)
+    else if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(line.account_number)) {
+      netEntryIds.add(line.journal_entry_id)
+    }
+  }
+
+  const shapedById = new Map<string, VatSettlementShapedEntry>()
+  for (const line of lines) {
+    const id = line.journal_entry_id
+    if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
+    const entry = line.journal_entries
+    if (!entry || entry.source_type === 'opening_balance') continue
+    shapedById.set(id, entry)
+  }
+
+  const totals = new Map<string, { debit: number; credit: number }>()
+  for (const line of lines) {
+    if (shapedById.has(line.journal_entry_id)) continue
+    const t = totals.get(line.account_number) || { debit: 0, credit: 0 }
+    t.debit += Number(line.debit_amount) || 0
+    t.credit += Number(line.credit_amount) || 0
+    totals.set(line.account_number, t)
+  }
+  return { totals, settlementShapedEntries: [...shapedById.values()] }
+}
+
+/**
+ * Map aggregated per-account totals to the momsdeklaration boxes, including
+ * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA.
+ */
+export function rutorFromTotals(
+  totals: Map<string, { debit: number; credit: number }>
+): VatDeclarationRutor {
+  const rutor: VatDeclarationRutor = {
+    ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
+    ruta10: 0, ruta11: 0, ruta12: 0,
+    ruta20: 0, ruta21: 0, ruta22: 0, ruta23: 0, ruta24: 0,
+    ruta30: 0, ruta31: 0, ruta32: 0,
+    ruta35: 0, ruta36: 0, ruta37: 0, ruta38: 0,
+    ruta39: 0, ruta40: 0, ruta41: 0, ruta42: 0,
+    ruta48: 0, ruta49: 0,
+    ruta50: 0, ruta60: 0, ruta61: 0, ruta62: 0,
+  }
+
+  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
+    const t = totals.get(account)
+    if (!t) continue
+    const balance = mapping.side === 'credit'
+      ? t.credit - t.debit
+      : t.debit - t.credit
+    rutor[mapping.box] = round(rutor[mapping.box] + balance)
+  }
+
+  // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
+  rutor.ruta49 = round(
+    rutor.ruta10 + rutor.ruta11 + rutor.ruta12 +
+    rutor.ruta30 + rutor.ruta31 + rutor.ruta32 +
+    rutor.ruta60 + rutor.ruta61 + rutor.ruta62 -
+    rutor.ruta48
+  )
+
+  return rutor
 }
 
 /**
@@ -265,60 +413,11 @@ export async function calculateVatDeclaration(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  // Fetch all posted journal entry lines on VAT-relevant accounts for the period
-  const lines = await fetchEntryLines<{
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-  }>({
-    supabase,
-    lineColumns: 'account_number, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .in('status', ['posted', 'reversed'])
-        .gte('entry_date', start)
-        .lte('entry_date', end),
-    filterLines: (q: EntryLinesQuery) => q.in('account_number', VAT_ACCOUNTS),
-  })
-
-  // Aggregate debit/credit totals per account
-  const totals = new Map<string, { debit: number; credit: number }>()
-  for (const line of lines) {
-    const t = totals.get(line.account_number) || { debit: 0, credit: 0 }
-    t.debit += Number(line.debit_amount) || 0
-    t.credit += Number(line.credit_amount) || 0
-    totals.set(line.account_number, t)
-  }
+  // Fetch and aggregate posted VAT-account activity for the period
+  const { totals } = await fetchVatAccountTotals(supabase, companyId, start, end)
 
   // Map account balances to momsdeklaration boxes
-  const rutor: VatDeclarationRutor = {
-    ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
-    ruta10: 0, ruta11: 0, ruta12: 0,
-    ruta20: 0, ruta21: 0, ruta22: 0, ruta23: 0, ruta24: 0,
-    ruta30: 0, ruta31: 0, ruta32: 0,
-    ruta35: 0, ruta36: 0, ruta37: 0, ruta38: 0,
-    ruta39: 0, ruta40: 0, ruta41: 0, ruta42: 0,
-    ruta48: 0, ruta49: 0,
-    ruta50: 0, ruta60: 0, ruta61: 0, ruta62: 0,
-  }
-
-  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
-    const t = totals.get(account)
-    if (!t) continue
-    const balance = mapping.side === 'credit'
-      ? t.credit - t.debit
-      : t.debit - t.credit
-    rutor[mapping.box] = round(rutor[mapping.box] + balance)
-  }
-
-  // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
-  rutor.ruta49 = round(
-    rutor.ruta10 + rutor.ruta11 + rutor.ruta12 +
-    rutor.ruta30 + rutor.ruta31 + rutor.ruta32 +
-    rutor.ruta60 + rutor.ruta61 + rutor.ruta62 -
-    rutor.ruta48
-  )
+  const rutor = rutorFromTotals(totals)
 
   // Compute per-rate base amounts from individual revenue accounts
   const revenueByRate = {

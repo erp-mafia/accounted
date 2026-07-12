@@ -57,13 +57,8 @@ import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
-
-// default_dimensions must stay in this projection: the fetched row feeds
-// createInvoiceJournalEntry, which reads the bag off the row — dropping the
-// column here silently untags the revenue JE lines.
-const INVOICE_SEND_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const InvoiceSendResponse = z.object({
   id: z.string().uuid(),
@@ -158,11 +153,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Fetch invoice + customer + items.
+    // Fetch invoice + customer + items. Uses the shared full projections so
+    // the row feeding the PDF/email/journal entry cannot drift from what GET
+    // returns: an earlier hand-rolled list here silently dropped
+    // deduction_total, which made v1-sent ROT/RUT invoices overstate
+    // "Att betala" (default_dimensions must also stay: createInvoiceJournalEntry
+    // reads the bag off this row).
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_SEND_RESPONSE_COLUMNS}, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account, dimensions)`,
+        `${INVOICE_FULL_COLUMNS}, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)

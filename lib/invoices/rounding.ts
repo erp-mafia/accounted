@@ -55,3 +55,38 @@ export function getDisplayTotal(
     applies: true,
   }
 }
+
+type AmountToPayShape = InvoiceTotalShape & {
+  /** ROT/RUT deduction (fakturamodellen). Reduces what the customer owes. */
+  deduction_total?: number | null
+  /** Set on credit notes; the deduction rule does not apply to those. */
+  credited_invoice_id?: string | null
+}
+
+export interface AmountToPay {
+  /** The öresavrundning outcome on the invoice total (before any deduction). */
+  rounding: DisplayTotal
+  /** True when a ROT/RUT deduction reduces the amount to pay. */
+  deductionApplies: boolean
+  /** Customer-facing "Att betala": rounded total minus any ROT/RUT deduction. */
+  toPay: number
+}
+
+/**
+ * Customer-facing "Att betala" for an invoice: öresavrundning via
+ * getDisplayTotal, then the ROT/RUT deduction (the customer only owes
+ * total - deduction; the rest is reclaimed from Skatteverket via
+ * fakturamodellen). Extracted from the PDF totals block so the invoice email
+ * shows the exact same amount as the attached PDF and the two cannot drift.
+ */
+export function getAmountToPay(
+  invoice: AmountToPayShape,
+  company: CompanyRoundingShape | null | undefined,
+): AmountToPay {
+  const rounding = getDisplayTotal(invoice, company)
+  const deductionApplies = !invoice.credited_invoice_id && (invoice.deduction_total ?? 0) > 0
+  const toPay = deductionApplies
+    ? Math.round((rounding.displayed - (invoice.deduction_total ?? 0)) * 100) / 100
+    : rounding.displayed
+  return { rounding, deductionApplies, toPay }
+}

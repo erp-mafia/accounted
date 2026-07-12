@@ -246,7 +246,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_huvudbok',
     descKey: 'desc_huvudbok',
     category: 'ledgers',
-    params: 'fiscal',
+    params: 'fiscal-range',
     exports: ['xlsx'],
     dimensions: true,
   },

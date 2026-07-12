@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 
@@ -59,6 +60,13 @@ export async function generateGeneralLedger(
     /** SIE dim → code filter ({"6":"P001"}). Opening balances are dropped
      *  when set: they are company-wide and cannot be dimension-scoped. */
     dimensions?: Record<string, string>
+    /** Inclusive date sub-range within the fiscal period (kontoanalys).
+     *  Lines before fromDate roll into each account's opening balance so
+     *  the running balance at the range start matches the full-year ledger;
+     *  lines after toDate are dropped. Callers validate the bounds
+     *  (parseReportDateRange). */
+    fromDate?: string
+    toDate?: string
   }
 ): Promise<GeneralLedgerReport> {
   const dimensionFilter =
@@ -135,7 +143,13 @@ export async function generateGeneralLedger(
   })
 
   if (rawLines.length === 0 && openingBalances.size === 0) {
-    return { accounts: [], period: { start: period.period_start, end: period.period_end } }
+    return {
+      accounts: [],
+      period: {
+        start: options?.fromDate ?? period.period_start,
+        end: options?.toDate ?? period.period_end,
+      },
+    }
   }
 
   // Fetch account names
@@ -153,12 +167,25 @@ export async function generateGeneralLedger(
     accountNameMap.set(acc.account_number, acc.account_name)
   }
 
-  // Group lines by account
+  // Group lines by account. Lines before fromDate accumulate per account so
+  // they can roll into the opening balance below; lines after toDate drop.
+  const fromDate = options?.fromDate
+  const toDate = options?.toDate
   const accountLines = new Map<string, GeneralLedgerLine[]>()
+  const preRangeMovements = new Map<string, number>()
 
   for (const line of rawLines) {
     const entry = line.journal_entries
     const accNum = line.account_number
+    const debit = Math.round((Number(line.debit_amount) || 0) * 100) / 100
+    const credit = Math.round((Number(line.credit_amount) || 0) * 100) / 100
+
+    if (toDate && entry.entry_date > toDate) continue
+    if (fromDate && entry.entry_date < fromDate) {
+      preRangeMovements.set(accNum, (preRangeMovements.get(accNum) || 0) + debit - credit)
+      continue
+    }
+
     if (!accountLines.has(accNum)) {
       accountLines.set(accNum, [])
     }
@@ -172,15 +199,24 @@ export async function generateGeneralLedger(
       journal_entry_id: line.journal_entry_id,
       description: entry.description || '',
       source_type: entry.source_type || '',
-      debit: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
-      credit: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
+      debit,
+      credit,
       balance: 0, // computed below
       ...(hasDims ? { dimensions: line.dimensions as Record<string, string> } : {}),
     })
   }
 
-  // Include accounts that have opening balance but no period lines
-  for (const [accNum, balance] of openingBalances) {
+  // Opening balance at the range start: period IB plus movements before
+  // fromDate. Under a dimension filter the IB map is empty (company-wide IB
+  // cannot be dimension-scoped) but pre-range movements are dimension-scoped
+  // by the query, so they still roll in.
+  const effectiveOpening = new Map<string, number>(openingBalances)
+  for (const [accNum, movement] of preRangeMovements) {
+    effectiveOpening.set(accNum, roundOre((effectiveOpening.get(accNum) || 0) + movement))
+  }
+
+  // Include accounts that carry a balance into the range but have no lines in it
+  for (const [accNum, balance] of effectiveOpening) {
     if (!accountLines.has(accNum) && Math.abs(balance) > 0.005) {
       accountLines.set(accNum, [])
     }
@@ -201,7 +237,7 @@ export async function generateGeneralLedger(
       return a.voucher_number - b.voucher_number
     })
 
-    const opening = Math.round((openingBalances.get(accNum) || 0) * 100) / 100
+    const opening = Math.round((effectiveOpening.get(accNum) || 0) * 100) / 100
     let runningBalance = opening
 
     for (const line of accLines) {
@@ -228,6 +264,9 @@ export async function generateGeneralLedger(
 
   return {
     accounts: result,
-    period: { start: period.period_start, end: period.period_end },
+    period: {
+      start: fromDate ?? period.period_start,
+      end: toDate ?? period.period_end,
+    },
   }
 }

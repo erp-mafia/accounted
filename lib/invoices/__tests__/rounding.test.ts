@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getAmountToPay, getDisplayTotal } from '@/lib/invoices/rounding'
 
 const inv = (total: number, currency: 'SEK' | 'EUR' = 'SEK') => ({ total, currency })
 const co = (ore_rounding: boolean) => ({ ore_rounding })
@@ -67,5 +67,48 @@ describe('getDisplayTotal', () => {
     const r = getDisplayTotal({ total: 99.99, currency: 'SEK', ore_rounding: null }, co(false))
     expect(r.applies).toBe(false)
     expect(r.displayed).toBe(99.99)
+  })
+})
+
+describe('getAmountToPay', () => {
+  it('equals the rounded display total when there is no deduction', () => {
+    const r = getAmountToPay(inv(1234.56), co(true))
+    expect(r.toPay).toBe(1235)
+    expect(r.deductionApplies).toBe(false)
+    expect(r.rounding.applies).toBe(true)
+    expect(r.rounding.roundingDelta).toBe(0.44)
+  })
+
+  it('subtracts the ROT/RUT deduction from the ROUNDED total', () => {
+    const r = getAmountToPay({ ...inv(1234.56), deduction_total: 500 }, co(true))
+    expect(r.deductionApplies).toBe(true)
+    expect(r.toPay).toBe(735)
+  })
+
+  it('subtracts the deduction from the raw total when rounding is off', () => {
+    const r = getAmountToPay({ ...inv(1234.56), deduction_total: 500 }, co(false))
+    expect(r.rounding.applies).toBe(false)
+    expect(r.toPay).toBe(734.56)
+  })
+
+  it('keeps öre precision in the deduction subtraction', () => {
+    // 1235 - 166.67 must not pick up float noise.
+    const r = getAmountToPay({ ...inv(1234.56), deduction_total: 166.67 }, co(true))
+    expect(r.toPay).toBe(1068.33)
+  })
+
+  it('ignores the deduction on credit notes (fakturamodellen does not apply)', () => {
+    const r = getAmountToPay(
+      { ...inv(-1234.56), deduction_total: 500, credited_invoice_id: 'inv-1' },
+      co(true),
+    )
+    expect(r.deductionApplies).toBe(false)
+    expect(r.toPay).toBe(-1235)
+  })
+
+  it('does not round non-SEK invoices but still applies the deduction', () => {
+    const r = getAmountToPay({ ...inv(1234.56, 'EUR'), deduction_total: 100 }, co(true))
+    expect(r.rounding.applies).toBe(false)
+    expect(r.toPay).toBe(1134.56)
   })
 })

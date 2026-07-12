@@ -121,6 +121,7 @@
     "badge_beta": "Beta",
     "needs_company_tooltip": "Lägg till ett företag för att aktivera",
     "logout_sandbox": "Avsluta sandbox",
+    "trial_days_left": "Provperiod: {days, plural, =1 {1 dag} other {# dagar}} kvar",
     "ext_tic": "Företagsprofil",
     "ext_invoice_inbox": "Dokumentinkorg"
   },
@@ -432,7 +433,12 @@
     "status_overdue": "Förfallen",
     "status_disputed": "Tvist",
     "status_credited": "Krediterad",
-    "status_reversed": "Makulerad"
+    "status_reversed": "Makulerad",
+    "not_approved": "Ej godkänd",
+    "approve": "Godkänn",
+    "approve_failed_title": "Godkännande misslyckades",
+    "approved_title": "Godkänd",
+    "approved_description": "Fakturan har godkänts"
   },
   "purchase_orders": {
     "title": "Inköpsorder",
@@ -2357,6 +2363,10 @@
     "your_reference_placeholder": "Kontaktperson hos kund",
     "our_reference_label": "Vår referens",
     "our_reference_placeholder": "Ditt namn",
+    "payment_link_label": "Betalningslänk (valfritt)",
+    "payment_link_placeholder": "https://buy.stripe.com/…",
+    "payment_link_hint": "Klistra in en betalningslänk skapad för just denna faktura (t.ex. i Stripe). Kontrollera att beloppet stämmer och begränsa gärna länken till en betalning. Länken visas som en knapp i fakturamejlet och som QR-kod på PDF:en.",
+    "validation_payment_link_https": "Betalningslänken måste vara en https-adress",
     "summary_card_title": "Summering",
     "subtotal_label": "Delsumma",
     "net_at_rate": "Netto {rate}%",

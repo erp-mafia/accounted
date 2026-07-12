@@ -4,11 +4,12 @@ import {
   Text,
   View,
   Image,
+  Link,
   StyleSheet,
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/invoices/rounding'
 
 type PdfLang = 'sv' | 'en'
 
@@ -86,6 +87,8 @@ const LABELS = {
     paymentReference: 'Betalningsreferens:',
     invoiceNumber: 'Fakturanummer:',
     swishQrCaption: 'Skanna för att betala med Swish',
+    payOnline: 'Betala online:',
+    paymentLinkQrCaption: 'Skanna för att betala online',
     // Footer
     orgNoLong: 'Org.nr:',
     vatRegNo: 'Momsreg.nr:',
@@ -152,6 +155,8 @@ const LABELS = {
     paymentReference: 'Payment reference:',
     invoiceNumber: 'Invoice number:',
     swishQrCaption: 'Scan to pay with Swish',
+    payOnline: 'Pay online:',
+    paymentLinkQrCaption: 'Scan to pay online',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
     // Statutory Swedish phrase: kept verbatim in both locales. Peppol SE-R-005
@@ -636,9 +641,12 @@ interface InvoicePDFProps {
   /** Pre-rendered Swish payment QR (PNG data URL). Built offline in
    *  pdf-render-helpers; null/omitted renders no QR. */
   swishQrDataUrl?: string | null
+  /** Pre-rendered payment-link QR (PNG data URL) for invoice.payment_link_url.
+   *  Built offline in pdf-render-helpers; null/omitted renders no QR. */
+  paymentLinkQrDataUrl?: string | null
 }
 
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, swishQrDataUrl }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, swishQrDataUrl, paymentLinkQrDataUrl }: InvoicePDFProps) {
   const lang: PdfLang = language ?? customer.language ?? 'sv'
   const L = LABELS[lang]
   // Build the stylesheet per-render so each invoice picks up its company's
@@ -915,14 +923,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               )
             )}
             {(() => {
-              const rounding = getDisplayTotal(invoice, company)
-              // ROT/RUT-avdrag reduces "Att betala": the customer only owes
-              // (total - deduction); the rest is reclaimed from Skatteverket
-              // via fakturamodellen. The rule does not apply to credit notes.
-              const showDeduction = !isCreditNote && (invoice.deduction_total ?? 0) > 0
-              const grandTotal = showDeduction
-                ? Math.round((rounding.displayed - (invoice.deduction_total ?? 0)) * 100) / 100
-                : rounding.displayed
+              // Shared with the invoice email (lib/email/invoice-templates.ts)
+              // so the mail and the PDF always state the same "Att betala".
+              const { rounding, deductionApplies: showDeduction, toPay: grandTotal } =
+                getAmountToPay(invoice, company)
               return (
                 <>
                   {rounding.applies && (
@@ -1033,6 +1037,16 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {!isCreditNote && !isProforma && !isDeliveryNote && (
           <View style={styles.paymentSection}>
             <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
+            {invoice.payment_link_url && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{L.payOnline}</Text>
+                <Link src={invoice.payment_link_url} style={styles.paymentValue}>
+                  {invoice.payment_link_url.length > 60
+                    ? `${invoice.payment_link_url.slice(0, 57)}...`
+                    : invoice.payment_link_url}
+                </Link>
+              </View>
+            )}
             {company.bank_name && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.bank}</Text>
@@ -1097,6 +1111,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <View style={{ position: 'absolute', top: 15, right: 15, width: 96, alignItems: 'center' }}>
                 <Image src={swishQrDataUrl} style={{ width: 96, height: 96 }} />
                 <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.swishQrCaption}</Text>
+              </View>
+            )}
+            {/* Payment-link QR: shifts left when the Swish QR occupies the corner. */}
+            {paymentLinkQrDataUrl && (
+              <View style={{ position: 'absolute', top: 15, right: swishQrDataUrl ? 125 : 15, width: 96, alignItems: 'center' }}>
+                <Image src={paymentLinkQrDataUrl} style={{ width: 96, height: 96 }} />
+                <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.paymentLinkQrCaption}</Text>
               </View>
             )}
           </View>

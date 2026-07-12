@@ -13,6 +13,12 @@ interface CompanyContextValue {
   isSandbox: boolean
   /** PAID capability keys the active company currently holds (entitled + enabled). */
   capabilities: CapabilityKey[]
+  /**
+   * Trial expiry while the trial is the company's only source of paid access;
+   * null when paying/comped or after the trial lapsed. Drives the countdown
+   * touchpoint in the sidebar.
+   */
+  trialEndsAt: string | null
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)

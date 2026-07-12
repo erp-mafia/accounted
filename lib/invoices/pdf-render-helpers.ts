@@ -27,6 +27,7 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoice.swish-qr')
+const paymentLinkLog = createLogger('invoice.payment-link-qr')
 
 export interface InvoicePdfRenderExtras {
   branding: InvoiceBranding
@@ -163,6 +164,29 @@ export async function prepareInvoicePdfRender(
  * `swishQrDataUrl` prop; the template gates rendering on the same payment box
  * that already shows the Swish number.
  */
+/**
+ * Build the payment-link QR for an invoice as a PNG data URL, or null when the
+ * invoice carries no payment_link_url or it isn't a payable document (credit
+ * notes, proformas and delivery notes show no payment box). The URL was
+ * https-validated at write time (lib/api/schemas.ts); the QR simply encodes it
+ * locally with the `qrcode` lib: no call to any payment provider.
+ */
+export async function buildPaymentLinkQrDataUrl(invoice: Invoice): Promise<string | null> {
+  const url = invoice.payment_link_url?.trim()
+  if (!url) return null
+  const docType = invoice.document_type || 'invoice'
+  if (docType !== 'invoice' || invoice.credited_invoice_id) return null
+  try {
+    return await QRCode.toDataURL(url, { margin: 1, width: 240, errorCorrectionLevel: 'M' })
+  } catch (err) {
+    paymentLinkLog.warn('payment link QR generation failed', {
+      invoiceId: invoice.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
 export async function buildSwishQrDataUrl(
   company: CompanySettings,
   invoice: Invoice,

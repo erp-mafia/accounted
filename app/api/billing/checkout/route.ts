@@ -55,12 +55,54 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
   const stripe = getStripe()
   const service = createServiceClient()
 
-  // Reuse the company's Stripe customer if we already created one.
-  const { data: existing } = await service
-    .from('company_subscriptions')
-    .select('stripe_customer_id')
-    .eq('company_id', companyId)
-    .maybeSingle()
+  // Reuse the company's Stripe customer if we already created one, and read
+  // the trial expiry for the deferred-first-charge decision below. Independent
+  // reads, so one round-trip batch.
+  const [{ data: existing }, { data: trialGrant, error: trialGrantError }] = await Promise.all([
+    service
+      .from('company_subscriptions')
+      .select('stripe_customer_id')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    service
+      .from('capability_grants')
+      .select('expires_at')
+      .eq('company_id', companyId)
+      .eq('source', 'trial')
+      .order('expires_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+
+  // Fail closed on an uncertain trial state: proceeding on a lookup error
+  // would silently charge immediately after the UI promised "0 kr idag".
+  if (trialGrantError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'TRIAL_LOOKUP_FAILED',
+          message: 'Kunde inte läsa din provperiod. Försök igen om en stund.',
+          message_en: 'Could not resolve the trial state. Try again shortly.',
+        },
+      },
+      { status: 500 },
+    )
+  }
+
+  // Defer the first charge to the end of an active trial. The company already
+  // holds the paid capabilities free until then, so charging at checkout would
+  // bill for days it already has; instead the subscription starts as
+  // 'trialing' (which grants access via the webhook, see subscription-sync)
+  // and the first charge lands when the product trial ends. Stripe Checkout
+  // requires trial_end to be at least 48h in the future; closer than that, or
+  // with no active trial, billing starts immediately.
+  const trialExpiry = (trialGrant as { expires_at: string | null } | null)?.expires_at ?? null
+  const trialExpiryMs = trialExpiry ? new Date(trialExpiry).getTime() : null
+  const STRIPE_MIN_TRIAL_END_MS = 49 * 3600 * 1000 // Stripe's 48h floor + 1h clock margin
+  const trialEnd =
+    trialExpiryMs && trialExpiryMs - Date.now() > STRIPE_MIN_TRIAL_END_MS
+      ? Math.floor(trialExpiryMs / 1000)
+      : undefined
 
   let customerId = (existing as { stripe_customer_id: string | null } | null)?.stripe_customer_id ?? null
   if (!customerId) {
@@ -81,7 +123,10 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
     line_items: [{ price: priceId, quantity: 1 }],
     client_reference_id: companyId,
     metadata: { company_id: companyId },
-    subscription_data: { metadata: { company_id: companyId } },
+    subscription_data: {
+      metadata: { company_id: companyId },
+      ...(trialEnd ? { trial_end: trialEnd } : {}),
+    },
     allow_promotion_codes: true,
     success_url: `${appUrl}/settings/billing?success=1`,
     cancel_url: `${appUrl}/settings/billing?canceled=1`,

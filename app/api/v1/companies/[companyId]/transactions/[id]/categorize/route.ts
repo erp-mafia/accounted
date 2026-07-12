@@ -397,8 +397,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Best-effort: save mapping rule + upsert counterparty template. These
     // are user-experience polish (faster future categorization) and never
-    // fail the request.
-    if (is_business && transaction.merchant_name) {
+    // fail the request. direction_mismatch = a mirrored refund/repayment
+    // booking; learning it as a rule would store backwards accounts.
+    if (is_business && transaction.merchant_name && !mappingResult.direction_mismatch) {
       try {
         await saveUserMappingRule(
           ctx.supabase,
@@ -417,7 +418,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     try {
       await upsertCounterpartyTemplate(
         ctx.supabase,
-        ctx.userId,
+        ctx.companyId!,
         transaction as Transaction,
         mappingResult,
         'user_approved',

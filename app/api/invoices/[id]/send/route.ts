@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -141,6 +141,7 @@ export const POST = withRouteContext(
       company as CompanySettings,
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
+    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: renderableInvoice,
@@ -150,6 +151,7 @@ export const POST = withRouteContext(
         originalInvoiceNumber,
         branding,
         swishQrDataUrl,
+        paymentLinkQrDataUrl,
       }),
     )
 
