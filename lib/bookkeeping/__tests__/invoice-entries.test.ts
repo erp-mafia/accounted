@@ -1405,4 +1405,46 @@ describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
     const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
     expect(totalDebit).toBe(totalCredit)
   })
+
+  it('cash method ROT with a non-default paymentAccount: bank leg moves, 1513 stays fixed', async () => {
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: 1,
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 25,
+          vat_amount: 2500,
+          deduction_type: 'rot',
+          deduction_amount: 3000,
+        }),
+      ],
+    })
+
+    await createInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, '2024-07-01',
+      'enskild_firma', undefined, '1940',
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // The bank leg follows the resolved paymentAccount, still reduced by the deduction.
+    const debit1940 = input.lines.find((l) => l.account_number === '1940')
+    expect(debit1940?.debit_amount).toBe(9500)
+    expect(input.lines.find((l) => l.account_number === '1930')).toBeUndefined()
+
+    // The ROT/RUT receivable from Skatteverket is never the bank leg, so it
+    // must stay on 1513 regardless of paymentAccount.
+    const debit1513NonDefault = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513NonDefault?.debit_amount).toBe(3000)
+
+    // Balance
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+  })
 })
